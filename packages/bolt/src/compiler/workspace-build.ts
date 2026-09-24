@@ -660,12 +660,6 @@ class WorkspaceCompiler {
 			'\tdisplay: grid;',
 			'\tgrid-template-rows: auto 1fr;',
 			'}',
-			'',
-			'.bolt-header-actions {',
-			'\tdisplay: flex;',
-			'\talign-items: center;',
-			'\tgap: 0.5rem;',
-			'}',
 			''
 		].join('\n');
 

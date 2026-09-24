@@ -40,7 +40,7 @@
 			{#each months as month}
 				<Grid>
 					<RangeCalendarPrimitive.GridHead>
-						<GridRow class="flex">
+						<GridRow>
 							{#each weekdays as weekday}
 								<HeadCell>
 									{weekday.slice(0, 2)}

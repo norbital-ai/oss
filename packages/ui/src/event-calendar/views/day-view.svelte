@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Scroll } from '#lib/layout';
+	import { Imposter, Scroll } from '#lib/layout';
+	import { fromAction } from 'svelte/attachments';
 	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import { assignLanes, dateToPixels, isMultiDayEvent, isSameDay } from '#lib/event-calendar/utils';
 	import type { CalendarEvent, CreateSlot, EventRenderContext } from '#lib/event-calendar/types';
@@ -87,20 +88,17 @@
 </script>
 
 <Scroll axis="y" name={t('misc.dayEvents')} class={cn('relative bg-background', className)}>
-	<div style="height: {totalHeight}px; position: relative">
-		{#each Array.from({ length: endHour - startHour + 1 }) as _, i (i)}
-			<div
-				style="top: {i * hourHeight}px"
-				class="absolute left-0 right-0 h-px bg-border pointer-events-none"
-			></div>
-		{/each}
-
+	<div
+		style="height: {totalHeight}px; position: relative; background-image: repeating-linear-gradient(to bottom, var(--color-border) 0 1px, transparent 1px {hourHeight}px)"
+	>
 		<NowLine {date} {hourHeight} {startHour} {endHour} timeAxisWidth={0} />
 
 		{#if !readonly}
-			<div
-				class="absolute inset-0"
-				use:pixelDrag={{
+			<!-- The create-drag surface lies under the event blocks. -->
+			<Imposter
+				placement="fill"
+				layer="under"
+				{@attach fromAction(pixelDrag, () => ({
 					onStart: (event) => {
 						if (!drag.isDragging() && event.currentTarget instanceof HTMLElement) {
 							const top = event.clientY - event.currentTarget.getBoundingClientRect().top;
@@ -110,11 +108,11 @@
 					onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 					onEnd: commitDrop,
 					onCancel: drag.cancelDrag,
-					axis: 'y',
+					axis: 'y' as const,
 					cursor: 'crosshair'
-				}}
+				}))}
 				role="none"
-			></div>
+			/>
 		{/if}
 
 		{#each timedEvents as event (event.id)}
@@ -122,35 +120,40 @@
 			{@const top = eventTop(event)}
 			{@const h = eventHeight(event)}
 			{@const editable = !readonly && event.editable !== false}
-			<div
-				class="absolute"
+			<!-- An event block at its computed time offset. -->
+			<Imposter
+				placement="top-start"
+				offset="none"
+				layer="under"
 				style={eventStyle(event)}
 				role="button"
-				tabindex="0"
+				tabindex={0}
 				aria-disabled={!editable}
 				title={!editable ? event.lockedReason : undefined}
-				use:pixelDrag={{
+				{@attach fromAction(pixelDrag, () => ({
 					onStart: () => {
 						if (editable) drag.beginMove(event, 0, top, h);
 					},
 					onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 					onEnd: commitDrop,
 					onCancel: drag.cancelDrag,
-					axis: 'y'
-				}}
+					axis: 'y' as const
+				}))}
 			>
 				<EventBox
 					{event}
 					{ctx}
 					onclick={onboxclick}
 					{eventContent}
-					style="top: 0; left: 0; right: 0; bottom: 0; position: static"
 					class={editable ? undefined : 'cursor-default opacity-70'}
 				/>
 				{#if editable}
-					<div
-						class="absolute bottom-0 left-0 right-0 h-[10px] cursor-s-resize hover:bg-brand/10 rounded-b-md"
-						use:pixelDrag={{
+					<!-- The resize grip pins to the event's lower edge. -->
+					<Imposter
+						placement="bottom"
+						layer="under"
+						class="h-2.5 cursor-s-resize rounded-b-md hover:bg-brand/10"
+						{@attach fromAction(pixelDrag, () => ({
 							onStart: (e) => {
 								e.stopPropagation();
 								drag.beginResize(event, 0, top, h);
@@ -158,19 +161,21 @@
 							onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 							onEnd: commitDrop,
 							onCancel: drag.cancelDrag,
-							axis: 'y'
-						}}
+							axis: 'y' as const
+						}))}
 						role="none"
-					></div>
+					/>
 				{/if}
-			</div>
+			</Imposter>
 		{/each}
 
 		{#if overlay}
-			<div
-				class="absolute left-[2px] right-[2px] rounded-md border-2 border-dashed opacity-50 z-30 pointer-events-none"
+			<!-- The drop preview at the drag offset. -->
+			<Imposter
+				placement="top"
+				class="pointer-events-none inset-x-[2px] z-30 rounded-md border-2 border-dashed opacity-50"
 				style="top: {overlay.top}px; height: {overlay.height}px; border-color: var(--color-brand); background: var(--color-brand-50)"
-			></div>
+			/>
 		{/if}
 	</div>
 </Scroll>

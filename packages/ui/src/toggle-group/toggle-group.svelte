@@ -7,15 +7,15 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import { ToggleGroup as ToggleGroupPrimitive } from 'bits-ui';
 
 	let {
 		ref = $bindable(null),
 		value = $bindable(),
-		class: className,
 		size = 'default',
 		variant = 'default',
+		children,
 		...restProps
 	}: ToggleGroupPrimitive.RootProps & ToggleVariants = $props();
 
@@ -40,17 +40,23 @@
 		{...restProps}
 		type="single"
 		bind:ref
-		class={cn('flex items-center justify-center gap-1', className)}
 		value={typeof value === 'string' ? value : undefined}
 		onValueChange={updateSingle}
-	/>
+	>
+		{#snippet child({ props })}
+			<Inline gap="xs" justify="center" {...props}>{@render children?.()}</Inline>
+		{/snippet}
+	</ToggleGroupPrimitive.Root>
 {:else}
 	<ToggleGroupPrimitive.Root
 		{...restProps}
 		type="multiple"
 		bind:ref
-		class={cn('flex items-center justify-center gap-1', className)}
 		value={Array.isArray(value) ? value : undefined}
 		onValueChange={updateMultiple}
-	/>
+	>
+		{#snippet child({ props })}
+			<Inline gap="xs" justify="center" {...props}>{@render children?.()}</Inline>
+		{/snippet}
+	</ToggleGroupPrimitive.Root>
 {/if}

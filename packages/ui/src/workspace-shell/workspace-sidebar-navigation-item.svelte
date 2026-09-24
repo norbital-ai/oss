@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Frame, Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
 	import { FEATURE_COLOR_STYLES } from '#lib/feature-colors';
@@ -42,10 +43,13 @@
 		onNavigate(href);
 	}
 
-	/** Follows the branch's own page; its children stay open so the branch reads as one region. */
-	function openBranch(event: MouseEvent): void {
-		navigate(event, item.href);
-		expanded = true;
+	/**
+	 * A group row is a disclosure, not a link: it expands and collapses its children. Only the
+	 * icon rail (sidebar collapsed, children unreachable) follows the group's own page.
+	 */
+	function toggleOrNavigate(event: MouseEvent): void {
+		if (open) expanded = !expanded;
+		else navigate(event, item.href);
 	}
 
 	watch(
@@ -60,23 +64,24 @@
 	{#if hasChildren}
 		<Sidebar.MenuButton isActive={item.active} size="sm" tooltipContent={item.label}>
 			{#snippet child({ props })}
-				<a
+				<svelte:element
+					this={open ? 'button' : 'a'}
 					{...props}
-					href={item.href}
-					onmouseenter={() => onPrefetch?.(item.href)}
-					onfocus={() => onPrefetch?.(item.href)}
-					onclick={openBranch}
+					type={open ? 'button' : undefined}
+					href={open ? undefined : item.href}
+					onclick={toggleOrNavigate}
 					aria-expanded={open ? expanded : undefined}
-					aria-current={item.active ? 'page' : undefined}
 					class={cn(
 						typeof props.class === 'string' ? props.class : undefined,
 						'relative w-full overflow-visible',
 						open && 'pr-7'
 					)}
 				>
-					<div
+					<Frame
+						ratio="square"
+						shrink={false}
 						class={cn(
-							'flex size-6 shrink-0 items-center justify-center rounded-md border shadow-xs',
+							'size-6 rounded-md border shadow-xs',
 							productIconName
 								? 'border-input bg-background text-foreground'
 								: (featureStyles?.iconWrapperClass ?? 'border-input bg-background')
@@ -90,7 +95,7 @@
 								class={cn('size-3.5', featureStyles?.iconClass)}
 							/>
 						{/if}
-					</div>
+					</Frame>
 					{#if open}
 						<span
 							data-navigation-label
@@ -106,24 +111,23 @@
 							>
 						{/if}
 						<div
-							class={cn(
-								WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
-								badgeIconName ? 'gap-1' : 'size-3.5'
-							)}
+							class={cn(WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS, !badgeIconName && 'size-3.5')}
 							aria-hidden="true"
 						>
-							{#if badgeIconName}
-								<span data-navigation-badge={item.badge}>
-									<ProductIcon name={badgeIconName} class="size-3.5" />
-								</span>
-							{/if}
-							<Icon
-								icon="lucide:chevron-right"
-								class={cn('size-3.5 transition-transform duration-150', expanded && 'rotate-90')}
-							/>
+							<Inline as="span" gap="xs">
+								{#if badgeIconName}
+									<span data-navigation-badge={item.badge}>
+										<ProductIcon name={badgeIconName} class="size-3.5" />
+									</span>
+								{/if}
+								<Icon
+									icon="lucide:chevron-right"
+									class={cn('size-3.5 transition-transform duration-150', expanded && 'rotate-90')}
+								/>
+							</Inline>
 						</div>
 					{/if}
-				</a>
+				</svelte:element>
 			{/snippet}
 		</Sidebar.MenuButton>
 		{#if open && expanded}
@@ -153,9 +157,11 @@
 						open && 'pr-7'
 					)}
 				>
-					<div
+					<Frame
+						ratio="square"
+						shrink={false}
 						class={cn(
-							'flex size-6 shrink-0 items-center justify-center rounded-md border shadow-xs',
+							'size-6 rounded-md border shadow-xs',
 							productIconName
 								? 'border-input bg-background text-foreground'
 								: (featureStyles?.iconWrapperClass ?? 'border-input bg-background')
@@ -169,7 +175,7 @@
 								class={cn('size-3.5', featureStyles?.iconClass)}
 							/>
 						{/if}
-					</div>
+					</Frame>
 					{#if open}
 						<span
 							data-navigation-label

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { CollapsibleTrigger } from '#lib/collapsible';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
@@ -40,34 +41,36 @@
 
 <CollapsibleTrigger
 	class={cn(
-		'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-micro font-medium text-foreground transition-colors hover:bg-muted/20',
+		'w-full rounded-md px-2 py-1 text-left text-micro font-medium text-foreground transition-colors hover:bg-muted/20',
 		className
 	)}
 >
-	<Icon
-		{icon}
-		class={cn('size-3.5 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground/80')}
-	/>
-	<span class="min-w-0 flex-1 text-left">
-		{#if isActive}
-			<Shimmer class="text-micro font-medium" content_length={labelLength}>
-				{#if children}
-					{@render children()}
-				{:else}
-					{t('misc.timeline')}
-				{/if}
-			</Shimmer>
-		{:else if children}
-			{@render children()}
-		{:else}
-			{t('misc.timeline')}
-		{/if}
-	</span>
-	<Icon
-		icon="lucide:chevron-down"
-		class={cn(
-			'size-2.5 shrink-0 text-foreground/45 transition-transform duration-150',
-			context.isOpen ? 'rotate-180' : 'rotate-0'
-		)}
-	/>
+	<Inline as="span" gap="xs">
+		<Icon
+			{icon}
+			class={cn('size-3.5 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground/80')}
+		/>
+		<span class="min-w-0 flex-1 text-left">
+			{#if isActive}
+				<Shimmer class="text-micro font-medium" content_length={labelLength}>
+					{#if children}
+						{@render children()}
+					{:else}
+						{t('misc.timeline')}
+					{/if}
+				</Shimmer>
+			{:else if children}
+				{@render children()}
+			{:else}
+				{t('misc.timeline')}
+			{/if}
+		</span>
+		<Icon
+			icon="lucide:chevron-down"
+			class={cn(
+				'size-2.5 shrink-0 text-foreground/45 transition-transform duration-150',
+				context.isOpen ? 'rotate-180' : 'rotate-0'
+			)}
+		/>
+	</Inline>
 </CollapsibleTrigger>

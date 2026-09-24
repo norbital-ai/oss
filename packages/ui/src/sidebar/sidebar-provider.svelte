@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import {
@@ -36,15 +37,17 @@
 
 <svelte:window onkeydown={sidebar.handleShortcutKeydown} />
 
-<div
+<Inline
+	gap="none"
+	align="stretch"
 	data-slot="sidebar-wrapper"
 	style="--sidebar-width: {SIDEBAR_WIDTH}; --sidebar-width-icon: {SIDEBAR_WIDTH_ICON}; {style}"
 	class={cn(
-		'group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar',
+		'group/sidebar-wrapper min-h-svh w-full has-data-[variant=inset]:bg-sidebar',
 		className
 	)}
-	bind:this={ref}
+	bind:ref
 	{...restProps}
 >
 	{@render children?.()}
-</div>
+</Inline>

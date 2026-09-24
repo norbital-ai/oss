@@ -5,7 +5,7 @@
 	import DateView from './date.view.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
-	import { Inline, Stack } from '#lib/layout';
+	import { Imposter, Inline, Stack } from '#lib/layout';
 	import {
 		fromLocalDateTimeParts,
 		toLocalDateTimeParts
@@ -19,8 +19,8 @@
 		disabled = false,
 		allowClear = true,
 		placeholder = t('dataRenderer.selectDateTime'),
-		class: className,
-		onValueChange
+		onValueChange,
+		...rest
 	}: {
 		value: string | string[] | null;
 		multiple?: boolean;
@@ -77,13 +77,13 @@
 	}
 </script>
 
-<Stack gap="sm" class={className}>
+<Stack gap="sm" {...rest}>
 	{#each values as entry, index (`${entry}-${index}`)}
 		{@const parts = toLocalDateTimeParts(entry)}
 		<Inline
 			align="stretch"
 			gap="none"
-			class="min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs focus-within:ring-2 focus-within:ring-ring"
+			class="min-w-0 overflow-clip rounded-md border border-input bg-background shadow-xs focus-within:ring-2 focus-within:ring-ring"
 		>
 			<DateView
 				value={entry}
@@ -96,10 +96,13 @@
 				onValueChange={(next) => updateDate(index, next)}
 			/>
 			<div class="relative w-28 shrink-0 border-l border-input">
-				<Icon
-					icon="lucide:clock-3"
-					class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-				/>
+				<Imposter
+					placement="center-start"
+					layer="under"
+					class="pointer-events-none left-2.5 size-4 text-muted-foreground"
+				>
+					<Icon icon="lucide:clock-3" class="block size-4" />
+				</Imposter>
 				<Input
 					type="time"
 					value={parts?.time ?? ''}
@@ -128,7 +131,7 @@
 		<Inline
 			align="stretch"
 			gap="none"
-			class="min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs"
+			class="min-w-0 overflow-clip rounded-md border border-input bg-background shadow-xs"
 		>
 			<DateView
 				value={null}
@@ -141,10 +144,13 @@
 				onValueChange={(next) => updateDate(0, next)}
 			/>
 			<div class="relative w-28 shrink-0 border-l border-input">
-				<Icon
-					icon="lucide:clock-3"
-					class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-				/>
+				<Imposter
+					placement="center-start"
+					layer="under"
+					class="pointer-events-none left-2.5 size-4 text-muted-foreground"
+				>
+					<Icon icon="lucide:clock-3" class="block size-4" />
+				</Imposter>
 				<Input
 					type="time"
 					value=""
@@ -157,13 +163,7 @@
 	{/if}
 
 	{#if multiple}
-		<Button
-			type="button"
-			variant="outline"
-			class="justify-center border-dashed"
-			{disabled}
-			onclick={addValue}
-		>
+		<Button type="button" variant="outline" class="border-dashed" {disabled} onclick={addValue}>
 			<Icon icon="radix-icons:plus" class="size-4" />
 			{t('dataRenderer.addDateTime')}
 		</Button>

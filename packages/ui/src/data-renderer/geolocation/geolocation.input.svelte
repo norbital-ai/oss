@@ -191,35 +191,39 @@
 	{#if addresses.length > 0}
 		<Inline gap="xs" class="truncate">
 			{#each addresses.slice(0, 2) as geoValue (geoValue.formatted_address)}
-				<Badge variant="outline" class="max-w-[200px] gap-1">
-					<Icon
-						icon={geoValue.geometry ? 'lucide:map-pin' : 'lucide:map-pin-off'}
-						class={`h-3 w-3 shrink-0 ${geoValue.geometry ? 'text-success' : 'text-orange-500'}`}
-					/>
-					<span class="truncate text-xs">
-						{geoValue?.formatted_address || t('dataRenderer.unknownLocation')}
-					</span>
-					{#if !readonly && multiple}
-						<button
-							type="button"
-							class="ml-1 rounded-full hover:bg-secondary focus:ring-2 focus:ring-brand focus:outline-none"
-							onclick={(e) => handleLocationRemove(geoValue, e)}
-							aria-label={t('dataRenderer.removeLocation', {
-								location: geoValue.formatted_address
-							})}
-						>
-							<Icon icon="lucide:x" class="h-3 w-3" />
-						</button>
-					{/if}
+				<Badge variant="outline" class="max-w-[200px]">
+					<Inline as="span" gap="xs">
+						<Icon
+							icon={geoValue.geometry ? 'lucide:map-pin' : 'lucide:map-pin-off'}
+							class={`h-3 w-3 shrink-0 ${geoValue.geometry ? 'text-success' : 'text-orange-500'}`}
+						/>
+						<span class="truncate text-xs">
+							{geoValue?.formatted_address || t('dataRenderer.unknownLocation')}
+						</span>
+						{#if !readonly && multiple}
+							<button
+								type="button"
+								class="ml-1 rounded-full hover:bg-secondary focus:ring-2 focus:ring-brand focus:outline-none"
+								onclick={(e) => handleLocationRemove(geoValue, e)}
+								aria-label={t('dataRenderer.removeLocation', {
+									location: geoValue.formatted_address
+								})}
+							>
+								<Icon icon="lucide:x" class="h-3 w-3" />
+							</button>
+						{/if}
+					</Inline>
 				</Badge>
 			{/each}
 
 			{#if addresses.length > 2}
-				<Badge variant="info" class="gap-1">
-					<Icon icon="lucide:more-horizontal" class="h-3 w-3" />
-					<span class="text-xs">
-						{t('misc.moreItems', { count: addresses.length - 2 })}
-					</span>
+				<Badge variant="info">
+					<Inline as="span" gap="xs">
+						<Icon icon="lucide:more-horizontal" class="h-3 w-3" />
+						<span class="text-xs">
+							{t('misc.moreItems', { count: addresses.length - 2 })}
+						</span>
+					</Inline>
 				</Badge>
 			{/if}
 		</Inline>
@@ -257,7 +261,7 @@
 						{ latitude: location.geometry.lat, longitude: location.geometry.lon, label: 'A' }
 					]}
 					ariaLabel={t('dataRenderer.mapOf', { location: location.formatted_address })}
-					class="h-[12.5rem]"
+					class="h-50"
 				/>
 			</Stack>
 		{/if}

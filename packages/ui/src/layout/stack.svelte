@@ -22,6 +22,10 @@
 		fill?: boolean;
 		/** Allow this region to shrink when its parent is constrained. */
 		shrink?: boolean;
+		/** A hairline between children — a list of rows. Pair with `gap="none"`. */
+		divided?: boolean;
+		/** Last child on top: a log read newest-first without reversing the data. */
+		reverse?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -32,12 +36,15 @@
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		gap = 'md',
 		align = 'stretch',
 		justify = 'start',
 		grow = false,
 		fill = false,
 		shrink = true,
+		divided = false,
+		reverse = false,
 		class: className,
 		children,
 		...restProps
@@ -59,15 +66,19 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
-		className,
-		'flex min-h-0 min-w-0 flex-col',
+		'flex min-h-0 min-w-0',
+		reverse ? 'flex-col-reverse' : 'flex-col',
 		GAP_CLASSES[gap],
 		alignClasses[align],
 		justifyClasses[justify],
 		grow && 'flex-1',
 		fill && 'h-full',
-		!shrink && 'shrink-0'
+		!shrink && 'shrink-0',
+		divided && 'divide-y divide-border',
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	data-layout="stack"
 	{...restProps}

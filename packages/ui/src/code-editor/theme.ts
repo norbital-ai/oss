@@ -201,11 +201,3 @@ export function buildCodeEditorTheme(options?: {
 		})
 	];
 }
-
-export function codeEditorShellClass(invalid?: boolean): string {
-	return [
-		'overflow-hidden rounded-sm border bg-background shadow-xs transition-[color,box-shadow]',
-		invalid ? 'border-destructive' : 'border-input',
-		'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50'
-	].join(' ');
-}

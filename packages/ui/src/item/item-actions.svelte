@@ -1,20 +1,23 @@
 <script lang="ts">
-	import { cn, type WithElementRef } from '#lib/utils';
+	import { Inline } from '#lib/layout';
+	import type { WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
 		ref = $bindable(null),
-		class: className,
 		children,
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
+<Inline
+	gap="sm"
 	data-slot="item-actions"
-	class={cn('flex items-center gap-2', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Inline>

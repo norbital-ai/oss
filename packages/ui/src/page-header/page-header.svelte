@@ -14,6 +14,7 @@
 
 <script lang="ts">
 	import { Cluster, INSET_X_CLASS, Split, Stack } from '#lib/layout';
+	import { insetReader } from '#lib/layout/inset.svelte';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -25,6 +26,7 @@
 		...restProps
 	}: PageHeaderProps = $props();
 
+	const insideInset = insetReader();
 	const hasHeading = $derived(Boolean(title || description || eyebrow));
 </script>
 
@@ -49,7 +51,7 @@
 {/snippet}
 
 <header
-	class={cn(className, INSET_X_CLASS, 'border-b border-border py-4')}
+	class={cn(className, !insideInset() && INSET_X_CLASS, 'border-b border-border py-4')}
 	data-page-header
 	{...restProps}
 >

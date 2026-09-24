@@ -103,7 +103,6 @@ const WorkspaceImpersonationSchema = Schema.Struct({
 });
 export type WorkspaceImpersonation = typeof WorkspaceImpersonationSchema.Type;
 
-
 const WorkspaceNavigationModelSchema = Schema.Struct({
 	activeOrganization: WorkspaceOrganizationOptionSchema,
 	organizations: Schema.Array(WorkspaceOrganizationOptionSchema),

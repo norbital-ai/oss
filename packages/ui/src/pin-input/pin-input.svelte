@@ -1,5 +1,6 @@
 <!-- exported package component rendered by the core OTP challenge -->
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import {
 		PinInput as PinInputPrimitive,
@@ -39,27 +40,33 @@
 	inputmode="numeric"
 	autocomplete="one-time-code"
 	aria-invalid={ariaInvalid}
-	class={cn('flex w-full items-center justify-between gap-2', className)}
+	class={cn('w-full', className)}
 	{...restProps}
 >
 	{#snippet children({ cells })}
-		{#each cells as cell, index (index)}
-			<PinInputPrimitive.Cell
-				{cell}
-				class={cn(
-					'flex h-11 min-w-0 flex-1 items-center justify-center rounded-sm border border-input bg-background text-base font-medium tabular-nums shadow-xs transition-[border-color,box-shadow,background-color] outline-none dark:bg-input/30',
-					cell.isActive && 'border-ring ring-[3px] ring-ring/50 ring-inset dark:bg-input/40',
-					invalid && 'border-destructive ring-destructive/20 ring-inset dark:ring-destructive/40',
-					disabled && 'cursor-not-allowed bg-muted opacity-50 shadow-none',
-					cellClass
-				)}
-			>
-				{#if cell.char}
-					{cell.char}
-				{:else if cell.hasFakeCaret}
-					<span class="h-5 w-px bg-foreground" aria-hidden="true"></span>
-				{/if}
-			</PinInputPrimitive.Cell>
-		{/each}
+		<Inline justify="between" class="w-full">
+			{#each cells as cell, index (index)}
+				<PinInputPrimitive.Cell
+					{cell}
+					class={cn(
+						'h-11 rounded-sm border border-input bg-background text-base font-medium tabular-nums shadow-xs transition-[border-color,box-shadow,background-color] outline-none dark:bg-input/30',
+						cell.isActive && 'border-ring ring-[3px] ring-ring/50 ring-inset dark:bg-input/40',
+						invalid && 'border-destructive ring-destructive/20 ring-inset dark:ring-destructive/40',
+						disabled && 'cursor-not-allowed bg-muted opacity-50 shadow-none',
+						cellClass
+					)}
+				>
+					{#snippet child({ props })}
+						<Inline gap="none" justify="center" grow {...props}>
+							{#if cell.char}
+								{cell.char}
+							{:else if cell.hasFakeCaret}
+								<span class="h-5 w-px bg-foreground" aria-hidden="true"></span>
+							{/if}
+						</Inline>
+					{/snippet}
+				</PinInputPrimitive.Cell>
+			{/each}
+		</Inline>
 	{/snippet}
 </PinInputPrimitive.Root>

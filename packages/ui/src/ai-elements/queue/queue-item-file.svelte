@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -19,11 +20,16 @@
 	}: QueueItemFileProps = $props();
 </script>
 
-<span
-	bind:this={ref}
-	class={cn('bg-muted flex items-center gap-1 rounded border px-2 py-1 text-xs', className)}
+<Inline
+	as="span"
+	gap="xs"
+	class={cn('bg-muted rounded border px-2 py-1 text-xs', className)}
 	{...restProps}
+	{@attach (node: HTMLSpanElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	<Icon icon="lucide:paperclip" class="size-3" />
 	<span class="max-w-[100px] truncate">{@render children?.()}</span>
-</span>
+</Inline>

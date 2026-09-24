@@ -22,7 +22,7 @@
 	import { type DateRange } from 'bits-ui';
 	import type { Snippet } from 'svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline, Scroll, Stack } from '#lib/layout';
+	import { Imposter, Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { RangeCalendar } from '#lib/range-calendar';
 	import type { TimeRange } from '#lib/time-range';
@@ -430,21 +430,26 @@
 	<div class={cn('group relative w-full', className)} {style}>
 		<Popover.Trigger
 			class={cn(
-				buttonVariants({ variant: 'outline', class: 'w-full justify-start gap-2' }),
+				buttonVariants({ variant: 'outline', class: 'w-full' }),
 				readonly && 'shadow-none',
 				borderless && 'border-none shadow-none'
 			)}
 			{disabled}
 			aria-readonly={readonly}
 		>
-			{@render TriggerContent()}
+			<Inline as="span" gap="sm" class="w-full">
+				{@render TriggerContent()}
+			</Inline>
 		</Popover.Trigger>
 		{#if allowClear && hasSelection && !cantMutate}
-			<button
+			<Imposter
+				as="button"
 				type="button"
+				placement="center-end"
+				layer="under"
 				class={cn(
 					buttonVariants({ variant: 'outline', size: 'icon' }),
-					'pointer-events-auto invisible absolute top-1/2 right-2 h-6 w-6 shrink-0 -translate-y-1/2 text-muted-foreground group-hover:visible hover:text-destructive'
+					'pointer-events-auto invisible h-6 w-6 shrink-0 text-muted-foreground group-hover:visible hover:text-destructive'
 				)}
 				onclick={(e) => {
 					e.preventDefault();
@@ -454,7 +459,7 @@
 				aria-label={t('dataRenderer.clearSelection')}
 			>
 				<Icon icon="lucide:x" class="h-3 w-3" />
-			</button>
+			</Imposter>
 		{/if}
 	</div>
 

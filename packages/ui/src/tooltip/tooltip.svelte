@@ -71,7 +71,7 @@
 				{avoidCollisions}
 				{collisionPadding}
 				{arrowClasses}
-				class={contentClass}
+				class={/* repository-health:allow UI25 -- pass-through of the caller's `contentClass` prop; its tokens are literal at the call site */ contentClass}
 			>
 				{#if content}
 					{@render content()}

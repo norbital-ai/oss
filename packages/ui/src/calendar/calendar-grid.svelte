@@ -9,8 +9,4 @@
 	}: CalendarPrimitive.GridProps = $props();
 </script>
 
-<CalendarPrimitive.Grid
-	bind:ref
-	class={cn('w-full border-collapse space-y-1', className)}
-	{...restProps}
-/>
+<CalendarPrimitive.Grid bind:ref class={cn('w-full border-collapse', className)} {...restProps} />

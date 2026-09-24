@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -10,12 +11,12 @@
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
+<Inline
+	gap="none"
 	data-slot="input-group"
 	role="group"
 	class={cn(
-		'group/input-group relative flex w-full items-center rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/30',
+		'group/input-group relative w-full rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/30',
 		'h-9 has-[>textarea]:h-auto',
 
 		// Variants based on alignment.
@@ -33,6 +34,10 @@
 		className
 	)}
 	{...props}
+	{@attach (node: HTMLElement) => {
+		ref = node as typeof ref;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Inline>

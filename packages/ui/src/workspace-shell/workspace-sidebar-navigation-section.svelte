@@ -31,6 +31,7 @@
 
 {#if items.length > 0}
 	<Sidebar.Group class={className}>
+		<!-- repository-health:allow UI25 -- the shared sidebar typography token (`text-overline`); it carries no layout -->
 		<Sidebar.GroupLabel class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>
 			{#if href}
 				<a

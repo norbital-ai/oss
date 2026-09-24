@@ -1,5 +1,6 @@
 <!-- star-rating-star.svelte -->
 <script lang="ts">
+	import { Imposter } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import { RatingGroup } from 'bits-ui';
@@ -34,15 +35,16 @@
 				<!-- Background empty star -->
 				<Icon icon="lucide:star" class="size-full text-muted-foreground transition-all" />
 				<!-- Half-filled overlay using CSS -->
-				<div
-					class="absolute inset-0 overflow-hidden [clip-path:polygon(0_0,50%_0,50%_100%,0%_100%)]"
+				<Imposter
+					placement="fill"
+					class="overflow-clip [clip-path:polygon(0_0,50%_0,50%_100%,0%_100%)]"
 				>
 					<Icon
 						icon="lucide:star"
 						fill="currentColor"
 						class="size-full text-yellow-400 transition-all"
 					/>
-				</div>
+				</Imposter>
 			</div>
 		{:else}
 			<!-- Outlined star for inactive state -->
@@ -57,11 +59,13 @@
 
 			<!-- Hover preview -->
 			{#if !disabled}
-				<Icon
-					icon="lucide:star"
-					fill="currentColor"
-					class="absolute top-0 left-0 size-full text-yellow-300 opacity-0 transition-all group-hover:opacity-40 group-data-[highlighted]:opacity-40"
-				/>
+				<Imposter placement="fill">
+					<Icon
+						icon="lucide:star"
+						fill="currentColor"
+						class="size-full text-yellow-300 opacity-0 transition-all group-hover:opacity-40 group-data-[highlighted]:opacity-40"
+					/>
+				</Imposter>
 			{/if}
 		{/if}
 	</div>

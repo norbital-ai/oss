@@ -24,7 +24,7 @@
 	import AttachmentPreviewPdf from './attachment-preview-pdf.svelte';
 	import AttachmentPreviewCsv from './attachment-preview-csv.svelte';
 	import AttachmentPreviewText from './attachment-preview-text.svelte';
-	import { Inline, Stack } from '#lib/layout';
+	import { Frame, Inline, Stack } from '#lib/layout';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -243,12 +243,13 @@
 </script>
 
 {#snippet Container(children: Snippet)}
-	<div
-		class="inline-flex w-full max-w-full flex-col rounded border border-border bg-background p-2"
+	<Stack
+		gap="none"
+		class="w-full max-w-full rounded border border-border bg-background p-2"
 		data-file-type={fileType}
 	>
 		{@render children()}
-	</div>
+	</Stack>
 {/snippet}
 {#snippet Loader()}
 	<Inline gap="sm" class="text-muted-foreground">
@@ -339,11 +340,11 @@
 					<button
 						type="button"
 						{...props}
-						class="ml-auto inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+						class="ml-auto h-7 w-7 rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 						onclick={(e) => e.stopPropagation()}
 						aria-label={t('misc.viewSummary')}
 					>
-						<Icon icon="lucide:info" width="16" height="16" />
+						<Icon icon="lucide:info" width="16" height="16" class="mx-auto block" />
 					</button>
 				{/snippet}
 				{#snippet content()}
@@ -376,9 +377,9 @@
 			<ScrollArea orientation="both" class="w-full border-t pt-3">
 				{#if preview.loading}
 					<Inline justify="center" gap="sm" class="p-4">
-						<div class="flex h-5 w-5 animate-spin items-center justify-center">
+						<Frame ratio="square" class="size-5 animate-spin">
 							<Icon icon="eos-icons:loading" />
-						</div>
+						</Frame>
 						<span>{t('misc.loadingPreview')}</span>
 					</Inline>
 				{:else if preview.error}

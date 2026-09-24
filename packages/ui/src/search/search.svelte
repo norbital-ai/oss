@@ -20,6 +20,7 @@
 </script>
 
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
 	import { Indicator } from '#lib/indicator';
@@ -59,7 +60,7 @@
 	}
 </script>
 
-<div class="relative flex items-center">
+<Inline gap="none" class="relative">
 	<Popover.Root
 		bind:open={isSearchOpen}
 		onOpenChange={(open) => {
@@ -109,4 +110,4 @@
 			/>
 		</Popover.Content>
 	</Popover.Root>
-</div>
+</Inline>

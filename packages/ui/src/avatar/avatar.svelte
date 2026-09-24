@@ -3,6 +3,7 @@
 </script>
 
 <script lang="ts">
+	import { Frame } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { setContext } from 'svelte';
 	import type { Snippet } from 'svelte';
@@ -25,10 +26,15 @@
 	setContext(AVATAR_KEY, state);
 </script>
 
-<div
-	bind:this={ref}
-	class={cn('relative flex size-10 shrink-0 overflow-hidden rounded-full', className)}
+<Frame
+	ratio="square"
+	shrink={false}
+	class={cn('relative size-10 rounded-full', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Frame>

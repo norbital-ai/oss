@@ -9,16 +9,15 @@
 		selection,
 		stepKey,
 		keyIndex,
-		separatorClass,
-		fallbackClass,
+		tone,
 		stepSeparator,
 		steps
 	}: {
 		selection: SelectionDraft<TValueMap>;
 		stepKey: keyof TValueMap;
 		keyIndex: number;
-		separatorClass: string;
-		fallbackClass: string;
+		/** Where the label sits: a trigger badge, or a complete / partial sidebar row. */
+		tone: 'badge' | 'complete' | 'partial';
 		stepSeparator: string;
 		steps: StepsConfig<TValueMap>;
 	} = $props();
@@ -35,11 +34,16 @@
 </script>
 
 {#if value != null}
-	{#if keyIndex > 0}<span class={separatorClass}>{stepSeparator}</span>{/if}
+	{#if keyIndex > 0}<span class={tone === 'badge' ? 'opacity-50' : 'opacity-40'}
+			>{stepSeparator}</span
+		>{/if}
 	{#if definition.type === 'custom' && definition.formatSelection}
 		{@render definition.formatSelection(value, { compact: true, ...selection })}
 	{:else if definition.type === 'custom'}
-		<span class={fallbackClass} title={JSON.stringify(value)}>{t('common.customFallback')}</span>
+		<span
+			class={{ badge: 'opacity-75', complete: 'opacity-70', partial: 'opacity-60' }[tone]}
+			title={JSON.stringify(value)}>{t('common.customFallback')}</span
+		>
 	{:else if option}
 		{#if typeof option.label === 'string'}
 			<span>{option.label}</span>
@@ -47,6 +51,9 @@
 			{@render option.label(value, { compact: true })}
 		{/if}
 	{:else}
-		<span class={fallbackClass} title={JSON.stringify(value)}>{t('common.unknownFallback')}</span>
+		<span
+			class={{ badge: 'opacity-75', complete: 'opacity-70', partial: 'opacity-60' }[tone]}
+			title={JSON.stringify(value)}>{t('common.unknownFallback')}</span
+		>
 	{/if}
 {/if}

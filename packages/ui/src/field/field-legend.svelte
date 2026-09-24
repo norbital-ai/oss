@@ -18,7 +18,8 @@
 	data-slot="field-legend"
 	data-variant={variant}
 	class={cn(
-		'mb-3 font-medium',
+		// The rendered legend sits outside the fieldset's flex box, so the parent gap cannot reach it.
+		'pb-3 font-medium',
 		'data-[variant=legend]:text-base',
 		'data-[variant=label]:text-sm',
 		className

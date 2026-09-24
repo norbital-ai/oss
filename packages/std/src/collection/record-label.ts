@@ -107,8 +107,12 @@ const JsonContainerDecoded = Schema.decodeOption(Schema.fromJsonString(JsonConta
  * Coercion therefore belongs here, where the values are ordinary JavaScript and a missing one can
  * simply be left out.
  */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
 export function labelTermText(value: unknown): string | null {
 	if (value == null) return null;
+	// An instant column reaches the client as its ISO text, not a `Date`: read it as the same instant.
+	if (typeof value === 'string' && ISO_INSTANT.test(value)) return labelTermText(new Date(value));
 	if (value instanceof Date) {
 		if (Number.isNaN(value.getTime())) return null;
 		const iso = value.toISOString();

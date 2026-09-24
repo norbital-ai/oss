@@ -5,7 +5,6 @@
 
 	let {
 		ref = $bindable(),
-		class: className,
 		children,
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLElement>> = $props();
@@ -13,6 +12,6 @@
 	const { t } = useI18n<UiKeys>();
 </script>
 
-<nav bind:this={ref} class={className} aria-label={t('misc.breadcrumb')} {...restProps}>
+<nav bind:this={ref} aria-label={t('misc.breadcrumb')} {...restProps}>
 	{@render children?.()}
 </nav>

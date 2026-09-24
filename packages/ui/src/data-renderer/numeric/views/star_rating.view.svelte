@@ -101,7 +101,7 @@
 {:else if scalarValue == null && mode === 'display'}
 	<span class={cn('text-sm text-muted-foreground', className)}>{placeholder}</span>
 {:else}
-	<div class={cn('flex items-center gap-2', className)}>
+	<Inline gap="sm" class={className}>
 		{@render rating(scalarValue ?? 0, mode === 'display', (next) =>
 			onValueChange?.(normalized(next))
 		)}
@@ -117,5 +117,5 @@
 				<Icon icon="lucide:x" class="size-4" />
 			</Button>
 		{/if}
-	</div>
+	</Inline>
 {/if}

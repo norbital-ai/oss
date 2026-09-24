@@ -25,7 +25,7 @@
 
 <button
 	class={cn(
-		'absolute left-px right-px rounded-md border text-left overflow-hidden',
+		'rounded-md border text-left overflow-clip',
 		'bg-card shadow-xs hover:shadow-sm transition-shadow',
 		'cursor-grab active:cursor-grabbing',
 		className
@@ -39,7 +39,7 @@
 		}
 	}}
 >
-	<div class="h-[3px] w-full" style="background: {accentColor}"></div>
+	<div class="h-0.75 w-full" style="background: {accentColor}"></div>
 	<div class="px-1.5 py-1 min-w-0">
 		{#if eventContent}
 			{@render eventContent(event, ctx)}

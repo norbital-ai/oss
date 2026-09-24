@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Bound, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { CommandState, setCommandState } from './command-state.svelte.js';
 	import type { CommandRootProps } from '#lib/command/types';
@@ -17,6 +18,7 @@
 		onValueChange,
 		onIndicatorKeydown,
 		disableNavigation = false,
+		gap = 'none',
 		...restProps
 	}: CommandRootProps = $props();
 
@@ -123,10 +125,16 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div
-	bind:this={ref}
+<!--
+	The rounded command surface clips its input and list; a caller's display and height classes
+	(`hidden`, a fixed height) win. No inline-size containment: a popover sizes itself to the list.
+-->
+<Bound
+	bind:ref
+	size="full"
+	clip
 	class={cn(
-		'flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground',
+		'w-full rounded-md bg-popover text-popover-foreground [container-type:normal]',
 		className
 	)}
 	data-command-root="true"
@@ -136,7 +144,9 @@
 	onmousemove={handleMouseMove}
 	{...restProps}
 >
-	{#if children}
-		{@render children()}
-	{/if}
-</div>
+	<Stack {gap} fill>
+		{#if children}
+			{@render children()}
+		{/if}
+	</Stack>
+</Bound>

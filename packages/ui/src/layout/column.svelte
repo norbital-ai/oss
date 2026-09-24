@@ -15,7 +15,14 @@
 	import { getContext } from 'svelte';
 	import { COLUMN_PARENT_CONTEXT, type ColumnParentContext } from '#lib/layout/layout.shared';
 
-	let { as = 'div', span = 1, class: className, children, ...restProps }: ColumnProps = $props();
+	let {
+		as = 'div',
+		ref = $bindable(null),
+		span = 1,
+		class: className,
+		children,
+		...restProps
+	}: ColumnProps = $props();
 	const parent = getContext<ColumnParentContext>(COLUMN_PARENT_CONTEXT);
 	const spanClasses: Record<ColumnSpan, string> = {
 		1: 'col-span-1',
@@ -40,7 +47,8 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'min-h-0 min-w-0', spanClass)}
+	bind:this={ref}
+	class={cn('min-h-0 min-w-0', spanClass, className)}
 	data-layout="column"
 	{...restProps}
 >

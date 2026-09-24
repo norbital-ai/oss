@@ -14,7 +14,8 @@
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { getErrorMessage } from '@norbital-ai/std';
-	import { Bound, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Grid, Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { VirtualList } from '@norbital-ai/ui/virtual-list';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { Textarea } from '@norbital-ai/ui/textarea';
@@ -44,7 +45,7 @@
 		type SubmissionCommand
 	} from './composer-commands.js';
 	import { downloadMarkdown, exportTranscript } from './export-transcript.js';
-	import { pairToolCalls, type SubagentTranscript } from './tool-rows.js';
+	import { pairToolCalls, rendersInTranscript, type SubagentTranscript } from './tool-rows.js';
 	import {
 		compactOrigin,
 		editableUserMessageText,
@@ -206,8 +207,6 @@
 			? activePlan
 			: undefined
 	);
-	const overlayPane =
-		'absolute inset-x-4 top-full mt-1 rounded-xl border border-border/70 bg-background px-3 py-2 shadow-lg';
 	function planTitle(body: string): string {
 		const heading = body.split('\n').find((line) => /^#{1,3}\s+\S/.test(line.trim()));
 		return (heading ?? body.split('\n').find((line) => line.trim() !== '') ?? 'Plan')
@@ -271,6 +270,15 @@
 			messages: deliveredMessages,
 			runs: rootRuns,
 			...(activePlan === undefined ? {} : { activePlan })
+		})
+	);
+	/** Rows that draw something; a model change keeps its divider even over a silent message. */
+	const transcriptRows = $derived(
+		contextView.focusMessages.flatMap((message) => {
+			const generating = runs.some((run) => run.id === message.runId && run.status === 'running');
+			const divider = modelDividers.get(message.id);
+			const renders = rendersInTranscript(message, { tools, hideTodo: true, generating });
+			return renders || divider !== undefined ? [{ message, generating, divider, renders }] : [];
 		})
 	);
 	const contextProjectionIncomplete = $derived(
@@ -991,9 +999,20 @@
 	});
 </script>
 
+{#snippet pendingAdmission(text: string)}
+	<Stack gap="xs" align="end" data-role="user" data-admission="pending">
+		<span class="text-tiny font-medium text-muted-foreground">You</span>
+		<div
+			class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
+		>
+			<p class="m-0 break-words whitespace-pre-wrap">{text}</p>
+		</div>
+	</Stack>
+{/snippet}
+
 <Stack gap="none" fill class="min-h-0 bg-card">
 	<div class="shrink-0 border-b border-border">
-		<Inline align="center" gap="sm" class="mx-auto w-full max-w-3xl px-4 py-2">
+		<Center measure="full" layout="inline" gap="sm" align="center" class="max-w-3xl px-4 py-2">
 			<div class="shrink-0" data-testid="workspace-agent-orb">
 				<NorbiusStrip state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
 			</div>
@@ -1053,22 +1072,26 @@
 					<Icon icon="lucide:x" class="size-4" />
 				</Button>
 			{/if}
-		</Inline>
+		</Center>
 	</div>
 
-	<div class="relative flex min-h-0 flex-1 flex-col">
+	<Stack gap="none" grow class="relative">
 		{#if !followingTail}
 			<!-- The reader scrolled up; new rows land below the fold. One press returns them to the end. -->
-			<Button
-				variant="secondary"
-				size="sm"
-				class="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full shadow-md"
-				aria-label="Jump to latest"
-				onclick={jumpToLatest}
-			>
-				<Icon icon="lucide:arrow-down" class="size-4" />
-				Latest
-			</Button>
+			<Imposter placement="bottom" class="pointer-events-none pb-3">
+				<Inline justify="center">
+					<Button
+						variant="secondary"
+						size="sm"
+						class="pointer-events-auto rounded-full shadow-md"
+						aria-label="Jump to latest"
+						onclick={jumpToLatest}
+					>
+						<Icon icon="lucide:arrow-down" class="size-4" />
+						Latest
+					</Button>
+				</Inline>
+			</Imposter>
 		{/if}
 		{#if pinnedPlan !== undefined || (todo !== null && todo.items.length > 0)}
 			{@const completed =
@@ -1077,7 +1100,7 @@
 				What the agent is working from, kept in view while the transcript scrolls: the plan it
 				is executing and the checklist it keeps. Collapsed to one line each; open for the body.
 			-->
-			<div class="relative z-20 mx-auto w-full max-w-3xl px-4 pt-3" data-now-strip>
+			<Center measure="full" class="relative z-20 max-w-3xl px-4 pt-3" data-now-strip>
 				<Stack
 					gap="xs"
 					class="rounded-xl border border-border/70 bg-background/95 px-3 py-2 shadow-sm backdrop-blur"
@@ -1101,11 +1124,16 @@
 								</Inline>
 							</summary>
 							<!-- Opens over the transcript, not into it: a fixed pane hung below the strip. -->
-							<Bound size="compact" class={overlayPane}>
-								<Scroll name="Plan">
-									<ReadonlyMarkdown scale="compact" allowHtml={false} content={pinnedPlan.body} />
-								</Scroll>
-							</Bound>
+							<Imposter placement="bottom" class="mx-4 translate-y-full pt-1">
+								<Bound
+									size="compact"
+									class="rounded-xl border border-border/70 bg-background px-3 py-2 shadow-lg"
+								>
+									<Scroll name="Plan">
+										<ReadonlyMarkdown scale="compact" allowHtml={false} content={pinnedPlan.body} />
+									</Scroll>
+								</Bound>
+							</Imposter>
 						</details>
 					{/if}
 					{#if todo !== null && todo.items.length > 0}
@@ -1142,40 +1170,45 @@
 									></progress>
 								</Stack>
 							</summary>
-							<Bound size="compact" class={overlayPane}>
-								<Scroll name="Goal steps">
-									<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
-										{#each todo.items as item (item.id)}
-											<li class="min-w-0 text-xs">
-												<Inline align="start" gap="sm">
-													{#if item.status === 'done'}
-														<Icon
-															icon="lucide:circle-check"
-															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-														/>
-													{:else if item.status === 'doing'}
-														<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
-													{:else}
-														<Icon
-															icon="lucide:circle"
-															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-														/>
-													{/if}
-													<span
-														class="min-w-0 {item.status === 'done'
-															? 'text-muted-foreground line-through'
-															: ''}">{item.text}</span
-													>
-												</Inline>
-											</li>
-										{/each}
-									</Stack>
-								</Scroll>
-							</Bound>
+							<Imposter placement="bottom" class="mx-4 translate-y-full pt-1">
+								<Bound
+									size="compact"
+									class="rounded-xl border border-border/70 bg-background px-3 py-2 shadow-lg"
+								>
+									<Scroll name="Goal steps">
+										<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
+											{#each todo.items as item (item.id)}
+												<li class="min-w-0 text-xs">
+													<Inline align="start" gap="sm">
+														{#if item.status === 'done'}
+															<Icon
+																icon="lucide:circle-check"
+																class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+															/>
+														{:else if item.status === 'doing'}
+															<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
+														{:else}
+															<Icon
+																icon="lucide:circle"
+																class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+															/>
+														{/if}
+														<span
+															class="min-w-0 {item.status === 'done'
+																? 'text-muted-foreground line-through'
+																: ''}">{item.text}</span
+														>
+													</Inline>
+												</li>
+											{/each}
+										</Stack>
+									</Scroll>
+								</Bound>
+							</Imposter>
 						</details>
 					{/if}
 				</Stack>
-			</div>
+			</Center>
 		{/if}
 		<Scroll
 			class="min-h-0 flex-1"
@@ -1183,82 +1216,79 @@
 			bind:ref={transcriptPort}
 			onscroll={tail.observe}
 		>
-			<Stack gap="md" class="mx-auto w-full max-w-3xl px-4 py-4">
+			<Center measure="full" layout="stack" gap="md" class="max-w-3xl px-4 py-4">
 				{#if activeTask === undefined && visibleAdmission === null}
-					<div class="grid min-h-56 place-items-center text-center text-sm text-muted-foreground">
+					<Center
+						measure="full"
+						layout="stack"
+						align="center"
+						justify="center"
+						class="min-h-56 text-center text-sm text-muted-foreground"
+					>
 						<p class="max-w-sm">
 							Start a conversation. Ask for help or switch to Plan to work through an approach.
 						</p>
-					</div>
+					</Center>
 				{:else if activeTask === undefined && visibleAdmission !== null}
-					<ol class="m-0 list-none p-0" aria-label="Messages in the agent model view">
-						<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
-							<Stack gap="xs" align="end">
-								<span class="text-tiny font-medium text-muted-foreground">You</span>
-								<div
-									class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
-								>
-									<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
-								</div>
-							</Stack>
-						</li>
-					</ol>
+					{@render pendingAdmission(visibleAdmission.message)}
 				{:else}
-					<Stack gap="md">
-						{#if contextProjectionIncomplete}
-							<div
-								class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs"
-								role="status"
-							>
-								The loaded query reached its safety limit. Older durable rows may not be visible;
-								the active model-view boundary cannot be certified until older rows are paged.
-							</div>
-						{/if}
+					{#if contextProjectionIncomplete}
+						<div
+							class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs"
+							role="status"
+						>
+							The loaded query reached its safety limit. Older durable rows may not be visible; the
+							active model-view boundary cannot be certified until older rows are paged.
+						</div>
+					{/if}
 
-						<AgentContextSegment
-							plan={draftingPlan ? undefined : activePlan}
-							runs={rootRuns}
-							messages={deliveredMessages}
-							status={planState()}
-							onrevise={() => Effect.runFork(submit('steer', 'revise'))}
-							ondelete={deletePlan}
-							deleteDisabled={composerLocked}
-							transitionDisabled={composerLocked ||
-								draft.trim().length > 0 ||
-								pendingAttachments.length > 0 ||
-								!modelAvailable}
-							{tools}
-							subagent={subagentTranscript}
-						/>
+					<AgentContextSegment
+						plan={draftingPlan ? undefined : activePlan}
+						runs={rootRuns}
+						messages={deliveredMessages}
+						status={planState()}
+						onrevise={() => Effect.runFork(submit('steer', 'revise'))}
+						ondelete={deletePlan}
+						deleteDisabled={composerLocked}
+						transitionDisabled={composerLocked ||
+							draft.trim().length > 0 ||
+							pendingAttachments.length > 0 ||
+							!modelAvailable}
+						{tools}
+						subagent={subagentTranscript}
+					/>
 
-						<ol class="m-0 list-none p-0" aria-label="Conversation transcript">
-							{#each contextView.focusMessages as message (message.key)}
-								{@const changedModel = modelDividers.get(message.id)}
-								{#if changedModel !== undefined}
-									<li
-										class="my-3 min-w-0"
-										role="separator"
-										data-divider="model"
-										aria-label={t('bolt.agent.modelChanged', { model: changedModel })}
-									>
-										<Inline align="center" gap="sm" class="text-micro text-muted-foreground">
-											<span class="h-px flex-1 bg-border"></span>
-											<Icon icon="lucide:cpu" class="size-3 shrink-0" />
-											<span class="shrink-0"
-												>{t('bolt.agent.modelChanged', { model: changedModel })}</span
-											>
-											<span class="h-px flex-1 bg-border"></span>
-										</Inline>
-									</li>
-								{/if}
+					<VirtualList
+						as="ol"
+						class="m-0 list-none p-0"
+						aria-label="Conversation transcript"
+						items={transcriptRows}
+						key={(row) => row.message.key}
+						estimateSize={96}
+					>
+						{#snippet item({ message, generating, divider, renders })}
+							{#if divider !== undefined}
+								<Inline
+									align="center"
+									gap="sm"
+									class="my-3 text-micro text-muted-foreground"
+									role="separator"
+									data-divider="model"
+									aria-label={t('bolt.agent.modelChanged', { model: divider })}
+								>
+									<span class="h-px flex-1 bg-border"></span>
+									<Icon icon="lucide:cpu" class="size-3 shrink-0" />
+									<span class="shrink-0">{t('bolt.agent.modelChanged', { model: divider })}</span>
+									<span class="h-px flex-1 bg-border"></span>
+								</Inline>
+							{/if}
+							{#if renders}
 								<AgentTranscriptItem
 									hideTodo
 									{message}
 									{tools}
+									{generating}
 									subagent={subagentTranscript}
-									generating={runs.some(
-										(run) => run.id === message.runId && run.status === 'running'
-									)}
 									mode={message.runId === null ? null : (modeByTurnId.get(message.runId) ?? null)}
 									outsideModelView={contextView.outsideMessageIds.has(message.id)}
 									checkpointOrigin={message.annotation?.tag === 'compact'
@@ -1268,35 +1298,24 @@
 										? undefined
 										: reviseMessage}
 								/>
-							{/each}
-							{#if waitingSeconds !== null}
-								<li class="my-1.5 min-w-0" role="status" data-turn-waiting>
-									<span class="text-xs text-muted-foreground"
-										>{t('bolt.agent.thinkingFor', { seconds: waitingSeconds })}</span
-									>
-								</li>
 							{/if}
-							{#if visibleAdmission !== null && activeTask?.status !== 'running'}
-								<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
-									<Stack gap="xs" align="end">
-										<span class="text-tiny font-medium text-muted-foreground">You</span>
-										<div
-											class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
-										>
-											<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
-										</div>
-									</Stack>
-								</li>
-							{/if}
-						</ol>
-					</Stack>
+						{/snippet}
+					</VirtualList>
+					{#if waitingSeconds !== null}
+						<p class="m-0 text-xs text-muted-foreground" role="status" data-turn-waiting>
+							{t('bolt.agent.thinkingFor', { seconds: waitingSeconds })}
+						</p>
+					{/if}
+					{#if visibleAdmission !== null && activeTask?.status !== 'running'}
+						{@render pendingAdmission(visibleAdmission.message)}
+					{/if}
 				{/if}
-			</Stack>
+			</Center>
 		</Scroll>
-	</div>
+	</Stack>
 
 	{#if draftingPlan}
-		<div class="mx-auto w-full max-w-3xl min-w-0 shrink-0 px-4 pb-3" data-draft-plan>
+		<Center measure="full" class="max-w-3xl shrink-0 px-4 pb-3" data-draft-plan>
 			<AgentContextSegment
 				plan={activePlan}
 				runs={rootRuns}
@@ -1316,14 +1335,14 @@
 					draft.trim().length > 0 ||
 					pendingAttachments.length > 0}
 			/>
-		</div>
+		</Center>
 	{/if}
 
 	<div
 		class="shrink-0 border-t border-border bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]"
 		data-agent-composer
 	>
-		<Stack gap="sm" class="mx-auto w-full max-w-3xl px-4 pt-2">
+		<Center measure="full" layout="stack" gap="sm" class="max-w-3xl px-4 pt-2">
 			<AgentMessageQueue
 				messages={queuedMessages}
 				pendingText={activeTask?.status === 'running' ? visibleAdmission?.message : undefined}
@@ -1399,20 +1418,22 @@
 				{/if}
 				{#if commandMode !== null}
 					<Inline align="center" gap="xs" class="pt-2">
-						<Badge variant="outline" class="gap-1.5 pr-1 pl-2 font-mono">
-							<Icon
-								icon={commandMode === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text'}
-								class="size-3 shrink-0"
-							/>
-							<span>/{commandMode}</span>
-							<button
-								type="button"
-								class="rounded-full opacity-70 transition-opacity hover:opacity-100"
-								aria-label={`Remove /${commandMode}`}
-								onclick={clearCommandMode}
-							>
-								<Icon icon="lucide:x" class="size-3" />
-							</button>
+						<Badge variant="outline" class="pr-1 pl-2 font-mono">
+							<Inline as="span" gap="xs">
+								<Icon
+									icon={commandMode === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text'}
+									class="size-3 shrink-0"
+								/>
+								<span>/{commandMode}</span>
+								<button
+									type="button"
+									class="rounded-full opacity-70 transition-opacity hover:opacity-100"
+									aria-label={`Remove /${commandMode}`}
+									onclick={clearCommandMode}
+								>
+									<Icon icon="lucide:x" class="size-3" />
+								</button>
+							</Inline>
 						</Badge>
 					</Inline>
 				{/if}
@@ -1438,18 +1459,20 @@
 						{#each pendingAttachments as image (image.id)}
 							<button
 								type="button"
-								class="relative flex h-10 max-w-48 items-center gap-2 rounded-md border border-border/70 px-2 text-xs"
+								class="relative h-10 max-w-48 rounded-md border border-border/70 px-2 text-xs"
 								style="overflow: hidden"
 								aria-label={`Remove ${image.file.name}`}
 								onclick={() => removePendingAttachment(image.id)}
 							>
-								{#if image.previewUrl !== null}
-									<img src={image.previewUrl} alt="" class="size-8 rounded object-cover" />
-								{:else}
-									<Icon icon="lucide:file-text" class="size-4 shrink-0" />
-								{/if}
-								<span class="truncate">{image.file.name}</span>
-								<Icon icon="lucide:x" class="size-3 shrink-0" />
+								<Inline as="span" gap="sm" fill>
+									{#if image.previewUrl !== null}
+										<img src={image.previewUrl} alt="" class="size-8 rounded object-cover" />
+									{:else}
+										<Icon icon="lucide:file-text" class="size-4 shrink-0" />
+									{/if}
+									<span class="truncate">{image.file.name}</span>
+									<Icon icon="lucide:x" class="size-3 shrink-0" />
+								</Inline>
 							</button>
 						{/each}
 					</Inline>
@@ -1468,19 +1491,23 @@
 						aria-label="Attach media or files"
 						disabled={composerLocked}
 						onclick={() => filePicker?.click()}
-						class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+						class="size-9 shrink-0 rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 					>
-						<Icon icon="lucide:plus" class="size-5" />
+						<Inline as="span" justify="center" fill>
+							<Icon icon="lucide:plus" class="size-5" />
+						</Inline>
 					</button>
 					<Popover.Root>
 						<Popover.Trigger
 							data-agent-usage
-							class="flex h-7 cursor-pointer list-none items-center gap-1 rounded px-1 text-xs tabular-nums hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+							class="h-7 cursor-pointer list-none rounded px-1 text-xs tabular-nums hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 							aria-label={`${t('bolt.agent.contextWindowUsed')}: ${contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / ${contextCapacity === undefined ? '—' : formatAgentTokens(contextCapacity)}; ${costLabel}; ${tokenCount} tokens`}
 						>
-							<Icon icon="lucide:chart-pie" class="size-3.5" />
-							<span>{contextPercent === undefined ? '—' : `${Math.round(contextPercent)}%`}</span>
-							<span>· {costLabel || '—'}</span>
+							<Inline as="span" gap="xs" fill>
+								<Icon icon="lucide:chart-pie" class="size-3.5" />
+								<span>{contextPercent === undefined ? '—' : `${Math.round(contextPercent)}%`}</span>
+								<span>· {costLabel || '—'}</span>
+							</Inline>
 						</Popover.Trigger>
 						<Popover.Content
 							side="top"
@@ -1509,13 +1536,13 @@
 										</p>
 									</Stack>
 									<p>{t('bolt.agent.usageScope')}</p>
-									<dl class="grid grid-cols-2 gap-1 tabular-nums">
+									<Grid as="dl" tracks="repeat(2, minmax(0, 1fr))" gap="xs" class="tabular-nums">
 										<dt>{t('bolt.agent.totalTokens')}</dt>
 										<dd class="text-right">{tokenCount}</dd>
 										<dt>{t('bolt.agent.totalCost')}</dt>
 										<dd class="text-right">{costLabel || '—'}</dd>
-									</dl>
-									<dl class="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+									</Grid>
+									<Grid as="dl" tracks="repeat(2, minmax(0, 1fr))" gap="xs" class="tabular-nums">
 										<dt>{t('bolt.agent.inputTokens')}</dt>
 										<dd class="text-right">{taskTokens.input.toLocaleString()}</dd>
 										<dt>{t('bolt.agent.cachedInput')}</dt>
@@ -1524,7 +1551,7 @@
 										<dd class="text-right">{taskTokens.output.toLocaleString()}</dd>
 										<dt>{t('bolt.agent.reasoningTokens')}</dt>
 										<dd class="text-right">{taskTokens.reasoning.toLocaleString()}</dd>
-									</dl>
+									</Grid>
 									{#if usageIncomplete}<p>{t('bolt.agent.usagePartialNote')}</p>{/if}
 								</Stack>
 							</Scroll>
@@ -1626,7 +1653,7 @@
 					{/if}
 				</Inline>
 			</Stack>
-		</Stack>
+		</Center>
 	</div>
 </Stack>
 

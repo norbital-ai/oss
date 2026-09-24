@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -10,11 +11,15 @@
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
+<Inline
+	gap="sm"
 	data-slot="item-title"
-	class={cn('flex w-fit items-center gap-2 text-sm leading-snug font-medium', className)}
+	class={cn('w-fit text-sm leading-snug font-medium', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Inline>

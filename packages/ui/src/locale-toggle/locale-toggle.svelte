@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let { class: className = '', showLabel = true }: { class?: string; showLabel?: boolean } =
@@ -28,12 +29,14 @@
 	aria-label={t('misc.switchLocale', { locale: nextLabel })}
 	title={t('misc.language')}
 	class={cn(
-		'inline-flex size-9 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground',
+		'inline-block size-9 rounded-md transition-colors hover:bg-accent hover:text-accent-foreground',
 		className
 	)}
 >
-	<Icon icon="lucide:languages" class="size-4 shrink-0" />
-	{#if showLabel}
-		<span class="text-tiny font-semibold">{nextLabel}</span>
-	{/if}
+	<Inline as="span" gap="none" justify="center" class="size-full">
+		<Icon icon="lucide:languages" class="size-4 shrink-0" />
+		{#if showLabel}
+			<span class="text-tiny font-semibold">{nextLabel}</span>
+		{/if}
+	</Inline>
 </button>

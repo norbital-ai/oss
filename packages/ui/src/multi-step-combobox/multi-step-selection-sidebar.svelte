@@ -3,7 +3,7 @@
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
-	import { Cluster, Inline, SCROLL_AXIS_CLASSES, Stack } from '#lib/layout';
+	import { Bound, Cluster, Inline, SCROLL_AXIS_CLASSES, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { SelectionDraft, StepsConfig } from '#lib/multi-step-combobox/types';
@@ -38,8 +38,7 @@
 				selection: SelectionDraft<TValueMap>,
 				stepKey: keyof TValueMap,
 				keyIndex: number,
-				separatorClass: string,
-				fallbackClass: string
+				tone: 'badge' | 'complete' | 'partial'
 			]
 		>;
 	} = $props();
@@ -49,7 +48,7 @@
 	const MISSING_SEP = ', ';
 </script>
 
-<aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
+<Bound as="aside" size="full" clip shrink={false} class="w-70 border-r bg-background">
 	<Stack gap="none" fill>
 		<Inline gap="none" justify="between" class="h-11 border-b px-3">
 			<Inline gap="sm" class="text-xs font-semibold text-muted-foreground">
@@ -85,13 +84,14 @@
 					{@const complete = isComplete(selection)}
 					{@const missing = stepKeys.filter((key) => selection[key] == null)}
 					{@const hasValues = stepKeys.some((key) => selection[key] != null)}
-					{@const sepClass = 'opacity-40'}
-					{@const fbClass = complete ? 'opacity-70' : 'opacity-60'}
-					<li
+					<Inline
+						as="li"
+						align="start"
+						justify="between"
 						role="option"
 						aria-selected={idx === currentSelectionIndex}
 						class={cn(
-							'group flex cursor-pointer items-start justify-between gap-3 rounded-md border border-transparent px-2.5 py-2 text-xs transition-colors hover:bg-brand-100/70 dark:hover:bg-brand-900/50',
+							'group cursor-pointer rounded-md border border-transparent px-2.5 py-2 text-xs transition-colors hover:bg-brand-100/70 dark:hover:bg-brand-900/50',
 							idx === currentSelectionIndex && 'border-accent/40 bg-accent/60'
 						)}
 						onclick={(e) => onSelect(idx, e)}
@@ -120,7 +120,12 @@
 									)}
 								>
 									{#each stepKeys as stepKey, keyIndex}
-										{@render stepValueLabel(selection, stepKey, keyIndex, sepClass, fbClass)}
+										{@render stepValueLabel(
+											selection,
+											stepKey,
+											keyIndex,
+											complete ? 'complete' : 'partial'
+										)}
 									{/each}
 								</Cluster>
 							{/if}
@@ -145,9 +150,9 @@
 								<Icon icon="lucide:x" class="h-3 w-3" />
 							</button>
 						{/if}
-					</li>
+					</Inline>
 				{/each}
 			{/if}
 		</ul>
 	</Stack>
-</aside>
+</Bound>

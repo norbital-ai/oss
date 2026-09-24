@@ -1,6 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLLiAttributes } from 'svelte/elements';
+	import { Stack } from '#lib/layout';
+	import type { HTMLAttributes, HTMLLiAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
 	export interface QueueItemProps extends WithElementRef<HTMLLiAttributes> {
@@ -17,13 +18,15 @@
 	}: QueueItemProps = $props();
 </script>
 
-<li
-	bind:this={ref}
-	class={cn(
-		'group hover:bg-muted flex flex-col gap-1 rounded-md px-3 py-1 text-sm transition-colors',
-		className
-	)}
-	{...restProps}
+<Stack
+	as="li"
+	gap="xs"
+	class={cn('group hover:bg-muted rounded-md px-3 py-1 text-sm transition-colors', className)}
+	{...restProps as HTMLAttributes<HTMLElement>}
+	{@attach (node: HTMLLIElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</li>
+</Stack>

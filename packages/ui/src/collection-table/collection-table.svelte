@@ -25,7 +25,7 @@
 	import { cn, renderSnippet } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
 	import { DataRenderer, formatDataValue, type FieldRendererComponent } from '#lib/data-renderer';
-	import { Cover, Scroll, Stack, Bound } from '#lib/layout';
+	import { Bound, Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
 		CollectionActionToolbar,
@@ -659,7 +659,7 @@
 		aria-pressed={isDetailActive}
 		tabindex={recordActionTabIndex(hovered, isDetailActive)}
 		class={cn(
-			'inline-flex size-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-xs outline-none transition-colors hover:bg-muted hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+			'size-8 rounded-md border border-border bg-card text-muted-foreground shadow-xs outline-none transition-colors hover:bg-muted hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
 			isDetailActive && 'border-brand/40 bg-accent text-accent-foreground',
 			!isDetailActive && !hovered && 'opacity-0'
 		)}
@@ -670,7 +670,9 @@
 			event.currentTarget.blur();
 		}}
 	>
-		<Icon icon="lucide:panel-right-open" class="size-4" />
+		<Inline as="span" justify="center" class="size-full">
+			<Icon icon="lucide:panel-right-open" class="size-4" />
+		</Inline>
 	</button>
 {/snippet}
 
@@ -735,39 +737,39 @@
 {/snippet}
 
 {#snippet autoListCard(record: TRow)}
-	<Stack gap="xs">
-		{@const titleName = autoCard.title.kind === 'field' ? autoCard.title.name : null}
-		{#if titleName}
-			{@const titleColumn = registeredColumns.find((column) => String(column.key) === titleName)}
+	{@const titleName = autoCard.title.kind === 'field' ? autoCard.title.name : null}
+	{@const titleColumn = titleName
+		? registeredColumns.find((column) => String(column.key) === titleName)
+		: undefined}
+	<Stack gap="none" class="min-w-0">
+		<div class="min-w-0 truncate text-sm font-medium">
 			{#if titleColumn}
-				<DataRenderer
-					field={metadataFor(titleColumn)}
-					value={Reflect.get(record, titleColumn.key)}
-					row={record as Record<string, unknown>}
-					mode="display"
-					renderer={titleColumn.renderer as FieldRendererComponent | undefined}
-					rendererProps={titleColumn.rendererProps as Readonly<Record<string, unknown>> | undefined}
-					relationOptions={titleColumn.relationOptions}
-				/>
+				{@render autoListField(record, titleColumn)}
+			{:else if !titleName}
+				{humanize(String(collection))}
 			{/if}
-		{:else}
-			<p class="flex min-h-9 items-center text-sm font-medium">{humanize(String(collection))}</p>
-		{/if}
-		{#each [...autoCard.subtitles, ...(autoCard.badge ? [autoCard.badge] : [])] as name (name)}
-			{@const cardColumn = registeredColumns.find((column) => String(column.key) === name)}
-			{#if cardColumn && (autoCard.title.kind !== 'field' || name !== autoCard.title.name)}
-				<DataRenderer
-					field={metadataFor(cardColumn)}
-					value={Reflect.get(record, cardColumn.key)}
-					row={record as Record<string, unknown>}
-					mode="display"
-					renderer={cardColumn.renderer as FieldRendererComponent | undefined}
-					rendererProps={cardColumn.rendererProps as Readonly<Record<string, unknown>> | undefined}
-					relationOptions={cardColumn.relationOptions}
-				/>
-			{/if}
-		{/each}
+		</div>
+		<Cluster gap="sm" class="min-w-0 text-meta">
+			{#each [...autoCard.subtitles, ...(autoCard.badge ? [autoCard.badge] : [])] as name (name)}
+				{@const cardColumn = registeredColumns.find((column) => String(column.key) === name)}
+				{#if cardColumn && name !== titleName}
+					{@render autoListField(record, cardColumn)}
+				{/if}
+			{/each}
+		</Cluster>
 	</Stack>
+{/snippet}
+
+{#snippet autoListField(record: TRow, column: ColumnConfig)}
+	<DataRenderer
+		field={metadataFor(column)}
+		value={Reflect.get(record, column.key)}
+		row={record as Record<string, unknown>}
+		mode="display"
+		renderer={column.renderer as FieldRendererComponent | undefined}
+		rendererProps={column.rendererProps as Readonly<Record<string, unknown>> | undefined}
+		relationOptions={column.relationOptions}
+	/>
 {/snippet}
 
 <div class="hidden" aria-hidden="true">
@@ -807,6 +809,7 @@
 		gap="sm"
 		top={toolbar}
 		bottom={paginationBar}
+		// repository-health:allow UI25 -- the caller's rootClass prop forwarded verbatim; its tokens are literals at the call site
 		class={rootClass}
 		style={bounded ? undefined : 'height: auto; max-height: none;'}
 	>
@@ -895,19 +898,18 @@
 	/* These classes are forwarded to child-component roots. They must be global:
 	   a scoped selector carries this component's Svelte hash, which those roots do
 	   not, and leaves both responsive variants painted on top of each other. */
-	:global(.collection-table-narrow) {
-		display: none;
+	/* Compact presentation is a phone viewport state, not a consequence of a narrow
+	   desktop pane, so this follows the viewport rather than the surface's inline size.
+	   Each variant is only ever hidden, so its own primitive keeps its display. */
+	@media (min-width: 48rem) {
+		:global(.collection-table-narrow) {
+			display: none;
+		}
 	}
 
-	/* Compact presentation is a phone viewport state, not a consequence of a narrow
-	   desktop pane, so this follows the viewport rather than the surface's inline size. */
 	@media (max-width: 47.999rem) {
 		:global(.collection-table-wide) {
 			display: none;
-		}
-
-		:global(.collection-table-narrow) {
-			display: grid;
 		}
 	}
 </style>

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Predicate, Schema } from 'effect';
 	import { IconWrapper } from '#lib/icon-wrapper';
-	import { Cluster, Inline, INSET_MX_CLASS, LAYOUT_INSET_CONTEXT } from '#lib/layout';
-	import { getContext } from 'svelte';
+	import { Cluster, Inline, INSET_MX_CLASS } from '#lib/layout';
+	import { insetReader } from '#lib/layout/inset.svelte';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
@@ -17,7 +17,7 @@
 		class: className,
 		listClass,
 		listStyle,
-		contentPadding = true,
+		flush = false,
 		variant = 'default',
 		semantics = 'default',
 		layout,
@@ -76,13 +76,13 @@
 	const resolvedVariant = $derived(resolvedLayout === 'vertical' ? 'underline' : variant);
 	// A page that owns its inset (`Bound inset`, every `page` AppShell) already aligns the strip
 	// with the content; the default chrome supplies the inset only on a full-bleed page.
-	const insideInset = getContext<boolean | undefined>(LAYOUT_INSET_CONTEXT) === true;
+	const insideInset = insetReader();
 	const resolvedListClass = $derived(
 		// `responsive` lists are width-full. The default chrome returns to auto width, or its 100%
 		// width plus both margins overhangs the PageHeader inset.
 		listClass ??
 			(resolvedVariant === 'default'
-				? cn(insideInset ? undefined : INSET_MX_CLASS, 'w-auto')
+				? cn(flush || insideInset() ? undefined : INSET_MX_CLASS, 'w-auto')
 				: undefined)
 	);
 </script>
@@ -95,7 +95,7 @@
 		variant={resolvedVariant}
 		{semantics}
 		layout={resolvedLayout}
-		class={resolvedListClass}
+		class={/* repository-health:allow UI25 -- the inset-aware list class is resolved in the script from `insetReader()`; its literal tokens are there */ resolvedListClass}
 		style={listStyle}
 		tabs={resolvedTabMeta}
 	>
@@ -127,11 +127,15 @@
 	class={cn(
 		showContent
 			? cn(
+					// repository-health:allow UI6 -- bits-ui owns the tabs root; its list/panel track is that element's own grid, and consumers restyle it through `class`
+					// repository-health:allow UI27 -- the list-to-panel gap of the same bits-ui root (see UI6 above)
 					'grid h-full min-h-0 min-w-0 gap-2 overflow-clip',
 					// A vertical strip is a rail beside the panel, not a stack above it.
+					// repository-health:allow UI27 -- the rail-or-stack track template of the same bits-ui root (see UI6 above)
 					resolvedLayout === 'vertical'
 						? 'grid-cols-[auto_minmax(0,1fr)]'
-						: 'grid-rows-[auto_minmax(0,1fr)]'
+						: // repository-health:allow UI27 -- the rail-or-stack track template of the same bits-ui root (see UI6 above)
+							'grid-rows-[auto_minmax(0,1fr)]'
 				)
 			: 'min-w-0 shrink-0',
 		className
@@ -162,7 +166,7 @@
 				keepAlive={tab.keepAlive ?? keepAlive}
 				lazyLoad={tab.lazyLoad ?? lazyLoad}
 				{animate}
-				{contentPadding}
+				{flush}
 			>
 				{#if typeof tabConfig.content === 'string'}
 					{tabConfig.content}

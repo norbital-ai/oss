@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	boundaryRules,
 	definePack,
+	layoutRules,
 	loadPackDirectory,
 	structureRules,
 	type Pack,
@@ -27,7 +28,7 @@ function load(name: string): ReadonlyArray<Rule> {
 export const platformRules: ReadonlyArray<Rule> = load('platform');
 export const platformPack: Pack = definePack({ name: 'norbital/platform', rules: platformRules });
 
-export const svelteRules: ReadonlyArray<Rule> = load('svelte');
+export const svelteRules: ReadonlyArray<Rule> = [...layoutRules, ...load('svelte')];
 export const sveltePack: Pack = definePack({ name: 'norbital/svelte', rules: svelteRules });
 
 export function capabilityPack(): Pack {

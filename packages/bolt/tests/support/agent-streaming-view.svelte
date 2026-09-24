@@ -11,4 +11,4 @@
 	}
 </script>
 
-<ol><AgentTranscriptItem {message} {generating} /></ol>
+<ol><li><AgentTranscriptItem {message} {generating} /></li></ol>

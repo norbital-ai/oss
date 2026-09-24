@@ -1,6 +1,7 @@
 <!-- exported package TOC root rendered by website docs layouts -->
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import { toError } from '@norbital-ai/std';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
@@ -19,7 +20,7 @@
 		title = 'On this page',
 		class: frameClass,
 		mainClass,
-		articleClass = 'doc-content prose prose-lg max-w-none dark:prose-invert',
+		articleClass,
 		asideWidthClass,
 		asideClass,
 		popoverClass,
@@ -85,15 +86,19 @@
 	}
 </script>
 
-<div class={cn('flex min-w-0 items-start overflow-x-clip', frameClass)}>
+<Inline gap="none" align="start" class={cn('overflow-x-clip', frameClass)}>
 	<div class={cn('relative min-w-0 flex-1', mainClass)}>
+		<!-- repository-health:allow UI25 -- forwards the caller's popoverClass prop unchanged: nothing is composed, and the rule exempts only a component's own `className` -->
 		<DocTocPopover {title} class={popoverClass} bind:open={popoverOpen} />
 
 		{#if before}
 			{@render before()}
 		{/if}
 
-		<div bind:this={articleElement} class={articleClass}>
+		<div
+			bind:this={articleElement}
+			class={articleClass ?? 'doc-content prose prose-lg max-w-none dark:prose-invert'}
+		>
 			{@render children()}
 		</div>
 
@@ -102,5 +107,6 @@
 		{/if}
 	</div>
 
+	<!-- repository-health:allow UI25 -- forwards the caller's asideClass prop unchanged: nothing is composed, and the rule exempts only a component's own `className` -->
 	<DocTocPanel {title} widthClass={asideWidthClass} class={asideClass} />
-</div>
+</Inline>

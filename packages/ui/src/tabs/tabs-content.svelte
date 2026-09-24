@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { cn } from '#lib/utils';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
 	import { INSET_CLASS } from '#lib/layout';
+	import { provisionalInset } from '#lib/layout/inset.svelte';
 
 	let {
 		ref = $bindable(null),
@@ -11,7 +13,7 @@
 		lazyLoad = true,
 		keepAlive = false,
 		animate = true,
-		contentPadding = true,
+		flush = false,
 		children,
 		...restProps
 	}: TabsPrimitive.ContentProps & {
@@ -19,13 +21,15 @@
 		lazyLoad?: boolean;
 		keepAlive?: boolean;
 		animate?: boolean;
-		contentPadding?: boolean;
+		/** Tabs inside a component, not a page region: the panel never takes the page inset. */
+		flush?: boolean;
 	} = $props();
 	/**
 	 * Sticky for `keepAlive`: a panel that has been shown once stays mounted after it is hidden.
 	 * The latch is set by the attachment on the kept-alive wrapper, which only ever mounts while
 	 * the panel is active — so no effect has to watch `active` to notice.
 	 */
+	const inset = untrack(() => flush) ? { padded: false } : provisionalInset();
 	let visited = $state(false);
 	const markVisited = () => {
 		visited = true;
@@ -36,7 +40,7 @@
 	bind:ref
 	class={cn(
 		'h-full min-h-0 min-w-0 overflow-clip ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none',
-		contentPadding && INSET_CLASS,
+		inset.padded && INSET_CLASS,
 		animate && [
 			'data-[state=active]:animate-in data-[state=active]:fade-in-50 data-[state=active]:blur-in-xs',
 			'motion-safe:data-[state=active]:duration-300',

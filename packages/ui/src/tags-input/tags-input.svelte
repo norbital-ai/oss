@@ -256,7 +256,7 @@
 
 		<Command.Root
 			shouldFilter={false}
-			class="gap-2"
+			gap="sm"
 			items={colorItems}
 			onValueChange={(value) => addTagWithColor(value as TagColor)}
 		>
@@ -324,9 +324,10 @@
 		</Command.Root>
 	</Stack>
 {:else}
-	<div
+	<Inline
+		gap="xs"
 		class={cn(
-			'flex h-9 w-full flex-nowrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',
+			'h-9 w-full rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',
 			SCROLL_AXIS_CLASSES.x,
 			{ 'cursor-not-allowed opacity-50': disabled },
 			className
@@ -379,5 +380,5 @@
 				{maxTags}/{maxTags}
 			</span>
 		{/if}
-	</div>
+	</Inline>
 {/if}

@@ -13,14 +13,13 @@
 		class="min-h-0 border-b border-l border-border/60 px-5 pt-4 pb-3"
 	>
 		{#if donut}
-			<div class="flex size-full items-center justify-center">
+			<Stack fill align="center" justify="center" class="w-full">
 				<Skeleton class="size-36 rounded-full ring-[2rem] ring-background" />
-			</div>
+			</Stack>
 		{:else}
-			<Skeleton class="h-[52%] flex-1 rounded-t-md" />
-			<Skeleton class="h-[82%] flex-1 rounded-t-md" />
-			<Skeleton class="h-[64%] flex-1 rounded-t-md" />
-			<Skeleton class="h-[38%] flex-1 rounded-t-md" />
+			{#each [52, 82, 64, 38] as height (height)}
+				<Skeleton class="flex-1 rounded-t-md" style="height: {height}%" />
+			{/each}
 		{/if}
 	</Inline>
 	<Inline align="end" justify="center" gap="md" shrink={false} class="h-10">

@@ -455,7 +455,7 @@
 
 <Cover class="relative bg-background" gap="none">
 	{#snippet top()}
-		<Stack gap="md" shrink={false} class="bg-background px-4 pt-3 sm:gap-6 sm:px-6 sm:pt-6">
+		<Stack gap="lg" shrink={false} class="bg-background px-4 pt-3 sm:px-6 sm:pt-6">
 			<Stack as="header" gap="xs">
 				<h1 class="text-heading">{t('bolt.studio.title')}</h1>
 				<p class="hidden max-w-2xl text-meta sm:block">
@@ -479,12 +479,14 @@
 				<Button
 					variant="ghost"
 					size="sm"
-					class="shrink-0 gap-2 md:hidden"
+					class="shrink-0 md:hidden"
 					aria-label={t('bolt.studio.openNavigator')}
 					onclick={() => (navigatorSheetOpen = true)}
 				>
-					<Icon icon="lucide:panel-bottom" class="size-4" />
-					{t('bolt.studio.browse')}
+					<Inline as="span" gap="sm">
+						<Icon icon="lucide:panel-bottom" class="size-4" />
+						{t('bolt.studio.browse')}
+					</Inline>
 				</Button>
 			</Cluster>
 		</Stack>

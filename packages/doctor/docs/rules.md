@@ -347,37 +347,41 @@ this?" without opening another function and tracing its early returns.
 
 ## Layout law
 
-Composition and scroll ownership rules from the authoring skill's layout guides. The layout primitives
-are `Stack`, `Inline`, `Cluster`, `Grid`, `Columns`, `Split`, `Cover`, `Bound`, `Scroll`, plus the
-`INSET_CLASS`/`INSET_X_CLASS`/`INSET_MX_CLASS` tokens, all from `@norbital-ai/ui/layout`. A raw element
-must never hand-roll what a primitive owns: sibling rhythm (gap), scroll regions (Bound+Scroll), the app
-inset (tokens), or height contracts (Bound sizes).
+Composition and scroll ownership rules from the authoring skill's layout guides. They ship in the core
+as `layoutPack` (`packs/layout/`), so a published template and Colony — which resolve only
+`@norbital-ai/doctor` — run them too; `doctor-norbital`'s `svelteRules` includes them for OSS.
 
-| Rule | Level | Detects                                                      |
-| ---- | ----- | ------------------------------------------------------------ |
-| UI5  | error | raw overflow scroll region bypasses the `Scroll` primitive   |
-| UI6  | error | raw flex/grid container bypasses the layout primitives       |
-| UI7  | error | sibling margin bypasses the parent gap contract              |
-| UI8  | error | literal app inset classes bypass the inset tokens            |
-| UI12 | error | Tailwind arbitrary value built at runtime emits no CSS       |
-| UI15 | error | fixed pane height on a primitive instead of `Bound` size     |
-| UI17 | error | template exposes uuid/system id to operators                 |
-| UI19 | error | raw positioning class bypasses the layout primitives         |
-| UI21 | error | viewport or arbitrary height class bypasses `Bound`          |
-| UI22 | error | raw `overflow-hidden` bypasses `Bound` clipping              |
-| UI23 | error | inline style carries layout that belongs on a primitive      |
-| UI24 | error | stylesheet layout declaration bypasses the layout primitives |
-| UI25 | error | class string composed in the script is unreachable as tokens |
+The primitives are `Stack`, `Inline`, `Cluster`, `Switcher`, `Grid`, `Columns`, `Split`, `Cover`,
+`Center`, `Frame`, `Bound`, `Scroll` and `Imposter` from `@norbital-ai/ui/layout`; the page edge is
+`inset` on `Bound`/`Scroll`, resolved by the inset context. A raw element must never hand-roll what a
+primitive owns.
 
-UI5–UI8, UI19, UI21, and UI22 match static `class` tokens on plain elements; UI6, UI19, UI21 and
-UI22 carry `**/packages/ui/src/**` in `ignore` so primitive implementations are exempt. UI7 matches
-`space-y-*`/`space-x-*` and `mt-*`/`mb-*`/`ml-*`/`mr-*` from `2` through `19`, so the sanctioned
-caption nudge (`mt-0.5`/`mt-1`) and `ml-auto` alignment stay quiet.
+| Rule | Level | Detects                                                                              |
+| ---- | ----- | ------------------------------------------------------------------------------------ |
+| UI5  | error | raw overflow scroll region bypasses the `Scroll` primitive                           |
+| UI6  | error | raw `flex`/`grid`/`inline-flex`/`inline-grid` container                              |
+| UI7  | error | sibling margin or `space-*` bypasses the parent gap contract                         |
+| UI8  | error | literal app inset classes bypass `inset`                                             |
+| UI12 | error | Tailwind arbitrary value built at runtime emits no CSS                               |
+| UI15 | error | fixed pane height on a primitive instead of `Bound` size                             |
+| UI19 | error | raw `absolute`/`fixed`/`sticky` bypasses `Imposter`                                  |
+| UI21 | error | viewport or arbitrary height class bypasses `Bound`                                  |
+| UI22 | error | raw `overflow-hidden` bypasses `Bound` clipping                                      |
+| UI23 | error | inline style carries layout that belongs on a primitive                              |
+| UI24 | error | stylesheet layout declaration bypasses the layout primitives                         |
+| UI25 | error | class string composed in the script is unreachable as tokens                         |
+| UI27 | error | `gap-*`, `items-*`, `justify-*`, `flex-col`/`-wrap`, `grid-cols-*`/`-rows-*`, `divide-*`, `place-*` instead of a primitive prop |
 
-UI23 and UI24 carry the same law into a static `style="…"` attribute and stylesheet declarations:
-`display: flex|grid` and `position: absolute|fixed|sticky` on a raw element belong on a primitive.
-UI25 flags a `class={…}` expression composed in the script, whose tokens a static class scan cannot
-see.
+Class tokens are read from `class="…"`, `class:` directives, and the quoted literals inside a
+`class={…}` expression (`cn('flex', open && 'grid')`) — the expression is brace-balanced, so
+`cn(recipe({ v }), 'flex')` is read whole, and comments inside it are skipped. A variant prefix
+(`sm:`, `hover:`, `[&>*]:`) does not hide a token. UI25 exempts `class={className}`, a component
+forwarding its own class prop.
+
+In a `.svelte` file an allowance written directly above a multi-line start tag covers that tag's
+attribute lines, because Svelte forbids a comment between attributes. Only `**/packages/ui/src/layout/**` — the primitives themselves — is
+exempt. UI7 matches `mt-*`/`mb-*`/`ml-*`/`mr-*` from `2` through `19`, so the sanctioned caption nudge
+(`mt-0.5`/`mt-1`) and `ml-auto` alignment stay quiet.
 
 UI17 enforces [controller-surfaces.md](../../../../agent-skills/authoring-tenant-workspace/references/controller-surfaces.md)
 rule 2 for authored `.svelte` templates (not `packages/ui` internals).

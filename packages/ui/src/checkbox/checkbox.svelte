@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import { Checkbox as CheckboxPrimitive, type WithoutChildrenOrChild } from 'bits-ui';
@@ -23,12 +24,12 @@
 	{...restProps}
 >
 	{#snippet children({ checked })}
-		<div class="flex size-4 items-center justify-center text-current">
+		<Inline as="span" justify="center" class="size-4 text-current">
 			{#if indeterminate}
 				<Icon icon="lucide:minus" class="size-3.5" />
 			{:else}
 				<Icon icon="lucide:check" class={cn('size-3.5', !checked && 'text-transparent')} />
 			{/if}
-		</div>
+		</Inline>
 	{/snippet}
 </CheckboxPrimitive.Root>

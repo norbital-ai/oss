@@ -102,8 +102,12 @@ const ALL_RULES: ReadonlyArray<Rule> = [
 
 function documented(): ReadonlyMap<string, Documented> {
 	const rows = new Map<string, Documented>();
-	for (const pack of ['platform', 'svelte', 'capability']) {
-		const directory = join(PACKS, pack);
+	// The layout rules ship in the core doctor (templates resolve only it); their examples live there.
+	const directories = [
+		...['platform', 'svelte', 'capability'].map((pack) => join(PACKS, pack)),
+		join(PACKS, '../../doctor/packs/layout')
+	];
+	for (const directory of directories) {
 		for (const name of readdirSync(directory).filter((entry) => /\.ya?ml$/.test(entry))) {
 			const document = parseYaml(readFileSync(join(directory, name), 'utf8')) as {
 				id?: string;

@@ -8,6 +8,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { Imposter } from '#lib/layout';
 	import { getStickToBottomContext } from './stick-to-bottom-context.svelte.js';
 	import { fly } from 'svelte/transition';
 	import { backOut } from 'svelte/easing';
@@ -29,31 +30,33 @@
 </script>
 
 {#if !context.isAtBottom}
-	<div
-		in:fly={{
-			duration: 300,
-			y: 10,
-			easing: backOut
-		}}
-		out:fly={{
-			duration: 200,
-			y: 10,
-			easing: backOut
-		}}
-		class="absolute bottom-4 left-[50%] translate-x-[-50%]"
-	>
-		<Button
-			class={cn(
-				'bg-background/80 border-border/50 hover:bg-background/90 rounded-full shadow-lg backdrop-blur-sm hover:shadow-xl',
-				className
-			)}
-			onclick={handleScrollToBottom}
-			size="icon"
-			type="button"
-			variant="outline"
-			{...restProps}
+	<Imposter placement="bottom" class="pointer-events-none pb-4">
+		<div
+			in:fly|global={{
+				duration: 300,
+				y: 10,
+				easing: backOut
+			}}
+			out:fly|global={{
+				duration: 200,
+				y: 10,
+				easing: backOut
+			}}
+			class="pointer-events-auto mx-auto w-fit"
 		>
-			<Icon icon="lucide:arrow-down" class="size-4" />
-		</Button>
-	</div>
+			<Button
+				class={cn(
+					'bg-background/80 border-border/50 hover:bg-background/90 rounded-full shadow-lg backdrop-blur-sm hover:shadow-xl',
+					className
+				)}
+				onclick={handleScrollToBottom}
+				size="icon"
+				type="button"
+				variant="outline"
+				{...restProps}
+			>
+				<Icon icon="lucide:arrow-down" class="size-4" />
+			</Button>
+		</div>
+	</Imposter>
 {/if}

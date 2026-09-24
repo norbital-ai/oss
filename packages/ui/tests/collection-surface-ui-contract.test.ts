@@ -18,7 +18,7 @@ function between(source: string, start: string, end: string): string {
 test('Kanban lanes own vertical scrolling and fixed-height cards are not nested scrollports', () => {
 	const lane = componentSource('collection-kanban/collection-kanban-lane.svelte');
 	const laneBody = between(lane, '<Scroll', '</Scroll>');
-	const cardBody = between(laneBody, '<CardPrimitive.Content', '</CardPrimitive.Content>');
+	const cardBody = between(lane, '<CardPrimitive.Content', '</CardPrimitive.Content>');
 
 	assert.match(laneBody, /axis="y"/u);
 	assert.match(laneBody, /data-kanban-lane=\{lane\}/u);
@@ -41,10 +41,14 @@ test('CollectionTable chooses exactly one responsive body from the viewport', ()
 	const table = componentSource('collection-table/collection-table.svelte');
 
 	assert.doesNotMatch(table, /@container \(max-width: 47\.999rem\)/u);
-	assert.match(table, /:global\(\.collection-table-narrow\)\s*\{\s*display: none;/u);
+	// Each variant is only ever hidden, on complementary viewport ranges, so one body shows.
 	assert.match(
 		table,
-		/@media \(max-width: 47\.999rem\)[\s\S]*?:global\(\.collection-table-wide\)[\s\S]*?display: none;[\s\S]*?:global\(\.collection-table-narrow\)[\s\S]*?display: grid;/u
+		/@media \(min-width: 48rem\)\s*\{\s*:global\(\.collection-table-narrow\)\s*\{\s*display: none;/u
+	);
+	assert.match(
+		table,
+		/@media \(max-width: 47\.999rem\)\s*\{\s*:global\(\.collection-table-wide\)\s*\{\s*display: none;/u
 	);
 });
 
@@ -54,17 +58,11 @@ test('list and Kanban cards render the shared record-warning leading accent', ()
 	const lane = componentSource('collection-kanban/collection-kanban-lane.svelte');
 
 	assert.match(list, /collectionRecordLeadingAccent\(metadata\)/u);
-	assert.match(
-		list,
-		/class=\{cn\('absolute inset-y-0 left-0 z-10', leadingAccent\.markerClass\)\}/u
-	);
+	assert.match(list, /class=\{cn\('inset-y-1 w-1 rounded-r-full', leadingAccent\.markerClass\)\}/u);
 
 	assert.match(board, /collectionRecordLeadingAccent\(metadataById\.get\(recordId\) \?\? \[\]\)/u);
 	assert.match(board, /getLeadingAccent=\{leadingAccentFor\}/u);
-	assert.match(
-		lane,
-		/class=\{cn\('absolute inset-y-0 left-0 z-10', leadingAccent\.markerClass\)\}/u
-	);
+	assert.match(lane, /class=\{cn\('inset-y-1 w-1 rounded-r-full', leadingAccent\.markerClass\)\}/u);
 });
 
 test('Kanban moves wait for authoritative settlement before reporting success', () => {
@@ -118,7 +116,7 @@ test('an unbounded CollectionTable yields vertical scrolling to its record-detai
 
 	assert.match(grid, /axis=\{bounded \? 'both' : 'x'\}/u);
 	assert.match(grid, /style=\{bounded \? undefined : 'height: auto; max-height: none;'\}/u);
-	assert.match(list, /\{#if bounded\}[\s\S]*?<Scroll axis="y"[\s\S]*?\{:else\}/u);
+	assert.match(list, /\{#if bounded\}[\s\S]*?<Scroll\s+axis="y"[\s\S]*?\{:else\}/u);
 	const boundedListChoice = between(list, '{#if bounded}', '{/if}');
 	const unboundedList = between(boundedListChoice, '{:else}', '{/if}');
 	assert.doesNotMatch(unboundedList, /<Scroll\b|overflow-y-(?:auto|scroll)/u);

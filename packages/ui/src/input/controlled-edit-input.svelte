@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button } from '#lib/button';
+	import { Imposter } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { toError } from '@norbital-ai/std';
 	import { Effect } from 'effect';
@@ -16,7 +17,6 @@
 	let {
 		ref = $bindable(null),
 		value = $bindable(),
-		class: className,
 		containerClass,
 		disabled = false,
 		...restProps
@@ -62,16 +62,18 @@
 	onmouseenter={() => (hovered = true)}
 	onmouseleave={() => (hovered = false)}
 >
-	<Input bind:ref bind:value class={className} disabled={isInputDisabled} {...restProps} />
+	<Input bind:ref bind:value disabled={isInputDisabled} {...restProps} />
 	{#if !disabled && hovered}
-		<Button
-			variant="ghost"
-			size="sm"
-			class="absolute top-1/2 right-1 h-6 -translate-y-1/2 px-2 text-tiny"
-			onclick={toggleEditing}
-			type="button"
-		>
-			{isEditing ? 'Done' : 'Edit'}
-		</Button>
+		<Imposter placement="center-end" offset="xs" class="leading-none">
+			<Button
+				variant="ghost"
+				size="sm"
+				class="h-6 px-2 align-top text-tiny"
+				onclick={toggleEditing}
+				type="button"
+			>
+				{isEditing ? 'Done' : 'Edit'}
+			</Button>
+		</Imposter>
 	{/if}
 </div>

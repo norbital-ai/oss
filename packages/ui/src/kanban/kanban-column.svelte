@@ -1,18 +1,14 @@
 <script lang="ts">
-	/**
-	 * KanbanColumn.svelte
-	 * - Virtualized infinite scroll while a lane is still paginating
-	 * - Sortable drag-and-drop once a lane is fully loaded
-	 */
+	/** One lane: always virtualized, sortable once fully loaded, paginates near its end. */
 	import * as Card from '#lib/card';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Skeleton } from '#lib/skeleton';
 	import { Sortable } from '#lib/sortable';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
+	import { VirtualList } from '#lib/virtual-list';
+	import { cn } from '#lib/utils';
 	import type SortablePrimitive from 'sortablejs';
-	import { fade } from 'svelte/transition';
-	import type { KanbanColumnProps, TCardSnippet, TKanbanItem } from './types.js';
+	import type { KanbanColumnProps } from './types.js';
 	import { Effect } from 'effect';
 
 	let {
@@ -30,70 +26,33 @@
 		columnTitleSnippet
 	}: KanbanColumnProps = $props();
 
-	const OVERSCAN = 5;
 	const LOAD_THRESHOLD = 5;
 	const ITEM_GAP = 8;
-	/** Fully loaded columns still virtualize above this count to avoid mounting hundreds of cards. */
-	const VIRTUALIZE_WHEN_LOADED_MIN_ITEMS = 8;
 	const { t } = useI18n<UiKeys>();
 
-	let containerRef: HTMLDivElement | null = $state(null);
-	let sortableColumn: HTMLElement | null = $state(null);
-	const sortableIds = $derived(column.items.map((it) => it._id));
-	const rowSize = $derived(itemHeight + ITEM_GAP);
-	/** Sortable once a lane has fully loaded — not while paginating (avoids DOM duplicates). */
-	const laneFullyLoaded = $derived(
-		(!column.hasMore && !(column.isFetchingNextPage ?? false)) ||
-			(column.totalCount !== undefined && column.items.length >= column.totalCount)
-	);
-	const canSort = $derived(sortable && laneFullyLoaded);
-	/** Prefer the sortable DOM path over virtualization whenever drag-and-drop is active. */
-	const useVirtualizer = $derived(
-		!canSort &&
-			(column.hasMore ||
-				(column.isLoading === true && column.items.length === 0) ||
-				column.items.length >= VIRTUALIZE_WHEN_LOADED_MIN_ITEMS)
-	);
-
-	const stableCount = $derived(column.totalCount ?? column.items.length);
-	const loadedCount = $derived(column.items.length);
-
+	let listElement: HTMLElement | null = $state(null);
 	const columnId = $derived(column._id);
-	const getItemKey = (index: number) => column.items[index]?._id ?? `skel:${columnId}:${index}`;
+	const loading = $derived((column.isLoading ?? false) || (column.isFetchingNextPage ?? false));
+	/** Sortable once a lane has fully loaded — a paginating lane would reorder a partial list. */
+	const canSort = $derived(
+		sortable && ((!column.hasMore && !loading) || column.items.length >= column.totalCount)
+	);
 
-	const virtualizer = createVirtualizer({
-		count: () => stableCount,
-		scrollElement: () => containerRef,
-		estimateSize: () => rowSize,
-		overscan: OVERSCAN,
-		indexAttribute: 'data-index',
-		getItemKey,
-		onChange: (inst) => {
-			const v = inst.virtualItems;
-			if (!v.length) return;
-			const last = v[v.length - 1]!;
-			if (
-				column.hasMore &&
-				!column.isLoading &&
-				!column.isFetchingNextPage &&
-				last.index >= loadedCount - LOAD_THRESHOLD
-			) {
-				Effect.runFork(onLoadMore(column._id, last.index));
-			}
+	function loadMoreNear(lastIndex: number): void {
+		if (column.hasMore && !loading && lastIndex >= column.items.length - LOAD_THRESHOLD) {
+			Effect.runFork(onLoadMore(columnId, lastIndex));
 		}
-	});
+	}
 
-	const virtualRows = $derived(virtualizer.virtualItems);
-	const totalSize = $derived(virtualizer.totalSize);
+	/** Sortable's `newIndex` counts mounted items; the first mounted `data-index` makes it absolute. */
+	function absoluteIndex(list: HTMLElement, newIndex: number | undefined): number | undefined {
+		if (newIndex === undefined) return undefined;
+		const indices = [...list.children].map((child) => Number((child as HTMLElement).dataset.index));
+		const first = Math.min(...indices.filter(Number.isFinite));
+		return Number.isFinite(first) ? first + newIndex : newIndex;
+	}
 
-	const [paddingTop, paddingBottom] = $derived.by((): [number, number] => {
-		if (!virtualRows.length) return [0, 0];
-		const first = virtualRows[0]!;
-		const last = virtualRows[virtualRows.length - 1]!;
-		return [Math.max(0, first.start), Math.max(0, totalSize - last.end)];
-	});
-
-	function emitCardMove(evt: SortablePrimitive.SortableEvent): void {
+	function handleSort(_orderedIds: string[], evt: SortablePrimitive.SortableEvent): void {
 		const recordId = evt.item.getAttribute('data-sortable-id');
 		const fromColumnId = evt.from?.getAttribute('data-column-id');
 		const toColumnId = evt.to?.getAttribute('data-column-id');
@@ -102,113 +61,61 @@
 			recordId,
 			fromColumnId,
 			toColumnId,
-			toIndex: evt.newIndex ?? undefined
+			toIndex: absoluteIndex(evt.to, evt.newIndex)
 		});
-	}
-
-	function handleSortIds(_orderedIds: string[], evt: SortablePrimitive.SortableEvent): void {
-		if (onCardMove) {
-			emitCardMove(evt);
-		}
 	}
 </script>
 
-<div
-	class="min-w-0 flex-1 shrink-0"
-	style="min-width: {minColumnWidth}px; width: {minColumnWidth}px;"
->
-	<Cover as="div" gap="sm" top={columnHeader}>
-		<Scroll
-			axis="y"
-			name={t('kanban.columnRegion', { column: column.title })}
-			bind:ref={containerRef}
-			class="rounded-md px-0.5"
-		>
-			{#if column.isLoading && column.items.length === 0}
-				<div class="w-full" transition:fade={{ duration: 150 }}>
-					<Stack gap="sm">
-						{#each Array.from({ length: 4 }) as _, index (index)}
-							{@render CardSkeleton()}
-						{/each}
-					</Stack>
-				</div>
-			{:else if column.items.length === 0}
-				<Stack gap="none" fill align="center" justify="center" class="p-4 text-muted-foreground">
-					<p>{t('kanban.emptyLane')}</p>
-				</Stack>
-			{:else if canSort}
-				<Sortable.Root
-					items={sortableIds}
-					sortableGroup={groupName}
-					handle={dragHandleClass}
-					sort={sortWithinColumn}
-					onSort={handleSortIds}
-					element={sortableColumn}
-				>
-					{#snippet child({ draggedItemId })}
-						<div
-							bind:this={sortableColumn}
-							data-column-id={columnId}
-							class="norbital-kanban-column flex flex-col"
-							style="gap: {ITEM_GAP}px;"
-						>
-							{#each column.items as item (item._id)}
-								{@const { _id: itemId } = item}
-								<Sortable.Item id={itemId} isDragging={draggedItemId === itemId}>
-									{#snippet child({ props })}
-										<div {...props} class="relative box-border w-full {props.class}">
-											{@render KanbanCard({ card: item, columnId, cardSnippet })}
-										</div>
-									{/snippet}
-								</Sortable.Item>
-							{/each}
-						</div>
-					{/snippet}
-				</Sortable.Root>
-			{:else}
-				<div
-					role="list"
-					class="relative w-full [overflow-anchor:none]"
-					style="height: {totalSize}px"
-				>
-					<div
+<Cover as="div" gap="sm" top={columnHeader} class="shrink-0" style="width: {minColumnWidth}px;">
+	<Scroll axis="y" name={t('kanban.columnRegion', { column: column.title })} class="px-0.5">
+		{#if column.isLoading && column.items.length === 0}
+			<Stack gap="sm">
+				{#each Array.from({ length: 4 }) as _, index (index)}
+					{@render CardSkeleton()}
+				{/each}
+			</Stack>
+		{:else if column.items.length === 0}
+			<p class="p-4 text-center text-muted-foreground">{t('kanban.emptyLane')}</p>
+		{:else}
+			<Sortable.Root
+				items={column.items.map((item) => item._id)}
+				sortableGroup={groupName}
+				handle={dragHandleClass}
+				sort={sortWithinColumn}
+				disabled={!canSort}
+				onSort={handleSort}
+				element={listElement}
+			>
+				{#snippet child({ draggedItemId })}
+					<VirtualList
+						items={column.items}
+						key={(item) => item._id}
+						estimateSize={itemHeight}
+						gap={ITEM_GAP}
+						role="list"
 						data-column-id={columnId}
 						class="norbital-kanban-column"
-						style="position: absolute; inset: 0; transform: translateY({paddingTop}px);"
+						bind:ref={listElement}
+						onRange={loadMoreNear}
+						itemProps={(item) => ({
+							'data-sortable-id': item._id,
+							class: cn('sortable-item', draggedItemId === item._id && 'sortable-dragging')
+						})}
 					>
-						{#each virtualRows as row (row.key)}
-							{@const item = column.items[row.index]}
-							{#if item}
-								<div
-									data-index={row.index}
-									class="relative box-border w-full"
-									style="height: {rowSize}px; padding-bottom: {ITEM_GAP}px;"
-								>
-									<div class="relative h-full w-full">
-										{@render KanbanCard({ card: item, columnId: column._id, cardSnippet })}
-									</div>
-								</div>
-							{:else}
-								<div
-									data-index={row.index}
-									class="relative box-border flex w-full items-center justify-center"
-									style="height: {rowSize}px; padding-bottom: {ITEM_GAP}px;"
-								>
-									{@render loadMoreIndicator({
-										loading: (column.isLoading ?? false) || (column.isFetchingNextPage ?? false)
-									})}
-								</div>
-							{/if}
-						{/each}
-						{#if paddingBottom > 0}
-							<div style="height: {paddingBottom}px;"></div>
-						{/if}
-					</div>
-				</div>
+						{#snippet item(card)}
+							{@render cardSnippet({ ...card, columnId })}
+						{/snippet}
+					</VirtualList>
+				{/snippet}
+			</Sortable.Root>
+			{#if column.hasMore}
+				<p class="py-2 text-center text-meta" class:animate-pulse={loading}>
+					{loading ? t('common.loading') : t('kanban.scrollForMore')}
+				</p>
 			{/if}
-		</Scroll>
-	</Cover>
-</div>
+		{/if}
+	</Scroll>
+</Cover>
 
 {#snippet columnHeader()}
 	<Inline gap="xs" class="px-1">
@@ -223,29 +130,13 @@
 		{:else}
 			<h2 class="text-sm font-semibold">{column.title}</h2>
 		{/if}
-		{#if column.totalCount !== undefined}
-			<span class="text-meta tabular-nums">{column.totalCount}</span>
-		{:else if column.items.length > 0}
-			<span class="text-meta tabular-nums">{column.items.length}</span>
-		{/if}
+		<span class="text-meta tabular-nums">{column.totalCount}</span>
 		{#if columnHeaderActionSnippet}
 			<div class="ml-auto">
 				{@render columnHeaderActionSnippet({ columnId })}
 			</div>
 		{/if}
 	</Inline>
-{/snippet}
-
-{#snippet KanbanCard({
-	card,
-	columnId,
-	cardSnippet
-}: {
-	card: TKanbanItem;
-	columnId: string;
-	cardSnippet: TCardSnippet;
-})}
-	{@render cardSnippet({ ...card, columnId })}
 {/snippet}
 
 {#snippet CardSkeleton()}
@@ -263,14 +154,4 @@
 			</Stack>
 		</Card.Content>
 	</Card.Root>
-{/snippet}
-
-{#snippet loadMoreIndicator({ loading }: { loading: boolean })}
-	<div class="flex items-center justify-center py-2 text-meta">
-		{#if loading}
-			<span class="animate-pulse">{t('common.loading')}</span>
-		{:else}
-			<span>{t('kanban.scrollForMore')}</span>
-		{/if}
-	</div>
 {/snippet}

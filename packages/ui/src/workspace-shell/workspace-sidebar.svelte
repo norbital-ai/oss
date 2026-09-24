@@ -10,7 +10,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Effect } from 'effect';
 	import { detectShortcutModifier, formatShortcut } from '#lib/keybindings';
-	import { Inline } from '#lib/layout';
+	import { Imposter, Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
 	import { Spinner } from '#lib/spinner';
 	import { Tooltip } from '#lib/tooltip';
@@ -236,7 +236,7 @@
 
 <Sidebar.Indicator />
 
-<Sidebar.Header class="gap-0 p-2">
+<Sidebar.Header class="p-2">
 	<Inline gap="xs" class="h-8">
 		{#if displayExpanded}
 			<div class="min-w-0 flex-1">{@render organizationSwitcher()}</div>
@@ -259,24 +259,28 @@
 				{/snippet}
 			</Tooltip>
 		{:else}
-			<div class="group/org relative mx-auto flex size-8 items-center justify-center">
-				<div
-					class="flex size-8 items-center justify-center transition-opacity group-hover/org:pointer-events-none group-hover/org:opacity-0"
+			<Inline gap="none" justify="center" class="group/org relative mx-auto size-8">
+				<Inline
+					gap="none"
+					justify="center"
+					class="size-8 transition-opacity group-hover/org:pointer-events-none group-hover/org:opacity-0"
 				>
 					{@render organizationSwitcher()}
-				</div>
-				<Sidebar.Trigger
-					target="expansion"
-					tabindex={-1}
-					class="pointer-events-none absolute inset-0 size-8 opacity-0 group-hover/org:pointer-events-auto group-hover/org:opacity-100"
-					aria-label={t('misc.expandSidebar')}
-				/>
-			</div>
+				</Inline>
+				<Imposter placement="fill" class="pointer-events-none">
+					<Sidebar.Trigger
+						target="expansion"
+						tabindex={-1}
+						class="pointer-events-none size-8 opacity-0 group-hover/org:pointer-events-auto group-hover/org:opacity-100"
+						aria-label={t('misc.expandSidebar')}
+					/>
+				</Imposter>
+			</Inline>
 		{/if}
 	</Inline>
 </Sidebar.Header>
 
-<Sidebar.Content class="gap-0 text-xs">
+<Sidebar.Content class="text-xs">
 	{#each model.sections as section (section.key)}
 		<WorkspaceSidebarNavigationSection
 			label={section.label}
@@ -291,7 +295,7 @@
 </Sidebar.Content>
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-1.5 text-xs">
-	<Sidebar.Menu class="gap-1.5">
+	<Sidebar.Menu>
 		{#if environmentLabel !== undefined && !displayExpanded}
 			<Sidebar.MenuItem>
 				<span
@@ -308,7 +312,8 @@
 		{/if}
 		{#if displayExpanded}
 			<Inline justify="between" align="center" gap="xs" class="h-7 px-1">
-				<div class="flex min-w-0 items-center gap-1.5">
+				<Inline gap="xs">
+					<!-- repository-health:allow UI25 -- the shared sidebar typography token (`text-overline`); it carries no layout -->
 					<div class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>{t('misc.account')}</div>
 					{#if environmentLabel !== undefined}
 						<Badge
@@ -320,7 +325,7 @@
 							{environmentLabel}
 						</Badge>
 					{/if}
-				</div>
+				</Inline>
 				<Inline gap="none" align="center" class="-mr-1">
 					{#if notifications}
 						<Sidebar.MenuItem>{@render notifications({ expanded: true })}</Sidebar.MenuItem>
@@ -348,7 +353,7 @@
 							aria-label={t('misc.openAccountMenu')}
 							class={cn(
 								'overflow-visible rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
-								displayExpanded ? 'h-11 items-center bg-popover px-2 py-1.5' : 'size-8 p-0'
+								displayExpanded ? 'h-11 bg-popover px-2 py-1.5' : 'size-8 p-0'
 							)}
 						>
 							<Avatar.Root class={displayExpanded ? 'size-6 shrink-0' : 'size-8'}>
@@ -391,26 +396,30 @@
 					<Button
 						type="button"
 						variant="ghost"
-						class="h-9 w-full justify-start gap-2 px-2 text-xs"
+						class="h-9 w-full px-2 text-xs"
 						onclick={toggleLocale}
 					>
-						<Icon icon="lucide:languages" class="size-3.5" />
-						<span>{t('misc.language')}</span>
-						<span class="ml-auto text-muted-foreground">
-							{t(`misc.localeName.${nextLocale}` as UiKeys)}
-						</span>
+						<Inline as="span" gap="sm" grow>
+							<Icon icon="lucide:languages" class="size-3.5" />
+							<span>{t('misc.language')}</span>
+							<span class="ml-auto text-muted-foreground">
+								{t(`misc.localeName.${nextLocale}` as UiKeys)}
+							</span>
+						</Inline>
 					</Button>
 					<Button
 						type="button"
 						variant="ghost"
-						class="h-9 w-full justify-start gap-2 px-2 text-xs"
+						class="h-9 w-full px-2 text-xs"
 						aria-label={t(isDark ? 'misc.switchToLightMode' : 'misc.switchToDarkMode')}
 						onclick={() => toggleMode()}
 						data-testid="workspace-theme-toggle"
 					>
-						<Icon icon={isDark ? 'lucide:sun' : 'lucide:moon'} class="size-3.5" />
-						<span>{t('misc.appearance')}</span>
-						<span class="ml-auto text-muted-foreground">{nextThemeLabel}</span>
+						<Inline as="span" gap="sm" grow>
+							<Icon icon={isDark ? 'lucide:sun' : 'lucide:moon'} class="size-3.5" />
+							<span>{t('misc.appearance')}</span>
+							<span class="ml-auto text-muted-foreground">{nextThemeLabel}</span>
+						</Inline>
 					</Button>
 					{#if impersonationAvailable}
 						<DropdownMenu.Separator />
@@ -434,12 +443,14 @@
 						</div>
 						{#if impersonation?.isActive}
 							<DropdownMenu.Item
-								class="gap-2 text-destructive data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive"
+								class="text-destructive data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive"
 								disabled={impersonationBusy}
 								onclick={() => void stopImpersonating()}
 							>
-								<Icon icon="lucide:user-x" class="size-3.5" />
-								<span>{t('misc.stopImpersonating')}</span>
+								<Inline as="span" gap="sm">
+									<Icon icon="lucide:user-x" class="size-3.5" />
+									<span>{t('misc.stopImpersonating')}</span>
+								</Inline>
 							</DropdownMenu.Item>
 						{/if}
 					{/if}
@@ -447,13 +458,15 @@
 					<Button
 						type="button"
 						variant="ghost"
-						class="h-9 w-full justify-start gap-2 px-2 text-xs hover:bg-destructive/10 hover:text-destructive"
+						class="h-9 w-full px-2 text-xs hover:bg-destructive/10 hover:text-destructive"
 						disabled={!onSignOut || signOutPending}
 						onclick={() => void signOut()}
 					>
-						<Icon icon="lucide:log-out" class="size-3.5" />
-						<span>{t('misc.logout')}</span>
-						{#if signOutPending}<Spinner class="ml-auto size-3.5" />{/if}
+						<Inline as="span" gap="sm" grow>
+							<Icon icon="lucide:log-out" class="size-3.5" />
+							<span>{t('misc.logout')}</span>
+							{#if signOutPending}<Spinner class="ml-auto size-3.5" />{/if}
+						</Inline>
 					</Button>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>

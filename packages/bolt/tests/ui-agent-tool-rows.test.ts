@@ -22,7 +22,7 @@ vi.mock('@norbital-ai/ui/markdown-editor', async () => ({
 }));
 vi.mock('@norbital-ai/ui/layout', async () => {
 	const { default: Fragment } = await import('./support/finder-test-fragment.svelte');
-	return { Inline: Fragment, Stack: Fragment };
+	return { Inline: Fragment, Scroll: Fragment, Stack: Fragment };
 });
 // The ui build's tabs entry is not resolvable here; the double renders every tab's content.
 vi.mock('@norbital-ai/ui/tabs', async () => ({
@@ -125,7 +125,7 @@ describe('AGENT-UI1 one row per tool call', () => {
 			const row = rows[0]!;
 			expect(row.getAttribute('data-tool-state')).toBe('done');
 			// The result rides the call's row: the tool message renders no list item of its own.
-			expect(view.target.querySelectorAll('li[data-role="tool"]')).toHaveLength(0);
+			expect(view.target.querySelectorAll('[data-role="tool"]')).toHaveLength(0);
 			expect(view.target.querySelectorAll('li')).toHaveLength(3);
 			expect(view.target.textContent).not.toContain('Tool');
 			expect(

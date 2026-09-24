@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { WithElementRef } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -11,6 +12,14 @@
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div bind:this={ref} class={cn('flex items-center p-6 pt-0', className)} {...restProps}>
+<Inline
+	gap="none"
+	class={cn('p-6 pt-0', className)}
+	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
+>
 	{@render children?.()}
-</div>
+</Inline>

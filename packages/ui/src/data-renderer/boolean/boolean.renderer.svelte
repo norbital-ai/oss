@@ -90,7 +90,7 @@
 		onValueChange={(next) => onValueChange?.(next == null ? null : next === 'true')}
 	/>
 {:else}
-	<div class={cn('flex h-8 items-center gap-2', className)}>
+	<Inline gap="sm" class={cn('h-8', className)}>
 		<Checkbox
 			{id}
 			checked={value === true}
@@ -98,5 +98,5 @@
 			onCheckedChange={(checked) => onValueChange?.(checked)}
 		/>
 		<span class="text-sm">{value === true ? t('dataRenderer.true') : t('dataRenderer.false')}</span>
-	</div>
+	</Inline>
 {/if}

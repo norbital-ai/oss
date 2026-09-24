@@ -6,7 +6,8 @@
 	import type { Action } from 'svelte/action';
 	import { fromAction } from 'svelte/attachments';
 	import { languageExtension } from '#lib/code-editor/languages';
-	import { buildCodeEditorTheme, codeEditorShellClass } from '#lib/code-editor/theme';
+	import { buildCodeEditorTheme } from '#lib/code-editor/theme';
+	import { Bound } from '#lib/layout';
 	import type { CodeEditorLanguage } from '#lib/code-editor/languages';
 
 	const ExternalSyncAnnotation = Annotation.define<boolean>();
@@ -117,16 +118,31 @@
 	};
 </script>
 
+{#snippet shell()}{/snippet}
+
 {#if typeof window === 'undefined'}
-	<div
-		class={cn(codeEditorShellClass(invalid), className)}
-		style:min-height={minHeight}
+	<Bound
+		size="auto"
+		clip
+		class={cn(
+			'rounded-sm border bg-background shadow-xs transition-[color,box-shadow] [container-type:normal] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
+			invalid ? 'border-destructive' : 'border-input',
+			className
+		)}
+		style="min-height: {minHeight}"
 		aria-hidden="true"
-	></div>
+		children={shell}
+	/>
 {:else}
-	<div
-		class={cn(codeEditorShellClass(invalid), className)}
-		style:min-height={minHeight}
+	<Bound
+		size="auto"
+		clip
+		class={cn(
+			'rounded-sm border bg-background shadow-xs transition-[color,box-shadow] [container-type:normal] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
+			invalid ? 'border-destructive' : 'border-input',
+			className
+		)}
+		style="min-height: {minHeight}"
 		{@attach fromAction(mountEditor, () => ({
 			value: value ?? '',
 			language,
@@ -135,7 +151,8 @@
 			ariaLabel,
 			onValueChange
 		}))}
-	></div>
+		children={shell}
+	/>
 {/if}
 
 <style>

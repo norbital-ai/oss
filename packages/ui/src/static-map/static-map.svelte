@@ -6,7 +6,7 @@
 	import type { Action } from 'svelte/action';
 	import { fromAction } from 'svelte/attachments';
 	import { cn } from '#lib/utils';
-	import { Inline } from '#lib/layout';
+	import { Imposter, Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import type { StaticMapMarker } from '#lib/static-map/static-map.types';
 
@@ -123,32 +123,37 @@
 
 <section
 	class={cn(
-		'relative isolate z-0 h-[20rem] overflow-hidden rounded-lg border border-border bg-muted/30',
+		'relative isolate z-0 h-80 overflow-clip rounded-lg border border-border bg-muted/30',
 		className
 	)}
 	aria-label={ariaLabel}
 >
-	<div
-		class="absolute inset-0 z-0"
+	<!-- Childless: Leaflet fills this layer with its own panes. -->
+	<Imposter
+		placement="fill"
+		layer="under"
 		aria-label={`${ariaLabel}. Drag to pan; use the zoom controls or mouse wheel to zoom.`}
 		{@attach fromAction(mountMap, () => markers)}
-	></div>
+	/>
 
 	{#if ready && markers.length > 0}
-		<div class="pointer-events-none absolute inset-0 z-10">
+		<Imposter placement="fill" class="pointer-events-none">
 			{#each markerPositions as position, index (index)}
 				{@const marker = markers[index]}
 				{#if marker && position.visible}
 					<Popover.Root>
 						<Popover.Trigger
 							class={cn(
-								'pointer-events-auto absolute flex size-8 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full border-2 border-background text-xs font-semibold text-white shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden',
+								// repository-health:allow UI19 -- a marker pinned at its projected map pixel; Imposter's offsets are fixed none–md steps from an edge, never a measured point
+								'pointer-events-auto absolute size-8 -translate-x-1/2 -translate-y-full rounded-full border-2 border-background text-xs font-semibold text-white shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden',
 								marker.tone === 'alert' ? 'bg-destructive' : 'bg-amber-700'
 							)}
 							style={`left: ${position.left}px; top: ${position.top}px;`}
 							aria-label={marker.ariaLabel ?? `Map marker ${marker.label ?? index + 1}`}
 						>
-							{marker.label ?? index + 1}
+							<Inline as="span" justify="center" class="size-full">
+								{marker.label ?? index + 1}
+							</Inline>
 						</Popover.Trigger>
 						{#if markerContent}
 							<Popover.Content class="w-auto p-3">
@@ -158,32 +163,34 @@
 					</Popover.Root>
 				{/if}
 			{/each}
-		</div>
+		</Imposter>
 	{/if}
 
 	{#if !ready || errorMessage || markers.length === 0}
-		<Inline
-			align="start"
-			gap="md"
-			class="absolute inset-x-4 top-4 z-20 rounded-md border border-border bg-background/95 p-3 shadow-sm backdrop-blur"
-			role={errorMessage ? 'alert' : undefined}
-		>
-			<Icon
-				icon={errorMessage
-					? 'lucide:map-pinned'
-					: !ready
-						? 'lucide:loader-circle'
-						: 'lucide:route-off'}
-				class={cn('mt-0.5 size-4 shrink-0', !ready && 'animate-spin')}
-			/>
-			<div>
-				<p class="text-sm font-medium">
-					{errorMessage ? 'Map unavailable' : !ready ? 'Loading map' : 'No mapped locations'}
-				</p>
-				<p class="text-meta">
-					{errorMessage ?? emptyDescription}
-				</p>
-			</div>
-		</Inline>
+		<Imposter placement="top" class="pointer-events-none p-4">
+			<Inline
+				align="start"
+				gap="md"
+				class="pointer-events-auto rounded-md border border-border bg-background/95 p-3 shadow-sm backdrop-blur"
+				role={errorMessage ? 'alert' : undefined}
+			>
+				<Icon
+					icon={errorMessage
+						? 'lucide:map-pinned'
+						: !ready
+							? 'lucide:loader-circle'
+							: 'lucide:route-off'}
+					class={cn('mt-0.5 size-4 shrink-0', !ready && 'animate-spin')}
+				/>
+				<div>
+					<p class="text-sm font-medium">
+						{errorMessage ? 'Map unavailable' : !ready ? 'Loading map' : 'No mapped locations'}
+					</p>
+					<p class="text-meta">
+						{errorMessage ?? emptyDescription}
+					</p>
+				</div>
+			</Inline>
+		</Imposter>
 	{/if}
 </section>

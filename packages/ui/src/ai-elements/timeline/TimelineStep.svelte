@@ -123,21 +123,25 @@
 	);
 </script>
 
-<div
-	bind:this={element}
+<Inline
+	gap="sm"
+	align="stretch"
 	data-timeline-step
 	class={cn(
-		'flex gap-2 text-xs transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+		'text-xs transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
 		statusStyles[status],
 		isVisible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0 motion-reduce:translate-y-0',
 		className
 	)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		element = node;
+	}}
 >
-	<div class="relative flex w-4 shrink-0 justify-center pt-0.5">
-		<Icon {icon} class={cn('size-3.5', iconStyles[status])} />
-		<div class={cn('absolute top-6 bottom-0 left-1/2 -mx-px w-px', connectorStyles[status])}></div>
-	</div>
+	<Stack gap="sm" align="center" shrink={false} class="w-4 pt-0.5">
+		<Icon {icon} class={cn('size-3.5 shrink-0', iconStyles[status])} />
+		<div class={cn('w-px flex-1', connectorStyles[status])}></div>
+	</Stack>
 	<Stack gap="sm" grow>
 		{#if shimmer}
 			<Shimmer content_length={label.length}>
@@ -174,4 +178,4 @@
 			{@render children()}
 		{/if}
 	</Stack>
-</div>
+</Inline>

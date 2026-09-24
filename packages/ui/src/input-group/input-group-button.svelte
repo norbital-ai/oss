@@ -42,7 +42,10 @@
 	{type}
 	data-size={size}
 	{variant}
-	class={cn(inputGroupButtonVariants({ size }), className)}
+	class={/* repository-health:allow UI25 -- the size recipe is a tailwind-variants `tv()` for the Button component (tooltip, haptics, link mode); `as="button"` makes a primitive a bare button, not this component, and its literal classes live in the script */ cn(
+		inputGroupButtonVariants({ size }),
+		className
+	)}
 	{...restProps}
 >
 	{@render children?.()}

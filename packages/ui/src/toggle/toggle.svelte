@@ -119,7 +119,10 @@
 		bind:ref
 		bind:pressed
 		{disabled}
-		class={cn(toggleVariants({ variant, size }), className)}
+		class={/* repository-health:allow UI25 -- `toggleVariants` is the exported tailwind-variants recipe for bits-ui's inline-flex toggle; primitives render block flex, so even `as="button"` changes its display, and its literal classes live in the script */ cn(
+			toggleVariants({ variant, size }),
+			className
+		)}
 		{...mergeProps(restProps, props)}
 		aria-label={restProps['aria-label'] || 'Toggle edit mode'}
 	>

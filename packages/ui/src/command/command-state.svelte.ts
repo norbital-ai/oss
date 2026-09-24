@@ -1,6 +1,7 @@
 import { watch } from 'runed';
 import { createContext } from 'svelte';
 import type { CommandItemData, CommandStateProps, FilterFunction } from '#lib/command/types';
+import type { ColumnCount } from '#lib/layout';
 
 // ============================================================================
 // Command Context
@@ -91,7 +92,7 @@ export class CommandState {
 		return this.#props.filterFn;
 	}
 
-	get columns(): number | undefined {
+	get columns(): ColumnCount | undefined {
 		return this.#props.columns;
 	}
 

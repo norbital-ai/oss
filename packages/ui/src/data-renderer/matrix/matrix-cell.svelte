@@ -22,9 +22,6 @@
 		onValueChange,
 		onRowChange
 	}: Props = $props();
-	const className = $derived(
-		cn('w-full min-w-0', borderless && 'border-0 bg-transparent shadow-none')
-	);
 	const value = $derived(row[column.key]);
 	const readOnly = $derived(column.readOnly === true);
 </script>
@@ -37,7 +34,7 @@
 	disabled={disabled || readOnly}
 	placeholder={column.placeholder}
 	{row}
-	class={className}
+	class={cn('w-full min-w-0', borderless && 'border-0 bg-transparent shadow-none')}
 	renderer={column.renderer as FieldRendererComponent | undefined}
 	relationOptions={column.relationOptions}
 	{onValueChange}

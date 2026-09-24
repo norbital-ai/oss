@@ -46,7 +46,7 @@ get along, so we shut typescript up by casting `value` to `never`.
 			{#each months as month (month)}
 				<Grid>
 					<GridHead>
-						<GridRow class="flex">
+						<GridRow>
 							{#each weekdays as weekday (weekday)}
 								<HeadCell>
 									{weekday.slice(0, 2)}

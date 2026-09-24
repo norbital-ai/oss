@@ -18,6 +18,7 @@
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		ratio = 'landscape',
 		shrink = true,
 		class: className,
@@ -35,11 +36,13 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
-		className,
-		'min-w-0 overflow-clip [&>img]:size-full [&>img]:object-cover',
+		'flex min-w-0 items-center justify-center overflow-clip [&>img]:size-full [&>img]:object-cover [&>video]:size-full [&>video]:object-cover',
 		ratioClasses[ratio],
-		!shrink && 'shrink-0'
+		!shrink && 'shrink-0',
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	data-layout="frame"
 	{...restProps}

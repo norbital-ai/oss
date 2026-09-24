@@ -5,7 +5,7 @@
 	 */
 	import Icon from '@iconify/svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline, Scroll } from '#lib/layout';
+	import { Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import { onMount } from 'svelte';
@@ -234,17 +234,18 @@
 	);
 </script>
 
-<div
-	class="flex max-h-[min(28rem,70vh)] w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover p-1 shadow-deep"
+<Stack
+	gap="none"
+	class="max-h-[min(28rem,70vh)] w-[min(34rem,calc(100vw-2rem))] overflow-clip rounded-xl border bg-popover p-1 shadow-deep"
 	role="menu"
 	aria-label={t('misc.mentionMenu')}
-	tabindex="-1"
+	tabindex={-1}
 	onmousemove={handleMouseMove}
 >
-	<div class="flex items-center justify-between px-2.5 py-2">
+	<Inline gap="none" justify="between" class="px-2.5 py-2">
 		<span class="text-xs font-medium text-muted-foreground">{t('misc.reference')}</span>
 		<span class="text-tiny text-muted-foreground/70">{t('misc.mentionKeyboardHint')}</span>
-	</div>
+	</Inline>
 	<Scroll axis="y" name={t('misc.mentionTree')} bind:ref={scrollContainerRef}>
 		<!-- Tree Content with scrolling -->
 		{#if visibleItems.length === 0}
@@ -255,7 +256,8 @@
 				{@const isExpanded = expandedIds.has(item.id)}
 				{@const hasChildren = itemsByParent.has(item.id)}
 
-				<div
+				<Inline
+					gap="none"
 					role="none"
 					data-index={index}
 					onmouseenter={() => {
@@ -265,7 +267,7 @@
 						}
 					}}
 					class={cn(
-						'flex w-full items-center rounded-lg py-1 text-left text-xs transition-colors',
+						'w-full rounded-lg py-1 text-left text-xs transition-colors',
 						isConsidered && 'bg-muted'
 					)}
 					style="padding-left: {depth * 16}px"
@@ -275,7 +277,7 @@
 						type="button"
 						onclick={(e) => handleChevronClick(e, item.id)}
 						class={cn(
-							'flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-secondary dark:hover:bg-secondary',
+							'h-5 w-5 shrink-0 rounded hover:bg-secondary dark:hover:bg-secondary',
 							!hasChildren && 'invisible'
 						)}
 						disabled={!hasChildren}
@@ -283,7 +285,7 @@
 						{#if hasChildren}
 							<Icon
 								icon={isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'}
-								class="h-3 w-3 text-muted-foreground"
+								class="mx-auto block h-3 w-3 text-muted-foreground"
 							/>
 						{/if}
 					</button>
@@ -299,7 +301,7 @@
 							<Icon icon={item.icon} class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 
 							<!-- Label & Description with highlighting -->
-							<div class="flex min-w-0 flex-1 flex-col">
+							<Stack gap="none" grow>
 								<span class="truncate text-start font-medium text-foreground">
 									{#each getHighlightedText(item.label, query) as part}
 										{#if part.highlight}
@@ -320,11 +322,11 @@
 										{/each}
 									</span>
 								{/if}
-							</div>
+							</Stack>
 						</Inline>
 					</button>
-				</div>
+				</Inline>
 			{/each}
 		{/if}
 	</Scroll>
-</div>
+</Stack>

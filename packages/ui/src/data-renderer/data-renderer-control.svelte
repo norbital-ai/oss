@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 
 	let {
 		mode = 'display',
@@ -18,10 +19,11 @@
 	inputs or trigger-and-overlay controls; both occupy the same input-sized footprint wherever a
 	field is placed. Complex controls may grow taller, hence min-height rather than a fixed height.
 -->
-<div
-	class={cn('flex min-h-9 min-w-0 w-full items-center text-sm', className)}
+<Inline
+	gap="none"
+	class={cn('min-h-9 w-full text-sm', className)}
 	data-data-renderer-control
 	data-mode={mode}
 >
 	{@render children()}
-</div>
+</Inline>

@@ -34,7 +34,10 @@
 	{@render children()}
 	{#if visible}
 		<span
-			class={cn(indicatorVariants({ variant, size, position, animated }), className)}
+			class={/* repository-health:allow UI25 -- the indicator recipe is a tailwind-variants `tv()` whose literal classes live in the module script */ cn(
+				indicatorVariants({ variant, size, position, animated }),
+				className
+			)}
 			aria-hidden="true"
 			{...restProps}
 		></span>

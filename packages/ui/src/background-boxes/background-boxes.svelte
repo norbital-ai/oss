@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Bound, Cluster, Imposter } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -21,30 +22,41 @@
 	let colsArray = $derived(Array.from({ length: cols }));
 </script>
 
-<div bind:this={ref} class={cn('relative h-full w-full overflow-hidden', className)} {...restProps}>
+<Bound
+	size="full"
+	clip
+	class={cn('relative w-full', className)}
+	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
+>
 	<!-- Background boxes grid -->
-	<div class="absolute inset-0 z-0 flex flex-wrap">
-		{#each rowsArray as _, i}
-			{#each colsArray as _, j}
-				{@const animDelay = ((i + j) * 50) % 2000}
-				{@const animDuration = 2000 + ((i * j) % 1000)}
-				<div
-					class="box-cell mounted relative h-12 w-12 border-t border-r border-neutral-300/60 transition-all duration-200 last:border-b hover:bg-brand-500/30 md:h-16 md:w-16 dark:border-neutral-700/60 dark:hover:bg-brand-400/20"
-					class:border-l={j === 0}
-					style="
-					--animation-delay: {animDelay}ms;
-					--animation-duration: {animDuration}ms;
-				"
-				></div>
+	<Imposter placement="fill">
+		<Cluster gap="none" align="start" fill>
+			{#each rowsArray as _, i}
+				{#each colsArray as _, j}
+					{@const animDelay = ((i + j) * 50) % 2000}
+					{@const animDuration = 2000 + ((i * j) % 1000)}
+					<div
+						class="box-cell mounted relative h-12 w-12 border-t border-r border-neutral-300/60 transition-all duration-200 last:border-b hover:bg-brand-500/30 md:h-16 md:w-16 dark:border-neutral-700/60 dark:hover:bg-brand-400/20"
+						class:border-l={j === 0}
+						style="
+						--animation-delay: {animDelay}ms;
+						--animation-duration: {animDuration}ms;
+					"
+					></div>
+				{/each}
 			{/each}
-		{/each}
-	</div>
+		</Cluster>
+	</Imposter>
 
 	<!-- Content overlay -->
 	<div class="pointer-events-auto relative z-10">
 		{@render children?.()}
 	</div>
-</div>
+</Bound>
 
 <style>
 	@keyframes pulse-box {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import { Skeleton } from '#lib/skeleton';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -17,12 +18,16 @@
 	const width = `${Math.floor(Math.random() * 40) + 50}%`;
 </script>
 
-<div
-	bind:this={ref}
+<Inline
+	gap="sm"
 	data-slot="sidebar-menu-skeleton"
 	data-sidebar="menu-skeleton"
-	class={cn('flex h-8 items-center gap-2 rounded-md px-2', className)}
+	class={cn('h-8 rounded-md px-2', className)}
 	{...restProps}
+	{@attach (node: HTMLElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{#if showIcon}
 		<Skeleton class="size-4 rounded-md" data-sidebar="menu-skeleton-icon" />
@@ -33,4 +38,4 @@
 		style="--skeleton-width: {width};"
 	/>
 	{@render children?.()}
-</div>
+</Inline>

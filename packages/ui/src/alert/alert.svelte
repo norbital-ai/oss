@@ -54,6 +54,7 @@
 	} = $props();
 </script>
 
+<!-- repository-health:allow UI25 -- the alert recipe is a tailwind-variants `tv()` whose literal classes live in the module script -->
 <div bind:this={ref} class={cn(alertVariants({ variant }), className)} {...restProps} role="alert">
 	{@render children?.()}
 </div>

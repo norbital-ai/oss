@@ -62,7 +62,7 @@
 <Sidebar.Provider
 	bind:open={expanded.current}
 	style={providerStyle}
-	class={cn(className, 'h-[var(--workspace-shell-height,100dvh)] min-h-0 overflow-clip')}
+	class={cn(className, 'h-(--workspace-shell-height,100dvh) min-h-0 overflow-clip')}
 	data-workspace-shell-frame
 >
 	<Sidebar.Root
@@ -73,21 +73,18 @@
 		{mobileDescription}
 		closeOnNavigate={true}
 		aria-label={navigationLabel}
-		class={sidebarClass}
+		class={/* repository-health:allow UI25 -- pass-through of the caller's `sidebarClass` prop; its tokens are literal at the call site */ sidebarClass}
 		mobileClass={mobileSidebarClass}
 	>
 		{@render navigation()}
 	</Sidebar.Root>
 
-	<Sidebar.Inset
-		as="main"
-		class={cn(insetClass, 'h-[var(--workspace-shell-height,100dvh)] min-h-0 min-w-0 overflow-clip')}
-	>
+	<Sidebar.Inset as="main" class={cn(insetClass, 'min-h-0 min-w-0 overflow-clip')}>
 		<Inline
 			as="header"
 			gap="sm"
 			shrink={false}
-			class="h-[calc(3.25rem+env(safe-area-inset-top))] border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
+			class="border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[calc(env(safe-area-inset-top)+0.25rem)] pb-1 md:hidden"
 		>
 			<Sidebar.Trigger
 				aria-label={t('misc.openNavigation', { navigation: navigationLabel.toLowerCase() })}

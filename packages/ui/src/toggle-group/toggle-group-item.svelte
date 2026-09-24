@@ -20,7 +20,7 @@
 
 <ToggleGroupPrimitive.Item
 	bind:ref
-	class={cn(
+	class={/* repository-health:allow UI25 -- `toggleVariants` is the exported tailwind-variants recipe for bits-ui's inline-flex toggle; primitives render block flex, so even `as="button"` changes its display, and its literal classes live in the script */ cn(
 		toggleVariants({
 			variant: ctx().variant || variant,
 			size: ctx().size || size

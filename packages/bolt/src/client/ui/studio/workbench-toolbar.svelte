@@ -125,7 +125,7 @@
 		{#if newCommits > 0}
 			<Badge
 				variant="warning"
-				class="h-5 max-w-48 shrink-0 gap-1 px-2 py-0 text-micro"
+				class="h-5 max-w-48 shrink-0 px-2 py-0 text-micro"
 				data-testid="studio-new-commits"
 			>
 				{t('bolt.studio.newCommits', { count: newCommits })}
@@ -134,19 +134,21 @@
 		{#if toolbarStatus}
 			<Badge
 				variant={toolbarStatus.variant}
-				class="h-5 max-w-48 shrink-0 gap-1 px-2 py-0 text-micro"
+				class="h-5 max-w-48 shrink-0 px-2 py-0 text-micro"
 				data-testid={toolbarStatus.testId}
 				aria-busy={toolbarStatus.loading}
 				title={toolbarStatus.detailKey === undefined
 					? toolbarStatus.detail
 					: t(toolbarStatus.detailKey)}
 			>
-				<Icon
-					icon={toolbarStatus.icon}
-					class={toolbarStatus.loading ? 'size-3 shrink-0 animate-spin' : 'size-3 shrink-0'}
-					aria-hidden="true"
-				/>
-				<span class="truncate">{t(toolbarStatus.labelKey)}</span>
+				<Inline as="span" gap="xs">
+					<Icon
+						icon={toolbarStatus.icon}
+						class={toolbarStatus.loading ? 'size-3 shrink-0 animate-spin' : 'size-3 shrink-0'}
+						aria-hidden="true"
+					/>
+					<span class="truncate">{t(toolbarStatus.labelKey)}</span>
+				</Inline>
 			</Badge>
 		{/if}
 		{#if supportingState !== undefined}
@@ -165,41 +167,47 @@
 			type="button"
 			variant="ghost"
 			size="sm"
-			class="h-8 gap-1 px-2 text-xs sm:h-7 sm:text-micro"
+			class="h-8 px-2 text-xs sm:h-7 sm:text-micro"
 			disabled={busy}
 			data-testid="studio-diagnose"
 			onclick={() => ondiagnose?.()}
 		>
-			<Icon icon="lucide:stethoscope" class="size-3.5" />
-			{t('bolt.studio.diagnose')}
+			<Inline as="span" gap="xs">
+				<Icon icon="lucide:stethoscope" class="size-3.5" />
+				{t('bolt.studio.diagnose')}
+			</Inline>
 		</Button>
 		{#if updateRequired || newCommits > 0}
 			<Button
 				type="button"
 				variant="default"
 				size="sm"
-				class="h-8 gap-1 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
+				class="h-8 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
 				disabled={updateDisabled}
 				disabledMessage={updateReason}
 				data-testid="studio-update"
 				onclick={() => onupdate?.()}
 			>
-				<Icon icon="lucide:arrow-up-from-line" class="size-3.5" />
-				{t(updateRequired ? 'bolt.studio.updateFromLive' : 'bolt.studio.update')}
+				<Inline as="span" gap="xs">
+					<Icon icon="lucide:arrow-up-from-line" class="size-3.5" />
+					{t(updateRequired ? 'bolt.studio.updateFromLive' : 'bolt.studio.update')}
+				</Inline>
 			</Button>
 		{:else}
 			<Button
 				type="button"
 				variant="default"
 				size="sm"
-				class="h-8 gap-1 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
+				class="h-8 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
 				disabled={publishDisabled}
 				disabledMessage={publishReason}
 				data-testid="studio-publish"
 				onclick={() => onpublish?.()}
 			>
-				<Icon icon="lucide:upload" class="size-3.5" />
-				{t('bolt.studio.publish')}
+				<Inline as="span" gap="xs">
+					<Icon icon="lucide:upload" class="size-3.5" />
+					{t('bolt.studio.publish')}
+				</Inline>
 			</Button>
 		{/if}
 	</Inline>

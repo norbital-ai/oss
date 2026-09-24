@@ -13,6 +13,7 @@
 </script>
 
 <script lang="ts">
+	import { Imposter } from '#lib/layout';
 	import { attachDotField, markRadius } from '#lib/dot-field';
 	import { norbiusStripGeometry, type NorbiusStripState } from './geometry.js';
 
@@ -68,14 +69,20 @@
 	}}
 >
 	<canvas aria-hidden="true" style="display: block; width: 100%; height: 100%"></canvas>
-	<span class="strip-accent-swatch" aria-hidden="true"></span>
+	<Imposter
+		as="span"
+		placement="top-start"
+		offset="none"
+		layer="under"
+		class="strip-accent-swatch invisible size-0"
+		style="color: var(--strip-accent)"
+		aria-hidden="true"
+	/>
 </span>
 
 <style>
 	.norbital-norbius-strip {
 		--strip-accent: var(--product-icon-accent, var(--color-brand));
-		position: relative;
-		display: grid;
 		flex: none;
 		place-items: center;
 		color: currentColor;
@@ -91,13 +98,5 @@
 		display: block;
 		width: 100%;
 		height: 100%;
-	}
-
-	.strip-accent-swatch {
-		position: absolute;
-		width: 0;
-		height: 0;
-		color: var(--strip-accent);
-		visibility: hidden;
 	}
 </style>

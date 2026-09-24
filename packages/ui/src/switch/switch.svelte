@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { Switch as SwitchPrimitive, type WithoutChildrenOrChild } from 'bits-ui';
 
@@ -19,7 +20,7 @@
 {#if readonly}
 	<div
 		class={cn(
-			'inline-flex h-[24px] w-[44px] shrink-0 items-center rounded-full border-2 border-transparent transition-colors',
+			'inline-block h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors',
 			// Apply colors based on the `checked` state
 			checked ? 'bg-primary' : 'bg-input',
 			// If disabled while readonly, apply opacity
@@ -28,28 +29,30 @@
 		)}
 		aria-readonly="true"
 	>
-		<div
-			class={cn(
-				'block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform',
-				// Translate the thumb based on the `checked` state
-				checked ? 'translate-x-5' : 'translate-x-0'
-			)}
-		></div>
+		<Inline gap="none" fill>
+			<div
+				class={cn(
+					'block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform',
+					// Translate the thumb based on the `checked` state
+					checked ? 'translate-x-5' : 'translate-x-0'
+				)}
+			></div>
+		</Inline>
 	</div>
 {:else}
 	<SwitchPrimitive.Root
 		bind:ref
 		bind:checked
 		class={cn(
-			'peer inline-flex h-[24px] w-[44px] shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input',
+			'peer inline-block h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input',
 			className
 		)}
 		{...restProps}
 	>
-		<SwitchPrimitive.Thumb
-			class={cn(
-				'pointer-events-none block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-5 data-[state=unchecked]:translate-x-0'
-			)}
-		/>
+		<Inline as="span" gap="none" fill>
+			<SwitchPrimitive.Thumb
+				class="pointer-events-none block size-5 rounded-full bg-background shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-5 data-[state=unchecked]:translate-x-0"
+			/>
+		</Inline>
 	</SwitchPrimitive.Root>
 {/if}

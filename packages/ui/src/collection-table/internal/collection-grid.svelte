@@ -2,7 +2,7 @@
 	import { Array as Array_, Effect, Result } from 'effect';
 	import Icon from '@iconify/svelte';
 	import * as Alert from '#lib/alert';
-	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
+	import { Cover, Imposter, Inline, Scroll, Stack } from '#lib/layout';
 	import { Skeleton } from '#lib/skeleton';
 	import { Sortable } from '#lib/sortable';
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
@@ -94,7 +94,6 @@
 	let {
 		table,
 		disabled = false,
-		class: className = '',
 		isLoading = false,
 		error = '',
 
@@ -117,7 +116,8 @@
 		getRowHasChildren,
 		getRowLeadingAccent,
 		activeRecordId = null,
-		bounded = true
+		bounded = true,
+		...rest
 	}: Props = $props();
 
 	// ----------------------------------------------------------------------------------
@@ -179,14 +179,6 @@
 	const sortingEnabled = $derived(enableSorting && !disabled);
 	const columnReorderEnabled = $derived(enableColumnReordering && !disabled);
 
-	function getPinnedLayerClass(top = false): string {
-		return cn(
-			'sticky left-0 z-40 h-full bg-card',
-			top && 'top-0',
-			!borderless && PINNED_LAYER_BORDER_CLASS
-		);
-	}
-
 	function handleSort(inst: ColumnAPI<TData, TCondition>) {
 		if (!sortingEnabled || !inst.enableSorting) return;
 		// Re-ordering the set invalidates the page you are on, but the grid does not own the page:
@@ -216,16 +208,6 @@
 		const next = reorderedIds.filter((id) => scrollableIds.includes(id));
 		table.columnOrder.current = next;
 		onColumnReorder?.(next);
-	}
-
-	function rowSurfaceClass(detailActive: boolean, expanded: boolean): string {
-		return cn(
-			'relative transition-colors',
-			!borderless && 'border-b',
-			detailActive && 'bg-accent/50',
-			!detailActive && expanded && 'bg-muted/50',
-			!detailActive && !expanded && 'hover:bg-muted/50'
-		);
 	}
 
 	function handleHeaderWheel(event: WheelEvent) {
@@ -433,7 +415,7 @@
 <Cover
 	as="div"
 	gap="none"
-	class={className}
+	{...rest}
 	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	role="grid"
 	aria-rowcount={table.totalRows}
@@ -470,14 +452,14 @@
 	>
 		<div class="relative h-full" bind:this={tableHeaderElement} role="row">
 			<!-- Pinned columns -->
-			<div class="absolute top-0 left-0 z-50 h-full bg-muted/80" style="width: {pinnedWidth}px;">
+			<Imposter placement="start" layer="modal" class="bg-muted/80" style="width: {pinnedWidth}px;">
 				{#each pinnedLayouts as layout (layout.id)}
 					{@render renderHeaderCell(layout)}
 				{/each}
-			</div>
+			</Imposter>
 
 			<!-- Scrollable columns -->
-			<div class="absolute top-0 right-0 h-full overflow-hidden" style="left: {pinnedWidth}px;">
+			<Imposter placement="end" layer="under" class="overflow-clip" style="left: {pinnedWidth}px;">
 				<div
 					class="relative h-full"
 					style="width: {scrollTotalWidth}px; transform: translateX(calc(-1 * var(--collection-table-header-scroll-left, 0px)));"
@@ -517,7 +499,7 @@
 						{/each}
 					{/if}
 				</div>
-			</div>
+			</Imposter>
 		</div>
 	</div>
 {/snippet}
@@ -545,6 +527,7 @@
 		{...sortableProps || {}}
 		gap="none"
 		fill
+		// repository-health:allow UI19 -- a virtualized cell at the virtualizer's measured pixel column offset; Imposter places at an edge with a fixed none–md offset, never a per-column measured one
 		class={cn('group absolute top-0 bg-muted/80', {
 			'border-r': !borderless,
 			[String(sortableProps?.class || '')]: true
@@ -557,7 +540,7 @@
 		aria-label={headerLabel}
 	>
 		{#if isCheckbox}
-			<Inline gap="none" fill grow justify="center" class="min-w-0 overflow-hidden px-3.5 py-1.5">
+			<Inline gap="none" fill grow justify="center" class="min-w-0 overflow-clip px-3.5 py-1.5">
 				{#if headerContent instanceof RenderComponentConfig}
 					{@const { component: Component, props } = headerContent}
 					<Component {...props} />
@@ -574,7 +557,7 @@
 				grow
 				fill
 				class={cn(
-					'min-w-0 overflow-hidden px-3 text-left text-[13px] font-medium',
+					'min-w-0 overflow-clip px-3 text-left text-[13px] font-medium',
 					headerSortableHandlerClass,
 					{
 						'cursor-grab': columnReorderEnabled,
@@ -595,60 +578,69 @@
 				{/if}
 			</Inline>
 
-			<Inline gap="none" class="absolute inset-y-0 right-0">
-				{#if inst.enableSorting && sortingEnabled}
-					<button
-						type="button"
-						aria-label={dir === 'asc'
-							? t('table.sortLabelDescending', { label: headerLabel })
-							: dir === 'desc'
-								? t('table.sortClearLabel', { label: headerLabel })
-								: t('table.sortLabelAscending', { label: headerLabel })}
-						title={dir === 'asc'
-							? t('table.sortDescending')
-							: dir === 'desc'
-								? t('table.sortClear')
-								: t('table.sortAscending')}
-						onclick={() => handleSort(inst)}
-						class={cn(
-							'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
-							isSorted ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-						)}
-					>
-						<Icon
-							icon={dir === 'desc'
-								? 'lucide:arrow-down'
-								: dir === 'asc'
-									? 'lucide:arrow-up'
-									: 'lucide:arrow-up-down'}
-							class="h-3.5 w-3.5 text-muted-foreground"
-						/>
-					</button>
-				{/if}
+			<Imposter
+				placement="end"
+				layer="under"
+				class={cn(!disabled && (inst.enablePinning || inst.enableHiding) && 'pr-3')}
+			>
+				<Inline gap="none" fill>
+					{#if inst.enableSorting && sortingEnabled}
+						<button
+							type="button"
+							aria-label={dir === 'asc'
+								? t('table.sortLabelDescending', { label: headerLabel })
+								: dir === 'desc'
+									? t('table.sortClearLabel', { label: headerLabel })
+									: t('table.sortLabelAscending', { label: headerLabel })}
+							title={dir === 'asc'
+								? t('table.sortDescending')
+								: dir === 'desc'
+									? t('table.sortClear')
+									: t('table.sortAscending')}
+							onclick={() => handleSort(inst)}
+							class={cn(
+								'h-8 w-8 rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
+								isSorted ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+							)}
+						>
+							<Inline as="span" justify="center" class="size-full">
+								<Icon
+									icon={dir === 'desc'
+										? 'lucide:arrow-down'
+										: dir === 'asc'
+											? 'lucide:arrow-up'
+											: 'lucide:arrow-up-down'}
+									class="h-3.5 w-3.5 text-muted-foreground"
+								/>
+							</Inline>
+						</button>
+					{/if}
 
-				{#if !disabled}
-					<CollectionTableColumnActions {inst} {table} />
-				{/if}
-			</Inline>
+					{#if !disabled}
+						<CollectionTableColumnActions {inst} {table} />
+					{/if}
+				</Inline>
+			</Imposter>
 
 			{@const canResize = layout.canResize}
 			{@const { id: columnId } = inst}
 			{@const isResizing = resizer.activeColumnId === columnId}
 			{#if canResize}
-				<button
+				<Imposter
+					as="button"
 					type="button"
+					placement="end"
+					layer={sortableProps ? 'raised' : 'under'}
 					title={t('table.resizeColumn')}
 					onmousedown={(e) => resizer.handle(e, inst.id)}
 					ontouchstart={(e) => resizer.handle(e, inst.id)}
-					class={cn(
-						'absolute top-0 right-0 h-full w-1.5 cursor-col-resize touch-none select-none',
-						sortableProps && 'z-10'
-					)}
+					class="w-1.5 cursor-col-resize touch-none select-none"
 				>
-					<div
+					<Inline
 						data-column-resize-indicator
+						justify="center"
 						class={cn(
-							'flex h-full w-full items-center justify-center transition-opacity',
+							'h-full w-full transition-opacity',
 							'opacity-0 group-hover:opacity-100',
 							isResizing && 'opacity-100'
 						)}
@@ -659,8 +651,8 @@
 								isResizing ? 'w-0.5 bg-brand' : 'w-px bg-muted-foreground/50'
 							)}
 						></div>
-					</div>
-				</button>
+					</Inline>
+				</Imposter>
 			{/if}
 		{/if}
 	</Inline>
@@ -694,19 +686,27 @@
 	<div class="w-full bg-card">
 		{#each Array(20) as _, i (i)}
 			<div class="relative" style="height: {ROW_HEIGHT}px;">
-				<div class={getPinnedLayerClass()} style="width: {pinnedWidth}px;">
+				<Imposter
+					position="sticky"
+					placement="start"
+					layer="overlay"
+					class={cn('h-full bg-card', !borderless && PINNED_LAYER_BORDER_CLASS)}
+					style="width: {pinnedWidth}px;"
+				>
 					{#each pinnedLayouts as layout (layout.id)}
 						<Inline
 							gap="none"
 							fill
+							// repository-health:allow UI19 -- a virtualized cell at the virtualizer's measured pixel column offset; Imposter places at an edge with a fixed none–md offset, never a per-column measured one
 							class="absolute top-0 bg-card p-2.5"
 							style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 						>
 							<Skeleton class="h-4 w-full" />
 						</Inline>
 					{/each}
-				</div>
+				</Imposter>
 				<div
+					// repository-health:allow UI19 -- the scrolling column track at the measured pinned-width offset; Imposter places at an edge with a fixed none–md offset, never a measured one
 					class="absolute top-0 h-full bg-card"
 					style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;"
 				>
@@ -716,6 +716,7 @@
 							<Inline
 								gap="none"
 								fill
+								// repository-health:allow UI19 -- a virtualized cell at the virtualizer's measured pixel column offset; Imposter places at an edge with a fixed none–md offset, never a per-column measured one
 								class="absolute top-0 p-2.5"
 								style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 							>
@@ -782,8 +783,9 @@
 				<div data-collection-grid-virtual-spacer style="height: {totalVirtualRowSize}px;"></div>
 				<div
 					bind:this={bodySortableElement}
-					class={bodySortableClass}
-					style="position: absolute; top: {paddingTop}px; left: 0; right: 0;"
+					// repository-health:allow UI19 -- the virtualizer's rendered row window at the measured height of the rows scrolled past; Imposter's offsets are fixed none–md steps, never a measured one
+					class={cn('absolute inset-x-0', bodySortableClass)}
+					style="top: {paddingTop}px;"
 				>
 					{#each items as vi (vi.key)}
 						{@const row = table.data.at(vi.index)}
@@ -816,39 +818,57 @@
 										{@attach measureRow()}
 									>
 										<div
-											class={rowSurfaceClass(isDetailActive, isRowExpanded)}
+											class={cn(
+												'relative transition-colors',
+												!borderless && 'border-b',
+												isDetailActive && 'bg-accent/50',
+												!isDetailActive && isRowExpanded && 'bg-muted/50',
+												!isDetailActive && !isRowExpanded && 'hover:bg-muted/50'
+											)}
 											style="min-height: {ROW_HEIGHT}px; height: {ROW_HEIGHT}px;"
 										>
 											{#if enableRowReordering}
-												<div
+												<Imposter
+													placement="center-start"
+													offset="none"
+													layer="overlay"
 													class={cn(
-														'absolute top-1/2 -left-1 z-40 h-6 w-1 -translate-y-1/2 cursor-grab rounded-l-md transition-all duration-150 group-hover:-left-3 active:cursor-grabbing',
+														'-left-1 h-6 w-1 cursor-grab rounded-l-md transition-all duration-150 group-hover:-left-3 active:cursor-grabbing',
 														rowDragClass,
 														'bg-accent group-hover:w-3 hover:bg-input',
 														'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100'
 													)}
 													title={t('form.dragToReorder')}
 												>
-													<div
-														class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
+													<Imposter
+														placement="fill"
+														class="opacity-0 transition-opacity group-hover:opacity-100"
 													>
-														<Icon icon="lucide:grip-vertical" class="h-3 w-3 text-white" />
-													</div>
-												</div>
+														<Inline justify="center" fill>
+															<Icon icon="lucide:grip-vertical" class="h-3 w-3 text-white" />
+														</Inline>
+													</Imposter>
+												</Imposter>
 											{/if}
 
 											{#if rowLeadingAccent}
-												<span
+												<Imposter
+													as="span"
 													role="img"
-													class={cn('absolute inset-y-0 left-0 z-50', rowLeadingAccent.markerClass)}
+													placement="start"
+													layer="modal"
+													class={cn('inset-y-1 w-1 rounded-r-full', rowLeadingAccent.markerClass)}
 													title={rowLeadingAccent.tooltip}
 													aria-label={rowLeadingAccent.tooltip}
-												></span>
+												/>
 											{:else if isDetailActive}
-												<span
-													class="absolute inset-y-1.5 left-0 z-50 w-0.5 rounded-full bg-brand"
+												<Imposter
+													as="span"
+													placement="start"
+													layer="modal"
+													class="inset-y-1.5 w-0.5 rounded-full bg-brand"
 													aria-hidden="true"
-												></span>
+												/>
 											{/if}
 
 											{@render renderRowCells(row, vi.index)}
@@ -867,25 +887,27 @@
 													buttons never drift past the row's natural right edge when the
 													row already fits inside the viewport.
 												-->
-												<div
-													class={cn(
-														'pointer-events-none absolute inset-y-0 z-50 flex items-center gap-0.5',
-														stickyRowActions ? 'right-0 pr-2' : 'right-1'
-													)}
+												<Imposter
+													placement="end"
+													offset={stickyRowActions ? 'none' : 'xs'}
+													layer="modal"
+													class={cn('pointer-events-none', stickyRowActions && 'pr-2')}
 													style={stickyRowActions
 														? `transform: translateX(min(0px, calc(var(${BODY_SCROLL_LEFT_VAR}, 0px) + var(${BODY_VIEWPORT_WIDTH_VAR}, 0px) - ${totalTableWidth}px)));`
 														: undefined}
 												>
-													{#each rowActions as action}
-														<div class="pointer-events-auto">
-															{@render action({
-																row: rowObj,
-																table: table,
-																hovered: hoveredRowId === rowObj.id
-															})}
-														</div>
-													{/each}
-												</div>
+													<Inline gap="xs" fill>
+														{#each rowActions as action}
+															<div class="pointer-events-auto">
+																{@render action({
+																	row: rowObj,
+																	table: table,
+																	hovered: hoveredRowId === rowObj.id
+																})}
+															</div>
+														{/each}
+													</Inline>
+												</Imposter>
 											{/if}
 										</div>
 
@@ -912,22 +934,34 @@
 
 {#snippet renderPlaceholderRow()}
 	<div class="relative" style="height: {ROW_HEIGHT}px;">
-		<div class={getPinnedLayerClass()} style="width: {pinnedWidth}px;">
+		<Imposter
+			position="sticky"
+			placement="start"
+			layer="overlay"
+			class={cn('h-full bg-card', !borderless && PINNED_LAYER_BORDER_CLASS)}
+			style="width: {pinnedWidth}px;"
+		>
 			{#each pinnedLayouts as layout (layout.id)}
 				<div
-					class={cn('absolute top-0 h-full items-center p-2.5', !borderless && 'border-r')}
+					// repository-health:allow UI19 -- a virtualized cell at the virtualizer's measured pixel column offset; Imposter places at an edge with a fixed none–md offset, never a per-column measured one
+					class={cn('absolute top-0 h-full p-2.5', !borderless && 'border-r')}
 					style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 				>
 					<Skeleton class="h-4 w-full" />
 				</div>
 			{/each}
-		</div>
-		<div class="absolute top-0 h-full" style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;">
+		</Imposter>
+		<div
+			// repository-health:allow UI19 -- the scrolling column track at the measured pinned-width offset; Imposter places at an edge with a fixed none–md offset, never a measured one
+			class="absolute top-0 h-full"
+			style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;"
+		>
 			{#each virtualCols as cvi (scrollLayouts[cvi.index]?.id ?? `idx:${cvi.index}`)}
 				{@const layout = scrollLayouts[cvi.index]}
 				{#if layout}
 					<div
-						class={cn('absolute top-0 h-full items-center p-2.5', !borderless && 'border-r')}
+						// repository-health:allow UI19 -- a virtualized cell at the virtualizer's measured pixel column offset; Imposter places at an edge with a fixed none–md offset, never a per-column measured one
+						class={cn('absolute top-0 h-full p-2.5', !borderless && 'border-r')}
 						style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 					>
 						<Skeleton class="h-4 w-full" />
@@ -942,17 +976,24 @@
 	{@const firstDataColumn = layouts.find((l) => !l.isCheckbox)}
 
 	<!-- pinned cells -->
-	<div class={getPinnedLayerClass(true)} style="width: {pinnedWidth}px;">
+	<Imposter
+		position="sticky"
+		placement="start"
+		layer="overlay"
+		class={cn('h-full bg-card', !borderless && PINNED_LAYER_BORDER_CLASS)}
+		style="width: {pinnedWidth}px;"
+	>
 		<div class="relative h-full bg-card">
 			{#each pinnedLayouts as layout (layout.id)}
 				{@render renderCell(layout, row, index, true, 'bg-card', firstDataColumn?.id ?? null)}
 			{/each}
 		</div>
-	</div>
+	</Imposter>
 
 	<!-- scrollable cells -->
 	<div
-		class="absolute top-0 h-full overflow-hidden"
+		// repository-health:allow UI19 -- the scrolling column track at the measured pinned-width offset; Imposter places at an edge with a fixed none–md offset, never a measured one
+		class="absolute top-0 h-full overflow-clip"
 		style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;"
 	>
 		{#each virtualCols as cvi (scrollLayouts[cvi.index]?.id ?? `idx:${cvi.index}`)}
@@ -988,6 +1029,7 @@
 		<Inline
 			gap="none"
 			fill
+			// repository-health:allow UI19 -- a virtualized cell at the virtualizer's measured pixel column offset; Imposter places at an edge with a fixed none–md offset, never a per-column measured one
 			class={cn('absolute top-0', !borderless && 'border-r', bgClass, isPinned && 'bg-card')}
 			style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 			role="gridcell"
@@ -996,9 +1038,13 @@
 			{#if layout.id === firstDataColumnId && hasRowControls}
 				{#if enableRowExpansion && (getRowHasChildren?.(row) ?? Boolean(subComponent))}
 					{@const isExpanded = !!table.expanded.current[rowObj.id]}
-					<button
+					<Imposter
+						as="button"
 						type="button"
-						class="absolute top-1/2 left-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-secondary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						placement="center-start"
+						offset="xs"
+						layer="under"
+						class="size-7 rounded-md border border-border bg-background text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-secondary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						onclick={(event) => {
 							event.stopPropagation();
 							table.toggleRowExpanded(rowObj.id);
@@ -1008,11 +1054,13 @@
 						aria-label={isExpanded ? t('table.collapseRowDetails') : t('table.expandRowDetails')}
 						title={isExpanded ? t('table.collapseRowDetails') : t('table.expandRowDetails')}
 					>
-						<Icon
-							icon={isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'}
-							class="size-3.5"
-						/>
-					</button>
+						<Inline as="span" justify="center" class="size-full">
+							<Icon
+								icon={isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'}
+								class="size-3.5"
+							/>
+						</Inline>
+					</Imposter>
 				{/if}
 			{/if}
 
@@ -1021,7 +1069,7 @@
 				grow
 				justify={layout.isCheckbox ? 'center' : 'start'}
 				class={cn(
-					'min-w-0 overflow-hidden px-3.5 py-1.5 text-xs',
+					'min-w-0 overflow-clip px-3.5 py-1.5 text-xs',
 					layout.id === firstDataColumnId && hasRowControls && 'pl-10'
 				)}
 			>

@@ -52,11 +52,13 @@
 			{@const reason = disabledReason(pipeline)}
 			<section class="rounded-md border border-border bg-background p-3 shadow-xs">
 				<Inline align="start" gap="md">
-					<div
-						class="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+					<Inline
+						justify="center"
+						shrink={false}
+						class="size-9 rounded-md bg-muted text-muted-foreground"
 					>
 						<Icon icon={pipeline.icon ?? KIND_ICON[kind]} class="size-4" />
-					</div>
+					</Inline>
 					<div class="min-w-0 flex-1">
 						<p class="text-sm font-medium">{pipeline.label}</p>
 						<Stack gap="sm">

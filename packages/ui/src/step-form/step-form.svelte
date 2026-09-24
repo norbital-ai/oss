@@ -3,6 +3,7 @@
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '#lib/card';
+	import { Inline, Stack } from '#lib/layout';
 	import { ProgressPicker } from '#lib/progress';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
@@ -40,63 +41,72 @@
 <form class={cn('w-full', className)} onsubmit={handleSubmit}>
 	<Card class="w-full border-0 p-0 shadow-none">
 		<CardHeader>
-			<CardTitle class="flex w-full flex-row justify-between">
-				{#if typeof currentStepTitle === 'string'}
-					<span class="text-heading">{currentStepTitle}</span>
-				{:else if typeof currentStepTitle === 'function'}
-					{@render currentStepTitle()}
-				{/if}
-				<span> </span>
-				<div class="text-sm text-muted-foreground">
-					{t('misc.stepOf', {
-						current: stepFormState.currentStep + 1,
-						total: stepFormState.steps.length
-					})}
-				</div>
+			<CardTitle class="w-full">
+				<Inline gap="none" justify="between">
+					{#if typeof currentStepTitle === 'string'}
+						<span class="text-heading">{currentStepTitle}</span>
+					{:else if typeof currentStepTitle === 'function'}
+						{@render currentStepTitle()}
+					{/if}
+					<span> </span>
+					<div class="text-sm text-muted-foreground">
+						{t('misc.stepOf', {
+							current: stepFormState.currentStep + 1,
+							total: stepFormState.steps.length
+						})}
+					</div>
+				</Inline>
 			</CardTitle>
-			<CardDescription class="flex flex-col">
-				<span>
-					{stepFormState.steps[stepFormState.currentStep].description}
-				</span>
-				<ProgressPicker value={stepFormState.progress} />
+			<CardDescription>
+				<Stack as="span" gap="none">
+					<span>
+						{stepFormState.steps[stepFormState.currentStep].description}
+					</span>
+					<ProgressPicker value={stepFormState.progress} />
+				</Stack>
 			</CardDescription>
 		</CardHeader>
 		<CardContent>
 			{@render StepsForm()}
 		</CardContent>
-		<CardFooter class="flex justify-between">
-			<Button
-				variant="outline"
-				class="gap-2"
-				onclick={() => {
-					stepFormState.previous();
-				}}
-				disabled={stepFormState.currentStep === 0}
-			>
-				<Icon icon="lucide:chevron-left" class="h-4 w-4" />
-				{t('common.previous')}
-			</Button>
-			{#if stepFormState.currentStep === stepFormState.steps.length - 1}
+		<CardFooter>
+			<Inline gap="none" justify="between" grow>
 				<Button
-					type="submit"
-					class="gap-2"
-					disabled={disableSubmit || hasErrors || stepFormState.submission.isSubmitting}
-				>
-					<span>{t('common.submit')}</span>
-					<Icon icon="lucide:circle-arrow-right" class="h-4 w-4" />
-				</Button>
-			{:else}
-				<Button
-					type="button"
-					class="gap-2"
+					variant="outline"
 					onclick={() => {
-						stepFormState.next();
+						stepFormState.previous();
 					}}
+					disabled={stepFormState.currentStep === 0}
 				>
-					{t('common.next')}
-					<Icon icon="lucide:chevron-right" class="h-4 w-4" />
+					<Inline as="span" gap="sm">
+						<Icon icon="lucide:chevron-left" class="h-4 w-4" />
+						{t('common.previous')}
+					</Inline>
 				</Button>
-			{/if}
+				{#if stepFormState.currentStep === stepFormState.steps.length - 1}
+					<Button
+						type="submit"
+						disabled={disableSubmit || hasErrors || stepFormState.submission.isSubmitting}
+					>
+						<Inline as="span" gap="sm">
+							<span>{t('common.submit')}</span>
+							<Icon icon="lucide:circle-arrow-right" class="h-4 w-4" />
+						</Inline>
+					</Button>
+				{:else}
+					<Button
+						type="button"
+						onclick={() => {
+							stepFormState.next();
+						}}
+					>
+						<Inline as="span" gap="sm">
+							{t('common.next')}
+							<Icon icon="lucide:chevron-right" class="h-4 w-4" />
+						</Inline>
+					</Button>
+				{/if}
+			</Inline>
 		</CardFooter>
 	</Card>
 </form>

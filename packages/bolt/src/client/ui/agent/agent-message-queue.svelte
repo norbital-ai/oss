@@ -40,10 +40,15 @@
 				onSort={onreorder}
 			>
 				{#snippet child()}
-					<ol
-						bind:this={list}
-						class="m-0 list-none divide-y divide-border/70 rounded-md bg-muted/30 p-0"
+					<Stack
+						as="ol"
+						gap="none"
+						divided
+						class="m-0 list-none rounded-md bg-muted/30 p-0"
 						aria-label="Message queue"
+						{@attach (node: HTMLElement) => {
+							list = node;
+						}}
 					>
 						{#each messages as message (message.id)}
 							<li
@@ -93,7 +98,7 @@
 							>
 								Sending · {pendingText}
 							</li>{/if}
-					</ol>
+					</Stack>
 				{/snippet}
 			</Sortable.Root>
 		</Scroll>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -11,12 +12,13 @@
 	let { children, class: className, ...restProps }: EventItemFileProps = $props();
 </script>
 
-<div
+<Inline
+	gap="xs"
 	class={cn(
-		'inline-flex items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 text-xs text-foreground',
+		'w-fit rounded-md border bg-secondary px-1.5 py-0.5 text-xs text-foreground',
 		className
 	)}
 	{...restProps}
 >
 	{@render children?.()}
-</div>
+</Inline>

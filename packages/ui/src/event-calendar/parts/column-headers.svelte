@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Imposter, Inline, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { addDays, isSameDay, isWeekend } from '#lib/event-calendar/utils';
 	import type { CalendarView } from '#lib/event-calendar/types';
@@ -40,39 +41,53 @@
 	const dayNumber = $derived(columns.map((c) => c.date.getDate()));
 </script>
 
-<div class={cn('sticky top-0 z-20 flex bg-card border-b border-border', className)}>
-	{#each columns as col, i}
-		<div
-			style="width: {colWidth}px; min-width: {colWidth}px"
-			class={cn(
-				'flex flex-col items-center justify-center py-1.5',
-				col.isWeekend && 'bg-muted/25',
-				col.isToday && !col.isWeekend ? 'bg-brand-50/20' : ''
-			)}
-		>
-			{#if view === 'month'}
-				<span class="text-overline">
-					{col.label}
-				</span>
-			{:else}
-				<span
-					class={cn(
-						'text-xs font-medium',
-						col.isToday ? 'text-brand-700' : 'text-muted-foreground'
-					)}
-				>
-					{col.label}
-				</span>
-			{/if}
-			<span
+<!-- The day headings stay pinned above the time grid's scrollport. -->
+<Imposter
+	position="sticky"
+	placement="top"
+	class={cn('inset-x-auto z-20 border-b border-border bg-card', className)}
+>
+	<Inline gap="none" align="stretch">
+		{#each columns as col, i}
+			<Stack
+				gap="none"
+				align="center"
+				justify="center"
+				style="width: {colWidth}px; min-width: {colWidth}px"
 				class={cn(
-					'inline-flex items-center justify-center text-sm font-semibold',
-					view === 'month' && 'mt-0.5',
-					col.isToday ? 'bg-brand text-brand-foreground size-[26px] rounded-full' : 'size-[26px]'
+					'py-1.5',
+					col.isWeekend && 'bg-muted/25',
+					col.isToday && !col.isWeekend ? 'bg-brand-50/20' : ''
 				)}
 			>
-				{dayNumber[i]}
-			</span>
-		</div>
-	{/each}
-</div>
+				{#if view === 'month'}
+					<span class="text-overline">
+						{col.label}
+					</span>
+				{:else}
+					<span
+						class={cn(
+							'text-xs font-medium',
+							col.isToday ? 'text-brand-700' : 'text-muted-foreground'
+						)}
+					>
+						{col.label}
+					</span>
+				{/if}
+				<Stack
+					as="span"
+					gap="none"
+					align="center"
+					justify="center"
+					class={cn(
+						'text-sm font-semibold',
+						view === 'month' && 'mt-0.5',
+						col.isToday ? 'bg-brand text-brand-foreground size-[26px] rounded-full' : 'size-[26px]'
+					)}
+				>
+					{dayNumber[i]}
+				</Stack>
+			</Stack>
+		{/each}
+	</Inline>
+</Imposter>

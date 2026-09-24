@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Frame } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { ProductIcon, productIconNameFromReference } from '#lib/product-icon';
 	import * as Sidebar from '#lib/sidebar';
@@ -29,14 +30,8 @@
 	let expanded = $state(item.active);
 	const productIconName = $derived(productIconNameFromReference(item.icon));
 
-	/** Follows the branch's own page; its children stay open so the branch reads as one region. */
-	function openBranch(event: MouseEvent): void {
-		if (onNavigate) {
-			event.preventDefault();
-			onNavigate(item.href);
-		}
-		expanded = true;
-	}
+	/** A nested group is a disclosure: it expands and collapses, it never navigates. */
+	const toggle = () => (expanded = !expanded);
 
 	watch(
 		() => item.active,
@@ -49,24 +44,23 @@
 <Sidebar.MenuSubItem>
 	<Sidebar.MenuSubButton isActive={item.active} size="sm">
 		{#snippet child({ props })}
-			<a
+			<button
 				{...props}
-				href={item.href}
-				onclick={openBranch}
-				aria-expanded={open ? expanded : undefined}
-				aria-current={item.active ? 'page' : undefined}
+				type="button"
+				onclick={toggle}
+				aria-expanded={expanded}
 				class={cn(
 					typeof props.class === 'string' ? props.class : undefined,
 					'relative w-full overflow-visible pr-7'
 				)}
 			>
-				<span class="flex size-6 shrink-0 items-center justify-center">
+				<Frame as="span" ratio="square" shrink={false} class="size-6">
 					{#if productIconName}
 						<ProductIcon name={productIconName} class="size-3.5" />
 					{:else}
 						<Icon icon={item.icon ?? 'lucide:folder'} class="size-3.5" />
 					{/if}
-				</span>
+				</Frame>
 				<span
 					class={cn('min-w-0 flex-1 truncate text-left pe-1', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
 					>{item.label}</span
@@ -77,7 +71,7 @@
 						class={cn('size-3.5 transition-transform duration-150', expanded && 'rotate-90')}
 					/>
 				</div>
-			</a>
+			</button>
 		{/snippet}
 	</Sidebar.MenuSubButton>
 	{#if open && expanded && item.children?.length}

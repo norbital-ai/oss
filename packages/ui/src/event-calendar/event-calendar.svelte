@@ -212,7 +212,7 @@
 			if (!o) handleCancel();
 		}}
 	>
-		<Popover.PopoverContent class="w-[320px]" align="start" sideOffset={8}>
+		<Popover.PopoverContent class="w-80" align="start" sideOffset={8}>
 			{@render eventEditor(editorCtx)}
 		</Popover.PopoverContent>
 	</Popover.Popover>

@@ -354,22 +354,24 @@
 						aria-selected={command === firstChoice}
 						aria-disabled={command.unavailable !== undefined}
 						class={cn(
-							'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent',
+							'w-full rounded-sm px-2 py-1.5 text-left hover:bg-accent',
 							command === firstChoice && 'bg-accent',
 							command.unavailable !== undefined && 'cursor-default opacity-50 hover:bg-transparent'
 						)}
 						onclick={() => choose(command.name)}
 					>
-						<span class="font-mono text-xs text-muted-foreground">/{command.name}</span>
-						<span class="truncate">{command.label}</span>
-						{#if command.unavailable !== undefined}
-							<span class="truncate text-xs text-muted-foreground">· {command.unavailable}</span>
-						{/if}
-						<Icon
-							icon={command.mode.kind === 'semantic' ? 'lucide:sparkles' : 'lucide:scan-search'}
-							class="ml-auto size-3.5 shrink-0 text-muted-foreground"
-							aria-hidden="true"
-						/>
+						<Inline as="span" gap="sm">
+							<span class="font-mono text-xs text-muted-foreground">/{command.name}</span>
+							<span class="truncate">{command.label}</span>
+							{#if command.unavailable !== undefined}
+								<span class="truncate text-xs text-muted-foreground">· {command.unavailable}</span>
+							{/if}
+							<Icon
+								icon={command.mode.kind === 'semantic' ? 'lucide:sparkles' : 'lucide:scan-search'}
+								class="ml-auto size-3.5 shrink-0 text-muted-foreground"
+								aria-hidden="true"
+							/>
+						</Inline>
 					</button>
 				</li>
 			{:else}

@@ -5,7 +5,7 @@
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline } from '#lib/layout';
+	import { Imposter, Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
@@ -37,8 +37,6 @@
 		className?: string;
 		triggerClass?: string;
 		style: string;
-		baseHeight: string;
-		elementGap: string;
 		compactTextClass: string;
 		dropdownClass?: string;
 		sameWidth: boolean;
@@ -110,8 +108,6 @@
 		className,
 		triggerClass,
 		style,
-		baseHeight,
-		elementGap,
 		compactTextClass,
 		dropdownClass,
 		sameWidth,
@@ -180,51 +176,6 @@
 	}
 
 	const trapFocus = $derived(showCreateForm ? submitting : true);
-	const triggerBaseClasses = $derived(
-		cn(
-			'flex min-w-0 w-full items-center gap-2 rounded-md p-1 pl-2',
-			'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
-			truncate || !multiple ? baseHeight : 'min-h-9',
-			{
-				'cursor-pointer justify-start overflow-hidden hover:bg-muted': readonly,
-				'border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground':
-					!readonly,
-				'border-destructive ring-[3px] ring-destructive/20 ring-inset': invalid
-			},
-			triggerClass
-		)
-	);
-	const triggerInnerClasses = $derived(
-		cn(
-			'flex min-w-0 grow items-center py-1',
-			elementGap,
-			truncate ? 'overflow-hidden' : 'flex-wrap'
-		)
-	);
-	const clearBtnClasses = $derived(
-		cn(
-			buttonVariants({ variant: 'outline' }),
-			'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-muted-foreground opacity-0 transition-opacity',
-			'group-hover:opacity-100 group-focus-within:opacity-100',
-			compactTextClass
-		)
-	);
-	/**
-	 * Mouse/keyboard chrome stays quiet at rest and appears with an outline on hover or focus.
-	 * Coarse pointers cannot hover, so their glyph remains visible. Disabled controls remain muted,
-	 * and simple read-only values take the non-trigger path in Combobox.
-	 */
-	const chevronChromeClasses = $derived(
-		cn(
-			'flex size-5 flex-none items-center justify-center rounded-md',
-			'border border-transparent bg-transparent text-muted-foreground outline outline-0 outline-transparent',
-			'opacity-0 [@media(hover:none)]:opacity-60',
-			'transition-[background-color,border-color,opacity,outline-color,outline-width]',
-			'group-hover:border-ring group-hover:bg-background group-hover:opacity-100 group-hover:outline-1 group-hover:outline-ring',
-			'group-focus-within:border-ring group-focus-within:bg-background group-focus-within:opacity-100 group-focus-within:outline-1 group-focus-within:outline-ring',
-			'group-has-[:disabled]:group-hover:border-transparent group-has-[:disabled]:group-hover:bg-transparent group-has-[:disabled]:group-hover:opacity-40 group-has-[:disabled]:group-hover:outline-0'
-		)
-	);
 </script>
 
 <Popover.Root {open} onOpenChange={handleOpenChange}>
@@ -235,37 +186,71 @@
 			aria-invalid={invalid}
 			aria-describedby={error ? `${comboboxId}-error` : undefined}
 			aria-label={ariaLabel ?? (readonly ? t('common.viewDetails') : selectionDescription)}
-			class={triggerBaseClasses}
+			class={cn(
+				'block w-full min-w-0 rounded-md p-1 pl-2',
+				'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
+				truncate || !multiple ? 'h-9' : 'min-h-9',
+				{
+					'cursor-pointer hover:bg-muted': readonly,
+					'border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground':
+						!readonly,
+					'border-destructive ring-[3px] ring-destructive/20 ring-inset': invalid
+				},
+				triggerClass
+			)}
 			role={readonly ? 'button' : 'combobox'}
 			disabled={disabled || isLoading}
 		>
-			<div class={triggerInnerClasses}>
+			<Inline as="span" gap="none" fill class="min-h-6.5 w-full py-1">
 				{@render renderSelectionContent()}
-			</div>
+			</Inline>
 		</Popover.Trigger>
 		{#if !readonly}
-			<Inline
-				gap="xs"
-				justify="center"
-				class="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2"
-			>
-				{#if showClearButton}
-					<button
-						type="button"
-						class={clearBtnClasses}
-						onclick={onClear}
-						aria-label={t('common.clearSelection')}>{t('common.clear')}</button
-					>
-				{/if}
-				{#if isLoading}
-					<Spinner class="h-3 w-3 shrink-0 opacity-60" />
-				{/if}
-				{#if !hideChevron}
-					<span class={chevronChromeClasses} aria-hidden="true">
-						<Icon icon="lucide:chevrons-up-down" class="h-3 w-3 shrink-0" />
-					</span>
-				{/if}
-			</Inline>
+			<Imposter placement="center-end" offset="xs" class="pointer-events-none">
+				<Inline gap="xs" justify="center">
+					{#if showClearButton}
+						<button
+							type="button"
+							class={cn(
+								buttonVariants({ variant: 'outline' }),
+								'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-muted-foreground opacity-0 transition-opacity',
+								'group-hover:opacity-100 group-focus-within:opacity-100',
+								compactTextClass
+							)}
+							onclick={onClear}
+							aria-label={t('common.clearSelection')}>{t('common.clear')}</button
+						>
+					{/if}
+					{#if isLoading}
+						<Spinner class="h-3 w-3 shrink-0 opacity-60" />
+					{/if}
+					{#if !hideChevron}
+						<!--
+						Mouse/keyboard chrome stays quiet at rest and appears with an outline on hover or focus.
+						Coarse pointers cannot hover, so their glyph remains visible. Disabled controls remain
+						muted, and simple read-only values take the non-trigger path in Combobox.
+					-->
+						<Inline
+							as="span"
+							gap="none"
+							justify="center"
+							shrink={false}
+							class={cn(
+								'size-5 rounded-md',
+								'border border-transparent bg-transparent text-muted-foreground outline outline-0 outline-transparent',
+								'opacity-0 [@media(hover:none)]:opacity-60',
+								'transition-[background-color,border-color,opacity,outline-color,outline-width]',
+								'group-hover:border-ring group-hover:bg-background group-hover:opacity-100 group-hover:outline-1 group-hover:outline-ring',
+								'group-focus-within:border-ring group-focus-within:bg-background group-focus-within:opacity-100 group-focus-within:outline-1 group-focus-within:outline-ring',
+								'group-has-[:disabled]:group-hover:border-transparent group-has-[:disabled]:group-hover:bg-transparent group-has-[:disabled]:group-hover:opacity-40 group-has-[:disabled]:group-hover:outline-0'
+							)}
+							aria-hidden="true"
+						>
+							<Icon icon="lucide:chevrons-up-down" class="h-3 w-3 shrink-0" />
+						</Inline>
+					{/if}
+				</Inline>
+			</Imposter>
 		{/if}
 	</div>
 

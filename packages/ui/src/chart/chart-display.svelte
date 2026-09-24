@@ -8,7 +8,7 @@
 	import ChartSkeleton from './chart-skeleton.svelte';
 	import ChartTooltip from './chart-tooltip.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
+	import { Bound, Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { AreaChart, BarChart, LineChart, PieChart } from 'layerchart';
 	import { Number as Number_, Schema } from 'effect';
 
@@ -110,19 +110,15 @@
 	{/if}
 
 	{#if spec.loading}
-		<div
-			class="flex h-[250px] items-center justify-center"
-			aria-busy="true"
-			aria-label={t('misc.chartLoading')}
-		>
+		<Bound size="compact" aria-busy="true" aria-label={t('misc.chartLoading')}>
 			<ChartSkeleton donut={isDonutChartSpec(spec)} />
-		</div>
+		</Bound>
 	{:else if spec.data.length === 0}
-		<div
-			class="flex h-[250px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
-		>
-			{t('misc.chartNoData')}
-		</div>
+		<Bound size="compact" class="rounded-md border border-dashed text-sm text-muted-foreground">
+			<Stack fill align="center" justify="center">
+				{t('misc.chartNoData')}
+			</Stack>
+		</Bound>
 	{:else if isDonutChartSpec(spec)}
 		{@const data = spec.data.map((entry, index) => ({
 			key: entry.key,
@@ -131,7 +127,7 @@
 			color: chartConfig[entry.key]?.color ?? getSeriesColor(index, spec.config[entry.key])
 		}))}
 		<Stack gap="none" grow>
-			<div class="flex min-h-0 flex-1 items-center justify-center">
+			<Stack gap="none" grow align="center" justify="center">
 				<ChartContainer
 					config={chartConfig}
 					class="aspect-square h-full max-h-[180px] w-full max-w-[180px]"
@@ -155,7 +151,7 @@
 						{tooltip}
 					/>
 				</ChartContainer>
-			</div>
+			</Stack>
 			<Cluster gap="sm" align="center" justify="center" shrink={false} class="text-meta">
 				{#each data as entry (entry.key)}
 					<Inline gap="sm">
@@ -175,15 +171,11 @@
 			value: key,
 			color: chartConfig[key]?.color ?? getSeriesColor(index, spec.config[key])
 		}))}
-		<Scroll
-			axis="x"
-			name={t('misc.chartScrollable', { title: spec.title ?? t('misc.dataChart') })}
-			class="max-"
-		>
+		<Scroll axis="x" name={t('misc.chartScrollable', { title: spec.title ?? t('misc.dataChart') })}>
 			{@const cartesianData = Array.isArray(spec.data) ? spec.data : []}
 			<ChartContainer
 				config={chartConfig}
-				class="h-[clamp(14rem,45dvh,18rem)] min-w-full"
+				class="h-72 max-h-[45dvh] min-h-56 min-w-full"
 				style={`width: max(100%, ${cartesianChartWidth}px);`}
 			>
 				{#if spec.kind === 'bar'}

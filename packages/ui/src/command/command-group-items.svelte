@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { Columns, Stack } from '#lib/layout';
 	import { getCommandState } from './command-state.svelte.js';
 	import type { CommandGroupItemsProps } from '#lib/command/types';
 
@@ -14,15 +14,20 @@
 	const commandState = getCommandState()();
 </script>
 
-<div
-	bind:this={ref}
-	class={cn(
-		commandState.columns ? `grid grid-cols-${commandState.columns}` : 'flex flex-col',
-		className
-	)}
-	{...restProps}
->
-	{#if children}
-		{@render children()}
-	{/if}
-</div>
+{#snippet items()}
+	{@render children?.()}
+{/snippet}
+
+{#if commandState.columns}
+	<Columns
+		bind:ref
+		count={commandState.columns}
+		gap="none"
+		collapse="none"
+		class={className}
+		{...restProps}
+		children={items}
+	/>
+{:else}
+	<Stack bind:ref gap="none" class={className} {...restProps} children={items} />
+{/if}

@@ -84,6 +84,13 @@ export const overlapPack = definePack({ name: 'norbital/overlaps', rules: overla
 // The same documents the graph tier runs: loaded once, shared by reference.
 export const graphRules = loadGraphRules();
 export const graphPack = definePack({ name: 'norbital/graph', rules: graphRules });
+/**
+ * The layout contract for `.svelte` source written against `@norbital-ai/ui/layout`: layout is a
+ * primitive's props, never raw flex/grid/gap/scroll/position utilities. It ships in the core, not
+ * the Norbital pack, because a published template can resolve only this package.
+ */
+export const layoutRules = loadPackDirectory(join(SHIPPED_PACKS, 'layout'));
+export const layoutPack = definePack({ name: 'norbital/layout', rules: layoutRules });
 export const stringlyPack = definePack({
 	name: 'norbital/stringly-typed',
 	rules: loadPackDirectory(join(SHIPPED_PACKS, 'stringly'))

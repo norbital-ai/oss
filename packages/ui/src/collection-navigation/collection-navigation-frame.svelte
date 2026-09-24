@@ -60,6 +60,7 @@
 		flush
 		contained
 		portalTarget="[data-slot='sidebar-inset']"
+		// repository-health:allow UI21 -- sheet width on the bits-ui Dialog.Content that Sheet.Content renders and slides; Bound's sizes are heights and no primitive names a width, and a nested primitive would not size the sliding box
 		class="w-[520px] sm:max-w-[520px]"
 		showCloseButton={false}
 		{fullScreen}

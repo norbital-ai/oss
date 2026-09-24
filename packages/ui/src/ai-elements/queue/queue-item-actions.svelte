@@ -1,5 +1,6 @@
 <script lang="ts" module>
-	import { cn, type WithElementRef } from '#lib/utils';
+	import type { WithElementRef } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -9,14 +10,17 @@
 </script>
 
 <script lang="ts">
-	let {
-		class: className,
-		children,
-		ref = $bindable(null),
-		...restProps
-	}: QueueItemActionsProps = $props();
+	let { children, ref = $bindable(null), ...restProps }: QueueItemActionsProps = $props();
 </script>
 
-<div bind:this={ref} class={cn('flex gap-1', className)} {...restProps}>
+<Inline
+	gap="xs"
+	align="stretch"
+	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
+>
 	{@render children?.()}
-</div>
+</Inline>

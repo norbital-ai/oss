@@ -63,13 +63,13 @@
 		loading = false,
 		error = '',
 		disabled = false,
-		class: className,
 		bounded = false,
 		emptyPlaceholder,
 		details,
 		hasDetails,
 		expandedRowIds = $bindable<string[] | undefined>(),
-		onExpandedRowIdsChange
+		onExpandedRowIdsChange,
+		...rest
 	}: DataGridProps<TRow> = $props();
 
 	let sort = $state<readonly TableSortEntry[]>([]);
@@ -176,7 +176,7 @@
 <CollectionGrid
 	{table}
 	{disabled}
-	class={className}
+	{...rest}
 	isLoading={loading}
 	{error}
 	enableSorting

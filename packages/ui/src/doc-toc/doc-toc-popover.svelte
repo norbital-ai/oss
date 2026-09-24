@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Collapsible from '#lib/collapsible';
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES, Inline } from '#lib/layout';
+	import { Imposter, Inline, Stack } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { findLastActiveIndex, getActiveDocTocItem } from '#lib/doc-toc/anchor-observer';
@@ -45,62 +45,72 @@
 </script>
 
 {#if toc.items.length > 0}
-	<div
-		bind:this={popoverElement}
-		class={cn('pointer-events-none absolute inset-0 z-40 lg:hidden', className)}
-	>
-		<div
-			class="sticky top-0 flex h-dvh items-end justify-end p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pe-[max(1rem,env(safe-area-inset-right))]"
-		>
-			<!-- Column-reverse: the trigger stays pinned to the bottom edge while the panel grows
-			     upward, which no stacking primitive expresses. The gap is still the shared token. -->
-			<Collapsible.Root
-				bind:open
-				class={cn(
-					'pointer-events-auto flex w-[min(20rem,calc(100%-0.5rem))] flex-col-reverse items-end',
-					GAP_CLASSES.sm
-				)}
+	<Imposter placement="fill" layer="overlay" class={cn('pointer-events-none lg:hidden', className)}>
+		<!-- The trigger stays pinned to the viewport while the article scrolls. -->
+		<Imposter position="sticky" placement="top" class="h-dvh">
+			<Stack
+				align="end"
+				justify="end"
+				fill
+				class="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pe-[max(1rem,env(safe-area-inset-right))]"
 			>
-				<Collapsible.Trigger
-					class={cn(
-						'inline-flex h-11 items-center gap-2 rounded-full border border-border bg-background/95 px-3.5 text-sm font-medium text-foreground shadow-lg backdrop-blur-sm transition-colors hover:bg-muted/60',
-						open && 'bg-muted/60'
-					)}
-					aria-label={open ? `Close ${title}` : `Open ${title}`}
-				>
-					<DocTocProgressRing value={progress} class={open ? 'text-primary' : undefined} />
-					<span class="max-w-[10rem] truncate">{open ? title : activeLabel}</span>
-					<Icon
-						icon="lucide:chevron-up"
-						class={cn(
-							'size-4 shrink-0 text-muted-foreground transition-transform duration-200',
-							open && 'rotate-180'
-						)}
-					/>
-				</Collapsible.Trigger>
+				<!-- Reversed: the trigger stays first in tab order and pinned to the bottom edge while the
+				     panel grows upward. -->
+				<Collapsible.Root bind:open bind:ref={popoverElement}>
+					{#snippet child({ props })}
+						<Stack
+							{...props}
+							reverse
+							gap="sm"
+							align="end"
+							class="pointer-events-auto w-80 max-w-[calc(100%-0.5rem)]"
+						>
+							<Collapsible.Trigger
+								class={cn(
+									'h-11 rounded-full border border-border bg-background/95 px-3.5 text-sm font-medium text-foreground shadow-lg backdrop-blur-sm transition-colors hover:bg-muted/60',
+									open && 'bg-muted/60'
+								)}
+								aria-label={open ? `Close ${title}` : `Open ${title}`}
+							>
+								<Inline as="span">
+									<DocTocProgressRing value={progress} class={open ? 'text-primary' : undefined} />
+									<span class="max-w-[10rem] truncate">{open ? title : activeLabel}</span>
+									<Icon
+										icon="lucide:chevron-up"
+										class={cn(
+											'size-4 shrink-0 text-muted-foreground transition-transform duration-200',
+											open && 'rotate-180'
+										)}
+									/>
+								</Inline>
+							</Collapsible.Trigger>
 
-				<Collapsible.Content class="w-full">
-					<div
-						class="w-full overflow-hidden rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur-sm"
-					>
-						<Inline justify="between" gap="sm" class="border-b border-border/60 px-3 py-2.5">
-							<p class="text-overline">
-								{title}
-							</p>
-							<span class="truncate text-meta">{activeLabel}</span>
-						</Inline>
-						<div class="max-h-[min(50dvh,20rem)] overflow-hidden">
-							<DocTocScrollArea bind:scrollElement class="max-h-[min(50dvh,20rem)] px-3 pt-2 pb-3">
-								<DocTocItems>
-									{#each toc.items as item (item.url)}
-										<DocTocItem {item} {scrollElement} onclick={() => (open = false)} />
-									{/each}
-								</DocTocItems>
-							</DocTocScrollArea>
-						</div>
-					</div>
-				</Collapsible.Content>
-			</Collapsible.Root>
-		</div>
-	</div>
+							<Collapsible.Content class="w-full">
+								<div
+									class="w-full overflow-clip rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur-sm"
+								>
+									<Inline justify="between" gap="sm" class="border-b border-border/60 px-3 py-2.5">
+										<p class="text-overline">
+											{title}
+										</p>
+										<span class="truncate text-meta">{activeLabel}</span>
+									</Inline>
+									<DocTocScrollArea
+										bind:scrollElement
+										class="max-h-[min(50dvh,20rem)] px-3 pt-2 pb-3"
+									>
+										<DocTocItems>
+											{#each toc.items as item (item.url)}
+												<DocTocItem {item} {scrollElement} onclick={() => (open = false)} />
+											{/each}
+										</DocTocItems>
+									</DocTocScrollArea>
+								</div>
+							</Collapsible.Content>
+						</Stack>
+					{/snippet}
+				</Collapsible.Root>
+			</Stack>
+		</Imposter>
+	</Imposter>
 {/if}

@@ -59,6 +59,17 @@ describe('record labels', () => {
 		assert.equal(label, 'Ada Lovelace · 2026-08-05');
 	});
 
+	it('renders an instant that arrives as ISO text the way it renders a Date', () => {
+		assert.equal(
+			resolveRecordLabel('work_date', { work_date: '2026-01-05T00:00:00.000Z' }),
+			'2026-01-05'
+		);
+		assert.equal(
+			resolveRecordLabel('work_date', { work_date: '2026-01-05T09:30:00.000Z' }),
+			'2026-01-05 09:30'
+		);
+	});
+
 	it('renders number and boolean terms', () => {
 		const label = resolveRecordLabel(`scope.record.hours + ' · ' + scope.record.approved`, {
 			hours: 7.5,

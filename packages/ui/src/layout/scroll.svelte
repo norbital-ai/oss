@@ -29,15 +29,31 @@
 		grow?: boolean;
 		/** Allow this region to shrink when its parent is constrained. */
 		shrink?: boolean;
+		/** Snap children to the start edge along the scroll axis — a reel of lanes or cards. */
+		snap?: boolean;
+		/**
+		 * Grow with the content up to a named cap instead of filling the parent — a popover list, a
+		 * disclosure body. Same scale as `Bound size`.
+		 */
+		max?: 'compact' | 'standard' | 'tall';
 		ref?: HTMLElement | null;
 		children: Snippet;
 	}
 </script>
 
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES, INSET_CLASS, SCROLL_AXIS_CLASSES } from '#lib/layout/layout.shared';
+	import { getContext, setContext } from 'svelte';
+	import {
+		GAP_CLASSES,
+		INSET_CLASS,
+		SCROLL_AXIS_CLASSES,
+		SCROLL_PORT_CONTEXT,
+		type ScrollPort
+	} from '#lib/layout/layout.shared';
 	import { scrollAffordance } from './scroll-affordance.svelte.js';
+	import { ownInset } from './inset.svelte.js';
 
 	let {
 		as = 'div',
@@ -51,6 +67,8 @@
 		justify = 'start',
 		grow = false,
 		shrink = true,
+		snap = false,
+		max,
 		ref = $bindable(null),
 		class: className,
 		children,
@@ -79,6 +97,19 @@
 		end: 'justify-end',
 		between: 'justify-between'
 	} as const;
+	const padsInset = untrack(() => inset) ? ownInset() : false;
+	const parentPort = getContext<ScrollPort | undefined>(SCROLL_PORT_CONTEXT);
+	setContext<ScrollPort>(SCROLL_PORT_CONTEXT, {
+		get element() {
+			return axis === 'x' ? (parentPort?.element ?? null) : ref;
+		}
+	});
+	// Capped by the viewport too: a popover body on a short phone still fits the screen.
+	const MAX_CLASSES = {
+		compact: 'max-h-[min(18rem,calc(100dvh-6rem))]',
+		standard: 'max-h-[min(28rem,calc(100dvh-6rem))]',
+		tall: 'max-h-[min(40rem,calc(100dvh-6rem))]'
+	} as const;
 	const resolvedAlign = $derived(align ?? (layout === 'inline' ? 'center' : 'stretch'));
 </script>
 
@@ -89,20 +120,26 @@
 	aria-label={name}
 	tabindex="0"
 	class={cn(
-		className,
-		'h-full max-h-full min-h-0 min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+		max ? MAX_CLASSES[max] : 'h-full max-h-full',
+		'min-h-0 min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 		SCROLL_AXIS_CLASSES[axis],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
 		layout !== 'block' && alignClasses[resolvedAlign],
 		layout !== 'block' && justifyClasses[justify],
-		inset && INSET_CLASS,
+		padsInset && INSET_CLASS,
 		grow && 'flex-1',
-		!shrink && 'shrink-0'
+		!shrink && 'shrink-0',
+		snap &&
+			(axis === 'x'
+				? 'snap-x snap-mandatory [&>*]:snap-start'
+				: 'snap-y snap-mandatory [&>*]:snap-start'),
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	data-layout="scroll"
 	data-scroll-axis={axis}
-	data-scroll-inset={inset || undefined}
+	data-scroll-inset={padsInset || undefined}
 	{...restProps}
 	{@attach scrollAffordance({ fade })}
 >

@@ -2,14 +2,14 @@
 	import * as FieldPrimitive from '#lib/field';
 
 	let {
-		class: className,
-		children
+		children,
+		...restProps
 	}: {
 		class?: string;
 		children?: import('svelte').Snippet;
 	} = $props();
 </script>
 
-<FieldPrimitive.Description class={className}>
+<FieldPrimitive.Description {...restProps}>
 	{@render children?.()}
 </FieldPrimitive.Description>

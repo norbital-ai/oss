@@ -242,7 +242,7 @@ describe('AGENT-UI5 rows after an automatic checkpoint', () => {
 		expect(view.focusMessages).toHaveLength(after * 2 + 2);
 		const list = mountList(view.focusMessages, messages, runs);
 		try {
-			const items = [...list.target.querySelectorAll('li')];
+			const items = [...list.target.querySelectorAll('li > [data-role]')];
 			const systemIndex = items.findIndex((item) => item.getAttribute('data-role') === 'system');
 			expect(systemIndex).toBe(-1);
 			expect(list.target.textContent).not.toContain('without a second checkpoint');

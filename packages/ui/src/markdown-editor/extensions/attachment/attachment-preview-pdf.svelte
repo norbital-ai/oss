@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { Inline, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 
 	const { t } = useI18n<UiKeys>();
@@ -24,8 +25,8 @@
 	}
 </script>
 
-<div class="h-full overflow-hidden rounded shadow">
-	<div class="flex items-center justify-between bg-muted px-3 py-2">
+<div class="h-full overflow-clip rounded shadow">
+	<Inline gap="none" justify="between" class="bg-muted px-3 py-2">
 		<span class="text-sm font-medium">{t('misc.pdfPreview')}</span>
 		<Button
 			variant="ghost"
@@ -37,13 +38,13 @@
 			<Icon icon="lucide:external-link" width="14" height="14" class="mr-1" />
 			{t('dataRenderer.openInNewTab')}
 		</Button>
-	</div>
+	</Inline>
 
 	{#if dataUrl}
 		<iframe src={dataUrl} title={fileName} class="h-96 w-full border-0" allow="fullscreen"></iframe>
 	{:else}
-		<div class="flex h-64 items-center justify-center">
+		<Stack align="center" justify="center" class="h-64">
 			<p>{t('misc.pdfPreviewUnavailable')}</p>
-		</div>
+		</Stack>
 	{/if}
 </div>

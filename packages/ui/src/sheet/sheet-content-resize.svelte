@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Imposter } from '#lib/layout';
+	import { cn } from '#lib/utils';
 	import type { Side } from '#lib/sheet/sheet-variants';
 	import { Number as Number_ } from 'effect';
 
@@ -221,7 +223,7 @@
 	 * Determine the position styles based on the side
 	 */
 	const widthHandlePositionStyles = $derived(
-		side === 'right' ? 'left-0 -translate-x-1/2' : 'right-0 translate-x-1/2'
+		side === 'right' ? '-translate-x-1/2' : 'translate-x-1/2'
 	);
 </script>
 
@@ -229,29 +231,33 @@
 
 {#if mobileBottomSheet}
 	<!-- Vertical resize handle for mobile bottom sheets -->
-	<button
-		type="button"
-		class="absolute top-0 left-1/2 z-20 flex h-6 w-24 -translate-x-1/2 touch-none cursor-ns-resize items-center justify-center rounded-md border-0 bg-transparent p-0 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:hidden"
-		aria-label={t('misc.resizePanelHeight')}
-		onpointerdown={handleHeightPointerDown}
-		onpointermove={handlePointerMove}
-		onpointerup={finishResize}
-		onpointercancel={finishResize}
-		onlostpointercapture={() => finishResize()}
-		onkeydown={handleHeightKeyDown}
-	>
-		<div
-			class="h-1 w-10 rounded-full bg-border transition-colors duration-150 hover:bg-input active:bg-input {resizeState.mode ===
-			'height'
-				? 'bg-input'
-				: ''}"
-		></div>
-	</button>
+	<Imposter placement="top" class="pointer-events-none md:hidden">
+		<button
+			type="button"
+			class="pointer-events-auto mx-auto block h-6 w-24 touch-none cursor-ns-resize rounded-md border-0 bg-transparent p-0 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+			aria-label={t('misc.resizePanelHeight')}
+			onpointerdown={handleHeightPointerDown}
+			onpointermove={handlePointerMove}
+			onpointerup={finishResize}
+			onpointercancel={finishResize}
+			onlostpointercapture={() => finishResize()}
+			onkeydown={handleHeightKeyDown}
+		>
+			<div
+				class="mx-auto h-1 w-10 rounded-full bg-border transition-colors duration-150 hover:bg-input active:bg-input {resizeState.mode ===
+				'height'
+					? 'bg-input'
+					: ''}"
+			></div>
+		</button>
+	</Imposter>
 {/if}
 
 <!-- Horizontal resize handle for desktop side sheets -->
-<div
-	class="absolute top-1/2 hidden -translate-y-1/2 touch-none outline-none {widthHandlePositionStyles} z-10 md:block"
+<Imposter
+	placement={side === 'right' ? 'center-start' : 'center-end'}
+	offset="none"
+	class={cn('hidden touch-none outline-none md:block', widthHandlePositionStyles)}
 	role="separator"
 	aria-orientation="vertical"
 	aria-label={t('misc.resizePanel')}
@@ -262,7 +268,7 @@
 	onlostpointercapture={() => finishResize()}
 >
 	<!-- Hitbox - larger invisible area for easier clicking -->
-	<div class="absolute inset-0 -m-2 cursor-ew-resize"></div>
+	<Imposter placement="fill" layer="under" class="-m-2 cursor-ew-resize" />
 
 	<!-- Visual handle - the thin pill -->
 	<div
@@ -273,4 +279,4 @@
 		<!-- Optional: Add subtle pattern/texture -->
 		<div class="h-full w-full rounded-full bg-linear-to-b from-white/10 to-transparent"></div>
 	</div>
-</div>
+</Imposter>

@@ -1,0 +1,24 @@
+id: UI27
+dominates:
+  - UI7
+summary: layout utility bypasses a primitive prop (gap, align, justify, direction, wrap, tracks, dividers)
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/layout/**'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*(?:gap(?:-[xy])?-\S+|items-(?:start|end|center|baseline|stretch)|justify-(?:start|end|center|between|around|evenly)|flex-(?:col|row)(?:-reverse)?|flex-wrap(?:-reverse)?|grid-(?:cols|rows)-\S+|divide-[xy](?:-\S+)?|place-(?:items|content)-\S+|content-(?:start|end|center|between))$'
+examples:
+  bad:
+    - '<Stack class="gap-2"><p>a</p></Stack>'
+    - '<div class="grid-cols-3"></div>'
+    - '<Stack gap="none" class="divide-y"><p>a</p></Stack>'
+    - '<div class={cn("items-center", wide && "sm:flex-row")}></div>'
+  good:
+    - '<Stack gap="sm" divided><p>a</p></Stack>'
+    - '<Inline align="center" justify="between"><p>a</p></Inline>'
+    - '<Columns count={3}><p>a</p></Columns>'

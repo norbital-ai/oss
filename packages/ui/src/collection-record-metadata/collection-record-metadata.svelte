@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type {
 		CollectionRecordFlagTone,
@@ -11,10 +12,13 @@
 	let {
 		metadata,
 		display = 'compact',
-		class: className
+		justify = 'start',
+		...rest
 	}: {
 		metadata: readonly ResolvedCollectionRecordMetadata[];
 		display?: 'compact' | 'notice';
+		/** Where the compact pills sit when the row has room to spare. */
+		justify?: 'start' | 'end';
 		class?: string;
 	} = $props();
 
@@ -77,13 +81,15 @@
 
 {#if metadata.length > 0}
 	{#if display === 'compact'}
-		<div class={cn('flex min-w-0 flex-wrap items-center gap-1.5', className)}>
+		<Cluster gap="sm" {justify} {...rest}>
 			{#each metadata as entry, index (`${entry.kind}:${entry.source}:${index}`)}
 				{@const label = labelFor(entry)}
 				{@const description = collectionRecordMetadataDescription(entry)}
-				<span
+				<Inline
+					as="span"
+					gap="xs"
 					class={cn(
-						'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium',
+						'max-w-full rounded-full border px-2 py-0.5 text-xs font-medium',
 						presentationClass(entry)
 					)}
 					title={description}
@@ -91,17 +97,16 @@
 				>
 					<Icon icon={iconFor(entry)} class="size-3 shrink-0" aria-hidden="true" />
 					<span class="truncate">{label}</span>
-				</span>
+				</Inline>
 			{/each}
-		</div>
+		</Cluster>
 	{:else}
-		<div class={cn('grid gap-2', className)}>
+		<Stack gap="sm" {...rest}>
 			{#each metadata as entry, index (`${entry.kind}:${entry.source}:${index}`)}
-				<div
-					class={cn(
-						'flex min-w-0 items-start gap-2.5 rounded-md border px-3 py-2.5',
-						presentationClass(entry)
-					)}
+				<Inline
+					align="start"
+					gap="sm"
+					class={cn('rounded-md border px-3 py-2.5', presentationClass(entry))}
 					role="status"
 				>
 					<Icon icon={iconFor(entry)} class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -111,8 +116,8 @@
 							{collectionRecordMetadataDescription(entry)}
 						</p>
 					</div>
-				</div>
+				</Inline>
 			{/each}
-		</div>
+		</Stack>
 	{/if}
 {/if}

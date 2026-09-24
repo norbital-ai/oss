@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { WithElementRef } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -11,10 +12,14 @@
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
-	class={cn('grid gap-1.5 p-4 text-center sm:text-left', className)}
+<Stack
+	gap="xs"
+	class={cn('p-4 text-center sm:text-left', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Stack>

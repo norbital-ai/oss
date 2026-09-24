@@ -2,7 +2,7 @@
 	import { Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
-	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Frame, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import AutomationStatusRenderer from './automation-status.renderer.svelte';
@@ -49,14 +49,16 @@
 <Stack gap="lg" class="p-5" aria-live="polite">
 	<Inline justify="between" align="center" gap="md">
 		<Inline gap="md" align="center" class="min-w-0">
-			<div
-				class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-500"
+			<Frame
+				ratio="square"
+				shrink={false}
+				class="size-10 rounded-lg bg-violet-500/10 text-violet-500"
 			>
 				<Icon
 					icon="lucide:refresh-cw"
 					class="size-5 {status === 'running' ? 'animate-spin' : ''}"
 				/>
-			</div>
+			</Frame>
 			<Stack gap="xs" class="min-w-0">
 				<p class="truncate text-base font-semibold text-foreground">
 					{text('name') ?? t('bolt.automations.run')}

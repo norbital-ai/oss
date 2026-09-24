@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { getContext } from 'svelte';
 	import type { Snippet } from 'svelte';
@@ -34,11 +35,16 @@
 	let backgroundColor = $derived(stringToColor(identifier));
 </script>
 
-<span
-	bind:this={ref}
-	class={cn('flex h-full w-full items-center justify-center rounded-full', className)}
+<Inline
+	as="span"
+	justify="center"
+	class={cn('h-full w-full rounded-full', className)}
 	style={ctx?.loaded ? 'display: none' : `background-color: ${backgroundColor};`}
 	{...restProps}
+	{@attach (node: HTMLElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</span>
+</Inline>

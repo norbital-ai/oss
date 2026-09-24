@@ -21,16 +21,19 @@
 		shimmer = false,
 		...restProps
 	}: ActionProps = $props();
-
-	let buttonClasses = $derived(
-		cn('relative size-7 p-0.5 text-muted-foreground hover:text-foreground', className)
-	);
 </script>
 
 {#if tooltip}
 	<Tooltip delayDuration={150} side="top" sideOffset={8}>
 		{#snippet trigger({ props })}
-			<Button class={buttonClasses} {size} type="button" {variant} {...restProps} {...props}>
+			<Button
+				class={cn('relative size-7 p-0.5 text-muted-foreground hover:text-foreground', className)}
+				{size}
+				type="button"
+				{variant}
+				{...restProps}
+				{...props}
+			>
 				{@render children?.()}
 				<span class="sr-only">{label || tooltip}</span>
 			</Button>
@@ -46,7 +49,13 @@
 		{/snippet}
 	</Tooltip>
 {:else}
-	<Button class={buttonClasses} {size} type="button" {variant} {...restProps}>
+	<Button
+		class={cn('relative size-7 p-0.5 text-muted-foreground hover:text-foreground', className)}
+		{size}
+		type="button"
+		{variant}
+		{...restProps}
+	>
 		{@render children?.()}
 		<span class="sr-only">{label || tooltip}</span>
 	</Button>

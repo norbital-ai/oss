@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn, type WithElementRef, type WithoutChildren } from '#lib/utils';
-	import { Stack } from '#lib/layout';
+	import { Inline, Stack } from '#lib/layout';
 	import { getChartContext, Tooltip as TooltipPrimitive, type Tooltip } from 'layerchart';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -87,9 +87,10 @@
 {/snippet}
 
 <TooltipPrimitive.Root context={chartCtx} variant="none">
-	<div
+	<Stack
+		gap="xs"
 		class={cn(
-			'grid min-w-[9rem] items-start gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl',
+			'min-w-36 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl',
 			className
 		)}
 		{...restProps}
@@ -102,11 +103,10 @@
 				{@const key = `${nameKey || item.key || item.label || 'value'}`}
 				{@const itemConfig = getPayloadConfigFromPayload(chart.config, item, key)}
 				{@const indicatorColor = color || item.color}
-				<div
-					class={cn(
-						'flex w-full flex-wrap items-stretch gap-2 [&>svg]:size-2.5 [&>svg]:text-muted-foreground',
-						indicator === 'dot' && 'items-center'
-					)}
+				<Inline
+					gap="sm"
+					align={indicator === 'dot' ? 'center' : 'stretch'}
+					class="w-full [&>svg]:size-2.5 [&>svg]:text-muted-foreground"
 				>
 					{#if formatter && item.value !== undefined && item.label}
 						{@render formatter({
@@ -130,11 +130,13 @@
 								})}
 							></div>
 						{/if}
-						<div
-							class={cn(
-								'flex flex-1 shrink-0 justify-between leading-none',
-								nestLabel ? 'items-end' : 'items-center'
-							)}
+						<Inline
+							gap="none"
+							grow
+							shrink={false}
+							justify="between"
+							align={nestLabel ? 'end' : 'center'}
+							class="leading-none"
 						>
 							<Stack gap="xs">
 								{#if nestLabel}
@@ -149,10 +151,10 @@
 									{item.value.toLocaleString()}
 								</span>
 							{/if}
-						</div>
+						</Inline>
 					{/if}
-				</div>
+				</Inline>
 			{/each}
 		</Stack>
-	</div>
+	</Stack>
 </TooltipPrimitive.Root>

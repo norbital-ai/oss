@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { getCommandState } from './command-state.svelte.js';
 	import type { CommandInputProps } from '#lib/command/types';
@@ -47,10 +48,7 @@
 	}
 </script>
 
-<div
-	class={cn('flex items-center gap-2 border-b px-2', outerClass)}
-	data-command-input-wrapper="true"
->
+<Inline class={cn('border-b px-2', outerClass)} data-command-input-wrapper="true">
 	{#if prefix}
 		{@render prefix()}
 	{:else}
@@ -64,7 +62,7 @@
 		{disabled}
 		data-command-input="true"
 		class={cn(
-			'flex h-9 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+			'block h-9 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
 			className
 		)}
 		oninput={handleInput}
@@ -75,4 +73,4 @@
 	{#if suffix}
 		{@render suffix()}
 	{/if}
-</div>
+</Inline>

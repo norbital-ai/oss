@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Scroll, Stack } from '#lib/layout';
+	import { Columns, Scroll, Stack } from '#lib/layout';
 	import {
 		assignLanes,
 		endOfMonth,
@@ -64,9 +64,12 @@
 </script>
 
 <Scroll axis="y" name={t('misc.monthEvents')} class={cn('bg-background p-2', className)}>
-	<div
-		class="grid h-full"
-		style="grid-template-columns: repeat(7, 1fr); grid-template-rows: repeat({weekCount}, 1fr)"
+	<Columns
+		count={7}
+		collapse="none"
+		gap="none"
+		class="h-full"
+		style="grid-template-rows: repeat({weekCount}, 1fr)"
 	>
 		{#each days as day (day.toISOString())}
 			{@const cellKey = day.toISOString().slice(0, 10)}
@@ -78,35 +81,42 @@
 
 			<button
 				class={cn(
-					'relative flex flex-col p-1 border border-border/60 rounded-sm text-left',
-					'min-h-0 overflow-hidden transition-colors',
+					'relative p-1 border border-border/60 rounded-sm text-left',
+					'min-h-0 overflow-clip transition-colors',
 					isOutside && 'opacity-40',
 					isWknd && 'bg-muted/20',
 					'transition-colors hover:bg-accent/40'
 				)}
 				onclick={() => oncellclick?.(day)}
 			>
-				<span
-					class={cn(
-						'inline-flex items-center justify-center size-[26px] rounded-full text-xs font-semibold shrink-0',
-						isToday && 'bg-brand text-brand-foreground'
-					)}
-				>
-					{day.getDate()}
-				</span>
+				<Stack gap="none" fill>
+					<Stack
+						as="span"
+						gap="none"
+						align="center"
+						justify="center"
+						shrink={false}
+						class={cn(
+							'size-[26px] rounded-full text-xs font-semibold',
+							isToday && 'bg-brand text-brand-foreground'
+						)}
+					>
+						{day.getDate()}
+					</Stack>
 
-				<Stack gap="xs" class="mt-0.5 min-w-0">
-					{#each dayEvents.slice(0, MAX_PILLS) as event}
-						<EventPill {event} onclick={onpillclick} />
-					{/each}
+					<Stack gap="xs" class="mt-0.5 min-w-0">
+						{#each dayEvents.slice(0, MAX_PILLS) as event}
+							<EventPill {event} onclick={onpillclick} />
+						{/each}
 
-					{#if overflow > 0}
-						<span class="text-tiny font-medium text-muted-foreground px-1.5">
-							{t('misc.moreItems', { count: overflow })}
-						</span>
-					{/if}
+						{#if overflow > 0}
+							<span class="text-tiny font-medium text-muted-foreground px-1.5">
+								{t('misc.moreItems', { count: overflow })}
+							</span>
+						{/if}
+					</Stack>
 				</Stack>
 			</button>
 		{/each}
-	</div>
+	</Columns>
 </Scroll>

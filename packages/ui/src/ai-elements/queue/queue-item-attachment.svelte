@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
+	import { Cluster } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -17,6 +18,15 @@
 	}: QueueItemAttachmentProps = $props();
 </script>
 
-<div bind:this={ref} class={cn('mt-1 flex flex-wrap gap-2', className)} {...restProps}>
+<Cluster
+	gap="sm"
+	align="start"
+	class={cn('pt-1', className)}
+	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
+>
 	{@render children?.()}
-</div>
+</Cluster>

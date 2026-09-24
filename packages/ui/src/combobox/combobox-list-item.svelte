@@ -30,23 +30,21 @@
 </script>
 
 {#if item._type === 'group'}
-	<div
+	<Inline
+		gap="none"
 		role="presentation"
-		class={cn('text-overline flex items-center bg-muted px-3', compactTextClass)}
+		class={cn('text-overline bg-muted px-3', compactTextClass)}
 		style="height: {groupHeaderHeight}px;"
 	>
 		{item._groupName}
-	</div>
+	</Inline>
 {:else if item._type === 'option'}
 	{@const selected = isValueSelected(item._option.value)}
-	<div
-		class={cn(
-			'relative z-10 flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-3 text-left',
-			compactTextClass,
-			{
-				'bg-accent text-accent-foreground': selected
-			}
-		)}
+	<Inline
+		justify="between"
+		class={cn('relative z-10 w-full cursor-pointer rounded-sm px-3 text-left', compactTextClass, {
+			'bg-accent text-accent-foreground': selected
+		})}
 		style="height: {itemHeight}px;"
 	>
 		<Inline gap="sm" grow class="text-left">
@@ -85,11 +83,13 @@
 		{:else if selected}
 			<Icon icon="lucide:check" class="h-3 w-3 text-foreground" />
 		{/if}
-	</div>
+	</Inline>
 {:else if item._type === 'select-all'}
-	<div
+	<Inline
+		gap="none"
+		justify="between"
 		class={cn(
-			'relative z-10 flex w-full cursor-pointer items-center justify-between rounded-sm border-b border-border/60 px-3 text-left',
+			'relative z-10 w-full cursor-pointer rounded-sm border-b border-border/60 px-3 text-left',
 			compactTextClass,
 			{ 'bg-accent text-accent-foreground': item._allSelected }
 		)}
@@ -114,11 +114,11 @@
 			aria-hidden="true"
 			class="scale-75"
 		/>
-	</div>
+	</Inline>
 {:else}
-	<div
+	<Inline
 		class={cn(
-			'relative z-10 flex w-full cursor-pointer items-center gap-2 rounded-sm px-3 text-left',
+			'relative z-10 w-full cursor-pointer rounded-sm px-3 text-left',
 			'bg-accent text-accent-foreground',
 			compactTextClass
 		)}
@@ -126,5 +126,5 @@
 	>
 		<Icon icon="lucide:plus" class="h-3 w-3" />
 		{t('common.createOption', { query: searchQuery })}
-	</div>
+	</Inline>
 {/if}

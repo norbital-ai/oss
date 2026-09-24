@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import { RadioGroup as RadioGroupPrimitive, type WithoutChildrenOrChild } from 'bits-ui';
@@ -19,10 +20,10 @@
 	{...restProps}
 >
 	{#snippet children({ checked })}
-		<div class="flex items-center justify-center">
+		<Inline as="span" gap="none" justify="center">
 			{#if checked}
 				<Icon icon="lucide:circle" class="size-2.5" color="var(--color-primary)" />
 			{/if}
-		</div>
+		</Inline>
 	{/snippet}
 </RadioGroupPrimitive.Item>

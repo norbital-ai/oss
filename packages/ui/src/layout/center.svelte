@@ -22,6 +22,7 @@
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		measure = 'reading',
 		layout = 'block',
 		gap = 'none',
@@ -65,6 +66,7 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
 		'mx-auto min-h-0 w-full min-w-0',
 		measureClasses[measure],

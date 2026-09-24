@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { onDestroy, onMount } from 'svelte';
+	import { Cluster } from '@norbital-ai/ui/layout';
 	import { getAppHeaderActionsSlot } from './app-header-actions.svelte.js';
 
 	let {
@@ -28,37 +29,21 @@
 </script>
 
 {#snippet toolbar()}
-	<div class:compact class="bolt-header-actions" role="toolbar" aria-label={label} aria-busy={busy}>
+	<Cluster
+		gap={compact ? 'xs' : 'sm'}
+		justify="end"
+		class="min-h-10"
+		role="toolbar"
+		aria-label={label}
+		aria-busy={busy}
+	>
 		{@render children()}
 		{#if busy}
-			<span class="status" role="status">Working…</span>
+			<span class="text-sm text-muted-foreground" role="status">Working…</span>
 		{/if}
-	</div>
+	</Cluster>
 {/snippet}
 
 {#if slot === null}
 	{@render toolbar()}
 {/if}
-
-<style>
-	.bolt-header-actions {
-		display: flex; /* repository-health:allow UI24 -- this teleported toolbar swaps gap and wrap in a 40rem media query and a compact variant; the primitives express neither a media query nor these off-scale gaps (0.75rem/0.375rem) */
-		align-items: center;
-		justify-content: flex-end;
-		gap: 0.75rem;
-		min-height: 2.5rem;
-	}
-	.bolt-header-actions.compact {
-		gap: 0.375rem;
-	}
-	.status {
-		color: var(--muted-foreground);
-		font-size: 0.875rem;
-	}
-	@media (max-width: 40rem) {
-		.bolt-header-actions {
-			flex-wrap: wrap;
-			justify-content: flex-start;
-		}
-	}
-</style>

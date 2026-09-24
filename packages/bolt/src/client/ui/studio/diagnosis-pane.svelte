@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { diagnosisFindingTone } from '#lib/client/ui/studio/authoring-live.js';
 	import {
 		diagnosisFindingPath,
@@ -67,7 +67,7 @@
 	class="border-t border-border/60 bg-card/40 p-3 sm:p-4 {dimmed ? 'opacity-70' : ''}"
 	data-testid="studio-diagnosis"
 >
-	<Inline gap="sm" align="start" class="flex-wrap">
+	<Cluster gap="sm" align="start">
 		<Stack gap="xs" grow class="min-w-0">
 			<h2 class="text-xs font-semibold text-foreground">{t('bolt.studio.diagnosis')}</h2>
 			{#if state === 'missing'}
@@ -89,7 +89,7 @@
 			<Icon icon="lucide:stethoscope" class="size-3.5" />
 			{t('bolt.studio.diagnosis.rerun')}
 		</Button>
-	</Inline>
+	</Cluster>
 
 	{#if groups.length === 0 && state !== 'missing'}
 		<p class="text-meta">{t('bolt.studio.noDiagnosisFindings')}</p>
@@ -99,7 +99,7 @@
 				{#each groups as group (group.file)}
 					<Stack gap="xs">
 						<p class="font-mono text-micro font-semibold text-foreground">{group.file}</p>
-						<ul class="divide-y divide-border/40">
+						<Stack as="ul" gap="none" divided>
 							{#each group.findings as finding (`${finding.rule}:${finding.location}`)}
 								<li class="border-l-2 py-1.5 pl-2 {toneClass(finding.severity)}">
 									<button
@@ -117,7 +117,7 @@
 									</button>
 								</li>
 							{/each}
-						</ul>
+						</Stack>
 					</Stack>
 				{/each}
 			</Stack>

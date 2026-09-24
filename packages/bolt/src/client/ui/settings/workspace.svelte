@@ -291,38 +291,35 @@
 	<TeamChart teams={access.teams} members={access.members} />
 {/snippet}
 
+{#snippet inviteForm()}
+	<Inline
+		as="form"
+		gap="sm"
+		onsubmit={(event) => {
+			event.preventDefault();
+			sendInvite();
+		}}
+	>
+		<Input
+			id="invite-email"
+			type="email"
+			class="min-w-56"
+			aria-label="Invite somebody"
+			bind:value={inviteEmail}
+			placeholder="name@example.com"
+		/>
+		<Button type="submit" size="sm" disabled={invitePending || inviteEmail.trim() === ''}>
+			{invitePending ? 'Sending…' : 'Send invitation'}
+		</Button>
+		{#if inviteFailure !== null}
+			<p class="min-w-0 truncate text-xs text-destructive" role="alert" title={inviteFailure}>
+				{inviteFailure}
+			</p>
+		{/if}
+	</Inline>
+{/snippet}
+
 {#snippet invitationsView()}
-	{#if canManage}
-		<Stack
-			as="form"
-			gap="sm"
-			class="mb-4 rounded-lg border border-border bg-card p-4"
-			onsubmit={(event) => {
-				event.preventDefault();
-				sendInvite();
-			}}
-		>
-			<div class="flex flex-wrap items-end gap-2">
-				<label class="min-w-56 grow text-sm font-medium" for="invite-email">
-					<Stack gap="xs">
-						<span>Invite somebody</span>
-						<Input
-							id="invite-email"
-							type="email"
-							bind:value={inviteEmail}
-							placeholder="name@example.com"
-						/>
-					</Stack>
-				</label>
-				<Button type="submit" size="sm" disabled={invitePending || inviteEmail.trim() === ''}>
-					{invitePending ? 'Sending…' : 'Send invitation'}
-				</Button>
-			</div>
-			{#if inviteFailure !== null}
-				<p class="text-xs text-destructive" role="alert">{inviteFailure}</p>
-			{/if}
-		</Stack>
-	{/if}
 	{#key invitationRows}
 		<CollectionTable
 			client={peopleClient}
@@ -330,6 +327,7 @@
 			view="workspace-settings:invitations"
 			title="Invitations"
 			description="Open invitations to join this workspace, and how each one ended. A pending invitation with a passed deadline reads as expired."
+			{...canManage ? { navigation: inviteForm } : {}}
 			features={{ create: false }}
 			query={{ orderBy: { status: 'asc' } }}
 		>

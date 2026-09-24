@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	type ActionsProps = HTMLAttributes<HTMLDivElement>;
 
-	let { class: className, children, ...restProps }: ActionsProps = $props();
+	let { children, ...restProps }: ActionsProps = $props();
 </script>
 
-<div class={cn('flex items-center gap-0.5', className)} {...restProps}>
+<Inline gap="xs" {...restProps}>
 	{@render children?.()}
-</div>
+</Inline>

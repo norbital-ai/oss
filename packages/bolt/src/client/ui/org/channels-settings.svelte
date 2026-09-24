@@ -4,7 +4,7 @@
 	import { watch } from 'runed';
 	import { Button } from '@norbital-ai/ui/button';
 	import * as Dialog from '@norbital-ai/ui/dialog';
-	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cover, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { toError } from '@norbital-ai/std';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -458,30 +458,30 @@
 		{/if}
 
 		{#if PAIRED_TRANSPORTS.includes(channel.transport)}
-		<Inline gap="sm" align="center">
-			<button
-				type="button"
-				class="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
-				disabled={unpairingBusy[channel.name] === true}
-				onclick={() => openPairing(channel)}
-			>
-				{pairingBusy[channel.name] === true
-					? 'Resume pairing'
-					: connection?.stored === true
-						? 'Reconnect'
-						: 'Pair this channel'}
-			</button>
-			{#if connection?.stored === true}
+			<Inline gap="sm" align="center">
 				<button
 					type="button"
-					class="rounded-md border px-2.5 py-1 text-xs font-medium text-destructive disabled:opacity-50"
-					disabled={pairingBusy[channel.name] === true || unpairingBusy[channel.name] === true}
-					onclick={() => void Effect.runPromise(runUnpairing(channel.name, channel.transport))}
+					class="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
+					disabled={unpairingBusy[channel.name] === true}
+					onclick={() => openPairing(channel)}
 				>
-					Unpair
+					{pairingBusy[channel.name] === true
+						? 'Resume pairing'
+						: connection?.stored === true
+							? 'Reconnect'
+							: 'Pair this channel'}
 				</button>
-			{/if}
-		</Inline>
+				{#if connection?.stored === true}
+					<button
+						type="button"
+						class="rounded-md border px-2.5 py-1 text-xs font-medium text-destructive disabled:opacity-50"
+						disabled={pairingBusy[channel.name] === true || unpairingBusy[channel.name] === true}
+						onclick={() => void Effect.runPromise(runUnpairing(channel.name, channel.transport))}
+					>
+						Unpair
+					</button>
+				{/if}
+			</Inline>
 		{/if}
 
 		<!--
@@ -521,11 +521,9 @@
 	{@const speaker = envoyOn(declared.name)}
 	<Stack as="section" gap="sm" class="rounded-lg border border-border bg-card p-4 shadow-card">
 		<Inline gap="sm" align="start" class="min-w-0">
-			<div
-				class="flex size-6 shrink-0 items-center justify-center rounded-md border border-border/60"
-			>
+			<Frame ratio="square" shrink={false} class="size-6 rounded-md border border-border/60">
 				<IconWrapper name="lucide:radio-tower" class="size-3.5 text-muted-foreground" />
-			</div>
+			</Frame>
 			<div class="min-w-0">
 				<p class="truncate font-mono text-sm font-semibold text-foreground">{declared.name}</p>
 				<p class="text-meta">Declared in the workspace source.</p>
@@ -598,8 +596,8 @@
 				<h1 class="text-heading">Channels</h1>
 				<p class="max-w-2xl text-meta">
 					Where this workspace sends and receives messages: each channel's history, its delivery
-					record, and the pairing a host needs. What an envoy on a channel may <em>do</em> is the
-					policies it declares, in the workspace source.
+					record, and the pairing a host needs. What an envoy on a channel may <em>do</em> is the policies
+					it declares, in the workspace source.
 				</p>
 			</Stack>
 		</Stack>
@@ -655,8 +653,7 @@
 				? Math.max(0, connection.pairingExpiresAt - pairingNow)
 				: undefined}
 		{@const pairingExpired = pairingRemainingMs === 0}
-		<!-- repository-health:allow UI21 -- the pairing dialog panel width is viewport-responsive (min(28rem, 100vw - 2rem)); Bound states height contracts only -->
-		<Dialog.Content class="w-[min(28rem,calc(100vw-2rem))]">
+		<Dialog.Content class="max-w-md">
 			<Dialog.Header>
 				<Dialog.Title>{reconnecting ? 'Reconnect' : 'Pair'} {target.name}</Dialog.Title>
 				<Dialog.Description>

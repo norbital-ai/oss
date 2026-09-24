@@ -5,7 +5,7 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import type { MembershipEditor } from '#lib/client/ui/system/membership-editor.svelte.js';
 	import { subtreeIds, type TeamNode } from '#lib/client/ui/settings/team-hierarchy.js';
@@ -105,13 +105,19 @@
 	};
 </script>
 
-<Stack gap="md" class="w-80 shrink-0 overflow-y-auto rounded-lg border border-border bg-card p-4">
-	<div class="flex items-start justify-between gap-2">
+<Scroll
+	name="Team details"
+	layout="stack"
+	gap="md"
+	shrink={false}
+	class="w-80 rounded-lg border border-border bg-card p-4"
+>
+	<Inline align="start" justify="between" gap="sm">
 		<h3 class="text-sm font-semibold text-foreground">Team details</h3>
 		<Button variant="ghost" size="icon" aria-label="Close details" onclick={onClose}>
 			<Icon icon="lucide:x" class="size-4" />
 		</Button>
-	</div>
+	</Inline>
 
 	<div class="text-xs text-muted-foreground">{team.id}</div>
 
@@ -155,14 +161,14 @@
 		{pending ? 'Saving…' : 'Save details'}
 	</Button>
 
-	<div class="border-t border-border pt-3">
+	<Stack gap="sm" class="border-t border-border pt-3">
 		<h4 class="text-sm font-semibold text-foreground">Members ({currentMembers.length})</h4>
 		{#if currentMembers.length === 0}
-			<p class="mt-1 text-xs text-muted-foreground">Nobody is in this team yet.</p>
+			<p class="text-xs text-muted-foreground">Nobody is in this team yet.</p>
 		{:else}
-			<ul class="mt-2 flex flex-col gap-1">
+			<Stack as="ul" gap="xs">
 				{#each currentMembers as member (member.id)}
-					<li class="flex items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-1">
+					<Inline as="li" justify="between" gap="sm" class="rounded-md bg-muted/40 px-2 py-1">
 						<span class="min-w-0 truncate text-xs text-foreground">{memberLabel(member)}</span>
 						<Button
 							variant="ghost"
@@ -173,12 +179,12 @@
 						>
 							<Icon icon="lucide:x" class="size-3.5" />
 						</Button>
-					</li>
+					</Inline>
 				{/each}
-			</ul>
+			</Stack>
 		{/if}
 		{#if memberOptions.length > 0}
-			<div class="mt-2">
+			<div>
 				<Combobox
 					options={memberOptions}
 					value={null}
@@ -192,7 +198,7 @@
 				/>
 			</div>
 		{/if}
-	</div>
+	</Stack>
 
 	{#if failure !== null}
 		<p class="text-xs text-destructive" role="alert">{failure}</p>
@@ -204,4 +210,4 @@
 			Deleting is refused while the team still has members.
 		</p>
 	</div>
-</Stack>
+</Scroll>

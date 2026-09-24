@@ -10,4 +10,5 @@
 	}: AlertDialogPrimitive.ActionProps = $props();
 </script>
 
+<!-- repository-health:allow UI25 -- the button recipe is a tailwind-variants `tv()` whose literal classes live in button.svelte -->
 <AlertDialogPrimitive.Action bind:ref class={cn(buttonVariants(), className)} {...restProps} />

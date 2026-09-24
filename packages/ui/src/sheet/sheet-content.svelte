@@ -21,6 +21,8 @@
 </script>
 
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { resetInset } from '#lib/layout/inset.svelte';
 	import Icon from '@iconify/svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
@@ -57,6 +59,8 @@
 		interactOutsideBehavior: interactOutsideBehaviorProp,
 		...restProps
 	}: SheetContentProps = $props();
+	// An overlay is a new page edge: it does not inherit the page's inset owner.
+	resetInset(!untrack(() => flush));
 
 	const shouldPreventBackgroundClick = $derived(
 		preventBackgroundClick === 'narrow' ? narrowViewport.current : preventBackgroundClick
@@ -194,20 +198,6 @@
 
 	const shouldShowActions = $derived(actions.length > 0);
 	const shouldShowCloseButton = $derived(showCloseButton && !fullScreen);
-
-	const contentClasses = $derived(
-		cn(
-			'sheet-content flex h-full max-h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden outline-none',
-			sheetVariants({ side }),
-			contained ? 'absolute' : 'fixed',
-			fullScreen ? 'inset-0' : '',
-			flush ? 'gap-0 p-0 shadow-none sm:max-w-none' : '',
-			className,
-			{
-				'shadow-none border-none': fullScreen
-			}
-		)
-	);
 </script>
 
 {#if mountedPortalTarget}
@@ -218,7 +208,22 @@
 			data-sheet-side={side}
 			data-mobile-bottom-sheet={mobileBottomSheet}
 			data-fullscreen={fullScreen}
-			class={contentClasses}
+			class={cn(
+				// repository-health:allow UI6 -- the sheet box is the bits-ui content element (focus trap, dismissal, side animation); its column of actions, body and close button is that element's own flex
+				// repository-health:allow UI27 -- the column direction of the same bits-ui element (see UI6 above)
+				// repository-health:allow UI22 -- the bits-ui sheet box clips its sliding body; Bound cannot be the dialog element
+				'sheet-content flex h-full max-h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden outline-none',
+				sheetVariants({ side }),
+				// repository-health:allow UI19 -- the sheet is pinned to its side of the viewport (or of its portal container when contained) and slides in; the element is bits-ui's, which Imposter's `as` (plain tags only) cannot render
+				contained ? 'absolute' : 'fixed',
+				fullScreen ? 'inset-0' : '',
+				// repository-health:allow UI27 -- `flush` drops the sheet element's default gap for edge-to-edge embeds; the gap belongs to the bits-ui element (see UI6 above)
+				flush ? 'gap-0 p-0 shadow-none sm:max-w-none' : '',
+				className,
+				{
+					'shadow-none border-none': fullScreen
+				}
+			)}
 			style={inlineStyles}
 			{trapFocus}
 			{interactOutsideBehavior}
@@ -254,7 +259,7 @@
 			{/if}
 
 			{#if shouldShowActions}
-				<Inline as="section" gap="sm" shrink={false} class="relative overflow-hidden">
+				<Inline as="section" gap="sm" shrink={false} class="relative overflow-clip">
 					{#each actions as action (action)}
 						{#if action instanceof RenderComponentConfig}
 							{@const { component: Component, props } = action}
@@ -273,7 +278,10 @@
 
 			{#if shouldShowCloseButton}
 				<BitsDialog.Close
-					class="absolute top-4 right-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none data-[state=open]:bg-secondary"
+					class={cn(
+						// repository-health:allow UI19 -- the close button stays a direct child of the bits-ui content so the mobile sidebar can hide it with `[&>button]:hidden`; an Imposter wrapper would break that contract, and `as="button"` would drop the bits-ui Close dismissal wiring
+						'absolute top-4 right-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none data-[state=open]:bg-secondary'
+					)}
 				>
 					<Icon icon="lucide:x" class="size-4" />
 					<span class="sr-only">{t('common.close')}</span>

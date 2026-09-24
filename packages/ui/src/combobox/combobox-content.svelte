@@ -114,7 +114,7 @@
 		value={commandValue}
 		items={commandItems}
 		shouldFilter={false}
-		class="gap-1"
+		gap="xs"
 		activeValue={initialActiveValue}
 		onValueChange={onCommandSelect}
 	>
@@ -123,7 +123,7 @@
 				value={searchQuery}
 				oninput={onSearchInput}
 				placeholder={searchPlaceholder}
-				class={compactTextClass}
+				class="text-xs"
 			>
 				{#snippet prefix()}
 					<div class={cn('pr-2 text-muted-foreground', compactTextClass)}>
@@ -143,7 +143,7 @@
 		{/if}
 		<Command.List
 			bind:ref={listContainerRef}
-			class="relative gap-1 p-1"
+			class="relative p-1"
 			style="max-height: {maxHeight}px;"
 			id="{comboboxId}-listbox"
 			{itemHeight}

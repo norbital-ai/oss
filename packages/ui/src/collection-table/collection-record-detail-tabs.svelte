@@ -151,9 +151,8 @@
 {/snippet}
 
 <Tabs
-	class="grid h-full w-full grid-rows-[auto_minmax(0,1fr)] overflow-clip"
+	class="w-full"
 	listClass="mb-0"
-	contentPadding={false}
 	variant="default"
 	layout="horizontal"
 	header={detailHeader}

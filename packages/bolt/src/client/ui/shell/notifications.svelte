@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '@norbital-ai/ui/button';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import * as Popover from '@norbital-ai/ui/popover';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import type { PushSubscriptionState } from './push-subscription.svelte.js';
@@ -55,23 +55,23 @@
 				{...props}
 				aria-label={unread.length > 0 ? `${unread.length} unread notifications` : 'Notifications'}
 				tooltipContent="Notifications"
-				class="relative justify-center rounded-md p-0 hover:bg-accent data-[state=open]:bg-accent {expanded
+				class="relative rounded-md p-0 hover:bg-accent data-[state=open]:bg-accent {expanded
 					? 'size-7'
 					: 'size-8'}"
 			>
-				<IconWrapper name="lucide:bell" class="size-3.5 shrink-0" />
+				<Inline justify="center" grow fill>
+					<IconWrapper name="lucide:bell" class="size-3.5 shrink-0" />
+				</Inline>
 				{#if unread.length > 0}
-					<Inline
-						style="position: absolute; top: -0.125rem; right: -0.125rem /* repository-health:allow UI23 -- The unread count overlays the bell; no layout primitive owns anchored badge placement. */"
-						class="min-w-3.5 rounded-full bg-primary px-1 text-[0.5625rem] leading-3.5 font-medium text-primary-foreground"
+					<Imposter
 						as="span"
-						justify="center"
-						gap="none"
+						placement="top-end"
+						class="-top-0.5 -right-0.5 z-auto min-w-3.5 rounded-full bg-primary px-1 text-[0.5625rem] leading-3.5 text-center font-medium text-primary-foreground"
 						data-testid="notification-unread-badge"
 						{@attach appBadge(unread.length)}
 					>
 						{badge}
-					</Inline>
+					</Imposter>
 				{/if}
 			</Sidebar.MenuButton>
 		{/snippet}
@@ -133,12 +133,12 @@
 					<span class="text-tiny text-muted-foreground">Nothing here yet</span>
 				</Stack>
 			{:else}
-				<ul class="divide-y">
+				<Stack as="ul" gap="none" divided>
 					{#each items as item (item.id)}
 						<li>
 							<button
 								type="button"
-								class="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent {item.read
+								class="w-full px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent {item.read
 									? ''
 									: 'bg-accent/40'}"
 								onclick={() => onread?.(item.id)}
@@ -153,7 +153,7 @@
 							</button>
 						</li>
 					{/each}
-				</ul>
+				</Stack>
 			{/if}
 		</Scroll>
 	</Popover.Content>

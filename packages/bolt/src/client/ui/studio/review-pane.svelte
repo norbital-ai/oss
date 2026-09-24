@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
-	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Columns, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -152,7 +152,7 @@
 					{failure}
 				</p>
 			{/if}
-			<Inline align="start" gap="sm" class="flex-wrap sm:flex-nowrap">
+			<Cluster align="start" gap="sm">
 				<Stack gap="xs" grow class="min-w-0">
 					<Cluster gap="xs">
 						<h2 class="text-sm font-semibold text-foreground">
@@ -167,7 +167,7 @@
 							{t(reviewFreshnessMessageKey(selected, currentReleaseId))}
 						</span>
 					</Cluster>
-					<ol class="flex flex-wrap gap-1" data-testid="studio-lifecycle-rail">
+					<Cluster as="ol" gap="xs" data-testid="studio-lifecycle-rail">
 						{#each LIFECYCLE_RAIL as stage (stage)}
 							{@const current = lifecycleRailCurrent(selected.state) === stage}
 							<li
@@ -180,7 +180,7 @@
 								{t(lifecycleRailMessageKey(stage))}
 							</li>
 						{/each}
-					</ol>
+					</Cluster>
 					{#if triple !== undefined}
 						<p class="font-mono text-micro text-muted-foreground" data-testid="studio-bound-triple">
 							{t('bolt.studio.boundTriple', {
@@ -236,7 +236,7 @@
 						</Button>
 					{/if}
 				</Cluster>
-			</Inline>
+			</Cluster>
 			<Tabs
 				value={changesView}
 				onValueChange={(next) => {
@@ -287,11 +287,7 @@
 								>
 									{file.path}
 								</p>
-								<Grid
-									minimum="compact"
-									gap="none"
-									class="divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
-								>
+								<Columns count={2} gap="none" collapse="narrow">
 									<Stack gap="xs" class="min-h-0 min-w-0 p-3">
 										<span class="text-micro font-medium text-foreground"
 											>{t('bolt.studio.before')}</span
@@ -308,7 +304,10 @@
 											class="h-full max-h-80 w-full min-h-0 rounded-none border-0 shadow-none"
 										/>
 									</Stack>
-									<Stack gap="xs" class="min-h-0 min-w-0 p-3">
+									<Stack
+										gap="xs"
+										class="min-h-0 min-w-0 border-t border-border/60 p-3 @min-[40rem]:border-t-0 @min-[40rem]:border-l"
+									>
 										<span class="text-micro font-medium text-foreground"
 											>{t('bolt.studio.after')}</span
 										>
@@ -321,7 +320,7 @@
 											class="h-full max-h-80 w-full min-h-0 rounded-none border-0 shadow-none"
 										/>
 									</Stack>
-								</Grid>
+								</Columns>
 							</Stack>
 						{/each}
 					{/if}
@@ -336,7 +335,7 @@
 					{#if selected.schemaPlan.steps.length === 0}
 						<p class="text-meta">{t('bolt.studio.noSchemaSteps')}</p>
 					{:else}
-						<ul class="divide-y divide-border/50 rounded-md border border-border/70">
+						<Stack as="ul" gap="none" divided class="rounded-md border border-border/70">
 							{#each selected.schemaPlan.steps as step (step.id)}
 								<li class="px-3 py-2">
 									<p class="text-xs text-foreground">{schemaPlanSentence(step.sql)}</p>
@@ -365,7 +364,7 @@
 									{/if}
 								</li>
 							{/each}
-						</ul>
+						</Stack>
 					{/if}
 				</Stack>
 			</Scroll>
@@ -375,7 +374,7 @@
 					{#if selected.commits.length > 0}
 						<Stack gap="xs">
 							<h3 class="text-xs font-semibold text-foreground">{t('bolt.studio.history')}</h3>
-							<ul class="divide-y divide-border/40">
+							<Stack as="ul" gap="none" divided>
 								{#each selected.commits as commit (`${commit.commit}:${commit.at}`)}
 									<li class="py-2 text-micro">
 										<span class="font-medium text-foreground">{commit.by}</span>
@@ -384,7 +383,7 @@
 										</span>
 									</li>
 								{/each}
-							</ul>
+							</Stack>
 						</Stack>
 					{/if}
 					{#if selected.decision?.reason !== null && selected.decision?.reason !== undefined}

@@ -23,8 +23,10 @@
 </script>
 
 <Collapsible.Root bind:open>
-	<Collapsible.Trigger class={cn('flex w-full place-items-center items-center gap-1', className)}>
-		{@render content?.({ open: open ?? false })}
+	<Collapsible.Trigger class={cn('block w-full', className)}>
+		<Inline as="span" gap="xs">
+			{@render content?.({ open: open ?? false })}
+		</Inline>
 	</Collapsible.Trigger>
 	<Collapsible.Content class="ms-3.75 border-s">
 		<Inline align="start" gap="none" class="relative">

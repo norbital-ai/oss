@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { WithElementRef } from 'bits-ui';
-	import type { HTMLOlAttributes } from 'svelte/elements';
+	import type { HTMLAttributes, HTMLOlAttributes } from 'svelte/elements';
 
 	let {
 		ref = $bindable(null),
@@ -11,13 +12,15 @@
 	}: WithElementRef<HTMLOlAttributes> = $props();
 </script>
 
-<ol
-	bind:this={ref}
-	class={cn(
-		'wrap-wrap-break-word flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground sm:gap-2.5',
-		className
-	)}
-	{...restProps}
+<Cluster
+	as="ol"
+	gap="sm"
+	class={cn('wrap-wrap-break-word text-sm text-muted-foreground', className)}
+	{...restProps as HTMLAttributes<HTMLElement>}
+	{@attach (node: HTMLOListElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</ol>
+</Cluster>

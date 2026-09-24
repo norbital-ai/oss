@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Checkbox } from '#lib/checkbox';
-	import { Inline } from '#lib/layout';
+	import { Inline, Stack } from '#lib/layout';
 	import type { Snippet } from 'svelte';
 	import { getSelectionCardContext } from './selection-card-root.svelte';
 
@@ -38,11 +38,13 @@
 	}
 </script>
 
-<div
+<Inline
+	gap="none"
+	align="start"
 	role="button"
 	tabindex={disabled ? -1 : 0}
 	class={{
-		'group flex items-start rounded-lg border p-3 shadow-sm transition-all duration-200 hover:bg-muted': true,
+		'group rounded-lg border p-3 shadow-sm transition-all duration-200 hover:bg-muted': true,
 		'bg-muted': isSelected(value),
 		'border-brand': isSelected(value),
 		'cursor-pointer': !disabled,
@@ -55,14 +57,14 @@
 	aria-disabled={disabled}
 >
 	<Inline gap="md" grow>
-		<div class="flex flex-col">
+		<Stack gap="xs">
 			<span class="text-sm font-medium">
 				{@render header()}
 			</span>
-			<span class="mt-1 text-meta">
+			<span class="text-meta">
 				{@render body()}
 			</span>
-		</div>
+		</Stack>
 	</Inline>
 	<Checkbox
 		checked={isSelected(value)}
@@ -70,4 +72,4 @@
 		aria-hidden="true"
 		{disabled}
 	/>
-</div>
+</Inline>

@@ -254,6 +254,7 @@
 			};
 		}
 	);
+	const triggerRecipe = $derived(tabTriggerVariants({ variant, semantics, layout }));
 </script>
 
 <TabsPrimitive.List
@@ -263,10 +264,13 @@
 		listLayoutClasses[layout],
 		listHeightClasses,
 		variant === 'default' && 'rounded-md bg-muted p-1 text-muted-foreground',
+		// repository-health:allow UI27 -- bits-ui owns the tablist element (roving focus, measured sliding indicator); the per-variant trigger gap is that element's own
 		variant === 'underline' &&
 			(layout === 'vertical'
 				? 'gap-1 bg-transparent p-0 text-muted-foreground'
-				: 'gap-0 bg-transparent p-0 text-muted-foreground'),
+				: // repository-health:allow UI27 -- see the underline gap above: the same bits-ui tablist element
+					'gap-0 bg-transparent p-0 text-muted-foreground'),
+		// repository-health:allow UI27 -- see the underline gap above: the same bits-ui tablist element
 		variant === 'chip' && 'gap-1 bg-transparent p-0 text-muted-foreground',
 		className
 	)}
@@ -274,25 +278,16 @@
 >
 	<!-- Animated indicator -->
 	<div
-		class={cn(indicatorVariants({ variant, semantics }), SLIDING_INDICATOR_TRANSITION_CLASS)}
+		class={/* repository-health:allow UI25 -- the indicator recipe is a tailwind-variants `tv()` plus the shared sliding transition constant; their literal classes live in the script */ cn(
+			indicatorVariants({ variant, semantics }),
+			SLIDING_INDICATOR_TRANSITION_CLASS
+		)}
 		style={indicatorStyle}
 	></div>
 
 	{#each tabs as tab (tab.value)}
 		{@const iconOnly = !tab.labelSnippet && !tab.label && Boolean(tab.icon)}
 		{@const ariaLabel = tab.description ?? tab.label ?? tab.value}
-		{@const triggerClass = cn(
-			tabTriggerVariants({ variant, semantics, layout }),
-			'group/tab relative z-10 data-[state=active]:shadow-none',
-			WORKSPACE_TAB_TRIGGER_TEXT_CLASS,
-			layout !== 'vertical' && 'data-[state=active]:bg-transparent',
-			iconOnly ? 'min-w-0 flex-1 justify-center px-1.5' : 'shrink-0',
-			semantics === 'default' && 'data-[state=active]:!text-foreground',
-			semantics === 'info' && 'data-[state=active]:!text-brand',
-			semantics === 'warning' && 'data-[state=active]:!text-brand',
-			semantics === 'danger' && 'data-[state=active]:!text-destructive',
-			semantics === 'success' && 'data-[state=active]:!text-success'
-		)}
 		<!--
 			No Tooltip / title on tab triggers. Sheet open + focus-trap previously focused
 			the first icon tab and flashed a "UI" tooltip on every sidesheet open.
@@ -302,7 +297,19 @@
 			value={tab.value}
 			disabled={tab.disabled}
 			aria-label={ariaLabel}
-			class={triggerClass}
+			class={cn(
+				triggerRecipe,
+				'group/tab relative z-10 data-[state=active]:shadow-none',
+				WORKSPACE_TAB_TRIGGER_TEXT_CLASS,
+				layout !== 'vertical' && 'data-[state=active]:bg-transparent',
+				// repository-health:allow UI27 -- the trigger is the bits-ui tab button; an icon-only tab centres its glyph in the space it grows into
+				iconOnly ? 'min-w-0 flex-1 justify-center px-1.5' : 'shrink-0',
+				semantics === 'default' && 'data-[state=active]:!text-foreground',
+				semantics === 'info' && 'data-[state=active]:!text-brand',
+				semantics === 'warning' && 'data-[state=active]:!text-brand',
+				semantics === 'danger' && 'data-[state=active]:!text-destructive',
+				semantics === 'success' && 'data-[state=active]:!text-success'
+			)}
 		>
 			{#if itemSnippet}
 				{@render itemSnippet({ tab })}

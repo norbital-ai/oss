@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import * as Breadcrumb from '@norbital-ai/ui/breadcrumb';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
-	import { Cover, Grid, SCROLL_AXIS_CLASSES, Stack } from '@norbital-ai/ui/layout';
+	import { Columns, Cover, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import {
 		editorLanguage,
@@ -36,20 +36,22 @@
 	{#snippet top()}
 		{#if pathSegments.length > 0}
 			<Stack gap="none" shrink={false} class="border-b border-border/60 bg-muted/20">
-				<Breadcrumb.Root class={SCROLL_AXIS_CLASSES.x} data-testid="studio-file-breadcrumb">
-					<Breadcrumb.List class="h-7 flex-nowrap px-3 font-mono text-xs">
-						{#each pathSegments as segment, index (`${index}:${segment}`)}
-							<Breadcrumb.Item class="min-w-0 shrink-0 gap-1">
-								{#if index === pathSegments.length - 1}
-									<Breadcrumb.Page class="font-medium" title={path}>{segment}</Breadcrumb.Page>
-								{:else}
-									<span>{segment}</span>
-									<Breadcrumb.Separator class="text-muted-foreground/70" />
-								{/if}
-							</Breadcrumb.Item>
-						{/each}
-					</Breadcrumb.List>
-				</Breadcrumb.Root>
+				<Scroll axis="x" name="File path">
+					<Breadcrumb.Root data-testid="studio-file-breadcrumb">
+						<Breadcrumb.List class="h-7 flex-nowrap px-3 font-mono text-xs">
+							{#each pathSegments as segment, index (`${index}:${segment}`)}
+								<Breadcrumb.Item class="min-w-0 shrink-0">
+									{#if index === pathSegments.length - 1}
+										<Breadcrumb.Page class="font-medium" title={path}>{segment}</Breadcrumb.Page>
+									{:else}
+										<span>{segment}</span>
+										<Breadcrumb.Separator class="text-muted-foreground/70" />
+									{/if}
+								</Breadcrumb.Item>
+							{/each}
+						</Breadcrumb.List>
+					</Breadcrumb.Root>
+				</Scroll>
 				{#if baselineKey !== undefined}
 					<p
 						class="px-3 pb-1.5 text-micro text-muted-foreground"
@@ -70,11 +72,7 @@
 			</p>
 		</Stack>
 	{:else if showDiff}
-		<Grid
-			minimum="compact"
-			gap="none"
-			class="h-full min-h-0 divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
-		>
+		<Columns count={2} gap="none" collapse="narrow" class="h-full">
 			<Stack gap="none" class="min-h-0 min-w-0">
 				<span class="px-3 pt-3 text-micro font-medium text-foreground"
 					>{t('bolt.studio.before')}</span
@@ -93,7 +91,10 @@
 					/>
 				{/key}
 			</Stack>
-			<Stack gap="none" class="min-h-0 min-w-0">
+			<Stack
+				gap="none"
+				class="min-h-0 min-w-0 border-t border-border/60 @min-[40rem]:border-t-0 @min-[40rem]:border-l"
+			>
 				<span class="px-3 pt-3 text-micro font-medium text-foreground"
 					>{t('bolt.studio.after')}</span
 				>
@@ -108,7 +109,7 @@
 					/>
 				{/key}
 			</Stack>
-		</Grid>
+		</Columns>
 	{:else}
 		{#key path}
 			<CodeEditor

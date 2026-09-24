@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Imposter, Stack } from '#lib/layout';
 	import { Separator } from '#lib/separator';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -23,10 +24,14 @@
 	class={cn('relative -my-2 h-5 text-sm group-data-[variant=outline]/field-group:-mb-2', className)}
 	{...restProps}
 >
-	<Separator class="absolute inset-0 top-1/2" />
+	<Imposter placement="fill">
+		<Stack gap="none" justify="center" fill>
+			<Separator />
+		</Stack>
+	</Imposter>
 	{#if children}
 		<span
-			class="relative mx-auto block w-fit bg-background px-2 text-muted-foreground"
+			class="relative z-20 mx-auto block w-fit bg-background px-2 text-muted-foreground"
 			data-slot="field-separator-content"
 		>
 			{@render children()}

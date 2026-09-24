@@ -11,6 +11,10 @@
 
 <DrawerPrimitive.Overlay
 	bind:ref
-	class={cn('fixed inset-0 z-50 bg-black/80', className)}
+	class={cn(
+		// repository-health:allow UI19 -- vaul owns the overlay element (presence and drag-linked fade); Imposter's `as` renders plain tags, not a vaul component, so the fixed inset-0 z-50 scrim stays on the library's element
+		'fixed inset-0 z-50 bg-black/80',
+		className
+	)}
 	{...restProps}
 />

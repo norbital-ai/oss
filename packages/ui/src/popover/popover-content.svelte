@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { Stack } from '#lib/layout';
+	import { resetInset } from '#lib/layout/inset.svelte';
 	import { cn } from '#lib/utils';
 	import { Popover as PopoverPrimitive } from 'bits-ui';
 	import type { Snippet } from 'svelte';
@@ -23,6 +25,8 @@
 		style?: string;
 		children: Snippet;
 	} = $props();
+	// An overlay is a new page edge: it does not inherit the page's inset owner.
+	resetInset(true);
 
 	/* ═══════════════════════════════════════════════════════════════════ */
 	/* WIDTH CONSTRAINT LOGIC                                               */
@@ -73,15 +77,10 @@
 	>
 		{#if needsWidthConstraints}
 			<!-- The width constraint sits on the bordered content element above; this wrapper only
-			     supplies the flex column and padding the unconstrained branch gets from `p-4`. -->
-			<div
-				class={cn(
-					'flex min-w-0 flex-col p-4', // Default to flex column to match typical popover behavior
-					className
-				)}
-			>
+			     supplies the column and padding the unconstrained branch gets from `p-4`. -->
+			<Stack gap="none" class={cn('p-4', className)}>
 				{@render children()}
-			</div>
+			</Stack>
 		{:else}
 			{@render children()}
 		{/if}

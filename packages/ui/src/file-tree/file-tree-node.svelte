@@ -2,7 +2,7 @@
 	import { cn } from '#lib/utils';
 	import { Effect } from 'effect';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { SLIDING_INDICATOR_EXPAND_TRANSITION_CLASS } from '#lib/sliding-indicator';
+	import { Grid } from '#lib/layout';
 	import { getDefaultFileTreeEntryIcon } from '#lib/file-tree/file-tree-icons';
 	import { onMount } from 'svelte';
 	import FileTreeNode from './file-tree-node.svelte';
@@ -49,10 +49,6 @@
 		entry.type === 'file' && Boolean(canDelete?.(entry.path, entry) && onDelete)
 	);
 	const emptyMessage = $derived(loadError || t('misc.emptyFolder'));
-	const emptyClass = $derived(
-		cn('py-1.5 pr-2 text-xs italic', isDark ? 'text-[#858585]' : 'text-muted-foreground')
-	);
-
 	function loadChildren(): Effect.Effect<void> {
 		if (!onToggle || loading) return Effect.void;
 		return Effect.suspend(() => {
@@ -120,12 +116,14 @@
 />
 
 {#if isDirectory}
-	<div
-		class={SLIDING_INDICATOR_EXPAND_TRANSITION_CLASS}
+	<Grid
+		gap="none"
+		tracks="minmax(0, 1fr)"
+		class="transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]"
 		data-file-tree-collapse=""
-		style:grid-template-rows={open ? '1fr' : '0fr'}
+		style="grid-template-rows: {open ? '1fr' : '0fr'}"
 	>
-		<div class="overflow-hidden min-h-0">
+		<div class="overflow-clip min-h-0">
 			{#if children.length > 0}
 				{#each children as child (child.path)}
 					<FileTreeNode
@@ -146,10 +144,16 @@
 					/>
 				{/each}
 			{:else if open && !loading}
-				<p class={emptyClass} style="padding-left: {1.125 + depth * 0.625}rem">
+				<p
+					class={cn(
+						'py-1.5 pr-2 text-xs italic',
+						isDark ? 'text-[#858585]' : 'text-muted-foreground'
+					)}
+					style="padding-left: {1.125 + depth * 0.625}rem"
+				>
 					{emptyMessage}
 				</p>
 			{/if}
 		</div>
-	</div>
+	</Grid>
 {/if}

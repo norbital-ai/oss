@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Imposter } from '#lib/layout';
 	import { attachDotField } from '#lib/dot-field';
 	import { accretionDiscGeometry } from './geometry.js';
 
@@ -41,13 +42,18 @@
 	}}
 >
 	<canvas aria-hidden="true" style="display: block; width: 100%; height: 100%"></canvas>
-	<span class="disc-accent-swatch" aria-hidden="true"></span>
+	<Imposter
+		as="span"
+		placement="top-start"
+		offset="none"
+		layer="under"
+		class="disc-accent-swatch invisible size-0"
+		aria-hidden="true"
+	/>
 </span>
 
 <style>
 	.norbital-accretion-disc {
-		position: relative;
-		display: grid;
 		flex: none;
 		place-items: center;
 		color: currentColor;
@@ -58,14 +64,5 @@
 		display: block;
 		width: 100%;
 		height: 100%;
-	}
-
-	/* Monochrome: the swatch exists for the engine's contract, and carries the ink colour. */
-	.disc-accent-swatch {
-		position: absolute;
-		width: 0;
-		height: 0;
-		color: currentColor;
-		visibility: hidden;
 	}
 </style>

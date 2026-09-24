@@ -132,18 +132,20 @@
 			<Button
 				variant="ghost"
 				size="sm"
-				class="min-w-0 gap-1.5 px-1"
+				class="min-w-0 px-1"
 				aria-expanded={draftExpanded}
 				aria-controls={draftBodyId}
 				onclick={() => (draftExpanded = !draftExpanded)}
 			>
-				<Icon
-					icon="lucide:chevron-down"
-					class="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none {draftExpanded
-						? 'rotate-180'
-						: ''}"
-				/>
-				Draft plan
+				<Inline as="span" gap="xs">
+					<Icon
+						icon="lucide:chevron-down"
+						class="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none {draftExpanded
+							? 'rotate-180'
+							: ''}"
+					/>
+					Draft plan
+				</Inline>
 			</Button>
 			<span
 				class="ml-auto text-xs tabular-nums text-muted-foreground"
@@ -162,16 +164,20 @@
 				</Button>{/if}
 			{#if onexecute}<Button
 					size="sm"
-					class="shrink-0 gap-1.5 px-2"
+					class="shrink-0 px-2"
 					aria-label={executePending ? 'Starting plan' : 'Execute plan'}
 					disabled={executeDisabled || executePending}
 					onclick={onexecute}
 				>
-					<Icon
-						icon={executePending ? 'lucide:loader-circle' : 'lucide:play'}
-						class={executePending ? 'size-3.5 animate-spin motion-reduce:animate-none' : 'size-3.5'}
-					/>
-					<span aria-live="polite">{executePending ? 'Starting…' : 'Execute'}</span>
+					<Inline as="span" gap="xs">
+						<Icon
+							icon={executePending ? 'lucide:loader-circle' : 'lucide:play'}
+							class={executePending
+								? 'size-3.5 animate-spin motion-reduce:animate-none'
+								: 'size-3.5'}
+						/>
+						<span aria-live="polite">{executePending ? 'Starting…' : 'Execute'}</span>
+					</Inline>
 				</Button>{/if}
 		</Inline>
 		{#if draftExpanded}
@@ -210,8 +216,10 @@
 							{...props}
 							type="button"
 							aria-label={`About ${title.toLowerCase()}`}
-							class="grid size-6 place-items-center rounded text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-							><Icon icon="lucide:info" class="size-3.5" /></button
+							class="size-6 rounded text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+							><Inline as="span" justify="center" fill
+								><Icon icon="lucide:info" class="size-3.5" /></Inline
+							></button
 						>
 					{/snippet}
 				</Tooltip>
@@ -222,7 +230,7 @@
 				variant="underline"
 				layout="horizontal"
 				animate={false}
-				contentPadding={false}
+				flush
 				class="h-80 max-h-[50dvh]"
 				listClass="mx-3"
 				keepAlive

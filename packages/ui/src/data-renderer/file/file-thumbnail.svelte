@@ -57,7 +57,7 @@
 <div class="{sizeClasses.width} {sizeClasses.fontSize} {className}">
 	<AspectRatio
 		{ratio}
-		class="overflow-hidden rounded-lg border border-border bg-muted shadow-sm transition-shadow hover:shadow-md"
+		class="overflow-clip rounded-lg border border-border bg-muted shadow-sm transition-shadow hover:shadow-md"
 	>
 		{#if isImage}
 			<img

@@ -9,9 +9,9 @@
 	let {
 		name,
 		form,
-		class: className,
 		orientation = 'vertical',
-		children
+		children,
+		...restProps
 	}: {
 		name: TPath;
 		form: FormState<TInput, TReturn>;
@@ -49,6 +49,6 @@
 	const hasErrors = $derived(field.errors.length > 0);
 </script>
 
-<FieldPrimitive.Field {orientation} data-invalid={hasErrors} class={className}>
+<FieldPrimitive.Field {orientation} data-invalid={hasErrors} {...restProps}>
 	{@render children?.({ field })}
 </FieldPrimitive.Field>

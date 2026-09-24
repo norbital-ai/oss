@@ -15,7 +15,7 @@
 	import { Button } from '#lib/button';
 	import { FormState, type FormSchema } from '#lib/form';
 	import { useI18n } from '#lib/i18n';
-	import { Cluster, Cover, Scroll, Stack } from '#lib/layout';
+	import { Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -160,9 +160,9 @@
 		notice = 'inline',
 		loading = false,
 		skeletonRows = 4,
-		class: className,
 		onAfterSubmit,
-		children
+		children,
+		...rest
 	}: CollectionFormProps<TCollections, TName> = $props();
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionForm');
@@ -464,19 +464,20 @@
 			{:else}
 				<Button
 					type="submit"
-					class="gap-2"
 					disabled={loading ||
 						form.disabled ||
 						submissionPending ||
 						pendingFields.size > 0 ||
 						Boolean(recordId && !form.isDirty)}
 				>
-					{#if submissionPending}
-						<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
-					{/if}
-					{submissionPending
-						? t('form.saving')
-						: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
+					<Inline as="span" gap="sm">
+						{#if submissionPending}
+							<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
+						{/if}
+						{submissionPending
+							? t('form.saving')
+							: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
+					</Inline>
 				</Button>
 				<Button
 					type="button"
@@ -520,7 +521,7 @@
 <Cover
 	as="form"
 	gap="md"
-	class={className}
+	{...rest}
 	aria-busy={loading || submissionPending}
 	onsubmit={submit}
 	bottom={sendMode === 'manual' && !readonly && writable ? formFooter : undefined}
@@ -528,28 +529,26 @@
 	{#if !noticeInHeader}
 		<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" class="mx-1" />
 	{/if}
-	<Scroll name={t('form.fieldsRegion', { name: String(collection) })}>
-		<div class="flex min-h-full min-w-0 flex-col pb-4">
-			{#if loading}
-				<Stack gap="md" aria-label={t('form.loadingForm')}>
-					<CollectionFormSkeleton rows={skeletonRows} />
-				</Stack>
-			{:else}
-				{@render children({
-					Field: CollectionFormField as unknown as CollectionFormComposition<
-						TCollections,
-						TName
-					>['Field'],
-					form: {
-						values: () => Object.fromEntries(Object.entries(form.getData())),
-						setValues: (values) => {
-							for (const [name, value] of Object.entries(values)) {
-								form.setValue(name, value as never);
-							}
+	<Scroll name={t('form.fieldsRegion', { name: String(collection) })} layout="stack" class="pb-4">
+		{#if loading}
+			<Stack gap="md" aria-label={t('form.loadingForm')}>
+				<CollectionFormSkeleton rows={skeletonRows} />
+			</Stack>
+		{:else}
+			{@render children({
+				Field: CollectionFormField as unknown as CollectionFormComposition<
+					TCollections,
+					TName
+				>['Field'],
+				form: {
+					values: () => Object.fromEntries(Object.entries(form.getData())),
+					setValues: (values) => {
+						for (const [name, value] of Object.entries(values)) {
+							form.setValue(name, value as never);
 						}
 					}
-				})}
-			{/if}
-		</div>
+				}
+			})}
+		{/if}
 	</Scroll>
 </Cover>

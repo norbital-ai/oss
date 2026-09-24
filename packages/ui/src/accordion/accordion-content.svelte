@@ -10,7 +10,7 @@
 <AccordionPrimitive.Content
 	forceMount
 	data-slot="accordion-content"
-	class={cn('overflow-hidden text-sm', className)}
+	class={cn('overflow-clip text-sm', className)}
 	{...restProps}
 >
 	{#snippet child({ props, open })}

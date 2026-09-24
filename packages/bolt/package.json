@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.108",
+	"version": "0.0.109",
 	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
 	"type": "module",
 	"sideEffects": [
@@ -96,7 +96,7 @@
 		"@norbital-ai/bolt-protocol": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
-		"@sveltejs/vite-plugin-svelte": "^7.3.0",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@tailwindcss/vite": "4.3.3",
 		"@xyflow/svelte": "catalog:",
 		"better-auth": "^1.7.1",
@@ -127,7 +127,7 @@
 		"@types/qrcode": "^1.5.6",
 		"happy-dom": "^20.11.6",
 		"jiti": "^2.7.0",
-		"svelte": "^5.56.10",
+		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
 		"typescript": "catalog:",
 		"vitest": "4.1.11"

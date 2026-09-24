@@ -3,6 +3,7 @@
 	import { buttonVariants } from '#lib/button';
 	import * as Popover from '#lib/popover';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Imposter, Inline } from '#lib/layout';
 	import type { BaseTreeItem } from '#lib/tree-select';
 	import { TreeSelect } from '#lib/tree-select';
 	import { cn } from '#lib/utils';
@@ -77,7 +78,7 @@
 			aria-haspopup="tree"
 			aria-label={ariaLabel}
 			class={cn(
-				'flex h-9 w-full items-center gap-2 rounded border border-input bg-background p-1 pl-2 text-left shadow-xs hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
+				'block h-9 w-full rounded border border-input bg-background p-1 pl-2 text-left shadow-xs hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
 				triggerClass,
 				{
 					'cursor-default': readonly,
@@ -86,47 +87,49 @@
 			)}
 			{disabled}
 		>
-			{#if trigger}
-				{@render trigger({ displayLabel })}
-			{:else if displayLabel}
-				<span class="truncate text-xs">{displayLabel}</span>
-			{:else}
-				<span class="text-meta">{placeholder}</span>
-			{/if}
+			<Inline as="span" fill class="w-full">
+				{#if trigger}
+					{@render trigger({ displayLabel })}
+				{:else if displayLabel}
+					<span class="truncate text-xs">{displayLabel}</span>
+				{:else}
+					<span class="text-meta">{placeholder}</span>
+				{/if}
+			</Inline>
 		</Popover.Trigger>
 		{#if !readonly && !disabled}
-			<div
-				class="pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center justify-center"
-			>
-				{#if allowCleared && value}
-					<button
-						type="button"
-						class={cn(
-							buttonVariants({ variant: 'outline' }),
-							'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-muted-foreground opacity-0 transition-opacity',
-							'group-hover:opacity-100 group-focus-within:opacity-100',
-							compactTextClass
-						)}
-						onclick={(e) => {
-							e.preventDefault();
-							handleClear(e);
-						}}
-						aria-label={t('dataRenderer.clearSelection')}>{t('misc.clearButton')}</button
-					>
-				{:else}
-					<Icon
-						icon="lucide:chevrons-up-down"
-						class="h-3 w-3 shrink-0 opacity-50"
-						aria-hidden="true"
-					/>
-				{/if}
-			</div>
+			<Imposter placement="center-end" offset="xs" class="pointer-events-none">
+				<Inline gap="none" justify="center">
+					{#if allowCleared && value}
+						<button
+							type="button"
+							class={cn(
+								buttonVariants({ variant: 'outline' }),
+								'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-muted-foreground opacity-0 transition-opacity',
+								'group-hover:opacity-100 group-focus-within:opacity-100',
+								compactTextClass
+							)}
+							onclick={(e) => {
+								e.preventDefault();
+								handleClear(e);
+							}}
+							aria-label={t('dataRenderer.clearSelection')}>{t('misc.clearButton')}</button
+						>
+					{:else}
+						<Icon
+							icon="lucide:chevrons-up-down"
+							class="h-3 w-3 shrink-0 opacity-50"
+							aria-hidden="true"
+						/>
+					{/if}
+				</Inline>
+			</Imposter>
 		{/if}
 	</div>
 	<Popover.Content
 		{align}
 		sideOffset={4}
-		class={cn('w-[min(calc(100vw-2rem),28rem)] min-w-0 max-w-[calc(100vw-2rem)] p-1', contentClass)}
+		class={cn('w-md min-w-0 max-w-[calc(100vw-2rem)] p-1', contentClass)}
 	>
 		<TreeSelect
 			multiple={false}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Bound, Imposter } from '#lib/layout';
 	import type { Snippet } from 'svelte';
 
 	/**
@@ -72,18 +73,26 @@
 	});
 </script>
 
-<div class="relative w-full overflow-hidden">
-	<div class="pointer-events-none absolute inset-0 z-0 h-full w-full blur-[100px]">
+<!-- A content-height backdrop clipping its blurred blobs. -->
+<Bound size="auto" clip class="relative w-full">
+	<Imposter placement="fill" class="pointer-events-none blur-[100px]">
 		{#each colors as color, i}
 			{@const style = final_blob_styles[i % final_blob_styles.length]}
-			<div class="absolute rounded-full opacity-70 {color}" {style}></div>
+			<!-- Each blob is placed by its computed top/left/size style. -->
+			<Imposter
+				placement="top-start"
+				offset="none"
+				layer="under"
+				class="rounded-full opacity-70 {color}"
+				{style}
+			/>
 		{/each}
-	</div>
+	</Imposter>
 
 	<div class="relative z-10">
 		{@render children()}
 	</div>
-</div>
+</Bound>
 
 <style>
 	/**

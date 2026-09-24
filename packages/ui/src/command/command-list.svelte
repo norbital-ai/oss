@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SCROLL_AXIS_CLASSES } from '#lib/layout';
+	import { Imposter, Inline, SCROLL_AXIS_CLASSES } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import { watch } from 'runed';
@@ -148,9 +148,11 @@
 					{@const isIndicator =
 						!item.disabled && commandState.resolvedIndicatorValue === item.value}
 					{@const isSelected = commandState.activeValues.includes(item.value)}
-					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-					<div
-						style="position: absolute; top: {row.start}px; left: 0; width: 100%; height: {itemHeight}px;"
+					<!-- A virtualizer row at its measured offset. -->
+					<Imposter
+						placement="top"
+						layer="under"
+						style="top: {row.start}px; height: {itemHeight}px;"
 						data-command-item={item.disabled ? undefined : 'true'}
 						data-value={item.value}
 						data-indicator={isIndicator ? 'true' : undefined}
@@ -163,27 +165,33 @@
 						onkeydown={(e) => e.key === 'Enter' && handleItemClick(item)}
 						onmouseenter={() => handleItemMouseEnter(item)}
 					>
-						<span
-							class="pointer-events-none absolute inset-0 z-0 rounded-md ring-2 ring-primary/60 transition-all duration-150 ring-inset"
-							class:opacity-0={!(isIndicator && commandState.shouldShowIndicator)}
-						></span>
+						<Imposter
+							as="span"
+							placement="fill"
+							class={cn(
+								'pointer-events-none rounded-md ring-2 ring-primary/60 transition-all duration-150 ring-inset',
+								!(isIndicator && commandState.shouldShowIndicator) && 'opacity-0'
+							)}
+						/>
 						{@render itemSnippet({ item, index: row.index, isIndicator, isSelected })}
-					</div>
+					</Imposter>
 				{:else}
 					<!-- Placeholder for unloaded items (infinite loading) -->
-					<div
-						style="position: absolute; top: {row.start}px; left: 0; width: 100%; height: {itemHeight}px;"
+					<Imposter
+						placement="top"
+						layer="under"
+						style="top: {row.start}px; height: {itemHeight}px;"
 						role="presentation"
 						aria-hidden="true"
 					>
 						{#if placeholderSnippet}
 							{@render placeholderSnippet({ index: row.index })}
 						{:else}
-							<div class="flex w-full items-center px-3 opacity-50" style="height: {itemHeight}px;">
+							<Inline class="w-full px-3 opacity-50" style="height: {itemHeight}px;">
 								<div class="h-3 w-24 animate-pulse rounded bg-muted/40"></div>
-							</div>
+							</Inline>
 						{/if}
-					</div>
+					</Imposter>
 				{/if}
 			{/each}
 		</div>

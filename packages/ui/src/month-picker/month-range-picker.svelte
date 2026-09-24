@@ -7,7 +7,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Popover, PopoverContent, PopoverTrigger } from '#lib/popover';
-	import { Stack } from '#lib/layout';
+	import { Inline, Stack } from '#lib/layout';
 	import { useI18n } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
@@ -128,20 +128,22 @@
 				data-start={value?.start}
 				data-end={value?.end}
 				class={cn(
-					'w-auto min-w-[14rem] justify-start gap-2 font-normal',
+					'w-auto min-w-56 font-normal',
 					label === null && 'text-muted-foreground',
 					className
 				)}
 			>
-				<Icon icon="lucide:calendar-range" class="size-4 shrink-0 text-muted-foreground" />
-				<span class="truncate">{label ?? placeholder ?? t('monthPicker.rangePlaceholder')}</span>
+				<Inline as="span" gap="sm" grow>
+					<Icon icon="lucide:calendar-range" class="size-4 shrink-0 text-muted-foreground" />
+					<span class="truncate">{label ?? placeholder ?? t('monthPicker.rangePlaceholder')}</span>
+				</Inline>
 			</Button>
 		{/snippet}
 	</PopoverTrigger>
 	<PopoverContent {align} class="w-auto p-3">
-		<div class="flex gap-4">
+		<Inline gap="md" align="stretch">
 			<Stack gap="sm">
-				<div class="grid grid-cols-[2rem_1fr_1fr_2rem] items-center">
+				<Inline gap="none">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -150,8 +152,8 @@
 					>
 						<Icon icon="lucide:chevron-left" class="size-4" />
 					</Button>
-					<span class="text-center text-sm font-medium tabular-nums">{viewYear}</span>
-					<span class="text-center text-sm font-medium tabular-nums">{viewYear + 1}</span>
+					<span class="flex-1 text-center text-sm font-medium tabular-nums">{viewYear}</span>
+					<span class="flex-1 text-center text-sm font-medium tabular-nums">{viewYear + 1}</span>
 					<Button
 						variant="ghost"
 						size="icon"
@@ -160,8 +162,8 @@
 					>
 						<Icon icon="lucide:chevron-right" class="size-4" />
 					</Button>
-				</div>
-				<div class="flex gap-4">
+				</Inline>
+				<Inline gap="md" align="stretch">
 					{#each [viewYear, viewYear + 1] as year (year)}
 						<MonthGrid
 							{year}
@@ -172,15 +174,14 @@
 							onHover={(key) => (hovered = key)}
 						/>
 					{/each}
-				</div>
+				</Inline>
 			</Stack>
 			{#if presets.length > 0}
-				<div class="flex flex-col gap-2 border-l border-border pl-4">
+				<Stack gap="sm" class="border-l border-border pl-4">
 					{#each presets as preset (preset)}
 						<Button
 							variant="outline"
 							size="sm"
-							class="justify-start"
 							data-month-range-preset={preset}
 							onclick={() => {
 								pending = null;
@@ -188,11 +189,11 @@
 								open = false;
 							}}
 						>
-							{presetLabel[preset]}
+							<span class="w-full text-start">{presetLabel[preset]}</span>
 						</Button>
 					{/each}
-				</div>
+				</Stack>
 			{/if}
-		</div>
+		</Inline>
 	</PopoverContent>
 </Popover>

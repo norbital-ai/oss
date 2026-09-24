@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Cover, Inline, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Cover, Inline, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -68,7 +68,8 @@
 					<Stack
 						as="div"
 						gap="none"
-						class="divide-y divide-border/50 border-y border-border/50"
+						divided
+						class="border-y border-border/50"
 						style="min-width: 42rem"
 					>
 						<Inline gap="sm" class="px-1 py-1 text-micro text-muted-foreground">
@@ -108,7 +109,7 @@
 				{#if collection.relations.length === 0}
 					<p class="text-meta">{t('bolt.studio.noRelations')}</p>
 				{:else}
-					<Stack as="ul" gap="none" class="divide-y divide-border/50 border-y border-border/50">
+					<Stack as="ul" gap="none" divided class="border-y border-border/50">
 						{#each collection.relations as relation (relation.name)}
 							<Inline as="li" gap="sm" align="baseline" class="px-1 py-1 text-xs">
 								<span class="font-medium text-foreground">{relation.name}</span>
@@ -128,16 +129,16 @@
 		{#if writes.length === 0}
 			<p class="text-meta">{t('bolt.studio.noWrites')}</p>
 		{:else}
-			<Stack as="ul" gap="none" class="divide-y divide-border/50 border-y border-border/50">
+			<Stack as="ul" gap="none" divided class="border-y border-border/50">
 				{#each writes as write (write.name)}
-					<Inline as="li" gap="sm" align="start" class="flex-wrap px-1 py-2 text-xs sm:flex-nowrap">
+					<Cluster as="li" gap="sm" align="start" class="px-1 py-2 text-xs">
 						<ProductIcon name="writes" class="size-3.5 shrink-0 text-muted-foreground" />
 						<Stack gap="none" grow class="min-w-0">
 							<span class="font-mono font-medium text-foreground">{write.name}</span>
 							<span class="text-meta">{write.description ?? t(writeSummaryKey(write.name))}</span>
 						</Stack>
 						{@render sourceLink(write.sourcePath, write.name)}
-					</Inline>
+					</Cluster>
 				{/each}
 			</Stack>
 		{/if}
@@ -148,9 +149,9 @@
 	{#if pipelines.length === 0}
 		<p class="text-meta">{t('bolt.studio.noPipelines')}</p>
 	{:else}
-		<Stack as="ul" gap="none" class="divide-y divide-border/50 border-y border-border/50">
+		<Stack as="ul" gap="none" divided class="border-y border-border/50">
 			{#each pipelines as pipeline (pipeline.name)}
-				<Inline as="li" gap="sm" align="start" class="flex-wrap px-1 py-2 text-xs sm:flex-nowrap">
+				<Cluster as="li" gap="sm" align="start" class="px-1 py-2 text-xs">
 					<ProductIcon name="pipelines" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 					<Stack gap="none" grow class="min-w-0">
 						<span class="font-mono font-medium text-foreground">{pipeline.name}</span>
@@ -159,7 +160,7 @@
 						{/if}
 					</Stack>
 					{@render sourceLink(pipeline.sourcePath, pipeline.name)}
-				</Inline>
+				</Cluster>
 			{/each}
 		</Stack>
 	{/if}
@@ -169,9 +170,9 @@
 	{#if integrations.length === 0}
 		<p class="text-meta">{t('bolt.studio.noIntegrations')}</p>
 	{:else}
-		<Stack as="ul" gap="none" class="divide-y divide-border/50 border-y border-border/50">
+		<Stack as="ul" gap="none" divided class="border-y border-border/50">
 			{#each integrations as integration (integration.name)}
-				<Inline as="li" gap="sm" align="start" class="flex-wrap px-1 py-2 text-xs sm:flex-nowrap">
+				<Cluster as="li" gap="sm" align="start" class="px-1 py-2 text-xs">
 					<ProductIcon name="integrations" class="size-3.5 shrink-0 text-muted-foreground" />
 					<Stack gap="none" grow class="min-w-0">
 						<span class="truncate font-medium text-foreground">{integration.name}</span>
@@ -180,7 +181,7 @@
 						{/each}
 					</Stack>
 					{@render sourceLink(integration.sourcePath, integration.name)}
-				</Inline>
+				</Cluster>
 			{/each}
 		</Stack>
 	{/if}
@@ -188,11 +189,11 @@
 
 <Cover gap="none">
 	{#snippet top()}
-		<Inline
+		<Cluster
 			gap="sm"
 			as="header"
 			align="center"
-			class="flex-wrap border-b border-border/60 py-2.5 sm:flex-nowrap {INSET_X_CLASS}"
+			class="border-b border-border/60 py-2.5 {INSET_X_CLASS}"
 		>
 			<IconWrapper name={collection.icon ?? 'lucide:box'} class="size-5 text-muted-foreground" />
 			<Stack gap="none" grow class="min-w-0">
@@ -214,7 +215,7 @@
 				</Inline>
 			</Stack>
 			{@render sourceLink(collection.sourcePath, collection.name)}
-		</Inline>
+		</Cluster>
 	{/snippet}
 
 	<Tabs

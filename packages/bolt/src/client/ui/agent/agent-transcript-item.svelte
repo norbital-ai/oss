@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs } from '@norbital-ai/ui/tabs';
 	import { Schema } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
@@ -10,14 +10,18 @@
 	import { decodeAttachmentDescriptor } from '#lib/runtime/agents/image-descriptors.js';
 	import AgentChildConversation from './agent-child-conversation.svelte';
 	import type { CompactOrigin } from './context-view.js';
-	import { checkpointSections, plainMessageText } from './context-view.js';
+	import { checkpointSections } from './context-view.js';
 	import { parseInboundEnvelope, type InboundEnvelope } from './inbound-message.js';
 	import type { PanelMessage } from './transcript.js';
 	import {
 		diagnostic,
 		diagnosticLanguage,
+		isActivePart as isActivePartOf,
+		runFailureText,
 		subagentLink,
+		visibleParts,
 		type SubagentTranscript,
+		type VisiblePart,
 		type ToolCallPart,
 		type ToolPairing,
 		type ToolResultPart
@@ -50,12 +54,7 @@
 		onedit?: ((message: PanelMessage) => void) | undefined;
 	} = $props();
 
-	/** A persisted run failure renders as an error bubble, not a plain system note. */
-	const failureText = $derived(
-		message.author.kind === 'system' && plainMessageText(message).startsWith('Task failed:')
-			? plainMessageText(message)
-			: null
-	);
+	const failureText = $derived(runFailureText(message));
 	const steering = $derived(message.priority === 'steer');
 	const cancelled = $derived(message.state === 'cancelled');
 	const queued = $derived(
@@ -107,46 +106,16 @@
 	}
 
 	const isString = Schema.is(Schema.String);
-	type Part = Exclude<Prompt.MessageEncoded['content'], string>[number];
-	const isProgressPart = (part: Part) =>
-		(part.type === 'tool-call' || part.type === 'tool-result') &&
-		part.name === 'todo' &&
-		(part.type !== 'tool-result' || !part.isFailure);
+	const isActivePart = (index: number) => isActivePartOf(message, index);
+	const visible = $derived(visibleParts(message, { tools, hideTodo, generating }));
 
-	const isActivePart = (index: number) =>
-		message.annotation?.tag === 'generation' && message.annotation.activeParts.includes(index);
-
-	/**
-	 * Reasoning is always captured, so the only question is whether there is something to read. An
-	 * empty part still being written is a live status rather than content, so it stays while
-	 * generating and goes when it settles with nothing in it.
-	 */
-	function reasoningVisible(part: Prompt.ReasoningPartEncoded, index: number): boolean {
-		if (part.text.trim().length > 0) return true;
-		return generating && isActivePart(index);
-	}
-
-	function partVisible(part: Part, index: number): boolean {
-		if (hideTodo && isProgressPart(part)) return false;
-		if (part.type === 'tool-result') return tools === undefined || !tools.callIds.has(part.id);
-		if (part.type === 'reasoning') return reasoningVisible(part, index);
-		return true;
-	}
-
-	const visibleParts = $derived(
-		isString(message.message.content)
-			? []
-			: message.message.content.flatMap((part, index) =>
-					partVisible(part, index) ? [{ part, index }] : []
-				)
-	);
 	/**
 	 * Consecutive tool calls fold into one row, the way a coding agent's transcript does: a step
 	 * that read three collections is one line, "3 tool calls · read_collection ×3", opened on
 	 * demand. A lone call keeps its own row; a child-task spawn is never folded, its block is the
 	 * conversation it started.
 	 */
-	type Visible = { readonly part: Part; readonly index: number };
+	type Visible = VisiblePart;
 	type Segment =
 		| { readonly kind: 'one'; readonly item: Visible }
 		| { readonly kind: 'tools'; readonly items: ReadonlyArray<Visible> };
@@ -163,7 +132,7 @@
 			else for (const item of run) out.push({ kind: 'one', item });
 			run = [];
 		};
-		for (const item of visibleParts) {
+		for (const item of visible) {
 			if (isFoldable(item)) run.push(item);
 			else {
 				flush();
@@ -190,16 +159,6 @@
 		}
 		return pending ? 'pending' : 'done';
 	};
-
-	const renders = $derived(
-		failureText !== null ||
-			(message.message.role !== 'system' &&
-				message.author.kind !== 'system' &&
-				(isString(message.message.content) ||
-					visibleParts.length > 0 ||
-					message.annotation?.tag === 'compact' ||
-					message.annotation?.tag === 'plan-verdict'))
-	);
 
 	function fileHref(part: Prompt.FilePartEncoded): string | null {
 		const descriptor = decodeAttachmentDescriptor(part.data);
@@ -231,8 +190,7 @@
 </script>
 
 {#snippet payload(label: string, value: unknown)}
-	<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
-	<div class="max-h-56 overflow-auto rounded-md border bg-background">
+	<Scroll name={label} axis="both" max="compact" class="rounded-md border bg-background">
 		<CodeEditor
 			value={diagnostic(value)}
 			language={diagnosticLanguage(value)}
@@ -241,7 +199,7 @@
 			minHeight="7rem"
 			class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
 		/>
-	</div>
+	</Scroll>
 {/snippet}
 
 <!--
@@ -292,7 +250,7 @@
 		</summary>
 		<Tabs
 			animate={false}
-			contentPadding={false}
+			flush
 			class="mt-1 h-auto w-full"
 			listClass="w-auto"
 			config={[
@@ -323,261 +281,247 @@
 	</Stack>
 {/snippet}
 
-{#if renders}
-	<li
-		class="message group/message my-4 min-w-0"
-		data-mode={mode ?? undefined}
-		aria-label={speaker(message)}
-		data-role={message.message.role}
-		data-model-view={outsideModelView ? 'outside' : 'inside'}
-		aria-busy={generating && message.annotation?.tag === 'generation'}
-	>
-		<Stack gap="xs" align={humanBubble ? 'end' : 'stretch'}>
-			{#if showSpeaker || cancelled || steering || queued || outsideModelView}
-				<Inline align="center" gap="xs" justify={humanBubble ? 'end' : 'start'} class="min-w-0">
-					{#if showSpeaker}
-						<span class="text-tiny font-medium text-muted-foreground">{speaker(message)}</span>
-					{/if}
-					{#if cancelled}
-						<span class="text-tiny text-muted-foreground">Cancelled</span>
-					{:else if steering}
-						<Icon icon="lucide:milestone" class="size-3.5 text-muted-foreground" />
-						<span class="text-tiny text-muted-foreground"
-							>{queued ? 'Steering · next step' : 'Steering applied'}</span
-						>
-					{:else if queued}
-						<span class="text-tiny text-muted-foreground">Queued</span>
-					{/if}
-					{#if outsideModelView}
-						<span
-							class="rounded-full border border-border/70 bg-muted/50 px-1.5 py-0.5 text-micro text-muted-foreground"
-							title="Saved in the full transcript, but outside the agent's active model view"
-						>
-							Outside model view
-						</span>
-					{/if}
-				</Inline>
-			{/if}
+<div
+	class="group/message my-4 min-w-0"
+	data-mode={mode ?? undefined}
+	aria-label={speaker(message)}
+	data-role={message.message.role}
+	data-model-view={outsideModelView ? 'outside' : 'inside'}
+	aria-busy={generating && message.annotation?.tag === 'generation'}
+>
+	<Stack gap="xs" align={humanBubble ? 'end' : 'stretch'}>
+		{#if showSpeaker || cancelled || steering || queued || outsideModelView}
+			<Inline align="center" gap="xs" justify={humanBubble ? 'end' : 'start'} class="min-w-0">
+				{#if showSpeaker}
+					<span class="text-tiny font-medium text-muted-foreground">{speaker(message)}</span>
+				{/if}
+				{#if cancelled}
+					<span class="text-tiny text-muted-foreground">Cancelled</span>
+				{:else if steering}
+					<Icon icon="lucide:milestone" class="size-3.5 text-muted-foreground" />
+					<span class="text-tiny text-muted-foreground"
+						>{queued ? 'Steering · next step' : 'Steering applied'}</span
+					>
+				{:else if queued}
+					<span class="text-tiny text-muted-foreground">Queued</span>
+				{/if}
+				{#if outsideModelView}
+					<span
+						class="rounded-full border border-border/70 bg-muted/50 px-1.5 py-0.5 text-micro text-muted-foreground"
+						title="Saved in the full transcript, but outside the agent's active model view"
+					>
+						Outside model view
+					</span>
+				{/if}
+			</Inline>
+		{/if}
 
-			{#if failureText !== null}
-				<div
-					class="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm"
-					role="alert"
-				>
-					<Inline gap="sm" align="start">
-						<Icon icon="lucide:circle-alert" class="size-4 shrink-0 text-destructive" />
-						<p class="m-0 min-w-0 flex-1 break-words whitespace-pre-wrap text-foreground">
-							{failureText}
-						</p>
-					</Inline>
-				</div>
-			{:else if typeof message.message.content === 'string'}
-				<div
-					class={humanBubble
-						? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
-						: 'w-full text-sm leading-6 text-foreground'}
-				>
-					{#if message.message.role === 'assistant'}
-						{#if message.annotation?.tag === 'generation' && message.annotation.activeParts.includes(0)}
-							<span role="status" class="text-xs text-muted-foreground"
-								>{generating ? 'Writing…' : 'Response interrupted'}</span
-							>
-						{/if}
-						<!-- A checkpoint answers as a section table; read it as headings here as in Summary. -->
-						<ReadonlyMarkdown
-							scale="reading"
-							allowHtml={false}
-							content={checkpointSections(message.message.content)}
-						/>
-					{:else if inboundEnvelope !== null}
-						{@render inboundMessage(inboundEnvelope)}
-					{:else}
-						{#if parentAttribution}
-							<ReadonlyMarkdown
-								scale="reading"
-								allowHtml={false}
-								content={message.message.content}
-							/>
-						{:else}
-							<p class="m-0 break-words whitespace-pre-wrap">{message.message.content}</p>
-						{/if}
+		{#if failureText !== null}
+			<div
+				class="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm"
+				role="alert"
+			>
+				<Inline gap="sm" align="start">
+					<Icon icon="lucide:circle-alert" class="size-4 shrink-0 text-destructive" />
+					<p class="m-0 min-w-0 flex-1 break-words whitespace-pre-wrap text-foreground">
+						{failureText}
+					</p>
+				</Inline>
+			</div>
+		{:else if typeof message.message.content === 'string'}
+			<div
+				class={humanBubble
+					? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
+					: 'w-full text-sm leading-6 text-foreground'}
+			>
+				{#if message.message.role === 'assistant'}
+					{#if message.annotation?.tag === 'generation' && message.annotation.activeParts.includes(0)}
+						<span role="status" class="text-xs text-muted-foreground"
+							>{generating ? 'Writing…' : 'Response interrupted'}</span
+						>
 					{/if}
-				</div>
-			{:else}
-				{#each segments as segment (segment.kind === 'one' ? segment.item.index : `tools:${segment.items[0]?.index}`)}
-					{#if segment.kind === 'tools'}
-						{@const state = foldState(segment.items)}
-						<details class="group/fold w-full rounded-lg py-1.5 text-xs" data-tool-fold={state}>
-							<summary class="cursor-pointer list-none">
+					<!-- A checkpoint answers as a section table; read it as headings here as in Summary. -->
+					<ReadonlyMarkdown
+						scale="reading"
+						allowHtml={false}
+						content={checkpointSections(message.message.content)}
+					/>
+				{:else if inboundEnvelope !== null}
+					{@render inboundMessage(inboundEnvelope)}
+				{:else}
+					{#if parentAttribution}
+						<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
+					{:else}
+						<p class="m-0 break-words whitespace-pre-wrap">{message.message.content}</p>
+					{/if}
+				{/if}
+			</div>
+		{:else}
+			{#each segments as segment (segment.kind === 'one' ? segment.item.index : `tools:${segment.items[0]?.index}`)}
+				{#if segment.kind === 'tools'}
+					{@const state = foldState(segment.items)}
+					<details class="group/fold w-full rounded-lg py-1.5 text-xs" data-tool-fold={state}>
+						<summary class="cursor-pointer list-none">
+							<Inline as="span" gap="sm">
+								<Icon
+									icon={state === 'pending'
+										? 'lucide:wrench'
+										: state === 'failed'
+											? 'lucide:circle-alert'
+											: 'lucide:circle-check'}
+									class={state === 'failed'
+										? 'size-3.5 text-destructive'
+										: 'size-3.5 text-muted-foreground'}
+								/>
+								<span class="font-medium">{segment.items.length} tool calls</span>
+								<span class="truncate text-muted-foreground">· {foldSummary(segment.items)}</span>
+							</Inline>
+						</summary>
+						<div class="mt-1 border-l border-border pl-3">
+							{#each segment.items as { part, index } (index)}
+								{#if part.type === 'tool-call'}
+									{@render toolRow(
+										part,
+										tools?.resultsByCallId.get(part.id) ?? null,
+										isActivePart(index)
+									)}
+								{:else if part.type === 'tool-result'}
+									{@render toolRow(null, part, false)}
+								{/if}
+							{/each}
+						</div>
+					</details>
+				{:else}
+					{@const { part, index } = segment.item}
+					{@const pendingPart = isActivePart(index)}
+					{#if part.type === 'text'}
+						<div
+							class={humanBubble
+								? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
+								: 'w-full text-sm leading-6 text-foreground'}
+							data-text-part
+						>
+							{#if message.message.role === 'assistant'}
+								{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
+										>{generating ? 'Writing…' : 'Response interrupted'}</span
+									>{/if}
+								<ReadonlyMarkdown
+									scale="reading"
+									allowHtml={false}
+									content={checkpointSections(part.text)}
+								/>
+							{:else}
+								{#if parentAttribution}
+									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+								{:else if inboundEnvelope !== null && part.text.startsWith('INBOUND MESSAGE')}
+									{@render inboundMessage(inboundEnvelope)}
+								{:else}
+									<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
+								{/if}
+							{/if}
+						</div>
+					{:else if part.type === 'reasoning'}
+						<details class="group/reasoning w-full rounded-lg py-1.5 text-xs" data-reasoning-part>
+							<summary class="cursor-pointer list-none text-muted-foreground">
 								<Inline as="span" gap="sm">
-									<Icon
-										icon={state === 'pending'
-											? 'lucide:wrench'
-											: state === 'failed'
-												? 'lucide:circle-alert'
-												: 'lucide:circle-check'}
-										class={state === 'failed'
-											? 'size-3.5 text-destructive'
-											: 'size-3.5 text-muted-foreground'}
-									/>
-									<span class="font-medium">{segment.items.length} tool calls</span>
-									<span class="truncate text-muted-foreground">· {foldSummary(segment.items)}</span>
+									<Icon icon="lucide:brain" class="size-3.5" />
+									<span
+										>{pendingPart
+											? generating
+												? 'Reasoning…'
+												: 'Reasoning interrupted'
+											: 'Reasoning'}</span
+									>
 								</Inline>
 							</summary>
-							<div class="mt-1 border-l border-border pl-3">
-								{#each segment.items as { part, index } (index)}
-									{#if part.type === 'tool-call'}
-										{@render toolRow(
-											part,
-											tools?.resultsByCallId.get(part.id) ?? null,
-											isActivePart(index)
-										)}
-									{:else if part.type === 'tool-result'}
-										{@render toolRow(null, part, false)}
-									{/if}
-								{/each}
+							<div class="mt-1 border-l border-border pl-3 text-foreground/85">
+								<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
 							</div>
 						</details>
-					{:else}
-						{@const { part, index } = segment.item}
-						{@const pendingPart = isActivePart(index)}
-						{#if part.type === 'text'}
-							<div
-								class={humanBubble
-									? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
-									: 'w-full text-sm leading-6 text-foreground'}
-								data-text-part
-							>
-								{#if message.message.role === 'assistant'}
-									{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
-											>{generating ? 'Writing…' : 'Response interrupted'}</span
-										>{/if}
-									<ReadonlyMarkdown
-										scale="reading"
-										allowHtml={false}
-										content={checkpointSections(part.text)}
-									/>
-								{:else}
-									{#if parentAttribution}
-										<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
-									{:else if inboundEnvelope !== null && part.text.startsWith('INBOUND MESSAGE')}
-										{@render inboundMessage(inboundEnvelope)}
-									{:else}
-										<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
-									{/if}
-								{/if}
-							</div>
-						{:else if part.type === 'reasoning'}
-							<details class="group/reasoning w-full rounded-lg py-1.5 text-xs" data-reasoning-part>
-								<summary class="cursor-pointer list-none text-muted-foreground">
-									<Inline as="span" gap="sm">
-										<Icon icon="lucide:brain" class="size-3.5" />
-										<span
-											>{pendingPart
-												? generating
-													? 'Reasoning…'
-													: 'Reasoning interrupted'
-												: 'Reasoning'}</span
-										>
-									</Inline>
-								</summary>
-								<div class="mt-1 border-l border-border pl-3 text-foreground/85">
-									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
-								</div>
-							</details>
-						{:else if part.type === 'file'}
-							{@const href = fileHref(part)}
-							{#if href !== null && /^image\/(png|jpeg|gif|webp|avif)$/.test(part.mediaType)}
-								<img
-									src={href}
-									alt={part.fileName ?? 'Agent image'}
-									class="max-h-96 max-w-full rounded-lg object-contain"
-								/>
-							{/if}
-							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-								<Inline gap="sm">
-									<Icon icon="lucide:file" class="size-3.5 text-muted-foreground" />
-									{#if href === null}
-										<span>{part.fileName ?? part.mediaType}</span>
-									{:else}
-										<a {href} target="_blank" rel="noreferrer" class="underline">
-											{part.fileName ?? part.mediaType}
-										</a>
-									{/if}
-								</Inline>
-							</div>
-						{:else if part.type === 'tool-call'}
-							{@const result = tools?.resultsByCallId.get(part.id)}
-							{@const link = subagent === undefined ? null : subagentLink(part, result)}
-							{#if link !== null && subagent !== undefined}
-								<AgentChildConversation {link} transcript={subagent} />
-							{:else}
-								{@render toolRow(part, result ?? null, pendingPart)}
-							{/if}
-						{:else if part.type === 'tool-result'}
-							{@render toolRow(null, part, false)}
-						{:else if part.type === 'tool-approval-request'}
-							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-								<Inline gap="sm">
-									<Icon icon="lucide:shield-question" class="size-3.5" />
-									<span>Approval requested for tool call {part.toolCallId}</span>
-								</Inline>
-							</div>
-						{:else if part.type === 'tool-approval-response'}
-							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-								<Inline gap="sm">
-									<Icon icon="lucide:shield-check" class="size-3.5" />
-									<span>Approval response recorded</span>
-								</Inline>
-							</div>
+					{:else if part.type === 'file'}
+						{@const href = fileHref(part)}
+						{#if href !== null && /^image\/(png|jpeg|gif|webp|avif)$/.test(part.mediaType)}
+							<img
+								src={href}
+								alt={part.fileName ?? 'Agent image'}
+								class="max-h-96 max-w-full rounded-lg object-contain"
+							/>
 						{/if}
+						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+							<Inline gap="sm">
+								<Icon icon="lucide:file" class="size-3.5 text-muted-foreground" />
+								{#if href === null}
+									<span>{part.fileName ?? part.mediaType}</span>
+								{:else}
+									<a {href} target="_blank" rel="noreferrer" class="underline">
+										{part.fileName ?? part.mediaType}
+									</a>
+								{/if}
+							</Inline>
+						</div>
+					{:else if part.type === 'tool-call'}
+						{@const result = tools?.resultsByCallId.get(part.id)}
+						{@const link = subagent === undefined ? null : subagentLink(part, result)}
+						{#if link !== null && subagent !== undefined}
+							<AgentChildConversation {link} transcript={subagent} />
+						{:else}
+							{@render toolRow(part, result ?? null, pendingPart)}
+						{/if}
+					{:else if part.type === 'tool-result'}
+						{@render toolRow(null, part, false)}
+					{:else if part.type === 'tool-approval-request'}
+						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+							<Inline gap="sm">
+								<Icon icon="lucide:shield-question" class="size-3.5" />
+								<span>Approval requested for tool call {part.toolCallId}</span>
+							</Inline>
+						</div>
+					{:else if part.type === 'tool-approval-response'}
+						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+							<Inline gap="sm">
+								<Icon icon="lucide:shield-check" class="size-3.5" />
+								<span>Approval response recorded</span>
+							</Inline>
+						</div>
 					{/if}
-				{/each}
-			{/if}
+				{/if}
+			{/each}
+		{/if}
 
-			{#if onedit !== undefined && message.author.kind === 'human' && !parentAttribution}
-				<button
-					type="button"
-					class="flex min-h-6 items-center gap-1 self-end rounded px-1.5 text-micro text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:opacity-0 md:group-hover/message:opacity-100 md:group-focus-within/message:opacity-100"
-					aria-label="Revise this message as a new instruction"
-					onclick={() => onedit?.(message)}
-				>
+		{#if onedit !== undefined && message.author.kind === 'human' && !parentAttribution}
+			<button
+				type="button"
+				class="min-h-6 self-end rounded px-1.5 text-micro text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:opacity-0 md:group-hover/message:opacity-100 md:group-focus-within/message:opacity-100"
+				aria-label="Revise this message as a new instruction"
+				onclick={() => onedit?.(message)}
+			>
+				<Inline as="span" gap="xs">
 					<Icon icon="lucide:pencil" class="size-3" />
 					Revise
-				</button>
-			{/if}
+				</Inline>
+			</button>
+		{/if}
 
-			{#if message.annotation?.tag === 'compact'}
-				<details class="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs">
-					<summary class="cursor-pointer">{compactLabel(checkpointOrigin)}</summary>
-					<p class="mb-0 text-muted-foreground">
-						Focus begins after message {message.annotation.cutoff}; full durable history is
-						retained.
-					</p>
-				</details>
-			{:else if message.annotation?.tag === 'plan-verdict'}
-				<div class="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs">
-					<p class="m-0 font-medium">
-						{message.annotation.complete ? 'Plan verified' : 'Plan verification found gaps'}
-					</p>
-					{#if message.annotation.gaps.length > 0}
-						<ul class="mb-0 list-disc pl-4 text-muted-foreground">
-							{#each message.annotation.gaps as gap (gap)}
-								<li>{gap}</li>
-							{/each}
-						</ul>
-					{/if}
-				</div>
-			{/if}
-		</Stack>
-	</li>
-{/if}
-
-<style>
-	/* A long transcript lays out only what is on screen, so dragging the sheet's width
-	   reflows a viewport of messages and not hundreds of markdown blocks per frame. */
-	.message {
-		content-visibility: auto;
-		contain-intrinsic-block-size: auto 6rem;
-	}
-</style>
+		{#if message.annotation?.tag === 'compact'}
+			<details class="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs">
+				<summary class="cursor-pointer">{compactLabel(checkpointOrigin)}</summary>
+				<p class="mb-0 text-muted-foreground">
+					Focus begins after message {message.annotation.cutoff}; full durable history is retained.
+				</p>
+			</details>
+		{:else if message.annotation?.tag === 'plan-verdict'}
+			<div class="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs">
+				<p class="m-0 font-medium">
+					{message.annotation.complete ? 'Plan verified' : 'Plan verification found gaps'}
+				</p>
+				{#if message.annotation.gaps.length > 0}
+					<ul class="mb-0 list-disc pl-4 text-muted-foreground">
+						{#each message.annotation.gaps as gap (gap)}
+							<li>{gap}</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		{/if}
+	</Stack>
+</div>

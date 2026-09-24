@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/oss",
-	"version": "0.0.108",
+	"version": "0.0.109",
 	"private": true,
 	"packageManager": "pnpm@11.22.0",
 	"engines": {

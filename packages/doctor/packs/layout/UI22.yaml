@@ -5,11 +5,11 @@ principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
 ignore:
-  - '**/packages/ui/src/**'
+  - '**/packages/ui/src/layout/**'
 rule:
   all:
     - kind: svelte:ClassToken
-    - regex: '^overflow-hidden$'
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*overflow-hidden$'
 examples:
   bad:
     - '<div class="overflow-hidden"></div>'

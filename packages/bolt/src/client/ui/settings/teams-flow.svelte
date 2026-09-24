@@ -9,7 +9,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { Input } from '@norbital-ai/ui/input';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Imposter, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import {
 		layoutTeamHierarchy,
@@ -140,13 +140,14 @@
 	};
 </script>
 
-<div class="flex h-full min-h-0 flex-col gap-3">
-	<div class="flex flex-wrap items-center gap-2">
+<Stack gap="sm" fill>
+	<Cluster gap="sm">
 		<div class="relative min-w-56 grow">
-			<Icon
-				icon="lucide:search"
-				class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-			/>
+			<Imposter placement="fill" class="pointer-events-none pl-2.5">
+				<Inline fill>
+					<Icon icon="lucide:search" class="size-4 text-muted-foreground" />
+				</Inline>
+			</Imposter>
 			<Input
 				class="pl-8"
 				placeholder="Search teams…"
@@ -166,21 +167,30 @@
 				New team
 			</Button>
 		{/if}
-	</div>
+	</Cluster>
 
-	<div class="flex min-h-0 grow gap-3">
-		<!-- repository-health:allow UI22 -- the SvelteFlow canvas box clips the flow renderer inside a fixed frame; Bound's named height contract and container-type containment are not safe around the flow library's own measurement -->
-		<div
-			class="h-[32rem] min-w-0 grow overflow-hidden rounded-lg border border-border/70 bg-card/20"
-		>
+	<Inline gap="sm" align="stretch" grow>
+		<Bound size="standard" clip grow class="rounded-lg border border-border/70 bg-card/20">
 			{#if teams.length === 0}
-				<div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+				<Stack
+					gap="none"
+					fill
+					align="center"
+					justify="center"
+					class="p-6 text-sm text-muted-foreground"
+				>
 					No teams configured.
-				</div>
+				</Stack>
 			{:else if visibleTeams.length === 0}
-				<div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+				<Stack
+					gap="none"
+					fill
+					align="center"
+					justify="center"
+					class="p-6 text-sm text-muted-foreground"
+				>
 					No teams match “{search}”.
-				</div>
+				</Stack>
 			{:else}
 				<SvelteFlow
 					nodes={[...nodes]}
@@ -200,7 +210,7 @@
 					<Controls />
 				</SvelteFlow>
 			{/if}
-		</div>
+		</Bound>
 
 		{#if selectedTeam !== null && editor !== null}
 			{#key selectedTeam.id}
@@ -214,8 +224,8 @@
 				/>
 			{/key}
 		{/if}
-	</div>
-</div>
+	</Inline>
+</Stack>
 
 <Dialog.Root
 	open={createOpen}
@@ -223,7 +233,7 @@
 		if (!open && !createPending) createOpen = false;
 	}}
 >
-	<Dialog.Content class="w-[min(28rem,calc(100vw-2rem))]">
+	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
 			<Dialog.Title>New team</Dialog.Title>
 			<Dialog.Description>

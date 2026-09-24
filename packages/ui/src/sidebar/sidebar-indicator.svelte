@@ -178,12 +178,17 @@
 
 <div
 	bind:this={ref}
-	class={cn('pointer-events-none absolute inset-y-0 z-30', className)}
+	class={cn(
+		// repository-health:allow UI19 -- the active-item indicator lane is offset by a measured `left`/`right` style; Imposter's offsets are fixed none–md steps, never a measured pixel one
+		'pointer-events-none absolute inset-y-0 z-30',
+		className
+	)}
 	style={positionStyle}
 	{...restProps}
 >
 	<div
 		class={cn(
+			// repository-health:allow UI19 -- the highlight is moved by a measured translateY/height transform on every navigation; an animated measured offset is not one of Imposter's placements, and its placement translate would fight the transform
 			'absolute left-0 top-0 rounded-lg bg-brand transition-[transform,height] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform',
 			width
 		)}

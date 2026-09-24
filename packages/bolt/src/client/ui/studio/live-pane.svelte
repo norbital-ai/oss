@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import BundleLogs from './bundle-logs.svelte';
 	import ManifestPane from './manifest-pane.svelte';
@@ -75,7 +75,7 @@
 {:else}
 	<Stack gap="none" fill class="min-h-0">
 		<Stack gap="sm" shrink={false} class="border-b border-border/60 px-4 py-3 sm:px-6">
-			<Inline align="start" gap="sm" class="flex-wrap">
+			<Cluster align="start" gap="sm">
 				<Stack gap="xs" grow class="min-w-0">
 					<Cluster gap="xs">
 						<h2 class="truncate font-mono text-sm font-semibold text-foreground">
@@ -107,7 +107,7 @@
 					<Icon icon="lucide:history" class="size-3.5" />
 					{t('bolt.studio.restore')}
 				</Button>
-			</Inline>
+			</Cluster>
 			<Tabs
 				value={liveView}
 				onValueChange={(next) => {

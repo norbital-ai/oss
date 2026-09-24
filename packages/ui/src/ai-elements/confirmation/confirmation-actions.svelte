@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -25,11 +26,16 @@
 </script>
 
 {#if shouldShow}
-	<div
-		bind:this={ref}
-		class={cn('flex items-center justify-end gap-2 self-end', className)}
+	<Inline
+		gap="sm"
+		justify="end"
+		class={cn('self-end', className)}
 		{...restProps}
+		{@attach (node: HTMLDivElement) => {
+			ref = node;
+			return () => (ref = null);
+		}}
 	>
 		{@render children?.()}
-	</div>
+	</Inline>
 {/if}

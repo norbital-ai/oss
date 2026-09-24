@@ -1,12 +1,28 @@
-import type { HTMLAttributes } from 'svelte/elements';
+import type {
+	HTMLAnchorAttributes,
+	HTMLAttributes,
+	HTMLButtonAttributes,
+	HTMLLabelAttributes
+} from 'svelte/elements';
 
-export type LayoutAttributes = Omit<HTMLAttributes<HTMLDivElement>, 'children'>;
+/**
+ * Attributes a primitive accepts: any element's, plus the few a `button`, `a` or `label` rendering
+ * needs (`as="button"` takes `type` and `disabled`; `as="a"` takes `href`).
+ */
+export type LayoutAttributes = Omit<HTMLAttributes<HTMLDivElement>, 'children'> &
+	Pick<HTMLButtonAttributes, 'type' | 'disabled' | 'form' | 'name' | 'value'> &
+	Pick<HTMLAnchorAttributes, 'href' | 'target' | 'rel' | 'download' | 'hreflang'> &
+	Pick<HTMLLabelAttributes, 'for'> & {
+		/** The rendered element, for measurement or focus. */
+		ref?: HTMLElement | null;
+	};
 /**
  * The elements a layout primitive may render as.
  *
  * The list is a whitelist of flow and inline *containers*, which is what keeps `as` from becoming a
- * way to render a layout primitive as a heading, a button, or anything else that carries behaviour
- * or typography of its own. Semantic sectioning elements belong here — the point of `as` is to let a
+ * way to render a layout primitive as a heading or anything else that carries typography of its
+ * own. `button`, `a` and `label` are here because a control whose content is laid out is otherwise
+ * a raw flex element or a control wrapping a layout span. Semantic sectioning elements belong here — the point of `as` is to let a
  * region be a `<section>` or an `<article>` without giving up the primitive's layout.
  */
 export type LayoutElement =
@@ -26,7 +42,11 @@ export type LayoutElement =
 	| 'dl'
 	| 'ol'
 	| 'ul'
-	| 'li';
+	| 'li'
+	// Interactive containers: a row, a card or a chip that IS the control, with no wrapper span.
+	| 'button'
+	| 'a'
+	| 'label';
 export type LayoutGap = 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type LayoutPad = Exclude<LayoutGap, 'xl'>;
 
@@ -46,6 +66,16 @@ export const GAP_CLASSES: Record<LayoutGap, string> = {
 	md: 'gap-4',
 	lg: 'gap-6',
 	xl: 'gap-8'
+};
+
+/** The same scale on the block axis alone, for a grid whose rows sit tighter than its columns. */
+export const ROW_GAP_CLASSES: Record<LayoutGap, string> = {
+	none: 'gap-y-0',
+	xs: 'gap-y-1',
+	sm: 'gap-y-2',
+	md: 'gap-y-4',
+	lg: 'gap-y-6',
+	xl: 'gap-y-8'
 };
 
 export type ScrollAxis = 'x' | 'y' | 'both';
@@ -89,6 +119,13 @@ export const INSET_CLASS = 'px-4 py-2 sm:px-6';
  * stepping in a second time.
  */
 export const LAYOUT_INSET_CONTEXT = Symbol('layout.inset');
+/**
+ * Set by every `Scroll` for its subtree: the nearest element that scrolls vertically. An x-only
+ * reel forwards its parent's, so a virtual list in a lane of a horizontal board still finds the
+ * lane.
+ */
+export const SCROLL_PORT_CONTEXT = Symbol('layout.scroll-port');
+export type ScrollPort = { readonly element: HTMLElement | null };
 /** Full-bleed chrome with its own vertical rhythm (`PageHeader`). */
 export const INSET_X_CLASS = 'px-4 sm:px-6';
 /** Chrome that draws its own background and so cannot pad itself (tab list). */

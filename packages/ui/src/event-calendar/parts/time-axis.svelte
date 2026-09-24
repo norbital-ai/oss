@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Imposter } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { generateTimeSlots } from '#lib/event-calendar/utils';
 
@@ -21,16 +22,21 @@
 	const slots = $derived(generateTimeSlots(startHour, endHour, stepMinutes));
 </script>
 
-<div class={cn('sticky left-0 z-10 bg-card select-none', compact ? 'w-10' : 'w-[60px]', className)}>
+<!-- The hour axis stays pinned while the time grid scrolls sideways. -->
+<Imposter
+	position="sticky"
+	placement="start"
+	class={cn('inset-y-auto bg-card select-none', compact ? 'w-10' : 'w-15', className)}
+>
 	{#each slots as slot}
 		<div
 			style="height: {(stepMinutes / 60) * hourHeight}px"
 			class={cn(
-				'flex items-start justify-end pr-2 text-tiny font-mono tabular-nums text-muted-foreground',
+				'pr-2 text-right text-tiny font-mono tabular-nums text-muted-foreground',
 				slots.indexOf(slot) % (60 / stepMinutes) === 0 ? '-mt-[0.5em] leading-none' : 'text-tiny'
 			)}
 		>
 			{slot}
 		</div>
 	{/each}
-</div>
+</Imposter>

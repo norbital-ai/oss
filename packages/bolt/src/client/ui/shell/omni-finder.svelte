@@ -2,6 +2,7 @@
 	import { Schema } from 'effect';
 	import { watch } from 'runed';
 	import * as Dialog from '@norbital-ai/ui/dialog';
+	import { Stack } from '@norbital-ai/ui/layout';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
@@ -484,24 +485,27 @@
 
 <Dialog.Root bind:open {onOpenChange}>
 	<Dialog.Content
-		class="gap-0 p-0 shadow-2xl [&>button]:hidden"
+		class="p-0 shadow-2xl [&>button]:hidden"
 		style="width: min(46rem, calc(100vw - 2rem)); overflow: hidden"
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			queueMicrotask(() => inputElement?.focus());
 		}}
 	>
-		<FinderPalette
-			bind:query
-			bind:inputElement
-			{items}
-			scope={parsed.collection}
-			parsedScope={parsed.scope}
-			placeholder={t('bolt.shell.omniPlaceholder')}
-			ariaLabel={t('bolt.shell.omniTitle')}
-			onPick={handlePick}
-			onQueryInput={(next) => commitQuery(next)}
-			onClearScope={() => commitQuery('#', true)}
-		/>
+		<!-- The palette renders its rows as display:contents; this Stack owns their rhythm, not the dialog grid. -->
+		<Stack gap="none">
+			<FinderPalette
+				bind:query
+				bind:inputElement
+				{items}
+				scope={parsed.collection}
+				parsedScope={parsed.scope}
+				placeholder={t('bolt.shell.omniPlaceholder')}
+				ariaLabel={t('bolt.shell.omniTitle')}
+				onPick={handlePick}
+				onQueryInput={(next) => commitQuery(next)}
+				onClearScope={() => commitQuery('#', true)}
+			/>
+		</Stack>
 	</Dialog.Content>
 </Dialog.Root>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Stack } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -10,12 +11,17 @@
 	}: WithElementRef<HTMLAttributes<HTMLUListElement>, HTMLUListElement> = $props();
 </script>
 
-<ul
-	bind:this={ref}
+<Stack
+	as="ul"
+	gap="xs"
 	data-slot="sidebar-menu"
 	data-sidebar="menu"
-	class={cn('flex w-full min-w-0 flex-col gap-1', className)}
-	{...restProps}
+	class={cn('w-full', className)}
+	{...restProps as HTMLAttributes<HTMLElement>}
+	{@attach (node: HTMLUListElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</ul>
+</Stack>

@@ -5,7 +5,7 @@ principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
 ignore:
-  - '**/packages/ui/src/**'
+  - '**/packages/ui/src/layout/**'
 rule:
   all:
     - kind: svelte:ClassToken

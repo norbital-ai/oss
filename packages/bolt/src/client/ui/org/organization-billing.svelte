@@ -10,7 +10,7 @@
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '@norbital-ai/ui/button';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Bound, Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { MeteredObservation, PeriodEstimate } from './organization-state.js';
 
 	let {
@@ -158,12 +158,15 @@
 						>
 							<Stack gap="sm">
 								<Inline gap="sm" align="center">
-									<span
-										class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
+									<Frame
+										as="span"
+										ratio="square"
+										shrink={false}
+										class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
 										aria-hidden="true"
 									>
 										<IconWrapper name={USAGE_ICONS[meter.kind] ?? 'lucide:gauge'} class="size-4" />
-									</span>
+									</Frame>
 									<p class="text-overline">
 										{USAGE_LABELS[meter.kind] ?? meter.kind}
 									</p>

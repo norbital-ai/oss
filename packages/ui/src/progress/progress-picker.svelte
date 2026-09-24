@@ -9,7 +9,7 @@
 	import Icon from '@iconify/svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import Button, { buttonVariants } from '../button/button.svelte';
-	import { Inline, Stack } from '#lib/layout';
+	import { Imposter, Inline, Stack } from '#lib/layout';
 	import { removeScalarRow, scalarPickerPayload } from '#lib/utils/scalar-picker';
 	import { Number as Number_ } from 'effect';
 
@@ -311,7 +311,7 @@
 	<Popover.Root bind:open={isOpen}>
 		<Popover.Trigger
 			class={cn(
-				'group relative flex h-auto min-h-8 w-full items-center gap-2 rounded-md p-1 pl-2 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
+				'group relative h-auto min-h-8 w-full rounded-md p-1 pl-2 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
 				buttonVariants({ variant: 'outline', class: 'bg-background px-2 shadow-xs' }),
 				className
 			)}
@@ -319,38 +319,47 @@
 			{disabled}
 		>
 			<!-- Trigger Content -->
-			<Icon
-				icon="lucide:trending-up"
-				class={cn('h-4 w-4', hasValidProgress ? 'text-brand' : 'text-muted-foreground')}
-			/>
-			<span
-				class={cn(
-					'truncate text-xs',
-					hasValidProgress ? 'text-foreground' : 'text-muted-foreground'
-				)}
-			>
-				{triggerText}
-			</span>
-			<Icon
-				icon="lucide:chevrons-up-down"
-				class={cn(
-					'ml-auto h-4 w-4 flex-none text-muted-foreground',
-					allowClear && hasValue ? 'group-hover:invisible' : ''
-				)}
-			/>
+			<Inline as="span" gap="sm" class="w-full">
+				<Icon
+					icon="lucide:trending-up"
+					class={cn('h-4 w-4', hasValidProgress ? 'text-brand' : 'text-muted-foreground')}
+				/>
+				<span
+					class={cn(
+						'truncate text-xs',
+						hasValidProgress ? 'text-foreground' : 'text-muted-foreground'
+					)}
+				>
+					{triggerText}
+				</span>
+				<Icon
+					icon="lucide:chevrons-up-down"
+					class={cn(
+						'ml-auto h-4 w-4 flex-none text-muted-foreground',
+						allowClear && hasValue ? 'group-hover:invisible' : ''
+					)}
+				/>
+			</Inline>
 
 			<!-- Clear button -->
 			{#if allowClear && hasValue}
-				<Button
-					size="icon"
-					variant="ghost"
-					class="invisible absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 rounded-full p-0 group-hover:visible focus:visible"
-					onclick={handleClear}
-					aria-label={t('dataRenderer.clearSelection')}
-					tabindex={-1}
+				<Imposter
+					placement="center-end"
+					offset="xs"
+					layer="under"
+					class="pointer-events-none size-6"
 				>
-					<Icon icon="lucide:x" class="h-4 w-4" />
-				</Button>
+					<Button
+						size="icon"
+						variant="ghost"
+						class="pointer-events-auto invisible h-6 w-6 rounded-full p-0 group-hover:visible focus:visible"
+						onclick={handleClear}
+						aria-label={t('dataRenderer.clearSelection')}
+						tabindex={-1}
+					>
+						<Icon icon="lucide:x" class="h-4 w-4" />
+					</Button>
+				</Imposter>
 			{/if}
 		</Popover.Trigger>
 
@@ -364,9 +373,11 @@
 						<p class="text-sm text-muted-foreground">
 							{t('misc.addFirstProgressHint')}
 						</p>
-						<Button variant="outline" onclick={addProgress} class="gap-2 border-dashed" {disabled}>
-							<Icon icon="lucide:plus" class="h-4 w-4" />
-							{t('misc.addFirstProgress')}
+						<Button variant="outline" onclick={addProgress} class="border-dashed" {disabled}>
+							<Inline as="span" gap="sm">
+								<Icon icon="lucide:plus" class="h-4 w-4" />
+								{t('misc.addFirstProgress')}
+							</Inline>
 						</Button>
 					</Stack>
 				{:else}
@@ -376,7 +387,7 @@
 							{@const entryState = getEntryState(progress)}
 							<Inline gap="md">
 								<!-- Visual indicator for entry state -->
-								<div class="flex shrink-0">
+								<Inline gap="none" shrink={false}>
 									{#if entryState === 'valid'}
 										<div
 											class="h-2 w-2 rounded-full bg-success"
@@ -388,7 +399,7 @@
 											title={t('misc.progressEmpty')}
 										></div>
 									{/if}
-								</div>
+								</Inline>
 
 								<!-- Progress Input -->
 								<Inline gap="sm" grow>
@@ -439,11 +450,13 @@
 						<Button
 							variant="outline"
 							onclick={addProgress}
-							class="w-full gap-2 border-dashed text-muted-foreground hover:text-foreground"
+							class="w-full border-dashed text-muted-foreground hover:text-foreground"
 							{disabled}
 						>
-							<Icon icon="lucide:plus" class="h-4 w-4" />
-							{t('misc.addProgress')}
+							<Inline as="span" gap="sm">
+								<Icon icon="lucide:plus" class="h-4 w-4" />
+								{t('misc.addProgress')}
+							</Inline>
 						</Button>
 					</Stack>
 				{/if}

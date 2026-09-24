@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Imposter } from '#lib/layout';
 	import { useResizeObserver, watch } from 'runed';
 	import type { Snippet } from 'svelte';
 	import { computeDocTocTrackBounds } from '#lib/doc-toc/anchor-observer';
@@ -47,18 +48,15 @@
 
 <div class="relative min-h-0">
 	{#if trackBounds}
-		<div
-			class="pointer-events-none absolute inset-y-0 inset-s-0 w-px bg-primary transition-[clip-path] duration-150 ease-out"
-			style:--track-top="{trackBounds.top}px"
-			style:--track-bottom="{trackBounds.bottom}px"
-			style:clip-path={TRACK_CLIP_PATH}
+		<Imposter
+			placement="start"
+			layer="under"
+			class="pointer-events-none inset-s-0 w-px bg-primary transition-[clip-path] duration-150 ease-out"
+			style="--track-top: {trackBounds.top}px; --track-bottom: {trackBounds.bottom}px; clip-path: {TRACK_CLIP_PATH}"
 			aria-hidden="true"
-		></div>
+		/>
 	{/if}
-	<div
-		bind:this={containerElement}
-		class={cn('relative flex flex-col border-s border-foreground/10', className)}
-	>
+	<div bind:this={containerElement} class={cn('relative border-s border-foreground/10', className)}>
 		{@render children()}
 	</div>
 </div>

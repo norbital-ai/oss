@@ -15,6 +15,12 @@
 		grow?: boolean;
 		/** Allow this region to shrink when its parent is constrained. */
 		shrink?: boolean;
+		/**
+		 * Centre the body's content in the space between `top` and `bottom` — Every Layout's Cover
+		 * principal: an empty state, a sign-in card, a splash. Without it the body is a scroll owner's
+		 * slot and starts at the top.
+		 */
+		center?: boolean;
 		top?: Snippet;
 		bottom?: Snippet;
 		children: Snippet;
@@ -27,10 +33,12 @@
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		gap = 'md',
 		pad = 'none',
 		grow = false,
 		shrink = true,
+		center = false,
 		top,
 		bottom,
 		class: className,
@@ -59,13 +67,15 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
-		className,
 		'grid h-full max-h-full min-h-0 min-w-0 overflow-clip',
 		GAP_CLASSES[gap],
 		PAD_CLASSES[pad],
 		grow && 'flex-1',
-		!shrink && 'shrink-0'
+		!shrink && 'shrink-0',
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	style={`grid-template-rows: ${rowTemplate};${styleProp ? ` ${styleProp}` : ''}`}
 	data-layout="cover"
@@ -75,7 +85,14 @@
 		<!-- Stack above the body so overlapping chrome (e.g. app banner icon) is not painted under. -->
 		<div class="relative z-10 min-w-0 shrink-0">{@render top()}</div>
 	{/if}
-	<div class="min-h-0 min-w-0 overflow-clip">{@render children()}</div>
+	<div
+		class={cn(
+			'min-h-0 min-w-0 overflow-clip',
+			center && 'flex flex-col items-center justify-center'
+		)}
+	>
+		{@render children()}
+	</div>
 	{#if bottom}
 		<div class="min-w-0 shrink-0">{@render bottom()}</div>
 	{/if}

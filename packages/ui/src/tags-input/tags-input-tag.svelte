@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { TagColor } from '#lib/tags-input/types';
 
@@ -38,9 +39,12 @@
 	};
 </script>
 
-<span
+<Inline
+	as="span"
+	gap="xs"
+	shrink={false}
 	class={cn(
-		'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors',
+		'rounded-md border px-2 py-1 text-xs font-medium transition-colors',
 		'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
 		{
 			'border-yellow-700 bg-yellow-100 text-yellow-700 hover:bg-yellow-200': color === 'yellow',
@@ -81,7 +85,7 @@
 				handleDelete();
 			}}
 			class={cn(
-				'ml-1 flex h-3 w-3 items-center justify-center rounded-full transition-colors',
+				'ml-1 h-3 w-3 rounded-full transition-colors',
 				'hover:bg-black/10 focus:bg-black/10 focus:outline-none',
 				{
 					'hover:bg-yellow-800/20 focus:bg-yellow-800/20': color === 'yellow',
@@ -98,20 +102,22 @@
 			)}
 			aria-label={t('misc.removeTag')}
 		>
-			<svg
-				class="h-2 w-2"
-				fill="none"
-				stroke="currentColor"
-				viewBox="0 0 24 24"
-				xmlns="http://www.w3.org/2000/svg"
-			>
-				<path
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					stroke-width="3"
-					d="M6 18L18 6M6 6l12 12"
-				/>
-			</svg>
+			<Inline as="span" gap="none" justify="center" fill>
+				<svg
+					class="h-2 w-2"
+					fill="none"
+					stroke="currentColor"
+					viewBox="0 0 24 24"
+					xmlns="http://www.w3.org/2000/svg"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="3"
+						d="M6 18L18 6M6 6l12 12"
+					/>
+				</svg>
+			</Inline>
 		</button>
 	{/if}
-</span>
+</Inline>

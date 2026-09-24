@@ -22,12 +22,15 @@
 	let { caption, children, class: className, ...restProps }: TimelineImageProps = $props();
 </script>
 
-<Stack gap="sm" class={cn('mt-2', className)} {...restProps}>
-	<div
-		class="relative flex max-h-88 items-center justify-center overflow-hidden rounded-lg bg-muted p-3"
+<Stack gap="sm" class={cn('pt-2', className)} {...restProps}>
+	<Stack
+		gap="none"
+		align="center"
+		justify="center"
+		class="relative max-h-88 overflow-clip rounded-lg bg-muted p-3"
 	>
 		{@render children()}
-	</div>
+	</Stack>
 	{#if caption}
 		<p class="text-meta">{caption}</p>
 	{/if}

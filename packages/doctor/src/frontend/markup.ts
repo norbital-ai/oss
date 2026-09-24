@@ -8,6 +8,8 @@ import { attach, createNode, walk, type Node } from '../model.js';
 const TAG_NAME = /^<([A-Za-z][\w:.-]*)/;
 const CLOSE = /^<\/([A-Za-z][\w:.-]*)>/;
 const ATTR = /([:@A-Za-z_][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([\s\S]*?)\}|(\S+)))?/g;
+/** A quoted literal with no `${…}` inside a `class={…}` expression. */
+const CLASS_LITERAL = /(["'`])((?:(?!\1)[^\\$\n])*)\1/g;
 const INTERPOLATION = /\{(?![:#@/])([\s\S]*?)\}/g;
 const BLOCK = /\{([#:/@][\s\S]*?)\}/g;
 const COMMENT = /<!--([\s\S]*?)-->/g;
@@ -130,14 +132,52 @@ function parseStyleProperties(attribute: Node, original: string, at: number, quo
 	}
 }
 
+/**
+ * The index of the `}` closing the expression whose `{` is at `open`: nested braces, strings and
+ * comments included. The attribute pattern alone stops at the first `}`, which cut
+ * `class={cn(recipe({ v }), 'flex')}` before its literals.
+ */
+function balancedClose(raw: string, open: number): number {
+	let depth = 0;
+	for (let index = open; index < raw.length; index += 1) {
+		const ch = raw[index]!;
+		if (ch === '"' || ch === "'" || ch === '`') {
+			const closeQuote = raw.indexOf(ch, index + 1);
+			if (closeQuote < 0) return -1;
+			index = closeQuote;
+		} else if (ch === '/' && raw[index + 1] === '/') {
+			const lineEnd = raw.indexOf('\n', index);
+			index = lineEnd < 0 ? raw.length : lineEnd;
+		} else if (ch === '/' && raw[index + 1] === '*') {
+			const commentEnd = raw.indexOf('*/', index + 2);
+			index = commentEnd < 0 ? raw.length : commentEnd + 1;
+		} else if (ch === '{') depth += 1;
+		else if (ch === '}' && (depth -= 1) === 0) return index;
+	}
+	return -1;
+}
+
+/** Comments blanked to spaces, so offsets hold and an apostrophe in prose opens no literal. */
+const blankComments = (code: string): string =>
+	code.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (comment) => ' '.repeat(comment.length));
+
 function parseAttributes(element: Node, original: string, start: number, raw: string): void {
 	ATTR.lastIndex = 0;
 	for (let match = ATTR.exec(raw); match !== null; match = ATTR.exec(raw)) {
 		const name = match[1] ?? '';
 		const at = start + match.index;
-		const end = at + match[0].length;
 		const quoted = match[2] ?? match[3];
-		const interp = match[4];
+		let interp = match[4];
+		let end = at + match[0].length;
+		if (interp !== undefined) {
+			const open = raw.indexOf('{', match.index + name.length);
+			const close = balancedClose(raw, open);
+			if (open >= 0 && close > open) {
+				interp = raw.slice(open + 1, close);
+				ATTR.lastIndex = close + 1;
+				end = start + close + 1;
+			}
+		}
 		if (name.startsWith('class:') || name.includes(':')) {
 			parseDirective(element, original, name, at, end);
 			continue;
@@ -153,6 +193,15 @@ function parseAttributes(element: Node, original: string, start: number, raw: st
 		if (name === 'class' && quoted !== undefined) {
 			const valueAt = original.indexOf(quoted, at);
 			parseClassTokens(attribute, original, valueAt >= 0 ? valueAt : at, quoted);
+		}
+		if (name === 'class' && interp !== undefined) {
+			// `class={cn('flex gap-2', open && 'grid')}`: the literals are still class tokens. A
+			// token composed at runtime stays invisible (UI25 reports that shape instead).
+			const interpAt = original.indexOf(`{${interp}`, at) + 1;
+			for (const literal of blankComments(interp).matchAll(CLASS_LITERAL)) {
+				const body = literal[2] ?? '';
+				parseClassTokens(attribute, original, interpAt + (literal.index ?? 0) + 1, body);
+			}
 		}
 		if (name === 'style' && quoted !== undefined) {
 			parseStyleProperties(attribute, original, at, quoted);

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Frame } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import Icon from '@iconify/svelte';
@@ -14,12 +15,17 @@
 	}: WithoutChildren<WithElementRef<HTMLAttributes<HTMLSpanElement>>> = $props();
 </script>
 
-<span
-	bind:this={ref}
+<Frame
+	as="span"
+	ratio="square"
 	aria-hidden="true"
-	class={cn('flex size-9 items-center justify-center', className)}
-	{...restProps}
+	class={cn('size-9', className)}
+	{...restProps as HTMLAttributes<HTMLElement>}
+	{@attach (node: HTMLSpanElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	<Icon icon="lucide:ellipsis" class="size-4" />
 	<span class="sr-only">{t('common.more')}</span>
-</span>
+</Frame>

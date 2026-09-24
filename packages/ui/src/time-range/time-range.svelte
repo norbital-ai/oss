@@ -10,6 +10,7 @@
 
 <script lang="ts" generics="T extends TimeValue = Time">
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { TimeRangeField } from 'bits-ui';
 	import { watch } from 'runed';
@@ -229,110 +230,118 @@
 	onStartValueChange={handleStartValueChange}
 	onEndValueChange={handleEndValueChange}
 	errorMessageId={displayError ? `${startName || endName}-error` : undefined}
-	class={cn('group flex w-full flex-col gap-1.5', className)}
+	class={cn('group w-full', className)}
 	{...restProps}
 >
-	{#if label}
-		<TimeRangeField.Label
-			class={cn(
-				'block text-sm font-medium text-secondary-foreground select-none dark:text-muted-foreground',
-				required && "after:ml-0.5 after:text-red-500 after:content-['*']",
-				disabled && 'cursor-not-allowed opacity-50',
-				labelClass
-			)}
-		>
-			{label}
-		</TimeRangeField.Label>
-	{/if}
-
-	<div
-		class={cn(
-			// Base styles
-			'flex w-full items-center rounded-sm border border-input bg-background px-3 py-2 text-sm tracking-[0.01em] transition-colors select-none',
-			// Focus styles
-			'focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20',
-			// Hover styles
-			'hover:border-input',
-			// Dark mode
-			'dark:border-input dark:bg-input/30 dark:text-foreground dark:focus-within:border-brand-400',
-			// States
-			disabled && 'cursor-not-allowed bg-muted opacity-50 dark:bg-muted',
-			readonly && 'bg-muted dark:bg-muted',
-			displayError && 'border-red-500 focus-within:border-red-500 focus-within:ring-red-500/20',
-			inputClass
-		)}
-	>
-		{#each ['start', 'end'] as const as type (type)}
-			<TimeRangeField.Input {type} name={type === 'start' ? startName : endName}>
-				{#snippet children({ segments })}
-					{#each segments as { part, value }, i (i)}
-						<div class="inline-block select-none">
-							{#if part === 'literal'}
-								<TimeRangeField.Segment
-									{part}
-									class={cn('px-1 text-muted-foreground dark:text-muted-foreground', segmentClass)}
-								>
-									{value}
-								</TimeRangeField.Segment>
-							{:else}
-								{@const isErrorSegment =
-									(type === 'start' && shouldHighlightStart) ||
-									(type === 'end' && hasCustomValidationError)}
-								<TimeRangeField.Segment
-									{part}
-									class={cn(
-										// Base styles
-										'rounded px-1 py-0.5 tabular-nums transition-colors outline-none',
-										// Interactive styles (conditional based on error state)
-										!isErrorSegment && 'hover:bg-muted focus:bg-brand-100 focus:text-brand-900',
-										!isErrorSegment &&
-											'dark:hover:bg-muted dark:focus:bg-brand-900/20 dark:focus:text-brand-300',
-										// Error state highlighting
-										isErrorSegment &&
-											'border border-red-200 bg-destructive/10 text-destructive-foreground hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive-foreground',
-										isErrorSegment &&
-											'dark:border-destructive dark:bg-destructive/30 dark:text-destructive dark:hover:bg-destructive/50 dark:focus:bg-destructive/50',
-										// Empty state
-										'aria-[valuetext=Empty]:text-muted-foreground dark:aria-[valuetext=Empty]:text-muted-foreground',
-										// Invalid state (keep existing invalid styling)
-										'data-invalid:text-destructive dark:data-invalid:text-destructive',
-										// Disabled state
-										disabled && 'cursor-not-allowed',
-										// Custom class
-										segmentClass
-									)}
-								>
-									{value}
-								</TimeRangeField.Segment>
-							{/if}
-						</div>
-					{/each}
-				{/snippet}
-			</TimeRangeField.Input>
-
-			{#if type === 'start'}
-				<div
-					aria-hidden="true"
+	{#snippet child({ props })}
+		<Stack gap="sm" {...props}>
+			{#if label}
+				<TimeRangeField.Label
 					class={cn(
-						'px-2 text-muted-foreground select-none dark:text-muted-foreground',
-						separatorClass
+						'block text-sm font-medium text-secondary-foreground select-none dark:text-muted-foreground',
+						required && "after:ml-0.5 after:text-red-500 after:content-['*']",
+						disabled && 'cursor-not-allowed opacity-50',
+						labelClass
 					)}
 				>
-					{separatorText}
-				</div>
+					{label}
+				</TimeRangeField.Label>
 			{/if}
-		{/each}
-	</div>
 
-	{#if displayError}
-		<p
-			id="{startName || endName}-error"
-			class="text-sm text-destructive dark:text-destructive"
-			role="alert"
-		>
-			{displayError}
-		</p>
-	{/if}
+			<Inline
+				gap="none"
+				class={cn(
+					// Base styles
+					'w-full rounded-sm border border-input bg-background px-3 py-2 text-sm tracking-[0.01em] transition-colors select-none',
+					// Focus styles
+					'focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20',
+					// Hover styles
+					'hover:border-input',
+					// Dark mode
+					'dark:border-input dark:bg-input/30 dark:text-foreground dark:focus-within:border-brand-400',
+					// States
+					disabled && 'cursor-not-allowed bg-muted opacity-50 dark:bg-muted',
+					readonly && 'bg-muted dark:bg-muted',
+					displayError && 'border-red-500 focus-within:border-red-500 focus-within:ring-red-500/20',
+					inputClass
+				)}
+			>
+				{#each ['start', 'end'] as const as type (type)}
+					<TimeRangeField.Input {type} name={type === 'start' ? startName : endName}>
+						{#snippet children({ segments })}
+							{#each segments as { part, value }, i (i)}
+								<div class="inline-block select-none">
+									{#if part === 'literal'}
+										<TimeRangeField.Segment
+											{part}
+											class={cn(
+												'px-1 text-muted-foreground dark:text-muted-foreground',
+												segmentClass
+											)}
+										>
+											{value}
+										</TimeRangeField.Segment>
+									{:else}
+										{@const isErrorSegment =
+											(type === 'start' && shouldHighlightStart) ||
+											(type === 'end' && hasCustomValidationError)}
+										<TimeRangeField.Segment
+											{part}
+											class={cn(
+												// Base styles
+												'rounded px-1 py-0.5 tabular-nums transition-colors outline-none',
+												// Interactive styles (conditional based on error state)
+												!isErrorSegment && 'hover:bg-muted focus:bg-brand-100 focus:text-brand-900',
+												!isErrorSegment &&
+													'dark:hover:bg-muted dark:focus:bg-brand-900/20 dark:focus:text-brand-300',
+												// Error state highlighting
+												isErrorSegment &&
+													'border border-red-200 bg-destructive/10 text-destructive-foreground hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive-foreground',
+												isErrorSegment &&
+													'dark:border-destructive dark:bg-destructive/30 dark:text-destructive dark:hover:bg-destructive/50 dark:focus:bg-destructive/50',
+												// Empty state
+												'aria-[valuetext=Empty]:text-muted-foreground dark:aria-[valuetext=Empty]:text-muted-foreground',
+												// Invalid state (keep existing invalid styling)
+												'data-invalid:text-destructive dark:data-invalid:text-destructive',
+												// Disabled state
+												disabled && 'cursor-not-allowed',
+												// Custom class
+												segmentClass
+											)}
+										>
+											{value}
+										</TimeRangeField.Segment>
+									{/if}
+								</div>
+							{/each}
+						{/snippet}
+					</TimeRangeField.Input>
+
+					{#if type === 'start'}
+						<div
+							aria-hidden="true"
+							class={cn(
+								'px-2 text-muted-foreground select-none dark:text-muted-foreground',
+								separatorClass
+							)}
+						>
+							{separatorText}
+						</div>
+					{/if}
+				{/each}
+			</Inline>
+
+			{#if displayError}
+				<p
+					id="{startName || endName}-error"
+					class="text-sm text-destructive dark:text-destructive"
+					role="alert"
+				>
+					{displayError}
+				</p>
+			{/if}
+		</Stack>
+	{/snippet}
 </TimeRangeField.Root>
 
 <style>

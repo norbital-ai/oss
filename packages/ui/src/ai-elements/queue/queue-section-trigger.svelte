@@ -10,6 +10,7 @@
 
 <script lang="ts">
 	import { CollapsibleTrigger } from '#lib/collapsible';
+	import { Inline } from '#lib/layout';
 
 	let {
 		class: className,
@@ -22,11 +23,13 @@
 <CollapsibleTrigger
 	bind:ref
 	class={cn(
-		'group bg-muted/40 text-muted-foreground hover:bg-muted flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm font-medium transition-colors',
+		'group bg-muted/40 text-muted-foreground hover:bg-muted w-full rounded-md px-3 py-2 text-left text-sm font-medium transition-colors',
 		className
 	)}
 	type="button"
 	{...restProps}
 >
-	{@render children?.()}
+	<Inline as="span" gap="none" justify="between">
+		{@render children?.()}
+	</Inline>
 </CollapsibleTrigger>

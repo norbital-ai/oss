@@ -46,6 +46,7 @@
 
 <script lang="ts" generics="T extends { key?: string }">
 	import { cn } from '#lib/utils';
+	import { Imposter, Inline } from '#lib/layout';
 	import { toError } from '@norbital-ai/std';
 	import { useResizeObserver, watch } from 'runed';
 	import { Effect } from 'effect';
@@ -83,7 +84,6 @@
 	const signature = $derived(entries.map((entry) => entry.id).join('\0'));
 
 	let rootEl = $state<HTMLDivElement | null>(null);
-	let measureEl = $state<HTMLDivElement | null>(null);
 	let layout = $state<Layout<T>>({ visible: [], hidden: [] });
 
 	const shown = $derived(enabled ? layout.visible : entries);
@@ -101,12 +101,12 @@
 			layout = { visible: entries, hidden: [] };
 			return true;
 		}
-		if (!rootEl || !measureEl) return true;
+		if (!rootEl) return true;
 
 		const available = rootEl.clientWidth;
-		const itemNodes = measureEl.querySelectorAll<HTMLElement>('[data-measure-item]');
+		const itemNodes = rootEl.querySelectorAll<HTMLElement>('[data-measure-item]');
 		const widths = [...itemNodes].map((node) => Math.ceil(node.getBoundingClientRect().width));
-		const ellipsisNode = measureEl.querySelector<HTMLElement>('[data-measure-ellipsis]');
+		const ellipsisNode = rootEl.querySelector<HTMLElement>('[data-measure-ellipsis]');
 		const ellipsisWidth = Math.ceil(ellipsisNode?.getBoundingClientRect().width ?? 0);
 
 		const attempts = measureAttempts + 1;
@@ -166,7 +166,7 @@
 	}
 
 	watch(
-		() => [signature, rootEl, measureEl] as const,
+		() => [signature, rootEl] as const,
 		() => scheduleLayout()
 	);
 
@@ -192,35 +192,31 @@
 
 <div
 	bind:this={rootEl}
-	class={cn(
-		'relative flex min-w-0 w-0 max-w-full flex-1 items-center overflow-hidden whitespace-nowrap',
-		cls
-	)}
+	class={cn('relative min-w-0 w-0 max-w-full flex-1 overflow-clip whitespace-nowrap', cls)}
 >
-	<div
-		bind:this={measureEl}
+	<Imposter
+		placement="top-start"
 		aria-hidden="true"
-		class="pointer-events-none invisible absolute flex h-0 overflow-hidden whitespace-nowrap"
-		style:gap="{gap}px"
+		class="pointer-events-none invisible h-0 overflow-clip whitespace-nowrap"
 	>
 		{#each entries as entry (entry.id)}
-			<div data-measure-item class="shrink-0">
+			<div data-measure-item class="inline-block">
 				{@render children(entry.item, entry.index)}
 			</div>
 		{/each}
 		{#if entries.length > 1}
-			<span data-measure-ellipsis class="inline-flex shrink-0">
+			<span data-measure-ellipsis class="inline-block">
 				{@render (ellipsis ?? fallbackEllipsis)(entries.length)}
 			</span>
 		{/if}
-	</div>
+	</Imposter>
 
-	<div class="flex min-w-0 items-center overflow-hidden whitespace-nowrap" style:gap="{gap}px">
+	<Inline gap="none" fill class="overflow-clip whitespace-nowrap" style="gap: {gap}px">
 		{#each shown as entry (entry.id)}
 			<div class="shrink-0">{@render children(entry.item, entry.index)}</div>
 		{/each}
 		{#if hiddenCount > 0}
 			{@render overflowIndicator(hiddenCount)}
 		{/if}
-	</div>
+	</Inline>
 </div>

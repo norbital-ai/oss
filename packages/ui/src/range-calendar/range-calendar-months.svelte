@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Switcher } from '#lib/layout';
 	import type { WithElementRef } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -11,10 +12,8 @@
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
-	class={cn('mt-4 flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4', className)}
-	{...restProps}
->
-	{@render children?.()}
+<div bind:this={ref} class={cn('pt-4', className)} {...restProps}>
+	<Switcher threshold="compact" gap="md">
+		{@render children?.()}
+	</Switcher>
 </div>

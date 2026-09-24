@@ -22,6 +22,7 @@
 	import type { Snippet } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import MatrixCell from './matrix-cell.svelte';
+	import { VirtualList } from '#lib/virtual-list';
 	import {
 		CollectionGrid,
 		ColumnAPI,
@@ -31,7 +32,7 @@
 		type TCreateColumnProps
 	} from '#lib/collection-table/internal';
 	import { collectionTableColumnCanSort } from '#lib/collection-table/collection-table.types';
-	import { Bound, Inline, Scroll, Stack } from '#lib/layout';
+	import { Bound, Imposter, Inline, Scroll, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, renderSnippet } from '#lib/utils';
 	import { decodeNumber } from '@norbital-ai/std/json';
@@ -261,7 +262,7 @@
 				aria-label={t('dataRenderer.removeRow')}
 				tabindex={hovered ? 0 : -1}
 				class={cn(
-					'inline-flex size-8 items-center justify-center rounded-sm text-destructive outline-none hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+					'size-8 rounded-sm text-destructive outline-none hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
 					hovered ? undefined : 'opacity-0'
 				)}
 				onclick={(event) => {
@@ -270,7 +271,9 @@
 					removeRow(row.raw.__matrixRowId);
 				}}
 			>
-				<Icon icon="lucide:trash-2" class="size-4" />
+				<Inline as="span" justify="center" class="size-full">
+					<Icon icon="lucide:trash-2" class="size-4" />
+				</Inline>
 			</button>
 		{/if}
 	{/if}
@@ -285,51 +288,19 @@
 	grow={bounded}
 	class={cn(
 		'matrix-renderer min-h-0 min-w-0 bg-card [container-type:inline-size]',
-		bounded ? 'max-h-[min(70dvh,36rem)] overflow-hidden' : 'max-h-none',
+		bounded ? 'max-h-[min(70dvh,36rem)] overflow-clip' : 'max-h-none',
 		className
 	)}
 	data-data-matrix-surface
 >
-	<div class="matrix-renderer-wide flex min-h-0 min-w-0 flex-1 flex-col">
+	<Stack gap="none" grow class="matrix-renderer-wide">
 		{#if bounded}
-			<Bound size="full" clip>
-				<CollectionGrid
-					class="min-h-0 flex-1"
-					table={tableApi}
-					{disabled}
-					isLoading={false}
-					error=""
-					enableSorting={true}
-					enableColumnReordering={false}
-					enableRowExpansion={false}
-					enableRowReordering={false}
-					borderless={true}
-					stickyRowActions={true}
-					bounded={true}
-					rowActions={gridRowActions}
-					{emptyPlaceholder}
-				/>
-			</Bound>
+			<Bound size="full" clip>{@render grid()}</Bound>
 		{:else}
-			<CollectionGrid
-				class="min-h-0"
-				table={tableApi}
-				{disabled}
-				isLoading={false}
-				error=""
-				enableSorting={true}
-				enableColumnReordering={false}
-				enableRowExpansion={false}
-				enableRowReordering={false}
-				borderless={true}
-				stickyRowActions={true}
-				bounded={false}
-				rowActions={gridRowActions}
-				{emptyPlaceholder}
-			/>
+			{@render grid()}
 		{/if}
-	</div>
-	<div class="matrix-renderer-narrow flex min-h-0 min-w-0 flex-1 flex-col">
+	</Stack>
+	<Stack gap="none" grow class="matrix-renderer-narrow">
 		{#if bounded}
 			<Scroll axis="y" name={t('dataRenderer.matrixRows')} grow>
 				{@render narrowRows()}
@@ -337,7 +308,7 @@
 		{:else}
 			{@render narrowRows()}
 		{/if}
-	</div>
+	</Stack>
 	{#if allowAddRows && createRow}
 		<div class="shrink-0 border-t border-border px-2 py-1">
 			<button
@@ -355,19 +326,47 @@
 	{/if}
 </Stack>
 
+{#snippet grid()}
+	<CollectionGrid
+		class={cn('min-h-0', bounded && 'flex-1')}
+		table={tableApi}
+		{disabled}
+		isLoading={false}
+		error=""
+		enableSorting={true}
+		enableColumnReordering={false}
+		enableRowExpansion={false}
+		enableRowReordering={false}
+		borderless={true}
+		stickyRowActions={true}
+		{bounded}
+		rowActions={gridRowActions}
+		{emptyPlaceholder}
+	/>
+{/snippet}
+
 {#snippet narrowRows()}
 	{#if displayRows.length === 0}
 		{@render emptyPlaceholder()}
 	{:else}
-		<div class="divide-y divide-border">
-			{#each displayRows as tableRow (tableRow.__matrixRowId)}
+		<VirtualList
+			items={displayRows}
+			key={(tableRow) => tableRow.__matrixRowId}
+			estimateSize={columns.length * 56 + 24}
+			// repository-health:allow UI27 -- VirtualList (virtual-list/, not a primitive) renders the list element; Stack `divided` cannot be that element, and `as`/`ref` do not reach inside it
+			class="divide-y divide-border"
+			itemProps={() => ({ class: 'group/matrix-row relative overflow-hidden' })}
+		>
+			{#snippet item(tableRow)}
 				{@const source = resolveSource(tableRow)}
-				<section class="matrix-renderer-narrow-row group relative overflow-hidden">
-					{#if source && showRowActionsColumn}
-						{@const rowDisabled = isRowDisabled?.(source.row, source.index) === true}
-						<div
-							class="absolute inset-y-0 right-0 flex w-16 items-stretch bg-destructive text-destructive-foreground"
-						>
+				{#if source && showRowActionsColumn}
+					{@const rowDisabled = isRowDisabled?.(source.row, source.index) === true}
+					<Imposter
+						placement="end"
+						layer="under"
+						class="w-16 bg-destructive text-destructive-foreground"
+					>
+						<Inline gap="none" align="stretch" fill>
 							{#each extraRowActions ?? [] as action, actionIndex (actionIndex)}
 								{@render action({
 									row: source.row,
@@ -380,67 +379,53 @@
 							{#if rowRemovable(source.row, source.index)}
 								<button
 									type="button"
-									class="flex w-full items-center justify-center outline-none hover:bg-destructive/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+									class="w-full outline-none hover:bg-destructive/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
 									aria-label={t('dataRenderer.removeRow')}
 									onclick={() => removeRow(tableRow.__matrixRowId)}
 								>
-									<Icon icon="lucide:trash-2" class="size-4" />
+									<Inline as="span" justify="center" class="size-full">
+										<Icon icon="lucide:trash-2" class="size-4" />
+									</Inline>
 								</button>
 							{/if}
-						</div>
-					{/if}
-					<Stack
-						gap="sm"
-						class="matrix-renderer-narrow-row-content relative z-10 bg-card px-3 py-3"
-					>
-						{#each columns as column (column.key)}
-							<Stack gap="xs">
-								<p class="text-overline">
-									{column.label}
-								</p>
-								{@render matrixCellEditor(tableRow, column, false)}
-							</Stack>
-						{/each}
-					</Stack>
-				</section>
-			{/each}
-		</div>
+						</Inline>
+					</Imposter>
+				{/if}
+				<!-- Slides aside on hover or focus to reveal the action strip beneath it. -->
+				<Stack
+					gap="sm"
+					class={cn(
+						'relative z-10 bg-card px-3 py-2.5',
+						showRowActionsColumn &&
+							'transition-transform duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] group-focus-within/matrix-row:-translate-x-16 group-hover/matrix-row:-translate-x-16 motion-reduce:transition-none'
+					)}
+				>
+					{#each columns as column (column.key)}
+						<Stack gap="xs">
+							<p class="text-overline">{column.label}</p>
+							{@render matrixCellEditor(tableRow, column, false)}
+						</Stack>
+					{/each}
+				</Stack>
+			{/snippet}
+		</VirtualList>
 	{/if}
 {/snippet}
 
 <style>
-	.matrix-renderer {
-		min-width: 0;
-	}
-
-	.matrix-renderer-narrow {
-		display: none;
-	}
-
-	.matrix-renderer-narrow-row-content {
-		transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
-	}
-
-	.matrix-renderer-narrow-row:hover .matrix-renderer-narrow-row-content,
-	.matrix-renderer-narrow-row:focus-within .matrix-renderer-narrow-row-content {
-		transform: translateX(-4rem);
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.matrix-renderer-narrow-row-content {
-			transition: none;
-		}
-	}
-
 	/* Matrix keeps the grid through sheet widths (~520px). Stacked cards only kick in for
-	   phone-narrow containers — unlike CollectionTable's 48rem list swap. */
-	@container (max-width: 23.999rem) {
-		.matrix-renderer-wide {
+	   phone-narrow containers — unlike CollectionTable's 48rem list swap. The variants are
+	   Stack roots, so the selectors are global, and each is only ever hidden: its Stack keeps
+	   its own display. */
+	@container (min-width: 24rem) {
+		:global(.matrix-renderer-narrow) {
 			display: none;
 		}
+	}
 
-		.matrix-renderer-narrow {
-			display: flex;
+	@container (max-width: 23.999rem) {
+		:global(.matrix-renderer-wide) {
+			display: none;
 		}
 	}
 </style>

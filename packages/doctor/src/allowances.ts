@@ -73,6 +73,29 @@ function allowedAt(lines: ReadonlyArray<string>, line: number, rule: string): bo
 	return false;
 }
 
+/**
+ * The first line of the markup start tag an attribute line belongs to, or undefined.
+ *
+ * Svelte forbids a comment between attributes, so the finding on `class=` inside a multi-line tag
+ * could never carry its own allowance: the one place to write it is above the tag. Walks up over
+ * attribute lines while the tag is still open (no line has ended in `>`).
+ */
+function tagStart(lines: ReadonlyArray<string>, index: number): number | undefined {
+	for (let above = index; above >= 0 && above > index - 40; above -= 1) {
+		const text = (lines[above] ?? '').trim();
+		if (above < index && /(?<!=)>$/.test(text)) return undefined;
+		if (text.startsWith('<') && !text.startsWith('</') && !text.startsWith('<!--'))
+			return above === index ? undefined : above;
+	}
+	return undefined;
+}
+
+function allowedInMarkup(lines: ReadonlyArray<string>, line: number, rule: string): boolean {
+	if (allowedAt(lines, line, rule)) return true;
+	const start = tagStart(lines, line - 1);
+	return start !== undefined && allowedAt(lines, start + 1, rule);
+}
+
 /** Drop every finding a reviewed allowance covers, from whichever tier reported it. */
 export function applyAllowances(
 	root: string,
@@ -106,7 +129,8 @@ export function applyAllowances(
 			if (file === undefined) continue;
 			const lines = linesOf(file);
 			if (lines === undefined) continue;
-			if (allowedAt(lines, line, finding.rule)) return false;
+			const allowed = file.endsWith('.svelte') ? allowedInMarkup : allowedAt;
+			if (allowed(lines, line, finding.rule)) return false;
 		}
 		return true;
 	});

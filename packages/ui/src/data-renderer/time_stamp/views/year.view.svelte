@@ -52,7 +52,7 @@
 				type="button"
 				class={cn(
 					buttonVariants({ variant: 'ghost', size: 'sm' }),
-					'h-8 justify-center text-xs font-normal tabular-nums',
+					'h-8 text-xs font-normal tabular-nums',
 					selectedYear === year && 'bg-primary text-primary-foreground hover:bg-primary/90'
 				)}
 				aria-pressed={selectedYear === year}

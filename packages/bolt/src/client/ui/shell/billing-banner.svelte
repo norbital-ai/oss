@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '@norbital-ai/ui/button';
-	import { Cluster, Inline } from '@norbital-ai/ui/layout';
+	import { Cluster, Imposter, Inline } from '@norbital-ai/ui/layout';
 
 	let {
 		message = '',
@@ -20,17 +20,13 @@
 	let dismissed = $state(false);
 </script>
 
-{#if message && !dismissed}
-	<Inline
-		justify="end"
-		class={fixed
-			? 'pointer-events-none fixed inset-x-4 top-[calc(3.25rem+env(safe-area-inset-top)+1rem)] z-50 sm:inset-x-auto sm:top-6 sm:right-6 sm:w-[min(34rem,calc(100vw-3rem))]'
-			: ''}
-	>
+{#snippet notice()}
+	<Inline justify="end">
 		<Cluster
 			gap="sm"
-			class="pointer-events-auto w-full rounded-lg border border-border bg-card p-3 text-card-foreground shadow-lg {level ===
-			'warning'
+			class="pointer-events-auto w-full rounded-lg border border-border bg-card p-3 text-card-foreground shadow-lg {fixed
+				? 'sm:max-w-[34rem]'
+				: ''} {level === 'warning'
 				? 'border-warning'
 				: level === 'critical'
 					? 'border-destructive'
@@ -63,4 +59,20 @@
 			</Cluster>
 		</Cluster>
 	</Inline>
+{/snippet}
+
+{#if message && !dismissed}
+	{#if fixed}
+		<!-- Viewport-pinned above the workspace chrome. -->
+		<Imposter
+			position="fixed"
+			layer="modal"
+			placement="top"
+			class="pointer-events-none px-4 pt-[calc(3.25rem+env(safe-area-inset-top)+1rem)] sm:px-6 sm:pt-6"
+		>
+			{@render notice()}
+		</Imposter>
+	{:else}
+		{@render notice()}
+	{/if}
 {/if}

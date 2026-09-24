@@ -118,7 +118,8 @@
 	};
 	const destinationAriaLabel = (destination: ManifestDestination, entity: string): string => {
 		if (destination.kind === 'app') return t('bolt.studio.openEntityApp', { entity });
-		if (destination.surface === 'channels') return t('bolt.studio.configureNamedChannel', { entity });
+		if (destination.surface === 'channels')
+			return t('bolt.studio.configureNamedChannel', { entity });
 		if (destination.surface === 'environment')
 			return t('bolt.studio.manageNamedSecret', { entity });
 		return `${destinationLabel(destination)}: ${entity}`;
@@ -192,10 +193,10 @@
 </script>
 
 {#snippet sectionRail()}
-	<Inline
+	<Cluster
 		gap="xs"
 		shrink={false}
-		class="flex-wrap border-b border-border/60 {INSET_CLASS}"
+		class="border-b border-border/60 {INSET_CLASS}"
 		data-testid="studio-manifest-sections"
 	>
 		<Tabs
@@ -210,7 +211,7 @@
 				content: ''
 			}))}
 		/>
-	</Inline>
+	</Cluster>
 {/snippet}
 
 {#snippet panelHeading(branch: ManifestSection, count: number)}
@@ -279,7 +280,12 @@
 
 {#snippet collectionBehaviors(entry: ManifestCollection, workspace: WorkspaceManifest)}
 	<Stack gap="md" class="pl-7">
-		{#each [{ title: t('bolt.studio.writes'), empty: t('bolt.studio.noWrites'), entries: entry.writes ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations.filter((integration) => integration.syncs.some((sync) => sync.collection === entry.name)).map((integration) => ({ name: integration.name, description: integration.syncs.filter((sync) => sync.collection === entry.name).map((sync) => `${sync.direction.replace('_', '-')} · ${sync.source}`).join(', ') })) }] as group (group.title)}
+		{#each [{ title: t('bolt.studio.writes'), empty: t('bolt.studio.noWrites'), entries: entry.writes ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations
+						.filter( (integration) => integration.syncs.some((sync) => sync.collection === entry.name) )
+						.map((integration) => ({ name: integration.name, description: integration.syncs
+								.filter((sync) => sync.collection === entry.name)
+								.map((sync) => `${sync.direction.replace('_', '-')} · ${sync.source}`)
+								.join(', ') })) }] as group (group.title)}
 			<Stack as="section" gap="xs">
 				<h4 class="text-xs font-medium text-foreground">{group.title}</h4>
 				{#if group.entries.length === 0}
@@ -320,9 +326,9 @@
 			{:else if entries.length === 0}
 				{@render emptyBranch(branch, emptySectionLabel(branch.id))}
 			{:else}
-				<Stack gap="none" class="divide-y divide-border/50 border-y border-border/50">
+				<Stack gap="none" divided class="border-y border-border/50">
 					{#each entries as entry (entry.key ?? entry.name)}
-						<Stack as="article" gap="sm" class="py-3 md:flex-row md:items-start md:justify-between">
+						<Cluster as="article" gap="sm" align="start" justify="between" class="py-3">
 							<Inline align="start" gap="sm" grow>
 								{#if entry.image}
 									<img
@@ -367,11 +373,11 @@
 									{/if}
 								</Stack>
 							</Inline>
-							<Cluster gap="sm" shrink={false} class="justify-end md:justify-end">
+							<Cluster gap="sm" justify="end" shrink={false}>
 								{@render destinationAction(entry.destination, entry.name)}
 								{@render sourceAction(entry.sourcePath, entry.name)}
 							</Cluster>
-						</Stack>
+						</Cluster>
 					{/each}
 				</Stack>
 			{/if}
@@ -386,7 +392,7 @@
 			{#if workspace.policies.length === 0}
 				{@render emptyBranch(branch, t('bolt.studio.noPolicies'))}
 			{:else}
-				<Stack gap="none" class="divide-y divide-border/50 border-y border-border/50">
+				<Stack gap="none" divided class="border-y border-border/50">
 					{#each workspace.policies as policy (policy.name)}
 						{@const open = expandedPolicies.includes(policy.name)}
 						{@const regionId = stableId('policy-details', policy.name)}
@@ -395,7 +401,7 @@
 								names.map((capabilityName) => ({ capabilityKind, capabilityName }))
 						)}
 						<Stack as="article" gap="sm" class="py-3">
-							<Inline align="start" gap="sm" class="flex-wrap sm:flex-nowrap">
+							<Cluster align="start" gap="sm">
 								<ProductIcon name="policies" class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 								<Stack gap="xs" grow class="min-w-0">
 									<Cluster gap="xs">
@@ -414,7 +420,7 @@
 										{@render description(policy.description)}
 									{/if}
 								</Stack>
-								<Cluster gap="sm" shrink={false} class="w-full justify-end sm:w-auto">
+								<Cluster gap="sm" justify="end" shrink={false} class="w-full sm:w-auto">
 									{@render destinationAction(policy.destination, policy.name)}
 									{@render sourceAction(policy.sourcePath, policy.name)}
 									<Button
@@ -433,7 +439,7 @@
 										{t(open ? 'bolt.studio.hideDetails' : 'bolt.studio.details')}
 									</Button>
 								</Cluster>
-							</Inline>
+							</Cluster>
 
 							{#if open}
 								<Stack id={regionId} gap="md" class="border-t border-border/50 pt-3">
@@ -442,7 +448,7 @@
 											<h4 class="font-mono text-micro font-semibold text-foreground">
 												{group.collectionName}
 											</h4>
-											<ul class="divide-y divide-border/40">
+											<Stack as="ul" gap="none" divided>
 												{#each group.grants as grant, index (`${grant.action}-${index}`)}
 													<Grid as="li" gap="sm" tracks="5rem 1fr" class="py-2 text-micro">
 														<span class="font-semibold uppercase text-foreground"
@@ -480,7 +486,7 @@
 														</Stack>
 													</Grid>
 												{/each}
-											</ul>
+											</Stack>
 										</Stack>
 									{/each}
 									{#if capabilities.length > 0}

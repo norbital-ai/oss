@@ -30,7 +30,7 @@
 		</p>
 	</Stack>
 {:else}
-	<div class="divide-y">
+	<Stack gap="none" divided>
 		{#each integrations as integration (integration.id)}
 			<Inline align="start" gap="md" class="px-4 py-3">
 				<span class={cn('mt-1.5 size-2 shrink-0 rounded-full', statusClass(integration.state))}
@@ -50,5 +50,5 @@
 				</div>
 			</Inline>
 		{/each}
-	</div>
+	</Stack>
 {/if}

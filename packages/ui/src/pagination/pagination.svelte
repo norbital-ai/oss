@@ -16,7 +16,12 @@
 
 <PaginationPrimitive.Root
 	bind:ref
-	class={cn('mx-auto flex w-full flex-col items-center', className)}
+	class={cn(
+		// repository-health:allow UI6 -- bits-ui owns the pagination root and hands its page model to the children snippet; the element and its column stay the library's
+		// repository-health:allow UI27 -- the column/centring of the same bits-ui root (see UI6 above)
+		'mx-auto flex w-full flex-col items-center',
+		className
+	)}
 	{count}
 	{perPage}
 	{siblingCount}

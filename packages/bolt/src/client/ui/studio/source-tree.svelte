@@ -2,7 +2,7 @@
 	import { Effect } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { FileTree, type FileTreeEntry } from '@norbital-ai/ui/file-tree';
-	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import {
@@ -59,69 +59,73 @@
 	const entryBadge = (entry: FileTreeEntry) => sourceTreeEntryBadge(entry, drafts, sourceFiles);
 </script>
 
-<Stack as="nav" gap="none" fill aria-label={t('bolt.studio.navigator')}>
-	<div class="flex h-full min-h-0 flex-col" data-testid="studio-source-tree">
-		<Inline
-			gap="xs"
-			shrink={false}
-			class="border-b border-border/60 px-3 py-1.5 text-muted-foreground"
+<Stack
+	as="nav"
+	gap="none"
+	fill
+	aria-label={t('bolt.studio.navigator')}
+	data-testid="studio-source-tree"
+>
+	<Inline
+		gap="xs"
+		shrink={false}
+		class="border-b border-border/60 px-3 py-1.5 text-muted-foreground"
+	>
+		<Icon icon="lucide:file-code-2" class="size-3.5 shrink-0" />
+		<span class="shrink-0 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
+			>{t('bolt.studio.source')}</span
 		>
-			<Icon icon="lucide:file-code-2" class="size-3.5 shrink-0" />
-			<span class="shrink-0 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
-				>{t('bolt.studio.source')}</span
+		{#if files.length > 0}
+			<span
+				class="shrink-0 rounded-full bg-muted px-1.5 py-px text-tiny font-semibold tabular-nums"
 			>
-			{#if files.length > 0}
-				<span
-					class="shrink-0 rounded-full bg-muted px-1.5 py-px text-tiny font-semibold tabular-nums"
-				>
-					{files.length}
-				</span>
+				{files.length}
+			</span>
+		{/if}
+		<label class="relative ml-auto min-w-0 flex-1">
+			<Imposter placement="fill" class="pointer-events-none pl-1.5">
+				<Inline fill>
+					<Icon icon="lucide:search" class="size-3 shrink-0 opacity-70" />
+				</Inline>
+			</Imposter>
+			<input
+				type="search"
+				bind:value={searchQuery}
+				aria-label={t('bolt.studio.filterSource')}
+				placeholder={t('bolt.studio.filter')}
+				class="block h-6 w-full min-w-0 rounded-sm border border-border/60 bg-background py-0 pl-6 pr-2 text-tiny text-foreground placeholder:text-muted-foreground"
+			/>
+		</label>
+	</Inline>
+	<Scroll name={t('bolt.studio.source')} layout="stack" gap="none" grow class="min-h-0 py-1">
+		<div class="min-h-0" class:hidden={filtering} aria-hidden={filtering}>
+			{#if browseEntries.length > 0}
+				<FileTree
+					entries={browseEntries}
+					onToggle={toggleDirectory}
+					onSelect={selectEntry}
+					selectedPath={selectedSourcePath}
+					getEntryBadge={entryBadge}
+				/>
+			{:else}
+				<p class="px-3 py-2 text-muted-foreground {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">
+					{t('bolt.studio.noSourceFiles')}
+				</p>
 			{/if}
-			<label class="relative ml-auto flex min-w-0 flex-1 items-center">
-				<Icon
-					icon="lucide:search"
-					class="pointer-events-none left-1.5 size-3 shrink-0 opacity-70"
-					style="position: absolute /* repository-health:allow UI23 -- the search icon pins inside the filter input; no layout primitive expresses icon-in-field placement */"
+		</div>
+		<div class="min-h-0" class:hidden={!filtering} aria-hidden={filtering}>
+			{#if filterEntries.length > 0}
+				<FileTree
+					entries={filterEntries}
+					onSelect={selectEntry}
+					selectedPath={selectedSourcePath}
+					getEntryBadge={entryBadge}
 				/>
-				<input
-					type="search"
-					bind:value={searchQuery}
-					aria-label={t('bolt.studio.filterSource')}
-					placeholder={t('bolt.studio.filter')}
-					class="h-6 w-full min-w-0 rounded-sm border border-border/60 bg-background py-0 pl-6 pr-2 text-tiny text-foreground placeholder:text-muted-foreground"
-				/>
-			</label>
-		</Inline>
-		<Scroll name={t('bolt.studio.source')} layout="stack" gap="none" grow class="min-h-0 py-1">
-			<div class="min-h-0" class:hidden={filtering} aria-hidden={filtering}>
-				{#if browseEntries.length > 0}
-					<FileTree
-						entries={browseEntries}
-						onToggle={toggleDirectory}
-						onSelect={selectEntry}
-						selectedPath={selectedSourcePath}
-						getEntryBadge={entryBadge}
-					/>
-				{:else}
-					<p class="px-3 py-2 text-muted-foreground {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">
-						{t('bolt.studio.noSourceFiles')}
-					</p>
-				{/if}
-			</div>
-			<div class="min-h-0" class:hidden={!filtering} aria-hidden={filtering}>
-				{#if filterEntries.length > 0}
-					<FileTree
-						entries={filterEntries}
-						onSelect={selectEntry}
-						selectedPath={selectedSourcePath}
-						getEntryBadge={entryBadge}
-					/>
-				{:else}
-					<p class="px-3 py-2 text-muted-foreground {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">
-						{t('bolt.studio.noSourceMatches')}
-					</p>
-				{/if}
-			</div>
-		</Scroll>
-	</div>
+			{:else}
+				<p class="px-3 py-2 text-muted-foreground {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">
+					{t('bolt.studio.noSourceMatches')}
+				</p>
+			{/if}
+		</div>
+	</Scroll>
 </Stack>

@@ -32,7 +32,6 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { Tooltip } from '#lib/tooltip';
-	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import type { CollectionFormFieldProps } from '#lib/collection-form/collection-form.types';
 	import CollectionFormFieldHistory from './collection-form-field-history.svelte';
@@ -44,14 +43,14 @@
 		label,
 		description,
 		descriptionExtra,
-		class: className,
 		hidden = false,
 		readonly: readonlyProp,
 		disabled: disabledProp,
 		placeholder,
 		relationOptions,
 		renderer,
-		rendererProps = {}
+		rendererProps = {},
+		...rest
 	}: CollectionFormFieldProps<TFieldName> = $props();
 
 	const context = getCollectionFormFieldContext();
@@ -70,8 +69,9 @@
 </script>
 
 {#if field && !hidden}
-	<div
-		class={cn('flex min-h-0 flex-col gap-2', className)}
+	<Stack
+		gap="sm"
+		{...rest}
 		data-collection-field={name}
 		data-dirty={dirty ? 'true' : undefined}
 		data-invalid={errors.length > 0 ? 'true' : undefined}
@@ -106,20 +106,22 @@
 							{...props}
 							type="button"
 							aria-label={t('form.fieldDescriptionLabel', { label: fieldLabel })}
-							class="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+							class="size-5 shrink-0 rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 						>
-							<Icon icon="lucide:info" class="size-3" aria-hidden="true" />
+							<Inline as="span" justify="center" class="size-full">
+								<Icon icon="lucide:info" class="size-3" aria-hidden="true" />
+							</Inline>
 						</button>
 					{/snippet}
 					{#snippet content()}
-						<div class="px-2.5 py-2 text-left text-xs text-muted-foreground">
+						<Stack gap="sm" class="px-2.5 py-2 text-left text-xs text-muted-foreground">
 							{#if description}
 								<p>{description}</p>
 							{/if}
 							{#if descriptionExtra}
-								<div class="mt-2">{@render descriptionExtra()}</div>
+								<div>{@render descriptionExtra()}</div>
 							{/if}
-						</div>
+						</Stack>
 					{/snippet}
 				</Tooltip>
 			{/if}
@@ -154,5 +156,5 @@
 				{/each}
 			</Stack>
 		{/if}
-	</div>
+	</Stack>
 {/if}

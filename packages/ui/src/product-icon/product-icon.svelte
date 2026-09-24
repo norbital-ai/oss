@@ -21,7 +21,10 @@
 {#if name === 'norbius' || name === 'agent'}
 	<!-- The Agent mark is the Norbius strip itself — the same animated band live surfaces render,
 	     so a listed `product:norbius` means what the workspace means by an agent. -->
-	<NorbiusStrip {size} class={className} />
+	<NorbiusStrip
+		{size}
+		class={/* repository-health:allow UI25 -- pass-through of the caller's class to the animated strip; its tokens are literal at the call site */ className}
+	/>
 {:else}
 	<svg
 		viewBox="0 0 24 24"

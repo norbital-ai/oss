@@ -3,7 +3,7 @@
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import Icon from '@iconify/svelte';
-	import { Stack } from '#lib/layout';
+	import { Frame, Stack } from '#lib/layout';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -29,14 +29,12 @@
 	gap="md"
 	justify="center"
 	align={align === 'left' ? 'start' : 'center'}
-	class={cn('min-h-[400px] p-8', align === 'left' ? 'text-left' : 'text-center', containerClass)}
+	class={cn('p-8', align === 'left' ? 'text-left' : 'text-center', containerClass)}
 >
 	{#if !hideIcon}
-		<div
-			class={cn('flex h-20 w-20 items-center justify-center rounded-full bg-muted', iconWellClass)}
-		>
+		<Frame ratio="square" shrink={false} class={cn('size-20 rounded-full bg-muted', iconWellClass)}>
 			<Icon {icon} class={cn('text-muted-foreground', iconClass)} />
-		</div>
+		</Frame>
 	{/if}
 
 	<Stack gap="sm">

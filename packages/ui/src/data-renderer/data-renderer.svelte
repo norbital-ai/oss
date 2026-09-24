@@ -6,6 +6,7 @@
 	import { Schema } from 'effect';
 	import { getOptionalCollectionClientContext } from '#lib/collection-runtime';
 	import { useI18n } from '#lib/i18n';
+	import { Stack } from '#lib/layout';
 	import DataRendererBuiltin from './data-renderer-builtin.svelte';
 	import DataRendererControl from './data-renderer-control.svelte';
 	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
@@ -27,10 +28,10 @@
 		row,
 		onRowChange,
 		locale,
-		class: className,
 		renderer,
 		rendererProps = {},
-		relationOptions
+		relationOptions,
+		...rest
 	}: DataRendererProps = $props();
 	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 	const effectiveDisabled = $derived(disabled || mode === 'display');
@@ -66,7 +67,7 @@
 	});
 </script>
 
-<DataRendererControl {mode} class={className}>
+<DataRendererControl {mode} {...rest}>
 	{#snippet children()}
 		{#if explicitRenderer}
 			{@const ExplicitRenderer = explicitRenderer}
@@ -124,7 +125,7 @@
 		{:else if customRendererState?.status === 'failed'}
 			<!-- The renderer did not load; the value is still the record's, so it is shown raw with the
 			     failure named beside it rather than hidden behind a placeholder. -->
-			<span class="flex min-w-0 flex-col gap-1">
+			<Stack as="span" gap="xs">
 				<DataRendererBuiltin
 					field={{ ...field, kind: 'json' }}
 					{value}
@@ -142,7 +143,7 @@
 						cause: customRendererState.error.message
 					})}
 				</span>
-			</span>
+			</Stack>
 		{:else}
 			<DataRendererBuiltin
 				{field}

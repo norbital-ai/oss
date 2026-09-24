@@ -31,7 +31,7 @@
 	data-chart={chartId}
 	data-slot="chart"
 	class={cn(
-		'flex aspect-video justify-center overflow-visible text-xs',
+		'aspect-video overflow-visible text-xs',
 		// Overrides
 		//
 		// Stroke around dots/marks when hovering
@@ -59,7 +59,9 @@
 		'[&_.lc-grid-y-radial-circle]:stroke-border [&_.lc-grid-y-radial-line]:stroke-border',
 
 		// Legend adjustments
+		// repository-health:allow UI27 -- restyles layerchart's own legend button markup: layerchart renders it, so no primitive (with or without `as`) can be that element
 		'[&_.lc-legend-swatch-button]:items-center [&_.lc-legend-swatch-button]:gap-1.5',
+		// repository-health:allow UI27 -- restyles layerchart's own legend group markup: layerchart renders it, so no primitive (with or without `as`) can be that element
 		'[&_.lc-legend-swatch-group]:items-center [&_.lc-legend-swatch-group]:gap-4',
 		'[&_.lc-legend-swatch]:size-2.5 [&_.lc-legend-swatch]:rounded-[2px]',
 

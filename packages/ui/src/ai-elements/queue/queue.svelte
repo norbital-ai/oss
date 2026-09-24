@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
+	import { Stack } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -13,13 +14,14 @@
 	let { class: className, children, ref = $bindable(null), ...restProps }: QueueProps = $props();
 </script>
 
-<div
-	bind:this={ref}
-	class={cn(
-		'border-border bg-background flex flex-col gap-2 rounded-xl border px-3 pt-2 pb-2 shadow-xs',
-		className
-	)}
+<Stack
+	gap="sm"
+	class={cn('border-border bg-background rounded-xl border px-3 pt-2 pb-2 shadow-xs', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Stack>

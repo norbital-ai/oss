@@ -5,6 +5,7 @@
 
 <script lang="ts" generics="T extends TimeValue = Time">
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { TimeField, type WithoutChildrenOrChild } from 'bits-ui';
 
@@ -73,7 +74,7 @@
 	errorMessageId={error ? `${name}-error` : undefined}
 	{...restProps}
 >
-	<div class={cn('flex w-full flex-col gap-1.5', className)}>
+	<Stack gap="sm" class={cn('w-full', className)}>
 		{#if label}
 			<TimeField.Label
 				class={cn(
@@ -91,7 +92,7 @@
 			{name}
 			class={cn(
 				// Base styles
-				'flex w-full items-center rounded-sm border border-input bg-background px-3 py-2 text-sm tracking-[0.01em] transition-colors select-none',
+				'w-full rounded-sm border border-input bg-background px-3 py-2 text-sm tracking-[0.01em] transition-colors select-none',
 				// Focus styles
 				'focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20',
 				// Hover styles
@@ -105,40 +106,42 @@
 				inputClass
 			)}
 		>
-			{#snippet children({ segments })}
-				{#each segments as { part, value }, i (i)}
-					<div class="inline-block select-none">
-						{#if part === 'literal'}
-							<TimeField.Segment
-								{part}
-								class={cn('px-1 text-muted-foreground dark:text-muted-foreground', segmentClass)}
-							>
-								{value}
-							</TimeField.Segment>
-						{:else}
-							<TimeField.Segment
-								{part}
-								class={cn(
-									// Base styles
-									'rounded px-1 py-0.5 tabular-nums transition-colors outline-none',
-									// Interactive styles
-									'hover:bg-muted focus:bg-brand-100 focus:text-brand-900',
-									'dark:hover:bg-muted dark:focus:bg-brand-900/20 dark:focus:text-brand-300',
-									// Empty state
-									'aria-[valuetext=Empty]:text-muted-foreground dark:aria-[valuetext=Empty]:text-muted-foreground',
-									// Invalid state
-									'data-invalid:text-destructive dark:data-invalid:text-destructive',
-									// Disabled state
-									disabled && 'cursor-not-allowed',
-									// Custom class
-									segmentClass
-								)}
-							>
-								{value}
-							</TimeField.Segment>
-						{/if}
-					</div>
-				{/each}
+			{#snippet child({ props, segments })}
+				<Inline gap="none" {...props}>
+					{#each segments as { part, value }, i (i)}
+						<div class="inline-block select-none">
+							{#if part === 'literal'}
+								<TimeField.Segment
+									{part}
+									class={cn('px-1 text-muted-foreground dark:text-muted-foreground', segmentClass)}
+								>
+									{value}
+								</TimeField.Segment>
+							{:else}
+								<TimeField.Segment
+									{part}
+									class={cn(
+										// Base styles
+										'rounded px-1 py-0.5 tabular-nums transition-colors outline-none',
+										// Interactive styles
+										'hover:bg-muted focus:bg-brand-100 focus:text-brand-900',
+										'dark:hover:bg-muted dark:focus:bg-brand-900/20 dark:focus:text-brand-300',
+										// Empty state
+										'aria-[valuetext=Empty]:text-muted-foreground dark:aria-[valuetext=Empty]:text-muted-foreground',
+										// Invalid state
+										'data-invalid:text-destructive dark:data-invalid:text-destructive',
+										// Disabled state
+										disabled && 'cursor-not-allowed',
+										// Custom class
+										segmentClass
+									)}
+								>
+									{value}
+								</TimeField.Segment>
+							{/if}
+						</div>
+					{/each}
+				</Inline>
 			{/snippet}
 		</TimeField.Input>
 
@@ -147,7 +150,7 @@
 				{error}
 			</p>
 		{/if}
-	</div>
+	</Stack>
 </TimeField.Root>
 
 <style>

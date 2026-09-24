@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -10,13 +11,17 @@
 	}: WithElementRef<HTMLAttributes<HTMLSpanElement>> = $props();
 </script>
 
-<span
-	bind:this={ref}
+<Inline
+	as="span"
 	class={cn(
-		"flex items-center gap-2 text-sm text-muted-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
+		"text-sm text-muted-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
 		className
 	)}
 	{...restProps}
+	{@attach (node: HTMLElement) => {
+		ref = node as typeof ref;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</span>
+</Inline>

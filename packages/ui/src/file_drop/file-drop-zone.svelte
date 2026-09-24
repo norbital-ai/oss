@@ -6,7 +6,7 @@
 	import { cn, formatFileSize } from '#lib/utils';
 	import { useId } from 'bits-ui';
 	import type { HTMLInputAttributes } from 'svelte/elements';
-	import { Inline, Scroll, Stack } from '#lib/layout';
+	import { Frame, Inline, Scroll, Stack } from '#lib/layout';
 	import { isActiveUploadStage, UPLOAD_STAGE_MESSAGES } from '../file-upload/index.js';
 	import type { IFileUploadClient } from '../file-upload/index.js';
 	import type { FileValue as TFileValue } from '../file-value/index.js';
@@ -198,13 +198,13 @@
 		{#if uploadedFiles.length > 0}
 			{#each uploadedFiles as file (file.url)}
 				<Inline gap="sm" class="rounded border border-border bg-background p-2">
-					<div class="flex h-6 w-6 shrink-0 items-center justify-center">
+					<Frame ratio="square" shrink={false} class="size-6">
 						{#if file.type.startsWith('image/') && file.url}
 							<img src={file.url} alt={file.name} class="h-6 w-6 rounded object-cover" />
 						{:else}
 							<Icon icon={getFileIcon(file.type)} class="h-4 w-4 text-muted-foreground" />
 						{/if}
-					</div>
+					</Frame>
 					<div class="min-w-0 flex-1">
 						<div class="truncate text-xs font-medium text-foreground">{file.name}</div>
 						<div class="text-meta">{formatFileSize(file.size)}</div>
@@ -212,8 +212,8 @@
 					{#if file.metadata}
 						<FileMetadataTooltip
 							metadata={file.metadata}
-							class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-							iconClass="h-3.5 w-3.5"
+							class="h-6 w-6 rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
+							iconClass="mx-auto block h-3.5 w-3.5"
 						/>
 					{/if}
 				</Inline>
@@ -232,7 +232,7 @@
 			for={id}
 			aria-disabled={disabled}
 			class={cn(
-				'relative flex flex-col overflow-hidden rounded-lg border-2 border-dashed transition-colors',
+				'relative block overflow-clip rounded-lg border-2 border-dashed transition-colors',
 				'border-border',
 				isInteractive && 'cursor-pointer hover:border-brand-400 hover:bg-brand-100/30',
 				'aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
@@ -240,32 +240,36 @@
 			)}
 		>
 			{#if !hasFiles}
-				<div class={cn('flex h-full items-center justify-center', isCompact ? 'p-3' : 'p-6')}>
-					<Stack gap="sm" align="center" class="text-center">
-						<Icon icon="lucide:upload" class="h-8 w-8 text-muted-foreground" />
-						<div class="text-sm font-medium text-muted-foreground">
-							{canUpload ? t('misc.dropFilesHere') : t('misc.maximumFilesReached')}
+				<Stack
+					gap="sm"
+					fill
+					align="center"
+					justify="center"
+					class={cn('text-center', isCompact ? 'p-3' : 'p-6')}
+				>
+					<Icon icon="lucide:upload" class="h-8 w-8 text-muted-foreground" />
+					<div class="text-sm font-medium text-muted-foreground">
+						{canUpload ? t('misc.dropFilesHere') : t('misc.maximumFilesReached')}
+					</div>
+					{#if canUpload}
+						<div class="mt-1 text-meta">
+							{#if maxFiles}
+								{t('misc.upToFiles', { count: maxFiles })}
+							{/if}
+							{#if maxFileSize}
+								{maxFiles ? ' • ' : ''}{t('misc.maxSizeEach', {
+									size: formatFileSize(maxFileSize)
+								})}
+							{/if}
+							{#if accept.length > 0}
+								{maxFiles || maxFileSize ? ' • ' : ''}
+								{t('misc.fileTypes', {
+									types: accept.map((type) => type.replace(/^\./, '').toUpperCase()).join(', ')
+								})}
+							{/if}
 						</div>
-						{#if canUpload}
-							<div class="mt-1 text-meta">
-								{#if maxFiles}
-									{t('misc.upToFiles', { count: maxFiles })}
-								{/if}
-								{#if maxFileSize}
-									{maxFiles ? ' • ' : ''}{t('misc.maxSizeEach', {
-										size: formatFileSize(maxFileSize)
-									})}
-								{/if}
-								{#if accept.length > 0}
-									{maxFiles || maxFileSize ? ' • ' : ''}
-									{t('misc.fileTypes', {
-										types: accept.map((type) => type.replace(/^\./, '').toUpperCase()).join(', ')
-									})}
-								{/if}
-							</div>
-						{/if}
-					</Stack>
-				</div>
+					{/if}
+				</Stack>
 			{:else}
 				<Stack gap="none" fill>
 					<Inline gap="sm" justify="between" class="border-b border-border px-3 py-2">
@@ -299,13 +303,13 @@
 								{@const fileUrl = item.result?.url}
 
 								<Inline gap="sm" class="rounded border border-border bg-background p-2">
-									<div class="flex h-8 w-8 shrink-0 items-center justify-center">
+									<Frame ratio="square" shrink={false} class="size-8">
 										{#if fileType.startsWith('image/') && fileUrl}
 											<img src={fileUrl} alt={fileName} class="h-8 w-8 rounded object-cover" />
 										{:else}
 											<Icon icon={getFileIcon(fileType)} class="h-5 w-5 text-muted-foreground" />
 										{/if}
-									</div>
+									</Frame>
 
 									<Stack gap="none" grow class="min-w-0">
 										<div class="truncate text-start text-sm font-medium text-foreground">
@@ -341,8 +345,8 @@
 										{#if item.isUploaded && item.result?.metadata}
 											<FileMetadataTooltip
 												metadata={item.result.metadata}
-												class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-												iconClass="h-3 w-3"
+												class="h-6 w-6 rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
+												iconClass="mx-auto block h-3 w-3"
 												preventDefault
 											/>
 										{/if}
@@ -354,10 +358,10 @@
 													e.preventDefault();
 													retryUpload(item);
 												}}
-												class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
+												class="h-6 w-6 rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
 												title={t('misc.retryUpload')}
 											>
-												<Icon icon="lucide:refresh-cw" class="h-3 w-3" />
+												<Icon icon="lucide:refresh-cw" class="mx-auto block h-3 w-3" />
 											</button>
 										{/if}
 
@@ -369,10 +373,10 @@
 													e.preventDefault();
 													removeFile(item);
 												}}
-												class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+												class="h-6 w-6 rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
 												title={t('misc.removeFile')}
 											>
-												<Icon icon="lucide:x" class="h-3 w-3" />
+												<Icon icon="lucide:x" class="mx-auto block h-3 w-3" />
 											</button>
 										{/if}
 									</Inline>
@@ -390,7 +394,7 @@
 				multiple={!maxFiles || maxFiles > 1}
 				disabled={!canUpload}
 				onchange={handleFileSelect}
-				class="pointer-events-none absolute inset-0 h-full w-full cursor-pointer opacity-0"
+				class="sr-only"
 			/>
 		</label>
 	</Stack>

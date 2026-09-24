@@ -67,8 +67,8 @@
 		hint,
 		actions,
 		tabs,
-		class: className,
-		children
+		children,
+		...rest
 	}: RecordShellProps = $props();
 
 	const hasState = $derived(icon != null || (badge != null && badge !== ''));
@@ -100,14 +100,16 @@
 	{#if badge != null && badge !== ''}
 		<Badge
 			variant="outline"
-			class="shrink-0 gap-1"
+			class="shrink-0"
 			title={hint}
 			aria-label={hint ? `${badge}: ${hint}` : undefined}
 		>
-			{#if icon != null}
-				<Icon {icon} class="size-3 shrink-0" aria-hidden="true" />
-			{/if}
-			{badge}
+			<Inline as="span" gap="xs">
+				{#if icon != null}
+					<Icon {icon} class="size-3 shrink-0" aria-hidden="true" />
+				{/if}
+				{badge}
+			</Inline>
 		</Badge>
 	{:else if icon != null}
 		<Icon {icon} class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -121,7 +123,7 @@
 	carries what the chrome does not, and inside the record sheet the pill moves up into
 	that chrome. Spacing belongs to the parent Stack, never margins on content.
 -->
-<Stack gap="md" class={className}>
+<Stack gap="md" {...rest}>
 	{#if title != null || subtitle != null || (actions && !actionsInHeader) || (hasState && !stateInHeader)}
 		<Inline align="start" justify="between" gap="md">
 			<Inline align="center" gap="sm" class="min-w-0">
@@ -149,7 +151,7 @@
 			No chrome insets here: the tab strip and its panels align flush with the header
 			text above. Tab content must not add its own padding.
 		-->
-		<Tabs animate={false} contentPadding={false} listClass="w-full" config={tabs} />
+		<Tabs animate={false} listClass="w-full" config={tabs} />
 	{:else if children}
 		{@render children()}
 	{/if}

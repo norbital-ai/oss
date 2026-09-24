@@ -5,7 +5,6 @@
 
 	let {
 		name,
-		class: className,
 		...restProps
 	}: {
 		name: string;
@@ -17,7 +16,7 @@
 </script>
 
 {#if productIconName}
-	<ProductIcon name={productIconName} class={className} {...restProps} />
+	<ProductIcon name={productIconName} {...restProps} />
 {:else}
-	<Icon icon={resolved} class={className} {...restProps} />
+	<Icon icon={resolved} {...restProps} />
 {/if}

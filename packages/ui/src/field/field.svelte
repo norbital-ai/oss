@@ -46,7 +46,10 @@
 	role="group"
 	data-slot="field"
 	data-orientation={orientation}
-	class={cn(fieldVariants({ orientation }), className)}
+	class={/* repository-health:allow UI25 -- the field recipe is a tailwind-variants `tv()` whose literal classes live in the module script */ cn(
+		fieldVariants({ orientation }),
+		className
+	)}
 	{...restProps}
 >
 	{@render children?.()}

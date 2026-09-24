@@ -4,7 +4,7 @@
 	import { getErrorMessage } from '@norbital-ai/std';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
-	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Frame, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { readMembershipEditor } from './membership-editor.svelte.js';
 
 	let { record }: { record: Record<string, unknown> | null; close?: () => void } = $props();
@@ -84,11 +84,13 @@
 
 <Stack gap="lg" class="p-5">
 	<Inline gap="md" align="center">
-		<div
-			class="flex size-12 shrink-0 items-center justify-center rounded-full bg-brand/10 text-sm font-bold text-brand"
+		<Frame
+			ratio="square"
+			shrink={false}
+			class="size-12 rounded-full bg-brand/10 text-sm font-bold text-brand"
 		>
 			{initials}
-		</div>
+		</Frame>
 		<Stack gap="xs" class="min-w-0">
 			<p class="truncate text-base font-semibold text-foreground">{name}</p>
 			<p class="truncate text-sm text-muted-foreground">{text('email') ?? 'No email recorded'}</p>

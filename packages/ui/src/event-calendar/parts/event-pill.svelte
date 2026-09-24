@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { CalendarEvent } from '#lib/event-calendar/types';
 
 	let {
@@ -17,7 +18,7 @@
 
 <button
 	class={cn(
-		'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-tiny font-semibold leading-none truncate max-w-full',
+		'px-1.5 py-0.5 rounded-full text-tiny font-semibold leading-none truncate max-w-full',
 		'transition-colors hover:brightness-95 bg-muted/60',
 		className
 	)}
@@ -29,6 +30,8 @@
 		}
 	}}
 >
-	<span class="size-[5px] rounded-full shrink-0" style="background: {accentColor}"></span>
-	<span class="truncate text-foreground">{event.title}</span>
+	<Inline as="span" gap="xs">
+		<span class="size-[5px] rounded-full shrink-0" style="background: {accentColor}"></span>
+		<span class="truncate text-foreground">{event.title}</span>
+	</Inline>
 </button>

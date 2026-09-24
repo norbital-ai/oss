@@ -21,7 +21,7 @@
 	import MentionTreeMenu from './extensions/mention/mention-tree-menu.svelte';
 	import { createSlashCommands, type CommandItem } from './extensions/slash-commands.svelte';
 	import Icon from '@iconify/svelte';
-	import { buttonVariants } from '#lib/button';
+	import { Button, buttonVariants } from '#lib/button';
 	import type { IFileUploadClient } from '#lib/file-upload';
 	import { Markdown } from '@tiptap/markdown';
 	import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
@@ -584,7 +584,7 @@
 {#if !isInput}
 	<Command.Root
 		shouldFilter={false}
-		class="hidden w-[min(30rem,calc(100vw-2rem))] rounded-xl border bg-popover p-1 shadow-deep"
+		class="hidden w-120 max-w-[calc(100vw-2rem)] rounded-xl border bg-popover p-1 shadow-deep"
 		bind:ref={refs.commandMenu}
 		value={String(commandMenu.selectedIndex)}
 		items={commandItems}
@@ -639,9 +639,8 @@
 		'ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:outline-none',
 		{
 			'w-full': type === 'default',
-			'flex h-8 w-full items-center rounded-md border border-input bg-background px-3 text-sm':
-				isInput,
-			'flex w-full rounded-md border border-input bg-background p-2 text-sm': isTextarea,
+			'h-8 w-full rounded-md border border-input bg-background px-3 text-sm': isInput,
+			'w-full rounded-md border border-input bg-background p-2 text-sm': isTextarea,
 			[SCROLL_AXIS_CLASSES.both]: isTextarea,
 			'resize-y': isTextarea && isInteractive,
 			'resize-none': isTextarea && !isInteractive,
@@ -649,7 +648,7 @@
 		},
 		{
 			'h-full': !isInput && heightMode === 'fill',
-			'min-h-[80px]': isTextarea && heightMode === 'auto'
+			'min-h-20': isTextarea && heightMode === 'auto'
 		},
 		className
 	)}
@@ -748,9 +747,9 @@
 		/>
 		<Dialog.Footer>
 			<Dialog.Close>{t('common.cancel')}</Dialog.Close>
-			<button type="button" class={buttonVariants()} onclick={() => applyLink()}>
+			<Button onclick={() => applyLink()}>
 				{t('common.apply')}
-			</button>
+			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
@@ -890,7 +889,7 @@
 		list-style: none;
 	}
 	:global(.rich-text-editor-wrapper ul[data-type='taskList'] li) {
-		display: flex;
+		display: flex; /* repository-health:allow UI24 -- lays out ProseMirror's rendered task item markup: the editor owns those <li> nodes, so no primitive (with or without `as`) can render them */
 		margin: 0.25rem 0;
 	}
 	:global(.rich-text-editor-wrapper ul[data-type='taskList'] label) {

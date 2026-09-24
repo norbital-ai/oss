@@ -4,10 +4,12 @@ severity: error
 principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/layout/**'
 rule:
   all:
     - kind: svelte:ClassToken
-    - regex: '^(?:overflow(?:-[xy])?-(?:auto|scroll))$'
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*overflow(?:-[xy])?-(?:auto|scroll)$'
 examples:
   bad:
     - '<div class="overflow-auto"><p>x</p></div>'

@@ -219,7 +219,6 @@
 		}
 		return reasons;
 	});
-	const updateRestrictedRecordIds = $derived(new Set(updateRestrictionReasonById.keys()));
 	const leadingAccentFor = (recordId: string) =>
 		collectionRecordLeadingAccent(metadataById.get(recordId) ?? []);
 	// Declared lanes are the columns, in model order, even when empty; a lane field with no
@@ -359,7 +358,7 @@
 		fromLane: string;
 		toLane: string;
 	}): void {
-		if (fromLane === toLane || writePending || updateRestrictedRecordIds.has(recordId)) return;
+		if (fromLane === toLane || writePending || updateRestrictionReasonById.has(recordId)) return;
 		const record = recordById.get(recordId);
 		if (!record) return;
 		moveError = '';
@@ -392,7 +391,7 @@
 	);
 </script>
 
-{#snippet autoCardField(name: string, record: Row, className?: string)}
+{#snippet autoCardField(name: string, record: Row, emphasis = false)}
 	{@const fieldConfig = registeredFields.find((candidate) => String(candidate.key) === name)}
 	{#if fieldConfig}
 		<DataRenderer
@@ -400,7 +399,7 @@
 			value={Reflect.get(record, fieldConfig.key)}
 			row={record as Record<string, unknown>}
 			mode="display"
-			class={className}
+			class={emphasis ? 'font-medium' : undefined}
 			renderer={fieldConfig.renderer as FieldRendererComponent | undefined}
 			rendererProps={fieldConfig.rendererProps as Readonly<Record<string, unknown>> | undefined}
 			relationOptions={fieldConfig.relationOptions}
@@ -411,9 +410,9 @@
 {#snippet autoCardSnippet(record: Row)}
 	<Stack gap="xs">
 		{#if autoCard.title.kind === 'field'}
-			{@render autoCardField(autoCard.title.name, record, 'font-medium')}
+			{@render autoCardField(autoCard.title.name, record, true)}
 		{:else}
-			<p class="flex min-h-9 items-center text-sm font-medium">
+			<p class="py-2 text-sm font-medium">
 				{humanize(String(collection))}
 			</p>
 		{/if}
@@ -471,7 +470,7 @@
 <Cover
 	as="div"
 	gap="sm"
-	class="collection-kanban min-h-[24rem]"
+	class="collection-kanban"
 	data-dragging={activeDrag != null}
 	top={kanbanToolbar}
 >
@@ -483,7 +482,7 @@
 		<Grid
 			minimum="compact"
 			gap="md"
-			class="h-full content-start pb-1"
+			class="h-full pb-1"
 			style={`grid-template-columns: repeat(${resolvedColumnCount}, minmax(min(18rem, 100%), 1fr)); grid-template-rows: repeat(${resolvedRowCount}, minmax(0, 1fr));`}
 		>
 			<CollectionKanbanSkeleton
@@ -499,11 +498,9 @@
 					{recordIds}
 					previousLane={groups[index - 1]?.[0]}
 					nextLane={groups[index + 1]?.[0]}
-					movable={true}
 					selectable={effectiveSelectable}
 					selectedRecordIds={visibleSelection}
 					mutationPending={writePending}
-					{updateRestrictedRecordIds}
 					{updateRestrictionReasonById}
 					renderCard={kanbanCard}
 					renderMetadata={kanbanMetadata}

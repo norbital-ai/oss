@@ -12,6 +12,7 @@
 </script>
 
 <script lang="ts">
+	import { Stack } from '#lib/layout';
 	import { setStickToBottomContext } from './stick-to-bottom-context.svelte.js';
 
 	let {
@@ -26,11 +27,16 @@
 	setStickToBottomContext();
 </script>
 
-<div
-	bind:this={ref}
-	class={cn('relative flex h-full flex-col overflow-hidden', className)}
+<Stack
+	gap="none"
+	fill
+	class={cn('relative overflow-clip', className)}
 	role="log"
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Stack>

@@ -14,11 +14,7 @@
 
 <AlertDialogPrimitive.Cancel
 	bind:ref
-	class={cn(
-		buttonVariants({ variant: 'ghost', size: children ? undefined : 'icon' }),
-		'mt-2 sm:mt-0',
-		className
-	)}
+	class={cn(buttonVariants({ variant: 'ghost', size: children ? undefined : 'icon' }), className)}
 	{...restProps}
 >
 	{#if children}

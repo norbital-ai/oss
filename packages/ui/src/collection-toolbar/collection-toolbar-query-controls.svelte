@@ -116,6 +116,7 @@
 			{/snippet}
 		</Popover.Trigger>
 		<!-- Wide enough for a capture form on one line: a chip, two selectors, three numbers, Clear. -->
+		<!-- repository-health:allow UI21 -- popover width on the bits-ui Popover.Content, which floating-ui measures for collision; Bound's sizes are heights and no primitive names a width, so a nested primitive would size the content but not the positioned box -->
 		<Popover.Content align="start" class="w-[min(calc(100vw-1rem),46rem)] p-2">
 			<CollectionSearchCommand
 				bind:this={box}

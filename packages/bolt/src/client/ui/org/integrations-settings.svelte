@@ -2,7 +2,7 @@
 	import { Effect } from 'effect';
 	import type { IntegrationSyncStatus } from '@norbital-ai/bolt-protocol';
 	import { Button } from '@norbital-ai/ui/button';
-	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Cover, Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
 	/**
@@ -33,7 +33,8 @@
 						generation += 1;
 					}),
 					Effect.catch((cause) => {
-						actionError = cause instanceof Error ? cause.message : 'The runtime refused this action.';
+						actionError =
+							cause instanceof Error ? cause.message : 'The runtime refused this action.';
 						return Effect.void;
 					}),
 					Effect.ensuring(Effect.sync(() => (acting = null)))
@@ -64,8 +65,8 @@
 				<h1 class="text-heading">Integrations</h1>
 				<p class="max-w-2xl text-meta">
 					Records this workspace keeps consistent with other systems, declared in
-					<code>src/integrations/</code>. Each sync converges within its bound; a conflict is settled by
-					its declared rule and recorded.
+					<code>src/integrations/</code>. Each sync converges within its bound; a conflict is
+					settled by its declared rule and recorded.
 				</p>
 			</Stack>
 		{/snippet}
@@ -74,13 +75,17 @@
 				<p class="text-sm text-muted-foreground">Reading the integrations…</p>
 			{:else if statusQuery.error !== undefined}
 				<p class="text-sm text-destructive" role="alert">
-					{statusQuery.error instanceof Error ? statusQuery.error.message : 'Unable to read the integrations.'}
+					{statusQuery.error instanceof Error
+						? statusQuery.error.message
+						: 'Unable to read the integrations.'}
 				</p>
 			{:else if syncs.length === 0}
-				<section class="rounded-lg border border-dashed border-border/70 bg-card/20 p-8 text-center">
+				<section
+					class="rounded-lg border border-dashed border-border/70 bg-card/20 p-8 text-center"
+				>
 					<p class="text-sm text-muted-foreground">
-						No integrations declared. Author one in <code>src/integrations/</code> to keep a collection in
-						step with another system.
+						No integrations declared. Author one in <code>src/integrations/</code> to keep a collection
+						in step with another system.
 					</p>
 				</section>
 			{:else}
@@ -88,31 +93,61 @@
 					<p class="text-sm text-destructive" role="alert">{actionError}</p>
 				{/if}
 				{#each integrations as integration (integration)}
-					<Stack as="section" gap="sm" class="rounded-lg border border-border bg-card p-4 shadow-card">
+					<Stack
+						as="section"
+						gap="sm"
+						class="rounded-lg border border-border bg-card p-4 shadow-card"
+					>
 						<p class="font-mono text-sm font-semibold text-foreground">{integration}</p>
 						{#each syncs.filter((sync) => sync.integration === integration) as sync (sync.sync)}
 							<Stack gap="sm" class="border-t pt-3">
-								<Inline gap="sm" align="center" justify="between" class="flex-wrap">
+								<Cluster gap="sm" align="center" justify="between">
 									<p class="text-sm">
 										<span class="font-mono">{sync.collection}</span>
-										<span class="text-meta">· {sync.direction.replace('_', '-')} · {stateLabel(sync)}</span>
+										<span class="text-meta"
+											>· {sync.direction.replace('_', '-')} · {stateLabel(sync)}</span
+										>
 									</p>
-									<Inline gap="xs" class="flex-wrap">
+									<Cluster gap="xs">
 										{#if sync.state === 'unlinked'}
-											<Button size="sm" disabled={acting !== null} onclick={() => act(sync, 'start')}>Start first sync</Button>
+											<Button
+												size="sm"
+												disabled={acting !== null}
+												onclick={() => act(sync, 'start')}>Start first sync</Button
+											>
 										{:else}
-											<Button size="sm" variant="outline" disabled={acting !== null} onclick={() => act(sync, 'reconcile')}>Reconcile now</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={acting !== null}
+												onclick={() => act(sync, 'reconcile')}>Reconcile now</Button
+											>
 										{/if}
 										{#if sync.state === 'paused'}
-											<Button size="sm" variant="outline" disabled={acting !== null} onclick={() => act(sync, 'resume')}>Resume</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={acting !== null}
+												onclick={() => act(sync, 'resume')}>Resume</Button
+											>
 										{:else}
-											<Button size="sm" variant="outline" disabled={acting !== null} onclick={() => act(sync, 'pause')}>Pause</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={acting !== null}
+												onclick={() => act(sync, 'pause')}>Pause</Button
+											>
 										{/if}
 										{#if sync.deadLetters > 0}
-											<Button size="sm" variant="outline" disabled={acting !== null} onclick={() => act(sync, 'retry')}>Retry dead letters</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={acting !== null}
+												onclick={() => act(sync, 'retry')}>Retry dead letters</Button
+											>
 										{/if}
-									</Inline>
-								</Inline>
+									</Cluster>
+								</Cluster>
 								<p class="text-meta">{boundLabel(sync)}</p>
 								<Grid as="dl" gap="sm" minimum="compact" class="text-xs">
 									<Stack gap="xs">
@@ -121,7 +156,9 @@
 									</Stack>
 									<Stack gap="xs">
 										<dt class="font-medium text-foreground">Dead letters</dt>
-										<dd class={sync.deadLetters > 0 ? 'text-destructive' : 'text-muted-foreground'}>{sync.deadLetters}</dd>
+										<dd class={sync.deadLetters > 0 ? 'text-destructive' : 'text-muted-foreground'}>
+											{sync.deadLetters}
+										</dd>
 									</Stack>
 									<Stack gap="xs">
 										<dt class="font-medium text-foreground">Conflicts logged</dt>
@@ -135,13 +172,17 @@
 											Last {report.mode} · {report.finishedAt}
 										</p>
 										<p class="text-muted-foreground">
-											matched {report.matched} · created {report.created} · updated {report.updated} · deleted
+											matched {report.matched} · created {report.created} · updated {report.updated} ·
+											deleted
 											{report.deleted} · pushed {report.pushed} · unmatched {report.unmatched} · rejected
 											{report.rejected} · conflicts {report.conflicts}
 										</p>
 										{#each Object.entries(report.samples) as [kind, samples] (kind)}
 											{#if samples.length > 0}
-												<p class="text-meta"><span class="font-medium">{kind}:</span> {samples.join(', ')}</p>
+												<p class="text-meta">
+													<span class="font-medium">{kind}:</span>
+													{samples.join(', ')}
+												</p>
 											{/if}
 										{/each}
 									</Stack>

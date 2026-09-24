@@ -90,11 +90,11 @@
 	}
 </script>
 
-<header
-	class={cn(
-		'flex items-center justify-between px-4 py-2.5 bg-card border-b border-border',
-		className
-	)}
+<Inline
+	as="header"
+	gap="none"
+	justify="between"
+	class={cn('px-4 py-2.5 bg-card border-b border-border', className)}
 >
 	<Inline gap="md">
 		<Inline gap="xs">
@@ -124,21 +124,19 @@
 		</span>
 	</Inline>
 
-	<div class="flex items-center">
-		<div class="flex border border-border rounded-sm bg-muted/40 p-0.5">
-			{#each views as v}
-				<button
-					class={cn(
-						'px-3 py-1 text-xs font-medium rounded-sm transition-colors',
-						v === view
-							? 'bg-background text-foreground shadow-xs'
-							: 'text-muted-foreground hover:text-foreground'
-					)}
-					onclick={() => onviewchange?.(v)}
-				>
-					{viewLabels[v]}
-				</button>
-			{/each}
-		</div>
-	</div>
-</header>
+	<Inline gap="none" align="stretch" class="border border-border rounded-sm bg-muted/40 p-0.5">
+		{#each views as v}
+			<button
+				class={cn(
+					'px-3 py-1 text-xs font-medium rounded-sm transition-colors',
+					v === view
+						? 'bg-background text-foreground shadow-xs'
+						: 'text-muted-foreground hover:text-foreground'
+				)}
+				onclick={() => onviewchange?.(v)}
+			>
+				{viewLabels[v]}
+			</button>
+		{/each}
+	</Inline>
+</Inline>

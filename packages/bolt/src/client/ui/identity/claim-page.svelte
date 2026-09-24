@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Center, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { getErrorMessage } from '@norbital-ai/std';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
@@ -99,7 +99,7 @@
 <svelte:head><title>{done ? claim.doneTitle : claim.title}</title></svelte:head>
 
 <Scroll as="section" name={kind} inset class="bg-background">
-	<div class="grid min-h-full place-items-center py-10">
+	<Center measure="full" layout="stack" align="center" justify="center" class="min-h-full py-10">
 		<Stack
 			gap="sm"
 			align="center"
@@ -122,5 +122,5 @@
 				<Button href="/" class="mt-1">Open the workspace</Button>
 			{/if}
 		</Stack>
-	</div>
+	</Center>
 </Scroll>

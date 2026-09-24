@@ -8,8 +8,9 @@ export const testChannels = (...names: ReadonlyArray<string>): WorkspaceDefiniti
 	names.map((name) => ({
 		name,
 		transport:
-			(['telegram', 'email', 'inbox', 'http'] as const).find((transport) => name.startsWith(transport)) ??
-			'whatsapp',
+			(['telegram', 'email', 'inbox', 'http'] as const).find((transport) =>
+				name.startsWith(transport)
+			) ?? 'whatsapp',
 		policies: [],
 		outbound: [],
 		events: []

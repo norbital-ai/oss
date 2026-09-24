@@ -1,16 +1,23 @@
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { WithElementRef } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
 		ref = $bindable(null),
-		class: className,
 		children,
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLUListElement>> = $props();
 </script>
 
-<ul bind:this={ref} class={cn('flex flex-row items-center gap-1', className)} {...restProps}>
+<Inline
+	as="ul"
+	gap="xs"
+	{...restProps as HTMLAttributes<HTMLElement>}
+	{@attach (node: HTMLUListElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
+>
 	{@render children?.()}
-</ul>
+</Inline>

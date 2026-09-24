@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
+	import { Stack } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 
 	let {
@@ -10,12 +11,16 @@
 	}: WithElementRef<HTMLAttributes<HTMLElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
+<Stack
+	gap="none"
 	data-slot="sidebar-group"
 	data-sidebar="group"
-	class={cn('relative flex w-full min-w-0 flex-col p-2', className)}
+	class={cn('relative w-full p-2', className)}
 	{...restProps}
+	{@attach (node: HTMLElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Stack>

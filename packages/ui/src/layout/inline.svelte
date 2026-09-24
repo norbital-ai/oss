@@ -13,6 +13,8 @@
 		fill?: boolean;
 		/** Allow this region to shrink when its parent is constrained. */
 		shrink?: boolean;
+		/** A hairline between children — a segmented strip. Pair with `gap="none"`. */
+		divided?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -23,12 +25,14 @@
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		gap = 'sm',
 		align = 'center',
 		justify = 'start',
 		grow = false,
 		fill = false,
 		shrink = true,
+		divided = false,
 		class: className,
 		children,
 		...restProps
@@ -51,15 +55,18 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
-		className,
 		'flex min-h-0 min-w-0 flex-row flex-nowrap',
 		GAP_CLASSES[gap],
 		alignClasses[align],
 		justifyClasses[justify],
 		grow && 'flex-1',
 		fill && 'h-full',
-		!shrink && 'shrink-0'
+		!shrink && 'shrink-0',
+		divided && 'divide-x divide-border',
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	data-layout="inline"
 	{...restProps}

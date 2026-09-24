@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
+	import { Inline } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
 	import type { MentionItem } from './mention-item.js';
@@ -108,15 +109,17 @@
 	}
 </script>
 
-<Badge class="gap-1 rounded-md" variant="outline">
-	<Icon {icon} class="size-3.5 shrink-0 text-muted-foreground" />
-	<span class="font-normal">{displayLabel}</span>
-	<button
-		onclick={removeMentionTag}
-		class="ml-0.5 flex size-3.5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-		title={t('common.remove')}
-		type="button"
-	>
-		<Icon icon="lucide:x" class="size-3" />
-	</button>
+<Badge class="rounded-md" variant="outline">
+	<Inline as="span" gap="xs">
+		<Icon {icon} class="size-3.5 shrink-0 text-muted-foreground" />
+		<span class="font-normal">{displayLabel}</span>
+		<button
+			onclick={removeMentionTag}
+			class="ml-0.5 size-3.5 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
+			title={t('common.remove')}
+			type="button"
+		>
+			<Icon icon="lucide:x" class="mx-auto block size-3" />
+		</button>
+	</Inline>
 </Badge>

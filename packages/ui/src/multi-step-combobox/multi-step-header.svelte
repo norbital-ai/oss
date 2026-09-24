@@ -28,7 +28,7 @@
 	const nextDisabled = $derived(disabled ? false : disabledForwardNavigation);
 </script>
 
-<div class="flex h-11 items-center justify-between border-b px-4">
+<Inline gap="none" justify="between" class="h-11 border-b px-4">
 	<Inline gap="sm">
 		<Button
 			variant="ghost"
@@ -57,4 +57,4 @@
 			<Icon icon="lucide:chevron-right" class="h-4 w-4" />
 		</Button>
 	</Inline>
-</div>
+</Inline>

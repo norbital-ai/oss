@@ -22,7 +22,7 @@
 	}: QueueListProps = $props();
 </script>
 
-<ScrollArea bind:ref class={cn('mt-2 -mb-1', className)} {...restProps}>
+<ScrollArea bind:ref class={cn('-mb-1 pt-2', className)} {...restProps}>
 	<div class="max-h-40 pr-4">
 		<ul>{@render children?.()}</ul>
 	</div>

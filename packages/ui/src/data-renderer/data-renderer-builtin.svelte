@@ -6,6 +6,7 @@
 	import { Combobox } from '#lib/combobox';
 	import { StructuredValue } from '#lib/structured-value';
 	import { useI18n } from '#lib/i18n';
+	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import BooleanRenderer from './boolean/boolean.renderer.svelte';
 	import ChannelsRenderer from './channels/channels.renderer.svelte';
@@ -156,7 +157,7 @@
 	{#if displayedFiles.length === 0}
 		<span class={cn('min-w-0 truncate text-muted-foreground', className)}>{placeholder}</span>
 	{:else}
-		<span class={cn('inline-flex min-w-0 flex-wrap gap-x-2 gap-y-1', className)}>
+		<Cluster as="span" gap="sm" class={className}>
 			{#each displayedFiles as file (file.id)}
 				{#if file.url === null}
 					<span class="truncate">{file.name}</span>
@@ -169,7 +170,7 @@
 					>
 				{/if}
 			{/each}
-		</span>
+		</Cluster>
 	{/if}
 {:else if mode === 'display' && usesStructuredDisplay}
 	<StructuredValue {value} class={cn('min-w-0 w-full', className)} />

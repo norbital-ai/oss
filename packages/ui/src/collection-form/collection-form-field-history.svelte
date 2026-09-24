@@ -126,9 +126,11 @@
 					{...props}
 					type="button"
 					aria-label={t('form.fieldHistoryLabel', { label })}
-					class="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					class="size-5 shrink-0 rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 				>
-					<Icon icon="lucide:history" class="size-3" aria-hidden="true" />
+					<Inline as="span" justify="center" class="size-full">
+						<Icon icon="lucide:history" class="size-3" aria-hidden="true" />
+					</Inline>
 				</button>
 			{/snippet}
 			{#snippet content()}

@@ -28,7 +28,8 @@ export type TabsProps = {
 	class?: string;
 	listClass?: string;
 	listStyle?: string;
-	contentPadding?: boolean;
+	/** Tabs inside a component (a tool row, a form) rather than a page region: never pad. */
+	flush?: boolean;
 	variant?: TabListVariant;
 	semantics?: TabListSemantics;
 	layout?: TabListLayout;

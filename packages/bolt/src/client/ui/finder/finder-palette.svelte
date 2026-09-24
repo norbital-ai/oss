@@ -3,7 +3,7 @@
 	import * as Command from '@norbital-ai/ui/command';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { Inline } from '@norbital-ai/ui/layout';
+	import { Bound, Inline } from '@norbital-ai/ui/layout';
 	import { commandPrefixChar, type CommandScope } from '#lib/client/ui/agent/mention-sources.js';
 	import type { FinderEntity, FinderRow } from '#lib/client/ui/finder/finder-entity.js';
 
@@ -54,7 +54,7 @@
 <div
 	class={showInput
 		? 'contents'
-		: 'overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg'}
+		: 'overflow-clip rounded-xl border border-border bg-popover text-popover-foreground shadow-lg'}
 >
 	{#if scope}
 		<Inline justify="between" gap="sm" class="border-b border-border/60 px-3 py-1.5 text-meta">
@@ -135,8 +135,7 @@
 							<span data-testid="agent-mention-empty" class="truncate text-meta">{row.label}</span>
 						{:else}
 							{#if row.thumbnail}
-								<!-- repository-health:allow UI22 -- this chip clips the row thumbnail image; Bound imposes a named height contract the 1rem chip cannot take -->
-								<span class="size-4 shrink-0 overflow-hidden rounded-sm">
+								<Bound as="span" size="auto" clip class="size-4 shrink-0 rounded-sm">
 									<img
 										src={row.thumbnail}
 										alt=""
@@ -144,7 +143,7 @@
 										loading="lazy"
 										decoding="async"
 									/>
-								</span>
+								</Bound>
 							{:else if row.icon}
 								<IconWrapper name={row.icon} class="size-3.5 shrink-0 text-muted-foreground" />
 							{:else}

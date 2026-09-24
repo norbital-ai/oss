@@ -1,7 +1,8 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { VirtualList } from '@norbital-ai/ui/virtual-list';
 	import AgentContextSegment from './agent-context-segment.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import { projectAgentContextView } from './context-view.js';
@@ -9,6 +10,7 @@
 		diagnostic,
 		diagnosticLanguage,
 		pairToolCalls,
+		rendersInTranscript,
 		type SubagentLink,
 		type SubagentTranscript
 	} from './tool-rows.js';
@@ -43,6 +45,12 @@
 		projectAgentContextView({ messages, runs, ...(plan === undefined ? {} : { activePlan: plan }) })
 	);
 	const tools = $derived(pairToolCalls(messages));
+	const rows = $derived(
+		view.focusMessages.flatMap((message) => {
+			const generating = runs.some((run) => run.id === message.runId && run.status === 'running');
+			return rendersInTranscript(message, { tools, generating }) ? [{ message, generating }] : [];
+		})
+	);
 	const running = $derived(link.pending || task?.status === 'running');
 	const state = $derived(
 		link.failure !== null ? 'failed' : link.pending ? 'starting' : (task?.status ?? 'missing')
@@ -92,20 +100,27 @@
 				parentAttribution
 			/>
 
-			<ol class="m-0 list-none p-0" aria-label={`Child Task ${task.agent_id} active conversation`}>
-				{#each view.focusMessages as message (message.key)}
+			<VirtualList
+				as="ol"
+				class="m-0 list-none p-0"
+				aria-label={`Child Task ${task.agent_id} active conversation`}
+				items={rows}
+				key={(row) => row.message.key}
+				estimateSize={96}
+			>
+				{#snippet item({ message, generating })}
 					<AgentTranscriptItem
 						{message}
 						{tools}
+						{generating}
 						subagent={transcript}
-						generating={runs.some((run) => run.id === message.runId && run.status === 'running')}
 						mode={message.runId === null
 							? null
 							: (runs.find((run) => run.id === message.runId)?.mode ?? null)}
-						parentAttribution={true}
+						parentAttribution
 					/>
-				{/each}
-			</ol>
+				{/snippet}
+			</VirtualList>
 		{:else if link.failure !== null}
 			<p class="m-0 text-xs text-destructive" role="alert" data-subagent-failure>{link.failure}</p>
 		{:else}
@@ -117,8 +132,7 @@
 				Raw call and result
 			</summary>
 			<Stack gap="xs" class="mt-1">
-				<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
-				<div class="max-h-56 overflow-auto rounded-md border bg-background">
+				<Scroll name="Tool call" axis="both" max="compact" class="rounded-md border bg-background">
 					<CodeEditor
 						value={diagnostic(link.raw.params)}
 						language={diagnosticLanguage(link.raw.params)}
@@ -127,10 +141,14 @@
 						minHeight="7rem"
 						class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
 					/>
-				</div>
+				</Scroll>
 				{#if link.raw.result !== undefined}
-					<!-- repository-health:allow UI22 -- same clipped CodeEditor box as the call above -->
-					<div class="max-h-56 overflow-auto rounded-md border bg-background">
+					<Scroll
+						name="Tool result"
+						axis="both"
+						max="compact"
+						class="rounded-md border bg-background"
+					>
 						<CodeEditor
 							value={diagnostic(link.raw.result)}
 							language={diagnosticLanguage(link.raw.result)}
@@ -139,7 +157,7 @@
 							minHeight="7rem"
 							class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
 						/>
-					</div>
+					</Scroll>
 				{/if}
 			</Stack>
 		</details>

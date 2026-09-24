@@ -53,14 +53,14 @@ it('renders reasoning immediately, fills completed parts without replacing the r
 	});
 	try {
 		flushSync();
-		const row = target.querySelector('li');
+		const row = target.querySelector('[data-role]');
 		expect(row?.getAttribute('aria-busy')).toBe('true');
 		expect(target.textContent).toContain('Reasoning…');
 		const details = target.querySelector('details')!;
 		details.open = true;
 		component.update(message('Verified the inputs.', '', [1], 1));
 		flushSync();
-		expect(target.querySelector('li')).toBe(row);
+		expect(target.querySelector('[data-role]')).toBe(row);
 		expect(target.querySelector('details')?.open).toBe(true);
 		expect(target.textContent).toContain('Verified the inputs.');
 		expect(target.textContent).toContain('Writing…');

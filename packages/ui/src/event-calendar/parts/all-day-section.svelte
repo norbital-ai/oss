@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Imposter } from '#lib/layout';
 	import { assignLanes, isSameDay } from '#lib/event-calendar/utils';
 	import type { CalendarEvent, EventRenderContext } from '#lib/event-calendar/types';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -54,12 +55,13 @@
 			{/each}
 
 			{#if maxLanes > LABEL_LANE}
-				<div
+				<Imposter
+					placement="top-start"
 					style="top: {LABEL_LANE * LONE_HEIGHT}px"
-					class="absolute left-2 text-tiny text-muted-foreground font-medium"
+					class="text-tiny text-muted-foreground font-medium"
 				>
 					{t('misc.moreItems', { count: maxLanes - LABEL_LANE })}
-				</div>
+				</Imposter>
 			{/if}
 		</div>
 	</div>

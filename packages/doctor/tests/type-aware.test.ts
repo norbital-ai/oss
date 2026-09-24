@@ -173,3 +173,54 @@ export default defineConfig({ packs: ['norbital'] });
 	const result = await audit({ root });
 	assert.equal(rules(result.findings, 'LOG1'), 0);
 });
+
+test('a layout allowance above a multi-line tag covers its attribute lines, and no other tag', async (context) => {
+	const root = repository('allowance-markup', {
+		'package.json': '{"name":"al","type":"module"}',
+		'doctor.config.ts': `import { defineConfig, layoutPack } from '@norbital-ai/doctor';
+export default defineConfig({ packs: [layoutPack] });
+`,
+		'src/Thing.svelte': `<!-- repository-health:allow UI19 -- the virtualizer places this row at a measured offset -->
+<div
+	role="row"
+	class="absolute"
+></div>
+<div
+	class="sticky"
+></div>
+`
+	});
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+
+	const result = await audit({ root });
+	const found = result.findings.filter((finding) => finding.rule === 'UI19');
+	assert.equal(found.length, 1);
+	assert.match(found[0]?.location ?? '', /^src\/Thing\.svelte:7: /);
+});
+
+test('class literals are read through nested braces and past comments in a class expression', async (context) => {
+	const root = repository('markup-class-expression', {
+		'package.json': '{"name":"cx","type":"module"}',
+		'doctor.config.ts': `import { defineConfig, layoutPack } from '@norbital-ai/doctor';
+export default defineConfig({ packs: [layoutPack] });
+`,
+		'src/Thing.svelte': `<div class={cn(recipe({ size: 'sm' }), 'grid')}></div>
+<div
+	class={cn(
+		// the caller's colour doesn't matter here
+		'flex'
+	)}
+></div>
+`
+	});
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+
+	const result = await audit({ root });
+	assert.deepEqual(
+		result.findings
+			.filter((finding) => finding.rule === 'UI6')
+			.map((finding) => finding.location.split(': ')[0])
+			.sort(),
+		['src/Thing.svelte:1', 'src/Thing.svelte:5']
+	);
+});

@@ -6,6 +6,10 @@
 	export interface GridProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
+		/** Space between rows when it differs from `gap` (a definition list: wide columns, tight rows). */
+		rowGap?: LayoutGap;
+		/** Block-axis placement of every cell. */
+		align?: 'start' | 'center' | 'end' | 'stretch';
 		minimum?: GridMinimum;
 		/**
 		 * Explicit column tracks. When set, this is the grid template (via `style`, not a Tailwind
@@ -20,11 +24,14 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { setContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES } from '#lib/layout/layout.shared';
+	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES, ROW_GAP_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		gap = 'md',
+		rowGap,
+		align = 'stretch',
 		minimum = 'card',
 		tracks,
 		class: className,
@@ -32,6 +39,12 @@
 		...restProps
 	}: GridProps = $props();
 
+	const ALIGN_CLASSES = {
+		start: 'items-start',
+		center: 'items-center',
+		end: 'items-end',
+		stretch: 'items-stretch'
+	} as const;
 	const minimumClasses: Record<GridMinimum, string> = {
 		compact: '[grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))]',
 		card: '[grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr))]',
@@ -45,11 +58,15 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
-		className,
 		'grid min-h-0 min-w-0',
 		GAP_CLASSES[gap],
-		tracks ? null : minimumClasses[minimum]
+		rowGap && ROW_GAP_CLASSES[rowGap],
+		ALIGN_CLASSES[align],
+		tracks ? null : minimumClasses[minimum],
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	style={tracks
 		? `grid-template-columns: ${tracks};${styleProp ? ` ${styleProp}` : ''}`

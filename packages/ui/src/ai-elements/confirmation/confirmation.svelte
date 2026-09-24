@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import { cn, type WithElementRef } from '#lib/utils';
+	import type { WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 	import type { ToolUIPartApproval, ToolUIPartState } from './confirmation-context.svelte.js';
@@ -14,11 +14,11 @@
 
 <script lang="ts">
 	import { Alert } from '#lib/alert';
+	import { Stack } from '#lib/layout';
 	import { setConfirmationContext } from './confirmation-context.svelte.js';
 	import { watch } from 'runed';
 
 	let {
-		class: className,
 		approval,
 		state,
 		children,
@@ -48,7 +48,9 @@
 </script>
 
 {#if shouldRender}
-	<Alert bind:ref class={cn('flex flex-col gap-2', className)} {...restProps}>
-		{@render children?.()}
+	<Alert bind:ref {...restProps}>
+		<Stack gap="sm">
+			{@render children?.()}
+		</Stack>
 	</Alert>
 {/if}

@@ -2,6 +2,7 @@ import { Schema } from 'effect';
 import type { WithElementRef } from 'bits-ui';
 import type { Snippet } from 'svelte';
 import type { HTMLAttributes } from 'svelte/elements';
+import type { ColumnCount, LayoutGap } from '#lib/layout';
 
 // ============================================================================
 // Core Data Types
@@ -72,7 +73,7 @@ export interface CommandStateProps {
 	// Configuration
 	shouldFilter: boolean;
 	filterFn?: FilterFunction;
-	columns?: number;
+	columns?: ColumnCount;
 	onChange?: (value: string) => void;
 }
 
@@ -91,7 +92,7 @@ export interface CommandRootProps extends WithElementRef<HTMLAttributes<HTMLDivE
 	searchValue?: string;
 	shouldFilter?: boolean;
 	filter?: FilterFunction;
-	columns?: number;
+	columns?: ColumnCount;
 	onValueChange?: (value: string) => void;
 	onIndicatorKeydown?: (
 		event: KeyboardEvent,
@@ -102,6 +103,8 @@ export interface CommandRootProps extends WithElementRef<HTMLAttributes<HTMLDivE
 	) => boolean | void;
 	children?: Snippet;
 	disableNavigation?: boolean;
+	/** Space between the input, list and footer. */
+	gap?: LayoutGap;
 }
 
 export interface CommandListProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {

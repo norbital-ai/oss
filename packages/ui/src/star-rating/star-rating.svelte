@@ -1,5 +1,6 @@
 <!-- star-rating.svelte -->
 <script lang="ts">
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { RatingGroup } from 'bits-ui';
 	import type { StarRatingRootProps } from '#lib/star-rating/types';
@@ -40,14 +41,18 @@
 	{hoverPreview}
 	{orientation}
 	{name}
-	class={cn(
-		'group flex w-fit place-items-center gap-1 rounded-md outline-hidden',
-		orientation === 'vertical' && 'flex-col',
-		className
-	)}
+	class={cn('group w-fit rounded-md outline-hidden', className)}
 	{...rest}
 >
-	{#snippet children({ items, value: currentValue, max: maxValue })}
-		{@render children?.({ items, value: currentValue, max: maxValue })}
+	{#snippet child({ props, items, value: currentValue, max: maxValue })}
+		{#if orientation === 'vertical'}
+			<Stack gap="xs" align="center" {...props}>
+				{@render children?.({ items, value: currentValue, max: maxValue })}
+			</Stack>
+		{:else}
+			<Inline gap="xs" {...props}>
+				{@render children?.({ items, value: currentValue, max: maxValue })}
+			</Inline>
+		{/if}
 	{/snippet}
 </RatingGroup.Root>

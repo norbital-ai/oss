@@ -6,7 +6,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Popover, PopoverContent, PopoverTrigger } from '#lib/popover';
-	import { Stack } from '#lib/layout';
+	import { Inline, Stack } from '#lib/layout';
 	import { useI18n } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import MonthGrid from './month-grid.svelte';
@@ -67,19 +67,21 @@
 				data-month-picker
 				data-value={value ?? undefined}
 				class={cn(
-					'w-auto min-w-[10rem] justify-start gap-2 font-normal',
+					'w-auto min-w-40 font-normal',
 					label === null && 'text-muted-foreground',
 					className
 				)}
 			>
-				<Icon icon="lucide:calendar" class="size-4 shrink-0 text-muted-foreground" />
-				<span class="truncate">{label ?? placeholder ?? t('monthPicker.placeholder')}</span>
+				<Inline as="span" gap="sm" grow>
+					<Icon icon="lucide:calendar" class="size-4 shrink-0 text-muted-foreground" />
+					<span class="truncate">{label ?? placeholder ?? t('monthPicker.placeholder')}</span>
+				</Inline>
 			</Button>
 		{/snippet}
 	</PopoverTrigger>
 	<PopoverContent {align} class="w-auto p-3">
 		<Stack gap="sm">
-			<div class="flex items-center justify-between">
+			<Inline gap="none" justify="between">
 				<Button
 					variant="ghost"
 					size="icon"
@@ -99,7 +101,7 @@
 				>
 					<Icon icon="lucide:chevron-right" class="size-4" />
 				</Button>
-			</div>
+			</Inline>
 			<MonthGrid
 				year={viewYear}
 				{today}

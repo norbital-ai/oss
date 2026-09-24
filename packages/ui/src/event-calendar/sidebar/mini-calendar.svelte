@@ -2,7 +2,7 @@
 	import { cn } from '#lib/utils';
 	import { buttonVariants } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline } from '#lib/layout';
+	import { Columns, Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 
 	const { t } = useI18n<UiKeys>();
@@ -110,15 +110,15 @@
 		</button>
 	</Inline>
 
-	<div class="grid grid-cols-7 text-center mb-1">
+	<Columns count={7} collapse="none" gap="none" class="text-center mb-1">
 		{#each weekDays as day}
 			<span class="text-overline py-0.5">
 				{day}
 			</span>
 		{/each}
-	</div>
+	</Columns>
 
-	<div class="grid grid-cols-7">
+	<Columns count={7} collapse="none" gap="none">
 		{#each weeks as week}
 			{#each week as day}
 				{#if day !== null}
@@ -142,5 +142,5 @@
 				{/if}
 			{/each}
 		{/each}
-	</div>
+	</Columns>
 </div>

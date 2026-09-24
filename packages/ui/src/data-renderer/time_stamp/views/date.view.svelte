@@ -14,7 +14,7 @@
 	import { zhCN } from 'date-fns/locale/zh-CN';
 	import { Calendar } from '#lib/calendar';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
+	import { Cluster, Imposter, Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn, parseUtcInstantZoned } from '#lib/utils';
 	import YearView from './year.view.svelte';
@@ -208,8 +208,10 @@
 </script>
 
 {#snippet DateBadge(dateStr: string, removable: boolean = true, size: 'sm' | 'md' = 'sm')}
-	<span
-		class="inline-flex items-center rounded-full bg-brand-100 px-2 py-1 text-xs font-normal text-brand-700 transition-all hover:font-medium"
+	<Inline
+		as="span"
+		gap="none"
+		class="rounded-full bg-brand-100 px-2 py-1 text-xs font-normal text-brand-700 transition-all hover:font-medium"
 		title={relativeTime ? formatDateForDisplay(dateStr) : formatDateRelative(dateStr)}
 	>
 		{getDisplayDate(dateStr)}
@@ -223,7 +225,7 @@
 				<Icon icon="radix-icons:cross-1" class="h-2 w-2" />
 			</button>
 		{/if}
-	</span>
+	</Inline>
 {/snippet}
 
 {#snippet TriggerContent()}
@@ -249,11 +251,13 @@
 					{@render DateBadge(dateStr, false, 'sm')}
 				{/each}
 				{#if selectedDateStrings.length > maxTriggerBadges}
-					<span
-						class="inline-flex items-center rounded-full bg-muted px-2 py-1 text-xs font-normal text-muted-foreground transition-all hover:font-medium"
+					<Inline
+						as="span"
+						gap="none"
+						class="rounded-full bg-muted px-2 py-1 text-xs font-normal text-muted-foreground transition-all hover:font-medium"
 					>
 						{t('misc.moreItems', { count: selectedDateStrings.length - maxTriggerBadges })}
-					</span>
+					</Inline>
 				{/if}
 			</Cluster>
 		{/if}
@@ -335,7 +339,7 @@
 				class={cn(
 					buttonVariants({
 						variant: 'outline',
-						class: 'w-full justify-start gap-2 bg-background shadow-xs'
+						class: 'w-full bg-background shadow-xs'
 					}),
 					readonly && 'shadow-none',
 					borderless && 'border-none shadow-none'
@@ -343,14 +347,19 @@
 				{disabled}
 				aria-readonly={readonly}
 			>
-				{@render TriggerContent()}
+				<Inline as="span" gap="sm" class="w-full">
+					{@render TriggerContent()}
+				</Inline>
 			</Popover.Trigger>
 			{#if allowClear && hasSelection && !cantMutate}
-				<button
+				<Imposter
+					as="button"
 					type="button"
+					placement="center-end"
+					layer="under"
 					class={cn(
 						buttonVariants({ variant: 'outline', size: 'icon' }),
-						'pointer-events-auto invisible absolute top-1/2 right-2 h-6 w-6 shrink-0 -translate-y-1/2 text-muted-foreground group-hover:visible hover:text-destructive'
+						'pointer-events-auto invisible h-6 w-6 shrink-0 text-muted-foreground group-hover:visible hover:text-destructive'
 					)}
 					onclick={(e: MouseEvent) => {
 						e.preventDefault();
@@ -360,7 +369,7 @@
 					aria-label={t('dataRenderer.clearSelection')}
 				>
 					<Icon icon="lucide:x" class="h-3 w-3" />
-				</button>
+				</Imposter>
 			{/if}
 		</div>
 
@@ -396,11 +405,13 @@
 				{@render DateBadge(dateStr, true, 'md')}
 			{/each}
 			{#if selectedDateStrings.length > maxBelowBadges}
-				<span
-					class="inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-normal text-muted-foreground transition-all hover:font-medium"
+				<Inline
+					as="span"
+					gap="none"
+					class="rounded-full bg-muted px-3 py-1 text-xs font-normal text-muted-foreground transition-all hover:font-medium"
 				>
 					{t('misc.moreItems', { count: selectedDateStrings.length - maxBelowBadges })}
-				</span>
+				</Inline>
 			{/if}
 		</Cluster>
 	{/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Frame } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
 	import { ProductIcon, productIconNameFromReference } from '#lib/product-icon';
@@ -73,13 +74,13 @@
 					'relative overflow-visible pr-7'
 				)}
 			>
-				<span class="flex size-6 shrink-0 items-center justify-center">
+				<Frame as="span" ratio="square" shrink={false} class="size-6">
 					{#if productIconName}
 						<ProductIcon name={productIconName} class="size-3.5" />
 					{:else}
 						<Icon icon={item.icon ?? 'lucide:file'} class="size-3.5" />
 					{/if}
-				</span>
+				</Frame>
 				<span
 					data-navigation-label
 					class="min-w-0 flex-1 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">{item.label}</span

@@ -330,9 +330,11 @@
 		{:else if approvalRequest}
 			<Stack gap="md" class="rounded-lg border bg-card p-4">
 				<Inline align="start" gap="md">
-					<div
+					<Inline
+						justify="center"
+						shrink={false}
 						class={cn(
-							'flex size-9 shrink-0 items-center justify-center rounded-full',
+							'size-9 rounded-full',
 							approvalRequest.status === 'APPROVED' && 'bg-success/10 text-success',
 							approvalRequest.status === 'REJECTED' && 'bg-destructive/10 text-destructive',
 							approvalRequest.status === 'CHANGES_REQUESTED' &&
@@ -356,7 +358,7 @@
 							class="size-4"
 							aria-hidden="true"
 						/>
-					</div>
+					</Inline>
 					<Stack gap="xs" grow>
 						<Inline gap="sm" justify="between">
 							<p class="text-sm font-medium">{t('table.approvalRequest')}</p>

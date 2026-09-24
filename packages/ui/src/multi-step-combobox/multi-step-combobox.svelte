@@ -16,7 +16,7 @@
 	} from '#lib/command';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
-	import { Bound, Inline } from '#lib/layout';
+	import { Bound, Imposter, Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import { toError } from '@norbital-ai/std';
@@ -573,27 +573,20 @@
 	selection: SelectionDraft,
 	stepKey: keyof TValueMap,
 	keyIndex: number,
-	separatorClass: string,
-	fallbackClass: string
+	tone: 'badge' | 'complete' | 'partial'
 )}
-	<MultiStepValueLabel
-		{selection}
-		{stepKey}
-		{keyIndex}
-		{separatorClass}
-		{fallbackClass}
-		{stepSeparator}
-		{steps}
-	/>
+	<MultiStepValueLabel {selection} {stepKey} {keyIndex} {tone} {stepSeparator} {steps} />
 {/snippet}
 
 {#snippet selectionBadges(selections: TValueMap[])}
 	<AutoTruncator items={selections} gap={4} class="min-w-0 flex-1 text-xs">
 		{#snippet children(item: TValueMap, selectionIndex: number)}
-			<Badge variant="outline" class="h-5 gap-1 truncate px-2 py-0 text-xs" data-truncate-item>
-				{#each stepKeys as stepKey, keyIndex}
-					{@render stepValueLabel(item, stepKey, keyIndex, 'opacity-50', 'opacity-75')}
-				{/each}
+			<Badge variant="outline" class="h-5 truncate px-2 py-0 text-xs" data-truncate-item>
+				<Inline as="span" gap="xs">
+					{#each stepKeys as stepKey, keyIndex}
+						{@render stepValueLabel(item, stepKey, keyIndex, 'badge')}
+					{/each}
+				</Inline>
 			</Badge>
 		{/snippet}
 		{#snippet ellipsis(hidden: number)}
@@ -608,13 +601,13 @@
 			aria-expanded={open}
 			aria-haspopup="listbox"
 			class={cn(
-				'flex min-h-9 w-full items-center rounded-md border border-input bg-background py-1 pr-2 pl-2',
+				'block min-h-9 w-full rounded-md border border-input bg-background py-1 pr-2 pl-2',
 				'hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset'
 			)}
 			role="combobox"
 			aria-disabled={disabled}
 		>
-			<div class="flex min-w-0 grow items-center">
+			<Inline as="span" gap="none" class="min-h-6.5 w-full">
 				{#if hasDisplaySelections}
 					{#if display}
 						{@render display(value)}
@@ -630,192 +623,195 @@
 						>{multiple ? t('common.buildItemsStepByStep') : t('common.buildItemStepByStep')}</span
 					>
 				{/if}
-			</div>
+			</Inline>
 		</Popover.Trigger>
-		<div
-			class="pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center justify-center"
-		>
-			{#if allowClear && hasDisplaySelections && !disabled}
-				<button
-					type="button"
-					class={cn(
-						buttonVariants({ variant: 'outline' }),
-						'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-meta opacity-0 transition-opacity',
-						'group-hover:opacity-100 group-focus-within:opacity-100'
-					)}
-					onclick={(e) => {
-						e.preventDefault();
-						handleClear(e);
-					}}
-					aria-label={t('common.clearSelection')}
-				>
-					{t('common.clear')}
-				</button>
-			{:else if !hideChevron}
-				<Icon
-					icon="lucide:chevrons-up-down"
-					class="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-50 group-focus-within:opacity-50"
-					aria-hidden="true"
-				/>
-			{/if}
-		</div>
+		<Imposter placement="center-end" offset="xs" class="pointer-events-none">
+			<Inline gap="none" justify="center">
+				{#if allowClear && hasDisplaySelections && !disabled}
+					<button
+						type="button"
+						class={cn(
+							buttonVariants({ variant: 'outline' }),
+							'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-meta opacity-0 transition-opacity',
+							'group-hover:opacity-100 group-focus-within:opacity-100'
+						)}
+						onclick={(e) => {
+							e.preventDefault();
+							handleClear(e);
+						}}
+						aria-label={t('common.clearSelection')}
+					>
+						{t('common.clear')}
+					</button>
+				{:else if !hideChevron}
+					<Icon
+						icon="lucide:chevrons-up-down"
+						class="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-50 group-focus-within:opacity-50"
+						aria-hidden="true"
+					/>
+				{/if}
+			</Inline>
+		</Imposter>
 	</div>
 
 	<Popover.Content
 		onCloseAutoFocus={(e) => e.preventDefault()}
-		class={cn(
-			'overflow-hidden p-0',
-			dropdownClass,
-			showSelectionsSidebar ? 'min-w-[800px]' : 'min-w-[320px]'
-		)}
+		class={cn('p-0', dropdownClass, showSelectionsSidebar ? 'min-w-200' : 'min-w-80')}
 		{sameWidth}
 		{align}
 		sideOffset={4}
 		aria-multiselectable={false}
 		style={`max-height: ${panelHeight}px;`}
 	>
-		<Inline align="stretch" gap="none" style={`height: ${panelHeight}px;`}>
-			{#if showSelectionsSidebar}
-				<MultiStepSelectionSidebar
-					selections={normalizedLocalSelections}
-					{currentSelectionIndex}
-					{multiple}
-					{disabled}
-					ariaLabel={ariaLabelSelectionsEffective}
-					{steps}
-					isComplete={isSelectionComplete}
-					onSelect={selectSelection}
-					onRemove={removeSelectionAt}
-					onAdd={addPartialSelection}
-					{stepValueLabel}
-				/>
-			{/if}
+		<!-- Clips the sidebar and step panes to the popover's corners; uncontained, so the popover sizes to them. -->
+		<Bound size="auto" clip class="rounded-md [container-type:normal]">
+			<Inline align="stretch" gap="none" style={`height: ${panelHeight}px;`}>
+				{#if showSelectionsSidebar}
+					<MultiStepSelectionSidebar
+						selections={normalizedLocalSelections}
+						{currentSelectionIndex}
+						{multiple}
+						{disabled}
+						ariaLabel={ariaLabelSelectionsEffective}
+						{steps}
+						isComplete={isSelectionComplete}
+						onSelect={selectSelection}
+						onRemove={removeSelectionAt}
+						onAdd={addPartialSelection}
+						{stepValueLabel}
+					/>
+				{/if}
 
-			{#if currentSelection && stepKeys.length > 0}
-				<Bound size="full" clip grow>
-					<Command.Root
-						filter={buildCustomFilterFn(filteredOptions)}
-						shouldFilter={false}
-						class="flex h-full flex-col"
-						items={commandItems}
-						onValueChange={handleCommandSelect}
-					>
-						<MultiStepHeader
-							{currentStepIndex}
-							stepCount={stepKeys.length}
-							{isFirstStep}
-							{disabled}
-							{disabledForwardNavigation}
-							onPrevious={goToPreviousStep}
-							onNext={goToNextStep}
-						/>
+				{#if currentSelection && stepKeys.length > 0}
+					<Bound size="full" clip grow>
+						<Command.Root
+							filter={buildCustomFilterFn(filteredOptions)}
+							shouldFilter={false}
+							items={commandItems}
+							onValueChange={handleCommandSelect}
+						>
+							<MultiStepHeader
+								{currentStepIndex}
+								stepCount={stepKeys.length}
+								{isFirstStep}
+								{disabled}
+								{disabledForwardNavigation}
+								onPrevious={goToPreviousStep}
+								onNext={goToNextStep}
+							/>
 
-						<Bound size="full" clip pad="sm" grow>
-							{#if isCustomStep && isCustom(currentStepDef) && currentStepKey}
-								{@render currentStepDef.render({
-									value: currentSelection?.[currentStepKey],
-									onValueChange: (nextValue) => {
-										if (!currentStepKey) return;
-										updateSelection((prev) => ({
-											...prev,
-											[currentStepKey]: nextValue
-										}));
-									},
-									selection: currentSelection ?? {}
-								})}
-							{:else}
-								<div class="relative w-full p-1">
-									<Input
-										type="text"
-										placeholder={t('common.search')}
-										bind:value={searchValue}
-										class="w-full text-sm"
-										tabindex={0}
-										bind:ref={refs.searchInput}
-										aria-label={t('common.searchTree')}
-										{disabled}
-										oninput={handleSearchInput}
-									/>
-									<Icon
-										icon="lucide:search"
-										class="absolute top-1/2 right-3 z-20 -translate-y-1/2 transform text-muted-foreground dark:text-muted-foreground"
-										aria-hidden="true"
-									/>
-								</div>
-								<Command.List
-									bind:ref={refs.listContainer}
-									class="relative w-full bg-transparent p-1"
-									style={`max-height: ${Math.min(maxHeight, panelHeight - 140)}px;`}
-									id="{comboboxId}-listbox"
-									aria-label={ariaLabelListEffective}
-									{itemHeight}
-									{overscan}
-									clientConfig={currentClientConfig}
-									serverConfig={currentServerConfig}
-									infiniteLoading={currentInfiniteLoading}
-								>
-									{#snippet itemSnippet({ item, isSelected })}
-										{@const option = item._option as TOption<
-											TValueMap[keyof TValueMap],
-											{ compact: boolean }
-										>}
-										{@const selected = isOptionSelected(option.value)}
-										<div
-											class={cn(
-												'relative z-10 flex w-full cursor-pointer items-center justify-between rounded-sm px-3 text-left',
-												{
-													'bg-brand-100 text-brand': selected
-												}
-											)}
-											style={`height: ${itemHeight}px;`}
+							<Bound size="full" clip pad="sm" grow>
+								{#if isCustomStep && isCustom(currentStepDef) && currentStepKey}
+									{@render currentStepDef.render({
+										value: currentSelection?.[currentStepKey],
+										onValueChange: (nextValue) => {
+											if (!currentStepKey) return;
+											updateSelection((prev) => ({
+												...prev,
+												[currentStepKey]: nextValue
+											}));
+										},
+										selection: currentSelection ?? {}
+									})}
+								{:else}
+									<div class="relative w-full p-1">
+										<Input
+											type="text"
+											placeholder={t('common.search')}
+											bind:value={searchValue}
+											class="w-full text-sm"
+											tabindex={0}
+											bind:ref={refs.searchInput}
+											aria-label={t('common.searchTree')}
+											{disabled}
+											oninput={handleSearchInput}
+										/>
+										<Imposter
+											placement="center-end"
+											offset="md"
+											class="z-20 leading-none text-muted-foreground"
 										>
-											<Inline gap="sm" grow class="min-w-0 text-xs">
-												<div class="min-w-0 flex-1 px-2">
-													{#if typeof option.label === 'string'}
-														<span
-															class="truncate text-secondary-foreground dark:text-muted-foreground"
-															>{option.label}</span
+											<Icon icon="lucide:search" class="block" aria-hidden="true" />
+										</Imposter>
+									</div>
+									<Command.List
+										bind:ref={refs.listContainer}
+										class="relative w-full bg-transparent p-1"
+										style={`max-height: ${Math.min(maxHeight, panelHeight - 140)}px;`}
+										id="{comboboxId}-listbox"
+										aria-label={ariaLabelListEffective}
+										{itemHeight}
+										{overscan}
+										clientConfig={currentClientConfig}
+										serverConfig={currentServerConfig}
+										infiniteLoading={currentInfiniteLoading}
+									>
+										{#snippet itemSnippet({ item, isSelected })}
+											{@const option = item._option as TOption<
+												TValueMap[keyof TValueMap],
+												{ compact: boolean }
+											>}
+											{@const selected = isOptionSelected(option.value)}
+											<Inline
+												gap="none"
+												justify="between"
+												class={cn('relative z-10 w-full cursor-pointer rounded-sm px-3 text-left', {
+													'bg-brand-100 text-brand': selected
+												})}
+												style={`height: ${itemHeight}px;`}
+											>
+												<Inline gap="sm" grow class="min-w-0 text-xs">
+													<div class="min-w-0 flex-1 px-2">
+														{#if typeof option.label === 'string'}
+															<span
+																class="truncate text-secondary-foreground dark:text-muted-foreground"
+																>{option.label}</span
+															>
+														{:else}
+															{@render option.label(option.value, { compact: false })}
+														{/if}
+													</div>
+												</Inline>
+												{#if selected}
+													<Imposter placement="center-end">
+														<Inline
+															gap="none"
+															justify="center"
+															class="h-4 w-4 rounded-full bg-brand-100 dark:bg-brand-900"
 														>
-													{:else}
-														{@render option.label(option.value, { compact: false })}
-													{/if}
-												</div>
+															<Icon
+																icon="lucide:check"
+																class="h-2.5 w-2.5 text-brand dark:text-brand-400"
+															/>
+														</Inline>
+													</Imposter>
+												{/if}
 											</Inline>
-											{#if selected}
-												<div
-													class="absolute right-2 flex h-4 w-4 items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900"
-												>
-													<Icon
-														icon="lucide:check"
-														class="h-2.5 w-2.5 text-brand dark:text-brand-400"
-													/>
-												</div>
-											{/if}
-										</div>
-									{/snippet}
-									{#snippet placeholderSnippet({ index })}
-										<div class="flex w-full items-center px-3" style={`height: ${itemHeight}px;`}>
-											<div class="h-3 w-32 animate-pulse rounded bg-muted/40"></div>
-										</div>
-									{/snippet}
-									{#if currentIsLoading && filteredOptions.length === 0}
-										<Inline gap="sm" justify="center" class="p-3 text-xs">
-											<Spinner class="h-3 w-3" />
-											{t('common.loading')}
-										</Inline>
-									{:else if commandItems.length === 0}
-										<div class="p-3 text-center text-xs">{t('common.noResultsFound')}</div>
-									{/if}
-								</Command.List>
-							{/if}
-						</Bound>
-					</Command.Root>
-				</Bound>
-			{:else}
-				<Inline justify="center" gap="none" grow class="p-4 text-meta">
-					{multiple ? t('common.selectOrCreateToStart') : t('common.createToStart')}
-				</Inline>
-			{/if}
-		</Inline>
+										{/snippet}
+										{#snippet placeholderSnippet({ index })}
+											<Inline gap="none" class="w-full px-3" style={`height: ${itemHeight}px;`}>
+												<div class="h-3 w-32 animate-pulse rounded bg-muted/40"></div>
+											</Inline>
+										{/snippet}
+										{#if currentIsLoading && filteredOptions.length === 0}
+											<Inline gap="sm" justify="center" class="p-3 text-xs">
+												<Spinner class="h-3 w-3" />
+												{t('common.loading')}
+											</Inline>
+										{:else if commandItems.length === 0}
+											<div class="p-3 text-center text-xs">{t('common.noResultsFound')}</div>
+										{/if}
+									</Command.List>
+								{/if}
+							</Bound>
+						</Command.Root>
+					</Bound>
+				{:else}
+					<Inline justify="center" gap="none" grow class="p-4 text-meta">
+						{multiple ? t('common.selectOrCreateToStart') : t('common.createToStart')}
+					</Inline>
+				{/if}
+			</Inline>
+		</Bound>
 	</Popover.Content>
 </Popover.Root>

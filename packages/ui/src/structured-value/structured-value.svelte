@@ -2,7 +2,7 @@
 	import { Schema } from 'effect';
 	import { humanize } from '@norbital-ai/std/string';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Grid, Scroll } from '#lib/layout';
+	import { Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -60,9 +60,9 @@
 								{/each}
 							</tr>
 						</thead>
-						<tbody class="divide-y">
+						<tbody>
 							{#each item as entry, index (index)}
-								<tr>
+								<tr class="not-first:border-t">
 									{#each columns as column (column)}
 										<td class="max-w-64 min-w-24 px-2.5 py-2 align-top break-words">
 											{@render renderValue(recordProperty(entry, column))}
@@ -74,11 +74,11 @@
 					</table>
 				</Scroll>
 			{:else}
-				<ol class="divide-y rounded-md border bg-muted/20">
+				<Stack as="ol" gap="none" divided class="rounded-md border bg-muted/20">
 					{#each item as entry, index (index)}
 						<li class="min-w-0 px-3 py-2.5">{@render renderValue(entry)}</li>
 					{/each}
-				</ol>
+				</Stack>
 			{/if}
 		{/if}
 	{:else if item != null && typeof item === 'object'}
@@ -86,20 +86,20 @@
 		{#if entries.length === 0}
 			<span class="text-muted-foreground">{t('misc.none')}</span>
 		{:else}
-			<dl class="divide-y rounded-md border bg-muted/20">
+			<Stack as="dl" gap="none" divided class="rounded-md border bg-muted/20">
 				{#each entries as [key, entry] (key)}
 					<!-- Stacked on a phone, label beside value from `sm` up; the template rides a custom
 					     property so the breakpoint stays a class. -->
 					<Grid
-						gap="xs"
+						gap="sm"
 						tracks="var(--structured-row-columns)"
-						class="min-w-0 px-3 py-2.5 sm:gap-3 [--structured-row-columns:minmax(0,1fr)] sm:[--structured-row-columns:10rem_minmax(0,1fr)]"
+						class="min-w-0 px-3 py-2.5 [--structured-row-columns:minmax(0,1fr)] sm:[--structured-row-columns:10rem_minmax(0,1fr)]"
 					>
 						<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
 						<dd class="min-w-0 break-words">{@render renderValue(entry)}</dd>
 					</Grid>
 				{/each}
-			</dl>
+			</Stack>
 		{/if}
 	{:else}
 		<span class="break-words">{primitiveLabel(item)}</span>

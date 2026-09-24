@@ -91,8 +91,6 @@
 	/* STYLES                                                              */
 	/* ═══════════════════════════════════════════════════════════════════ */
 	const compactTextClass = 'text-xs';
-	const baseHeight = 'h-9';
-	const elementGap = 'gap-1';
 
 	/* ═══════════════════════════════════════════════════════════════════ */
 	/* DERIVED DISPLAY STATES                                              */
@@ -411,18 +409,14 @@
 {/snippet}
 
 {#if isReadonlySimple}
-	<div
-		class={cn(
-			'flex w-full items-center justify-start rounded-md p-1 pl-2',
-			'overflow-hidden select-text',
-			baseHeight,
-			className
-		)}
+	<Inline
+		gap="none"
+		class={cn('h-9 w-full rounded-md p-1 pl-2 select-text', className)}
 		aria-readonly="true"
 		{style}
 	>
 		{@render renderSelectionContent()}
-	</div>
+	</Inline>
 {:else}
 	<ComboboxTrigger
 		bind:open
@@ -443,8 +437,6 @@
 		{className}
 		{triggerClass}
 		{style}
-		{baseHeight}
-		{elementGap}
 		{compactTextClass}
 		{dropdownClass}
 		{sameWidth}

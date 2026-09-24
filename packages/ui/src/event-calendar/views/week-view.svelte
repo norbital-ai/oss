@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Scroll, Stack } from '#lib/layout';
+	import { Imposter, Scroll, Stack } from '#lib/layout';
+	import { fromAction } from 'svelte/attachments';
 	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import {
 		addDays,
@@ -31,7 +32,7 @@
 		onmove,
 		eventContent,
 		readonly = false,
-		class: className
+		...rest
 	}: {
 		date: Date;
 		events: CalendarEvent[];
@@ -126,7 +127,7 @@
 	const overlayWidth = $derived(colWidth - 4);
 </script>
 
-<Stack gap="none" grow class={className}>
+<Stack gap="none" grow {...rest}>
 	<AllDaySection {events} columnCount={7} {colWidth} onbarclick={onboxclick} {eventContent} />
 
 	<Scroll axis="y" name={t('misc.weekEvents')} class="bg-background relative">
@@ -135,26 +136,23 @@
 				{@const colDate = addDays(weekStart, col)}
 				{@const isTodayColumn = col === todayIndex}
 				{@const isWeekendCol = isWeekend(colDate)}
-				<div
-					style="left: {col * colWidth}px; width: {colWidth}px"
+				<!-- A day column at its computed offset, under the event blocks. -->
+				<Imposter
+					placement="start"
+					layer="under"
+					style="left: {col *
+						colWidth}px; width: {colWidth}px; background-image: repeating-linear-gradient(to bottom, var(--color-border) 0 1px, transparent 1px {hourHeight}px)"
 					data-calendar-column={col}
 					class={cn(
-						'absolute top-0 bottom-0',
 						isWeekendCol && 'bg-muted/25',
 						isTodayColumn && !isWeekendCol && 'bg-brand-50/15'
 					)}
 				>
-					{#each Array.from({ length: endHour - startHour + 1 }) as _, i (i)}
-						<div
-							style="top: {i * hourHeight}px"
-							class="absolute left-0 right-0 h-px bg-border pointer-events-none"
-						></div>
-					{/each}
-
 					{#if !readonly}
-						<div
-							class="absolute inset-0"
-							use:pixelDrag={{
+						<Imposter
+							placement="fill"
+							layer="under"
+							{@attach fromAction(pixelDrag, () => ({
 								onStart: (event) => {
 									if (!drag.isDragging() && event.currentTarget instanceof HTMLElement) {
 										const top = event.clientY - event.currentTarget.getBoundingClientRect().top;
@@ -164,13 +162,13 @@
 								onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 								onEnd: commitDrop,
 								onCancel: drag.cancelDrag,
-								axis: 'y',
+								axis: 'y' as const,
 								cursor: 'crosshair'
-							}}
+							}))}
 							role="none"
-						></div>
+						/>
 					{/if}
-				</div>
+				</Imposter>
 
 				{#each dayColumns[col] as event (event.id)}
 					{@const ctx = getContext(event, col)}
@@ -183,15 +181,18 @@
 					{@const top = eventTop(event, col)}
 					{@const h = eventHeight(event, col)}
 					{@const editable = !readonly && event.editable !== false}
-					<div
+					<!-- An event block at its computed time offset. -->
+					<Imposter
+						placement="top-start"
+						offset="none"
+						layer="under"
 						style="left: {col * colWidth + 2 + (a?.lane ?? 0) * laneWidth}px; width: {laneWidth -
 							2}px; top: {top}px; height: {h}px"
-						class="absolute"
 						role="button"
-						tabindex="0"
+						tabindex={0}
 						aria-disabled={!editable}
 						title={!editable ? event.lockedReason : undefined}
-						use:pixelDrag={{
+						{@attach fromAction(pixelDrag, () => ({
 							onStart: () => {
 								if (editable) drag.beginMove(event, col, top, h);
 							},
@@ -206,21 +207,23 @@
 							},
 							onEnd: commitDrop,
 							onCancel: drag.cancelDrag,
-							axis: 'both'
-						}}
+							axis: 'both' as const
+						}))}
 					>
 						<EventBox
 							{event}
 							{ctx}
 							onclick={onboxclick}
 							{eventContent}
-							style="top: 0; left: 0; right: 0; bottom: 0; position: static"
 							class={editable ? undefined : 'cursor-default opacity-70'}
 						/>
 						{#if editable}
-							<div
-								class="absolute bottom-0 left-0 right-0 h-[10px] cursor-s-resize hover:bg-brand/10 rounded-b-md"
-								use:pixelDrag={{
+							<!-- The resize grip pins to the event's lower edge. -->
+							<Imposter
+								placement="bottom"
+								layer="under"
+								class="h-2.5 cursor-s-resize rounded-b-md hover:bg-brand/10"
+								{@attach fromAction(pixelDrag, () => ({
 									onStart: (e) => {
 										e.stopPropagation();
 										drag.beginResize(event, col, top, h);
@@ -228,22 +231,25 @@
 									onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 									onEnd: commitDrop,
 									onCancel: drag.cancelDrag,
-									axis: 'y'
-								}}
+									axis: 'y' as const
+								}))}
 								role="none"
-							></div>
+							/>
 						{/if}
-					</div>
+					</Imposter>
 				{/each}
 			{/each}
 
 			<NowLine {date} {hourHeight} {startHour} {endHour} timeAxisWidth={0} />
 
 			{#if overlay}
-				<div
-					class="absolute rounded-md border-2 border-dashed opacity-50 z-30 pointer-events-none"
+				<!-- The drop preview at the drag offset. -->
+				<Imposter
+					placement="top-start"
+					offset="none"
+					class="pointer-events-none z-30 rounded-md border-2 border-dashed opacity-50"
 					style="top: {overlay.top}px; left: {overlayLeft}px; width: {overlayWidth}px; height: {overlay.height}px; border-color: var(--color-brand); background: var(--color-brand-50)"
-				></div>
+				/>
 			{/if}
 		</div>
 	</Scroll>

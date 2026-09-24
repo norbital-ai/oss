@@ -7,9 +7,9 @@
 
 	let {
 		metadata,
-		class: className,
 		iconClass,
-		preventDefault = false
+		preventDefault = false,
+		...rest
 	}: {
 		metadata: FileMetadata;
 		class?: string;
@@ -28,13 +28,14 @@
 			<button
 				type="button"
 				{...props}
-				class={className}
+				{...rest}
 				aria-label={t('misc.viewSummary')}
 				onclick={(event) => {
 					event.stopPropagation();
 					if (preventDefault) event.preventDefault();
 				}}
 			>
+				<!-- repository-health:allow UI25 -- the caller's iconClass prop forwarded verbatim to the icon; its tokens are literals at the call site -->
 				<Icon icon="lucide:info" class={iconClass} />
 			</button>
 		{/snippet}

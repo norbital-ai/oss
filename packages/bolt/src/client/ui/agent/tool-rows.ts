@@ -8,6 +8,7 @@
 import { Option, Result, Schema } from 'effect';
 import type { Prompt } from 'effect/unstable/ai';
 import type { Conversation } from './conversation-selector.js';
+import { plainMessageText } from './context-view.js';
 import type { PlanRow, TurnRow, PanelMessage } from './transcript.js';
 
 export type ToolCallPart = Prompt.ToolCallPartEncoded;
@@ -101,4 +102,62 @@ export function diagnostic(value: unknown): string {
 export function diagnosticLanguage(value: unknown): 'json' | 'plaintext' {
 	const text = diagnostic(value).trimStart();
 	return text.startsWith('{') || text.startsWith('[') ? 'json' : 'plaintext';
+}
+
+type Part = Exclude<Prompt.MessageEncoded['content'], string>[number];
+export type VisiblePart = { readonly part: Part; readonly index: number };
+export type TranscriptRowOptions = Readonly<{
+	tools?: ToolPairing | undefined;
+	hideTodo?: boolean;
+	generating?: boolean;
+}>;
+
+/** A persisted run failure renders as an error bubble, not a plain system note. */
+export function runFailureText(message: PanelMessage): string | null {
+	if (message.author.kind !== 'system') return null;
+	const text = plainMessageText(message);
+	return text.startsWith('Task failed:') ? text : null;
+}
+
+export const isActivePart = (message: PanelMessage, index: number): boolean =>
+	message.annotation?.tag === 'generation' && message.annotation.activeParts.includes(index);
+
+const isProgressPart = (part: Part) =>
+	(part.type === 'tool-call' || part.type === 'tool-result') &&
+	part.name === 'todo' &&
+	(part.type !== 'tool-result' || !part.isFailure);
+
+/**
+ * The parts a row shows. A result paired with its call renders on the call's row; reasoning shows
+ * when it has text, or while it is the part still being written.
+ */
+export function visibleParts(
+	message: PanelMessage,
+	{ tools, hideTodo = false, generating = false }: TranscriptRowOptions
+): VisiblePart[] {
+	const content = message.message.content;
+	if (isString(content)) return [];
+	return content.flatMap((part, index) => {
+		if (hideTodo && isProgressPart(part)) return [];
+		if (part.type === 'tool-result' && tools !== undefined && tools.callIds.has(part.id)) return [];
+		if (
+			part.type === 'reasoning' &&
+			part.text.trim().length === 0 &&
+			!(generating && isActivePart(message, index))
+		)
+			return [];
+		return [{ part, index }];
+	});
+}
+
+/** Whether a message draws a row at all; lists filter on it so no empty row is measured. */
+export function rendersInTranscript(message: PanelMessage, options: TranscriptRowOptions): boolean {
+	if (runFailureText(message) !== null) return true;
+	if (message.message.role === 'system' || message.author.kind === 'system') return false;
+	return (
+		isString(message.message.content) ||
+		message.annotation?.tag === 'compact' ||
+		message.annotation?.tag === 'plan-verdict' ||
+		visibleParts(message, options).length > 0
+	);
 }

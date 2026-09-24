@@ -35,7 +35,10 @@
 	bind:this={ref}
 	data-slot="item-media"
 	data-variant={variant}
-	class={cn(itemMediaVariants({ variant }), className)}
+	class={/* repository-health:allow UI25 -- the media recipe is a tailwind-variants `tv()` whose literal classes live in the module script */ cn(
+		itemMediaVariants({ variant }),
+		className
+	)}
 	{...restProps}
 >
 	{@render children?.()}

@@ -24,6 +24,7 @@
 
 	let {
 		as = 'div',
+		ref = $bindable(null),
 		ratio = 'half',
 		collapse = 'stack',
 		collapseAt = 'narrow',
@@ -48,12 +49,14 @@
 
 <svelte:element
 	this={as}
+	bind:this={ref}
 	class={cn(
-		className,
 		'split min-h-0 min-w-0',
 		GAP_CLASSES[gap],
 		ratioClasses[ratio],
-		fill && 'h-full'
+		fill && 'h-full',
+		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		className
 	)}
 	data-layout="split"
 	data-collapse={collapse}
@@ -133,35 +136,44 @@
 		box-shadow: var(--shadow-xs);
 	}
 	/*
-		A Split responds to the space its caller actually grants, not to the browser window. The app
-		shell, Bound, and other pane primitives establish inline-size containers, so this continues to
-		work inside a sidebar, sheet, or nested dashboard pane.
+		A Split measures itself: it is its own inline-size container, and the collapse rules move its
+		panes (the container's children) rather than its template. Measuring an ancestor meant a Split
+		in a narrow grid cell inside a wide Bound never collapsed.
 	*/
+	.split {
+		container-type: inline-size;
+	}
+	.split[data-collapse='switch'] {
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+	.split[data-collapse='switch'] > .split__pane {
+		grid-row: 1 / -1;
+	}
 	@container (max-width: 39.999rem) {
-		.split[data-collapse-at='narrow']:not([data-collapse='none']) {
-			grid-template-columns: minmax(0, 1fr);
+		.split[data-collapse-at='narrow']:not([data-collapse='none']) > .split__pane {
+			grid-column: 1 / -1;
 		}
-		.split[data-collapse-at='narrow'][data-collapse='switch'] {
-			grid-template-rows: auto minmax(0, 1fr);
+		.split[data-collapse-at='narrow'][data-collapse='switch'] > .split__pane {
+			grid-row: 2;
 		}
-		.split[data-collapse-at='narrow'][data-collapse='switch'] .split__switch {
+		.split[data-collapse-at='narrow'][data-collapse='switch'] > .split__switch {
 			display: flex;
 		}
-		.split[data-collapse-at='narrow'][data-collapse='switch'] .split__pane_inactive {
+		.split[data-collapse-at='narrow'][data-collapse='switch'] > .split__pane_inactive {
 			display: none;
 		}
 	}
 	@container (max-width: 29.999rem) {
-		.split[data-collapse-at='compact']:not([data-collapse='none']) {
-			grid-template-columns: minmax(0, 1fr);
+		.split[data-collapse-at='compact']:not([data-collapse='none']) > .split__pane {
+			grid-column: 1 / -1;
 		}
-		.split[data-collapse-at='compact'][data-collapse='switch'] {
-			grid-template-rows: auto minmax(0, 1fr);
+		.split[data-collapse-at='compact'][data-collapse='switch'] > .split__pane {
+			grid-row: 2;
 		}
-		.split[data-collapse-at='compact'][data-collapse='switch'] .split__switch {
+		.split[data-collapse-at='compact'][data-collapse='switch'] > .split__switch {
 			display: flex;
 		}
-		.split[data-collapse-at='compact'][data-collapse='switch'] .split__pane_inactive {
+		.split[data-collapse-at='compact'][data-collapse='switch'] > .split__pane_inactive {
 			display: none;
 		}
 	}

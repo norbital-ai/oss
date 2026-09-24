@@ -157,7 +157,7 @@
 
 	{#each drafts as draft, index (index)}
 		<Inline gap="sm" class="min-w-0">
-			<InputGroup.Root class="min-w-0 w-full flex-1 overflow-hidden">
+			<InputGroup.Root class="min-w-0 w-full flex-1 overflow-clip">
 				<InputGroup.Addon align="inline-start" class="border-r border-input pr-1">
 					<Combobox
 						options={currencyOptions}
@@ -199,12 +199,7 @@
 	{/each}
 
 	{#if multiple}
-		<Button
-			variant="outline"
-			class="w-full justify-center border-dashed"
-			{disabled}
-			onclick={addValue}
-		>
+		<Button variant="outline" class="w-full border-dashed" {disabled} onclick={addValue}>
 			<Icon icon="lucide:plus" class="size-4" />
 			{t('dataRenderer.addAmount')}
 		</Button>
@@ -218,20 +213,22 @@
 				{id}
 				class={cn(
 					buttonVariants({ variant: 'outline' }),
-					'group h-9 w-full min-w-0 justify-start gap-2 overflow-hidden px-3',
+					'group h-9 w-full min-w-0 px-3',
 					className
 				)}
 				{disabled}
 			>
-				<Icon
-					icon="lucide:banknote"
-					class={cn(
-						'size-4 shrink-0',
-						completedValues.length ? 'text-emerald-600' : 'text-muted-foreground'
-					)}
-				/>
-				<span class="min-w-0 flex-1 truncate text-left text-sm">{triggerText}</span>
-				<Icon icon="lucide:chevrons-up-down" class="size-4 shrink-0 text-muted-foreground" />
+				<Inline as="span" gap="sm" class="w-full">
+					<Icon
+						icon="lucide:banknote"
+						class={cn(
+							'size-4 shrink-0',
+							completedValues.length ? 'text-emerald-600' : 'text-muted-foreground'
+						)}
+					/>
+					<span class="min-w-0 flex-1 truncate text-left text-sm">{triggerText}</span>
+					<Icon icon="lucide:chevrons-up-down" class="size-4 shrink-0 text-muted-foreground" />
+				</Inline>
 			</Popover.Trigger>
 
 			<Popover.Content sameWidth={true} minWidth={360} align="start" class="p-3">

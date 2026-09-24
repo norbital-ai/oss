@@ -28,10 +28,16 @@
 	}: ConversationEmptyStateProps = $props();
 </script>
 
-<div
-	bind:this={ref}
-	class={cn('flex size-full flex-col items-center justify-center gap-3 p-8 text-center', className)}
+<Stack
+	gap="sm"
+	align="center"
+	justify="center"
+	class={cn('size-full p-8 text-center', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{#if children}
 		{@render children?.()}
@@ -48,4 +54,4 @@
 			{/if}
 		</Stack>
 	{/if}
-</div>
+</Stack>

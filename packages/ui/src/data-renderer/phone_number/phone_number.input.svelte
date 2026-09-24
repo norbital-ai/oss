@@ -105,7 +105,7 @@
 {/snippet}
 
 <div class={cn('min-w-0 space-y-1.5', className)}>
-	<div class="flex min-w-0">
+	<Inline gap="none" align="stretch">
 		<Combobox
 			options={countryOptions}
 			value={country}
@@ -137,7 +137,7 @@
 			oninput={updateValue}
 			onblur={handleBlur}
 		/>
-	</div>
+	</Inline>
 	{#if invalid}
 		<p id={errorId} class="text-xs text-destructive" role="alert">
 			{t('dataRenderer.invalidPhone')}

@@ -8,7 +8,7 @@
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
-	import { Cover, Inline, Scroll } from '#lib/layout';
+	import { Cover, Grid, Imposter, Inline, Scroll, Stack } from '#lib/layout';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import type {
 		ResourceSchedulerChange,
@@ -82,7 +82,7 @@
 	const rangeEnd = $derived(days.at(-1)?.end ?? anchorDate);
 	const selected = $derived(new Set(selectedItemIds));
 	let bodyElement: HTMLElement | null = $state(null);
-	let headerTimelineElement: HTMLDivElement | null = $state(null);
+	let headerScrollLeft = $state(0);
 	let drag: DragState | null = $state(null);
 
 	const virtualizer = createVirtualizer({
@@ -114,9 +114,7 @@
 	});
 
 	function syncHeaderScroll(): void {
-		if (bodyElement && headerTimelineElement) {
-			headerTimelineElement.scrollLeft = bodyElement.scrollLeft;
-		}
+		if (bodyElement) headerScrollLeft = bodyElement.scrollLeft;
 	}
 
 	function toggleItem(itemId: string, additive: boolean): void {
@@ -301,24 +299,30 @@
 </script>
 
 {#snippet schedulerHeader()}
-	<div
-		class="grid h-10 border-b bg-muted/80"
-		style={`grid-template-columns:${resourceWidth}px minmax(0,1fr)`}
-	>
-		<div class="z-20 flex items-center border-r px-3 text-xs font-semibold">{resourceLabel}</div>
-		<div bind:this={headerTimelineElement} class="overflow-hidden">
-			<div class="flex h-full" style={`width:${timelineWidth}px`}>
+	<Grid gap="none" tracks={`${resourceWidth}px minmax(0,1fr)`} class="h-10 border-b bg-muted/80">
+		<Inline gap="none" class="z-20 border-r px-3 text-xs font-semibold">{resourceLabel}</Inline>
+		<!-- The header follows the body's horizontal scroll by translating its track, so it never
+		     becomes a second scrollport. -->
+		<div class="overflow-clip">
+			<Inline
+				gap="none"
+				fill
+				align="stretch"
+				style={`width:${timelineWidth}px;transform:translateX(-${headerScrollLeft}px)`}
+			>
 				{#each days as day (day.key)}
-					<div
-						class="flex shrink-0 items-center border-r px-2 text-xs font-medium"
+					<Inline
+						gap="none"
+						shrink={false}
+						class="border-r px-2 text-xs font-medium"
 						style={`width:${dayWidth}px`}
 					>
 						{day.label}
-					</div>
+					</Inline>
 				{/each}
-			</div>
+			</Inline>
 		</div>
-	</div>
+	</Grid>
 {/snippet}
 
 <Cover
@@ -344,8 +348,12 @@
 					{@const { id: resourceId } = resource}
 					{@const resourceItems = itemsByResource.get(resourceId) ?? []}
 					{@const selectedCount = resourceItems.filter((item) => selected.has(item.id)).length}
-					<div
-						class="absolute left-0 border-b"
+					<!-- A virtualizer row at its measured offset inside the virtual canvas. -->
+					<Imposter
+						placement="top-start"
+						offset="none"
+						layer="under"
+						class="border-b"
 						style={`top:${virtualRow.start}px;height:${rowHeight}px;width:${totalWidth}px`}
 						data-resource-id={resourceId}
 						role="presentation"
@@ -354,35 +362,38 @@
 						onpointerup={finishCreate}
 						onpointercancel={() => (drag = null)}
 					>
-						<Inline
-							gap="sm"
-							fill
-							class="sticky left-0 z-20 border-r bg-card px-3"
+						<!-- The resource column stays pinned while the timeline scrolls sideways. -->
+						<Imposter
+							position="sticky"
+							placement="start"
+							class="inset-y-auto z-20 h-full"
 							style={`width:${resourceWidth}px`}
 						>
-							{#if onSelectionChange}
-								<Checkbox
-									checked={resourceItems.length > 0 && selectedCount === resourceItems.length}
-									indeterminate={selectedCount > 0 && selectedCount < resourceItems.length}
-									disabled={resourceItems.length === 0}
-									onCheckedChange={(checked) => toggleResource(resource.id, checked)}
-								/>
-							{/if}
-							<div class="min-w-0">
-								{#if resourceContent}
-									{@render resourceContent(resource)}
-								{:else}
-									<p class="truncate text-sm font-medium">{resource.label}</p>
-									{#if resource.description}<p class="truncate text-meta">
-											{resource.description}
-										</p>{/if}
+							<Inline gap="sm" fill class="border-r bg-card px-3">
+								{#if onSelectionChange}
+									<Checkbox
+										checked={resourceItems.length > 0 && selectedCount === resourceItems.length}
+										indeterminate={selectedCount > 0 && selectedCount < resourceItems.length}
+										disabled={resourceItems.length === 0}
+										onCheckedChange={(checked) => toggleResource(resource.id, checked)}
+									/>
 								{/if}
-							</div>
-						</Inline>
+								<div class="min-w-0">
+									{#if resourceContent}
+										{@render resourceContent(resource)}
+									{:else}
+										<p class="truncate text-sm font-medium">{resource.label}</p>
+										{#if resource.description}<p class="truncate text-meta">
+												{resource.description}
+											</p>{/if}
+									{/if}
+								</div>
+							</Inline>
+						</Imposter>
 
-						<div
-							class="absolute inset-y-0"
-							style={`left:${resourceWidth}px;width:${timelineWidth}px`}
+						<Imposter
+							placement="fill"
+							style={`left:${resourceWidth}px;right:auto;width:${timelineWidth}px`}
 						>
 							{#if layout === 'matrix'}
 								{#each days as day, index (day.key)}
@@ -390,15 +401,16 @@
 									{@const visibleItems = cell.items.slice(0, maxVisibleCellItems)}
 									{@const overflow = cell.items.length - visibleItems.length}
 									{@const locked = cell.items.some((item) => item.editable === false)}
-									<div
-										class={cn('absolute inset-y-0 border-r px-2 py-1.5', locked && 'bg-warning/10')}
-										style={`left:${index * dayWidth}px;width:${dayWidth}px`}
+									<Imposter
+										placement="fill"
+										class={cn('border-r px-2 py-1.5', locked && 'bg-warning/10')}
+										style={`left:${index * dayWidth}px;right:auto;width:${dayWidth}px`}
 										data-day-index={index}
 										data-locked={locked || undefined}
 									>
 										<button
 											type="button"
-											class="flex w-full items-center justify-between rounded-sm text-left text-micro font-medium focus-visible:ring-2 focus-visible:ring-ring"
+											class="w-full rounded-sm text-left text-micro font-medium focus-visible:ring-2 focus-visible:ring-ring"
 											disabled={disabled || !onCellActivate}
 											aria-label={t('misc.cellAssignments', {
 												count: cell.items.length,
@@ -407,23 +419,25 @@
 											})}
 											onclick={() => onCellActivate?.(cell)}
 										>
-											{#if cellContent}
-												{@render cellContent(resource, cell)}
-											{:else}
-												<span>{t('misc.assigned', { count: cell.items.length })}</span>
-												{#if locked}
-													<Icon icon="lucide:lock-keyhole" class="size-3 text-muted-foreground" />
+											<Inline as="span" gap="none" justify="between">
+												{#if cellContent}
+													{@render cellContent(resource, cell)}
+												{:else}
+													<span>{t('misc.assigned', { count: cell.items.length })}</span>
+													{#if locked}
+														<Icon icon="lucide:lock-keyhole" class="size-3 text-muted-foreground" />
+													{/if}
 												{/if}
-											{/if}
+											</Inline>
 										</button>
-										<div class="min-w-0 overflow-hidden">
+										<div class="min-w-0 overflow-clip">
 											<Inline gap="xs" class="mt-1">
 												{#each visibleItems as item (item.id)}
 													{@const { id: schedulerItemId } = item}
 													<button
 														type="button"
 														class={cn(
-															'flex h-7 min-w-0 touch-none items-center gap-1 rounded-sm border bg-background px-1.5 text-micro shadow-xs focus-visible:ring-2 focus-visible:ring-ring',
+															'h-7 min-w-0 touch-none rounded-sm border bg-background px-1.5 text-micro shadow-xs focus-visible:ring-2 focus-visible:ring-ring',
 															item.editable === false
 																? 'cursor-default text-muted-foreground'
 																: 'cursor-grab active:cursor-grabbing',
@@ -444,13 +458,15 @@
 														onpointerup={() => finishItemDrag(item)}
 														onpointercancel={() => (drag = null)}
 													>
-														{#if item.editable === false}<Icon
-																icon="lucide:lock-keyhole"
-																class="size-3 shrink-0"
-															/>{/if}
-														<span class="truncate">
-															{#if itemContent}{@render itemContent(item)}{:else}{item.label}{/if}
-														</span>
+														<Inline as="span" gap="xs">
+															{#if item.editable === false}<Icon
+																	icon="lucide:lock-keyhole"
+																	class="size-3 shrink-0"
+																/>{/if}
+															<span class="truncate">
+																{#if itemContent}{@render itemContent(item)}{:else}{item.label}{/if}
+															</span>
+														</Inline>
 													</button>
 												{/each}
 												{#if overflow > 0}
@@ -462,13 +478,17 @@
 												{/if}
 											</Inline>
 										</div>
-									</div>
+									</Imposter>
 								{/each}
 							{:else}
 								{#each days as day, index (day.key)}
-									<button
+									<!-- A day's create target at its computed offset on the timeline. -->
+									<Imposter
+										as="button"
 										type="button"
-										class="absolute inset-y-0 border-r hover:bg-muted/30 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring"
+										placement="start"
+										layer="under"
+										class="border-r hover:bg-muted/30 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring"
 										style={`left:${index * dayWidth}px;width:${dayWidth}px`}
 										data-day-index={index}
 										aria-label={t('misc.createOn', { day: day.label, resource: resource.label })}
@@ -476,7 +496,7 @@
 										onclick={(event) => {
 											if (event.detail === 0) commitCreate(resource.id, day.start, day.end);
 										}}
-									></button>
+									/>
 								{/each}
 								{#each resourceItems.filter(visible) as item (item.id)}
 									{@const { id: schedulerItemId } = item}
@@ -486,10 +506,14 @@
 										rangeStart,
 										dayWidth
 									)}
-									<button
+									<!-- An item bar at its computed interval offset on the timeline. -->
+									<Imposter
+										as="button"
 										type="button"
+										placement="top-start"
+										layer="under"
 										class={cn(
-											'group absolute top-2 flex h-8 touch-none items-center overflow-hidden rounded-sm border px-2 text-left text-xs shadow-xs focus-visible:ring-2 focus-visible:ring-ring',
+											'group h-8 touch-none overflow-clip rounded-sm border px-2 text-left text-xs shadow-xs focus-visible:ring-2 focus-visible:ring-ring',
 											item.tone === 'warning' && 'border-warning/50 bg-warning/15',
 											item.tone === 'destructive' && 'border-destructive/50 bg-destructive/10',
 											item.tone === 'muted' && 'bg-muted',
@@ -513,34 +537,46 @@
 										onpointerup={() => finishItemDrag(item)}
 										onpointercancel={() => (drag = null)}
 									>
-										{#if item.editable !== false}<span
-												class="absolute inset-y-0 left-0 flex w-2 cursor-ew-resize items-center justify-center opacity-0 group-hover:opacity-100"
+										{#if item.editable !== false}<Imposter
+												as="span"
+												placement="fill"
+												class="w-2 cursor-ew-resize opacity-0 group-hover:opacity-100"
+												style="right:auto"
 												role="separator"
 												aria-orientation="vertical"
 												aria-label={t('misc.resizeStart')}
-												onpointerdown={(event) => {
+												onpointerdown={(event: PointerEvent) => {
 													event.stopPropagation();
 													beginItemDrag(event, item, 'resize-start');
-												}}><Icon icon="lucide:grip-vertical" class="size-3" /></span
+												}}
+												><Stack as="span" gap="none" fill align="center" justify="center"
+													><Icon icon="lucide:grip-vertical" class="size-3" /></Stack
+												></Imposter
 											>{/if}
-										<span class="min-w-0 flex-1 truncate">
+										<span class="block min-w-0 truncate">
 											{#if itemContent}{@render itemContent(item)}{:else}{item.label}{/if}
 										</span>
-										{#if item.editable !== false}<span
-												class="absolute inset-y-0 right-0 flex w-2 cursor-ew-resize items-center justify-center opacity-0 group-hover:opacity-100"
+										{#if item.editable !== false}<Imposter
+												as="span"
+												placement="fill"
+												class="w-2 cursor-ew-resize opacity-0 group-hover:opacity-100"
+												style="left:auto"
 												role="separator"
 												aria-orientation="vertical"
 												aria-label={t('misc.resizeEnd')}
-												onpointerdown={(event) => {
+												onpointerdown={(event: PointerEvent) => {
 													event.stopPropagation();
 													beginItemDrag(event, item, 'resize-end');
-												}}><Icon icon="lucide:grip-vertical" class="size-3" /></span
+												}}
+												><Stack as="span" gap="none" fill align="center" justify="center"
+													><Icon icon="lucide:grip-vertical" class="size-3" /></Stack
+												></Imposter
 											>{/if}
-									</button>
+									</Imposter>
 								{/each}
 							{/if}
-						</div>
-					</div>
+						</Imposter>
+					</Imposter>
 				{/if}
 			{/each}
 		</div>

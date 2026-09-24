@@ -2,7 +2,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { IconWrapper } from '#lib/icon-wrapper';
-	import { INSET_X_CLASS, Cluster, Inline, Stack } from '#lib/layout';
+	import { INSET_X_CLASS, Cluster, Frame, Imposter, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -44,47 +44,52 @@
 	Airbnb-style photo card chrome: full-bleed media, bottom-weighted dark scrim,
 	identity copy on the scrim. Banner art never owns text contrast.
 -->
-<div class={cn('relative h-28 shrink-0 overflow-clip', className)} data-layout="app-media-header">
-	<!-- Base wash while the image loads, or when it fails. -->
-	<div class="absolute inset-0 bg-neutral-900" aria-hidden="true"></div>
+<!-- The neutral background is the base wash while the image loads, or when it fails. -->
+<div
+	class={cn('relative h-28 shrink-0 overflow-clip bg-neutral-900', className)}
+	data-layout="app-media-header"
+>
 	{#if src != null && !imageFailed}
-		<img
-			{src}
-			alt=""
-			class={cn(
-				'absolute inset-0 size-full object-cover object-top transition-opacity duration-300',
-				imageLoaded ? 'opacity-100' : 'opacity-0'
-			)}
-			onload={() => (loadedSrc = src)}
-			onerror={() => (failedSrc = src)}
-		/>
+		<Imposter placement="fill">
+			<img
+				{src}
+				alt=""
+				class={cn(
+					'size-full object-cover object-top transition-opacity duration-300',
+					imageLoaded ? 'opacity-100' : 'opacity-0'
+				)}
+				onload={() => (loadedSrc = src)}
+				onerror={() => (failedSrc = src)}
+			/>
+		</Imposter>
 	{/if}
-	<!-- Dark scrim: strong at the copy edge, lighter toward the top. -->
-	<div
-		class="absolute inset-0 bg-linear-to-t from-black/80 via-black/50 to-black/25"
-		aria-hidden="true"
-	></div>
-
-	<Inline align="end" gap="md" class={cn(INSET_X_CLASS, 'absolute inset-x-0 bottom-0 z-10 py-3')}>
-		{#if icon}
-			<div
-				class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-background text-foreground shadow-md ring-1 ring-white/25"
-			>
-				<IconWrapper name={icon} class="size-5" />
-			</div>
-		{/if}
-		{#if title || description}
-			<Stack gap="none" grow class="min-w-0">
-				{#if title}
-					<h1 class="truncate text-base font-semibold tracking-tight text-white">{title}</h1>
+	<!-- Dark scrim: strong at the copy edge, lighter toward the top; the copy sits on its bottom edge. -->
+	<Imposter placement="fill" class="bg-linear-to-t from-black/80 via-black/50 to-black/25">
+		<Stack gap="none" justify="end" fill>
+			<Inline align="end" gap="md" class={cn(INSET_X_CLASS, 'py-3')}>
+				{#if icon}
+					<Frame
+						ratio="square"
+						shrink={false}
+						class="size-11 rounded-xl bg-background text-foreground shadow-md ring-1 ring-white/25"
+					>
+						<IconWrapper name={icon} class="size-5" />
+					</Frame>
 				{/if}
-				{#if description}
-					<p class="truncate text-xs leading-snug text-white/80">{description}</p>
+				{#if title || description}
+					<Stack gap="none" grow class="min-w-0">
+						{#if title}
+							<h1 class="truncate text-base font-semibold tracking-tight text-white">{title}</h1>
+						{/if}
+						{#if description}
+							<p class="truncate text-xs leading-snug text-white/80">{description}</p>
+						{/if}
+					</Stack>
 				{/if}
-			</Stack>
-		{/if}
-		{#if actions}
-			<Cluster justify="end" class="shrink-0">{@render actions()}</Cluster>
-		{/if}
-	</Inline>
+				{#if actions}
+					<Cluster justify="end" shrink={false}>{@render actions()}</Cluster>
+				{/if}
+			</Inline>
+		</Stack>
+	</Imposter>
 </div>

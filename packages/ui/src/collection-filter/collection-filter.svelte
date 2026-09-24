@@ -552,7 +552,8 @@
 	<Grid
 		gap="sm"
 		tracks="var(--filter-row-columns)"
-		class="min-w-0 items-center [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
+		align="center"
+		class="min-w-0 [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
 	>
 		<div class="col-start-1 min-w-0 w-full sm:col-auto">
 			<TreeCombobox
@@ -704,7 +705,8 @@
 						<Grid
 							gap="sm"
 							tracks="var(--filter-row-columns)"
-							class="min-w-0 items-center [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
+							align="center"
+							class="min-w-0 [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
 						>
 							<Combobox
 								options={relationships.map((relation) => ({
@@ -784,10 +786,14 @@
 									type="button"
 									variant="ghost"
 									size="sm"
-									class="h-7 w-fit gap-1.5 text-xs"
+									class="h-7 w-fit text-xs"
 									onclick={() => addGroupCondition(group.id)}
-									><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
 								>
+									<Inline as="span" gap="xs">
+										<Icon icon="lucide:plus" class="size-3.5" />
+										{t('table.filterAdd')}
+									</Inline>
+								</Button>
 							</Stack>
 						{/if}
 					</Stack>
@@ -799,20 +805,22 @@
 				type="button"
 				variant="ghost"
 				size="sm"
-				class="h-7 gap-1.5 text-xs"
+				class="h-7 text-xs"
 				disabled={filterFields.length === 0}
 				onclick={addFilter}
-				><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
 			>
+				<Inline as="span" gap="xs">
+					<Icon icon="lucide:plus" class="size-3.5" />
+					{t('table.filterAdd')}
+				</Inline>
+			</Button>
 			{#if relationships.length > 0}
-				<Button
-					type="button"
-					variant="ghost"
-					size="sm"
-					class="h-7 gap-1.5 text-xs"
-					onclick={addGroup}
-					><Icon icon="lucide:git-fork" class="size-3.5" /> {t('table.filterRelatedAdd')}</Button
-				>
+				<Button type="button" variant="ghost" size="sm" class="h-7 text-xs" onclick={addGroup}>
+					<Inline as="span" gap="xs">
+						<Icon icon="lucide:git-fork" class="size-3.5" />
+						{t('table.filterRelatedAdd')}
+					</Inline>
+				</Button>
 			{/if}
 		</footer>
 	</Popover.Content>

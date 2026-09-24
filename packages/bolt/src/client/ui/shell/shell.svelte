@@ -921,17 +921,3 @@
 {#if status === 'error'}
 	<p class="sr-only" role="alert">{t('bolt.shell.applicationLoadFailed')}</p>
 {/if}
-
-<style>
-	.sr-only {
-		position: absolute; /* repository-health:allow UI24 -- .sr-only is the visually-hidden accessibility recipe, not layout composition; no layout primitive expresses it */
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
-		border: 0;
-	}
-</style>

@@ -9,6 +9,7 @@
 </script>
 
 <script lang="ts">
+	import { Bound } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	import type { CommandGroupProps } from '#lib/command/types';
@@ -28,11 +29,15 @@
 	setCommandGroupId(() => groupId);
 </script>
 
-<div
-	bind:this={ref}
+<!-- A content-height group clipping its item rows at the popup edge; uncontained, so a popover still sizes to its rows. -->
+<Bound
+	bind:ref
+	size="auto"
+	clip
+	pad="xs"
+	class={cn('text-foreground [container-type:normal]', className)}
 	data-command-group="true"
 	data-group-id={groupId}
-	class={cn('overflow-hidden p-1 text-foreground', className)}
 	{...restProps}
 >
 	{#if heading}
@@ -43,4 +48,4 @@
 	{#if children}
 		{@render children()}
 	{/if}
-</div>
+</Bound>

@@ -7,7 +7,7 @@
 	import type { IFileUploadClient } from '#lib/file-upload';
 	import { isActiveUploadStage, UPLOAD_STAGE_MESSAGES } from '#lib/file-upload';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline, Stack } from '#lib/layout';
+	import { Frame, Imposter, Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { FileMetadataTooltip } from '#lib/file-value';
 	import FileThumbnail from './file-thumbnail.svelte';
@@ -272,16 +272,17 @@
 			<!-- The thumbnails deliberately overlap, which is an offset rather than a gap. -->
 			<Inline gap="none" class="[&>*+*]:-ml-1">
 				{#each displayFiles as file (file.id)}
-					<div class="h-5 w-5 overflow-hidden rounded-full border border-border">
+					<Frame ratio="square" class="h-5 w-5 rounded-full border border-border">
 						<FileThumbnail file_value={file} ratio={1} size="small" class="m-0 h-full w-full p-0" />
-					</div>
+					</Frame>
 				{/each}
 				{#if extraCount > 0}
-					<div
-						class="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-secondary text-xs font-medium text-muted-foreground"
+					<Inline
+						justify="center"
+						class="h-5 w-5 rounded-full border-2 border-white bg-secondary text-xs font-medium text-muted-foreground"
 					>
 						+{extraCount}
-					</div>
+					</Inline>
 				{/if}
 			</Inline>
 		</Inline>
@@ -306,16 +307,18 @@
 	{/if}
 	<!-- Clear button -->
 	{#if allowClear && ((Array.isArray(value) && value.length > 0) || (!Array.isArray(value) && value)) && !readonly}
-		<Button
-			size="icon"
-			variant="ghost"
-			class="invisible absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 rounded-full p-0 group-hover:visible focus:visible"
-			onclick={handleClear}
-			aria-label={t('dataRenderer.clearSelection')}
-			tabindex={-1}
-		>
-			<Icon icon="lucide:x" class="h-4 w-4" />
-		</Button>
+		<Imposter placement="center-end" offset="xs" layer="under" class="pointer-events-none size-6">
+			<Button
+				size="icon"
+				variant="ghost"
+				class="pointer-events-auto invisible h-6 w-6 rounded-full p-0 group-hover:visible focus:visible"
+				onclick={handleClear}
+				aria-label={t('dataRenderer.clearSelection')}
+				tabindex={-1}
+			>
+				<Icon icon="lucide:x" class="h-4 w-4" />
+			</Button>
+		</Imposter>
 	{/if}
 {/snippet}
 
@@ -327,9 +330,9 @@
 					<Carousel.Item>
 						<Stack gap="md">
 							<Inline gap="md" class="rounded-md bg-muted/40 p-3">
-								<div class="h-12 w-12 overflow-hidden rounded-lg">
+								<Frame ratio="square" class="h-12 w-12 rounded-lg">
 									<FileThumbnail file_value={file} ratio={1} size="small" class="h-full w-full" />
-								</div>
+								</Frame>
 								<div class="min-w-0 flex-1">
 									<p class="truncate text-xs font-semibold text-foreground">{file.name}</p>
 									<p class="text-meta">{formatFileSize(file.size)}</p>
@@ -337,8 +340,8 @@
 								{#if file.metadata}
 									<FileMetadataTooltip
 										metadata={file.metadata}
-										class="inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-										iconClass="h-4 w-4"
+										class="h-8 w-8 rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
+										iconClass="mx-auto block h-4 w-4"
 									/>
 								{/if}
 								<Button
@@ -389,15 +392,17 @@
 			<Button
 				variant="outline"
 				onclick={openFileBrowser}
-				class="gap-2 border-dashed"
+				class="border-dashed"
 				disabled={disabled || clientUploadBusy}
 			>
-				<Icon icon="lucide:plus" class="h-4 w-4" />
-				{#if clientUploadBusy}
-					{UPLOAD_STAGE_MESSAGES.uploading}
-				{:else}
-					{t('dataRenderer.addFirstFile')}
-				{/if}
+				<Inline as="span" gap="sm">
+					<Icon icon="lucide:plus" class="h-4 w-4" />
+					{#if clientUploadBusy}
+						{UPLOAD_STAGE_MESSAGES.uploading}
+					{:else}
+						{t('dataRenderer.addFirstFile')}
+					{/if}
+				</Inline>
 			</Button>
 		</Stack>
 	{:else}
@@ -406,7 +411,7 @@
 				{#each client.uploads as pending (pending.id)}
 					<Inline gap="sm">
 						<Inline gap="md" grow class="rounded-lg border p-2">
-							<div class="h-8 w-8 overflow-hidden rounded bg-muted"></div>
+							<div class="h-8 w-8 rounded bg-muted"></div>
 							<div class="min-w-0 flex-1">
 								<p class="truncate text-sm font-medium">{pending.file.name}</p>
 								<p class="text-meta">
@@ -448,9 +453,9 @@
 			{#each editingFiles as file, index (index)}
 				<Inline gap="sm">
 					<Inline gap="md" grow class="rounded-lg border p-2">
-						<div class="h-8 w-8 overflow-hidden rounded">
+						<Frame ratio="square" class="h-8 w-8 rounded">
 							<FileThumbnail file_value={file} ratio={1} size="small" class="h-full w-full" />
-						</div>
+						</Frame>
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-sm font-medium">{file.name}</p>
 							<p class="text-meta">{formatFileSize(file.size)}</p>
@@ -460,8 +465,8 @@
 					{#if file.metadata}
 						<FileMetadataTooltip
 							metadata={file.metadata}
-							class="inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-							iconClass="h-4 w-4"
+							class="h-8 w-8 rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
+							iconClass="mx-auto block h-4 w-4"
 						/>
 					{/if}
 
@@ -481,15 +486,17 @@
 				<Button
 					variant="outline"
 					onclick={openFileBrowser}
-					class="w-min gap-2 border-dashed text-muted-foreground hover:text-foreground"
+					class="w-min border-dashed text-muted-foreground hover:text-foreground"
 					disabled={disabled || clientUploadBusy}
 				>
-					<Icon icon="lucide:plus" class="h-4 w-4" />
-					{#if clientUploadBusy}
-						{UPLOAD_STAGE_MESSAGES.uploading}
-					{:else}
-						{t('dataRenderer.addFile')}
-					{/if}
+					<Inline as="span" gap="sm">
+						<Icon icon="lucide:plus" class="h-4 w-4" />
+						{#if clientUploadBusy}
+							{UPLOAD_STAGE_MESSAGES.uploading}
+						{:else}
+							{t('dataRenderer.addFile')}
+						{/if}
+					</Inline>
 				</Button>
 			{/if}
 
@@ -515,11 +522,11 @@
 	<Popover.Trigger
 		class={cn(
 			// Base styles - always applied
-			'group relative flex h-auto min-h-8 w-full items-center gap-2 rounded-md p-1 pl-2 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
+			'group relative h-auto min-h-8 w-full rounded-md p-1 pl-2 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
 			// Conditional styles using cn's object syntax
 			{
 				// Readonly mode styles
-				'cursor-pointer justify-start overflow-hidden hover:bg-accent': readonly && !borderless,
+				'cursor-pointer overflow-clip hover:bg-accent': readonly && !borderless,
 				// Editable mode styles
 				[buttonVariants({ variant: 'outline', class: 'bg-background px-2 shadow-xs' })]:
 					!readonly && !borderless,
@@ -531,7 +538,9 @@
 		{style}
 		{disabled}
 	>
-		{@render triggerContent()}
+		<Inline as="span" gap="sm" class="w-full">
+			{@render triggerContent()}
+		</Inline>
 	</Popover.Trigger>
 	<Popover.Content sameWidth={true} class="p-0" align="start" sideOffset={4}>
 		<Stack gap="md" class="p-1">

@@ -28,7 +28,8 @@
 		</div>
 	{/if}
 
-	<table class="min-w-full divide-y divide-gray-200">
+	<table class="min-w-full">
+		<!-- repository-health:allow UI19 -- a sticky <thead>: Imposter's sticky position cannot render as a table section (its `as` list has no thead), and wrapping it breaks the table -->
 		<thead class="sticky top-0 bg-muted">
 			<tr>
 				{#each headers as header}
@@ -38,9 +39,9 @@
 				{/each}
 			</tr>
 		</thead>
-		<tbody class="divide-y divide-gray-200 bg-background">
+		<tbody class="bg-background">
 			{#each visibleRows as row}
-				<tr>
+				<tr class="border-t border-gray-200">
 					{#each headers as header}
 						<td class="px-3 py-2 text-sm whitespace-nowrap text-muted-foreground">
 							{row[header] || ''}

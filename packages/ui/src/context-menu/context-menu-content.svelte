@@ -13,7 +13,7 @@
 	<ContextMenuPrimitive.Content
 		bind:ref
 		class={cn(
-			'z-[2000] min-w-[8rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md focus:outline-none',
+			'z-[2000] min-w-32 rounded-md border bg-popover p-1 text-popover-foreground shadow-md focus:outline-none',
 			className
 		)}
 		{...restProps}

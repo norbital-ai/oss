@@ -5,7 +5,7 @@
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
-	import { Inline, Stack } from '#lib/layout';
+	import { Imposter, Inline, Stack } from '#lib/layout';
 	import { ScrollArea } from '#lib/scroll-area';
 	import { cn } from '#lib/utils';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
@@ -345,7 +345,7 @@
 {#snippet renderNodeContent(node: TreeNode)}
 	{@const matchInfo = treeState.matchInfo.get(node.id)}
 	<Inline gap="sm" grow class={cn('h-7', { 'opacity-50': node.disabled })}>
-		<div class="flex h-7 w-4 items-center justify-center">
+		<Inline gap="none" justify="center" shrink={false} class="h-7 w-4">
 			{#if isParentNode(node)}
 				<Icon
 					icon={node.isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'}
@@ -353,14 +353,14 @@
 					aria-hidden="true"
 				/>
 			{/if}
-		</div>
-		<div class="flex h-7 w-6 items-center justify-center">
+		</Inline>
+		<Inline gap="none" justify="center" shrink={false} class="h-7 w-6">
 			<Icon
 				icon={node.icon}
 				class="h-3.5 w-3.5 text-muted-foreground dark:text-muted-foreground"
 				aria-hidden="true"
 			/>
-		</div>
+		</Inline>
 		<Inline
 			as="span"
 			gap="none"
@@ -368,13 +368,13 @@
 			class="truncate text-start text-xs text-secondary-foreground dark:text-muted-foreground"
 		>
 			{#if matchInfo}
-				<span class="flex w-min flex-row">
+				<Inline as="span" gap="none" align="stretch" class="w-min">
 					{node.title.slice(0, matchInfo.start)}
 					<span class="bg-brand-100 dark:bg-brand-200"
 						>{node.title.slice(matchInfo.start, matchInfo.end)}</span
 					>
 					{node.title.slice(matchInfo.end)}
-				</span>
+				</Inline>
 			{:else}
 				{node.title}
 			{/if}
@@ -383,15 +383,19 @@
 			{/if}
 		</Inline>
 		{#if !multiple && !isParentNode(node) && node.isSelected}
-			<div
-				class="absolute right-2 flex h-4 w-4 items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900"
-			>
-				<Icon
-					icon="lucide:check"
-					class="h-2.5 w-2.5 text-brand dark:text-brand-400"
-					aria-hidden="true"
-				/>
-			</div>
+			<Imposter placement="center-end">
+				<Inline
+					gap="none"
+					justify="center"
+					class="h-4 w-4 rounded-full bg-brand-100 dark:bg-brand-900"
+				>
+					<Icon
+						icon="lucide:check"
+						class="h-2.5 w-2.5 text-brand dark:text-brand-400"
+						aria-hidden="true"
+					/>
+				</Inline>
+			</Imposter>
 		{/if}
 	</Inline>
 {/snippet}
@@ -401,13 +405,13 @@
 	{@const isDirectChild = node.parentNode?.depth === 0}
 	{@const isActive = treeState.activeNodeId === nodeId}
 	<li class="relative">
-		<div
+		<Inline
 			role="none"
-			class="group relative flex w-full items-center py-0.5 text-sm"
+			class="group relative w-full py-0.5 text-sm"
 			style="padding-left: {isDirectChild ? 0 : 8}px;"
 			onmouseenter={() => handleNodeMouseEnter(node.id)}
 		>
-			<div class="relative flex flex-1 items-center">
+			<Inline gap="none" grow class="relative">
 				<Button
 					variant="ghost"
 					role="treeitem"
@@ -431,7 +435,7 @@
 					}}
 					onfocus={() => handleNodeFocus(node.id)}
 					class={cn(
-						'relative z-1 flex flex-1 justify-start rounded px-0.5 text-xs transition-colors duration-150 hover:bg-accent/50 focus:bg-accent/50 focus:outline-none focus-visible:ring-0 focus-visible:outline-none active:bg-accent/70',
+						'relative z-1 flex-1 rounded px-0.5 text-xs transition-colors duration-150 hover:bg-accent/50 focus:bg-accent/50 focus:outline-none focus-visible:ring-0 focus-visible:outline-none active:bg-accent/70',
 						{
 							'cursor-pointer': !node.disabled,
 							'cursor-not-allowed': node.disabled,
@@ -442,20 +446,26 @@
 					style="margin-left: {isDirectChild ? 0 : node.displayDepth * INDENTATION_WIDTH}px;"
 				>
 					{#if isActive && shouldShowIndicator}
-						<span
-							class="pointer-events-none absolute inset-0 z-0 rounded-md ring-2 ring-primary/60 ring-inset"
-						></span>
+						<Imposter
+							as="span"
+							placement="fill"
+							class="pointer-events-none rounded-md ring-2 ring-primary/60 ring-inset"
+						>
+							{#snippet children()}{/snippet}
+						</Imposter>
 					{/if}
 					{@render renderNodeContent(node)}
 				</Button>
 				{#if node.action}
-					<div class="absolute right-1 z-10 flex items-center">
-						{@render renderAction(node.action, node)}
-					</div>
+					<Imposter placement="center-end" offset="xs">
+						<Inline gap="none">
+							{@render renderAction(node.action, node)}
+						</Inline>
+					</Imposter>
 				{/if}
-			</div>
+			</Inline>
 			{#if multiple}
-				<div class={cn('ml-2 flex-none', { 'opacity-50': node.disabled })}>
+				<div class={cn('flex-none', { 'opacity-50': node.disabled })}>
 					<Checkbox
 						indeterminate={isParentNode(node) && node.isIndeterminate}
 						checked={node.isSelected}
@@ -469,16 +479,16 @@
 					/>
 				</div>
 			{/if}
-		</div>
+		</Inline>
 	</li>
 {/snippet}
 
 {#snippet renderNodeList(nodes: TreeNode[])}
-	<ul class="flex flex-col p-2" role="tree" aria-multiselectable={multiple}>
+	<Stack as="ul" gap="none" class="p-2" role="tree" aria-multiselectable={multiple}>
 		{#each nodes as node (node.id)}
 			{@render renderTreeNode(node)}
 		{/each}
-	</ul>
+	</Stack>
 {/snippet}
 
 {#snippet renderRootTabContent(rootNode: (typeof treeState.rootNodes)[0])}
@@ -526,11 +536,13 @@
 							onfocus={handleInputFocus}
 							onblur={handleInputBlur}
 						/>
-						<Icon
-							icon="lucide:search"
-							class="absolute top-1/2 right-3 z-20 -translate-y-1/2 transform text-muted-foreground dark:text-muted-foreground"
-							aria-hidden="true"
-						/>
+						<Imposter
+							placement="center-end"
+							offset="md"
+							class="z-20 leading-none text-muted-foreground"
+						>
+							<Icon icon="lucide:search" class="block" aria-hidden="true" />
+						</Imposter>
 					</div>
 				{/if}
 				{#if treeState.activeRootNode}
@@ -560,11 +572,13 @@
 						onfocus={handleInputFocus}
 						onblur={handleInputBlur}
 					/>
-					<Icon
-						icon="lucide:search"
-						class="absolute top-1/2 right-3 z-20 -translate-y-1/2 transform text-muted-foreground dark:text-muted-foreground"
-						aria-hidden="true"
-					/>
+					<Imposter
+						placement="center-end"
+						offset="md"
+						class="z-20 leading-none text-muted-foreground"
+					>
+						<Icon icon="lucide:search" class="block" aria-hidden="true" />
+					</Imposter>
 				</div>
 			{/if}
 			{#if treeState.activeRootNode}
@@ -573,10 +587,15 @@
 			{/if}
 		</Inline>
 		<ScrollArea class="flex-1" bind:viewportRef={scrollViewportRef}>
-			<div
-				class="relative flex flex-1 flex-col bg-transparent"
-				bind:this={treeContainerElement}
-				tabindex="-1"
+			<Stack
+				gap="none"
+				grow
+				class="relative bg-transparent"
+				{@attach (node: HTMLDivElement) => {
+					treeContainerElement = node;
+					return () => (treeContainerElement = null);
+				}}
+				tabindex={-1}
 				role="tree"
 				aria-multiselectable={multiple}
 				aria-label={t('misc.treeNavigation')}
@@ -589,7 +608,7 @@
 						{t('misc.noItemsToDisplay')}
 					</p>
 				{/if}
-			</div>
+			</Stack>
 		</ScrollArea>
 	{/if}
 </Stack>

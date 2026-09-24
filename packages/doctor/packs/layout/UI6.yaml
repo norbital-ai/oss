@@ -1,28 +1,22 @@
 id: UI6
 dominates:
   - UI7
-summary: raw flex/grid container bypasses the layout primitives
+summary: raw flex/grid container bypasses the layout primitives (Stack, Inline, Cluster, Switcher, Grid, Columns, Split, Cover, Center)
 severity: error
 principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
 ignore:
-  - '**/packages/ui/src/**'
+  - '**/packages/ui/src/layout/**'
 rule:
   all:
     - kind: svelte:ClassToken
-    - regex: '^(?:flex|grid)$'
-    - not:
-        inside:
-          all:
-            - kind: svelte:Element
-            - has:
-                field: tagName
-                regex: '^(?:Stack|Inline|Cluster|Grid|Bound|Cover|Scroll)$'
-        stopBy: end
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*(?:inline-)?(?:flex|grid)$'
 examples:
   bad:
     - '<div class="flex gap-2"><span>one</span></div>'
     - '<div class="flex items-center justify-between"></div>'
+    - '<div class={cn("sm:flex", open && "grid")}></div>'
+    - '<Stack><ul class="flex flex-col gap-1"><li>a</li></ul></Stack>'
   good:
     - '<Stack gap="sm"><span>one</span></Stack>'

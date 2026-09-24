@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { NavigationMenu as NavigationMenuPrimitive } from 'bits-ui';
 	import NavigationMenuViewport from './navigation-menu-viewport.svelte';
@@ -20,15 +21,15 @@
 	bind:ref
 	data-slot="navigation-menu"
 	data-viewport={viewport}
-	class={cn(
-		'group/navigation-menu relative flex max-w-max flex-1 items-center justify-center',
-		className
-	)}
+	class={cn('group/navigation-menu relative max-w-max', className)}
 	{...restProps}
 >
-	{@render children?.()}
-
-	{#if viewport}
-		<NavigationMenuViewport wrapperClass={viewportWrapperClass} />
-	{/if}
+	{#snippet child({ props })}
+		<Inline gap="none" justify="center" grow {...props}>
+			{@render children?.()}
+			{#if viewport}
+				<NavigationMenuViewport wrapperClass={viewportWrapperClass} />
+			{/if}
+		</Inline>
+	{/snippet}
 </NavigationMenuPrimitive.Root>

@@ -3,6 +3,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { TimeField } from '#lib/time-field';
 	import { TimeRangeField, type TimeRange } from '#lib/time-range';
+	import { Grid } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	const { t } = useI18n<UiKeys>();
@@ -47,7 +48,7 @@
 		separatorClass="text-muted-foreground"
 	/>
 {:else}
-	<div class={cn('grid gap-4', hasEnd ? 'grid-cols-2' : 'grid-cols-1', className)}>
+	<Grid gap="md" tracks={hasEnd ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 1fr)'} class={className}>
 		<TimeField
 			label={t('dataRenderer.startTime')}
 			value={value.start}
@@ -74,5 +75,5 @@
 				segmentClass="text-xs hover:bg-muted focus:bg-brand-100 focus:text-brand-900"
 			/>
 		{/if}
-	</div>
+	</Grid>
 {/if}

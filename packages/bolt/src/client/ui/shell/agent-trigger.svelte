@@ -14,6 +14,7 @@
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
+	import { Frame } from '@norbital-ai/ui/layout';
 
 	let {
 		label,
@@ -50,7 +51,7 @@
 	data-testid="workspace-agent-trigger"
 	class="rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded
 		? 'h-8 px-2'
-		: 'size-8 justify-center p-0'}"
+		: 'size-8 p-1'}"
 >
 	<!--
 		The same chip every other top-level sidebar item wears, so the orb sits on the same
@@ -63,18 +64,20 @@
 		a whole — the orb inside the sheet and the composer wear the open conversation's state; the
 		door stays at rest.
 	-->
-	<div
-		class="flex size-6 shrink-0 items-center justify-center rounded-md border border-input bg-background shadow-xs"
+	<Frame
+		ratio="square"
+		shrink={false}
+		class="size-6 rounded-md border border-input bg-background shadow-xs"
 	>
 		<NorbiusStrip size={20} />
-	</div>
+	</Frame>
 	{#if expanded}
 		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
 			>{label}</span
 		>
 		{#if shortcut}
 			<kbd
-				class="pointer-events-none ml-auto hidden h-5 select-none items-center rounded-md border border-border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex"
+				class="pointer-events-none ml-auto hidden h-5 select-none rounded-md border border-border bg-muted px-1.5 py-px font-mono text-[10px] leading-4 font-medium text-muted-foreground sm:inline-block"
 				data-testid="workspace-agent-shortcut"
 				aria-hidden="true">{shortcut}</kbd
 			>

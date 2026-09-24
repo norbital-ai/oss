@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Stack } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -10,12 +11,16 @@
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
-<div
-	bind:this={ref}
+<Stack
+	gap="none"
 	role="list"
 	data-slot="item-group"
-	class={cn('group/item-group flex flex-col', className)}
+	class={cn('group/item-group', className)}
 	{...restProps}
+	{@attach (node: HTMLDivElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
 >
 	{@render children?.()}
-</div>
+</Stack>

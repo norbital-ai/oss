@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Stack } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import * as Popover from '#lib/popover';
@@ -45,11 +46,11 @@
 					isActive={active}
 					aria-label={t('misc.moreDestinations')}
 					tooltipContent={t('misc.moreDestinations')}
-					class="justify-center rounded-md p-0 hover:bg-accent data-[state=open]:bg-accent {expanded
+					class="rounded-md p-0 hover:bg-accent data-[state=open]:bg-accent {expanded
 						? 'size-7'
 						: 'size-8'}"
 				>
-					<Icon icon="lucide:ellipsis" class="size-3.5 shrink-0" />
+					<Icon icon="lucide:ellipsis" class="mx-auto size-3.5 shrink-0" />
 				</Sidebar.MenuButton>
 			{/snippet}
 		</Popover.Trigger>
@@ -57,18 +58,22 @@
 			side={expanded ? 'top' : 'right'}
 			align={expanded ? 'end' : 'start'}
 			sideOffset={8}
-			class="flex w-64 flex-col gap-3 p-2"
+			class="w-64 p-2"
 		>
-			{#each segments as segment (segment.item.key)}
-				<div>
-					<div class="px-1.5 pb-1 {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">{segment.item.label}</div>
-					<ul class="flex min-w-0 flex-col gap-0.5">
-						{#each segment.rows as row (row.key)}
-							<WorkspaceSidebarNavigationLeaf item={row} onNavigate={navigate} />
-						{/each}
-					</ul>
-				</div>
-			{/each}
+			<Stack gap="sm">
+				{#each segments as segment (segment.item.key)}
+					<div>
+						<div class="px-1.5 pb-1 {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">
+							{segment.item.label}
+						</div>
+						<Stack as="ul" gap="xs">
+							{#each segment.rows as row (row.key)}
+								<WorkspaceSidebarNavigationLeaf item={row} onNavigate={navigate} />
+							{/each}
+						</Stack>
+					</div>
+				{/each}
+			</Stack>
 		</Popover.Content>
 	</Popover.Root>
 {/if}

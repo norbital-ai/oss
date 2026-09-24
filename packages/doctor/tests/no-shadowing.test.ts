@@ -62,7 +62,7 @@ test('no pack directory is present but unloaded', async () => {
 	// A directory of rule files that no module loads is the same defect as the filter.
 	const { norbitalPack, reactivePack } = await import('@norbital-ai/doctor-norbital');
 	const { effectPack, effectCeremonyPack } = await import('@norbital-ai/doctor-effect');
-	const { stringlyPack, overlapPack, graphPack } = await import('../build/index.js');
+	const { stringlyPack, overlapPack, graphPack, layoutPack } = await import('../build/index.js');
 	const loaded = new Set(
 		[
 			norbitalPack,
@@ -70,6 +70,7 @@ test('no pack directory is present but unloaded', async () => {
 			effectPack,
 			effectCeremonyPack,
 			stringlyPack,
+			layoutPack,
 			overlapPack,
 			graphPack
 		].flatMap((pack) => pack.rules.map((rule) => rule.id))

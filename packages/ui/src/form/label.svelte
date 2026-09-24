@@ -1,17 +1,17 @@
 <script lang="ts">
 	import * as FieldPrimitive from '#lib/field';
 	import { Indicator } from '#lib/indicator';
-	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { Snippet } from 'svelte';
 	import { getField } from '#lib/form/context';
 
 	let {
-		class: className,
 		children,
 		after,
 		hint,
 		enableIndicator = true,
-		before
+		before,
+		...restProps
 	}: {
 		class?: string;
 		children?: Snippet<[]>;
@@ -26,10 +26,12 @@
 </script>
 
 <Indicator size="sm" variant="info" visible={hasChanges}>
-	<FieldPrimitive.Label for={field?.name} class={cn('flex flex-row items-center gap-2', className)}>
-		{@render before?.()}
-		{@render children?.()}
-		{@render after?.()}
-		{@render hint?.()}
+	<FieldPrimitive.Label for={field?.name} {...restProps}>
+		<Inline as="span" gap="sm">
+			{@render before?.()}
+			{@render children?.()}
+			{@render after?.()}
+			{@render hint?.()}
+		</Inline>
 	</FieldPrimitive.Label>
 </Indicator>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Sheet from '#lib/sheet';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Imposter, Stack } from '#lib/layout';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { Attachment } from 'svelte/attachments';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -56,16 +57,18 @@
 </script>
 
 {#if collapsible === 'none'}
-	<div
-		class={cn(
-			'flex h-full w-(--sidebar-width) flex-col bg-sidebar text-sidebar-foreground',
-			className
-		)}
-		bind:this={ref}
+	<Stack
+		gap="none"
+		fill
+		class={cn('w-(--sidebar-width) bg-sidebar text-sidebar-foreground', className)}
 		{...restProps}
+		{@attach (node: HTMLDivElement) => {
+			ref = node;
+			return () => (ref = null);
+		}}
 	>
 		{@render children?.()}
-	</div>
+	</Stack>
 {:else if sidebar.isMobile}
 	<Sheet.Root bind:open={() => sidebar.openMobile, (v) => sidebar.setOpenMobile(v)}>
 		<Sheet.Content
@@ -84,9 +87,9 @@
 				<Sheet.Title>{mobileTitle}</Sheet.Title>
 				<Sheet.Description>{mobileDescription}</Sheet.Description>
 			</Sheet.Header>
-			<div class="flex h-full w-full flex-col" {@attach closeOnNavigation}>
+			<Stack gap="none" fill class="w-full" {@attach closeOnNavigation}>
 				{@render children?.()}
-			</div>
+			</Stack>
 		</Sheet.Content>
 	</Sheet.Root>
 {:else}
@@ -111,13 +114,15 @@
 					: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)'
 			)}
 		></div>
-		<div
+		<Imposter
+			position="fixed"
+			placement={side === 'left' ? 'start' : 'end'}
 			data-slot="sidebar-container"
 			class={cn(
-				'fixed inset-y-0 z-10 hidden h-[var(--sidebar-height,100svh)] w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex',
+				'hidden h-(--sidebar-height,100svh) w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:block',
 				side === 'left'
-					? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
-					: 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
+					? 'group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
+					: 'group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
 				// Adjust the padding for floating and inset variants.
 				variant === 'floating' || variant === 'inset'
 					? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
@@ -126,13 +131,15 @@
 			)}
 			{...restProps}
 		>
-			<div
+			<Stack
+				gap="none"
+				fill
 				data-sidebar="sidebar"
 				data-slot="sidebar-inner"
-				class="relative flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
+				class="relative w-full bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
 			>
 				{@render children?.()}
-			</div>
-		</div>
+			</Stack>
+		</Imposter>
 	</div>
 {/if}

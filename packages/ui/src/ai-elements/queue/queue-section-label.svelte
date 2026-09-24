@@ -1,5 +1,6 @@
 <script lang="ts" module>
-	import { cn, type WithElementRef } from '#lib/utils';
+	import type { WithElementRef } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -18,14 +19,21 @@
 		count,
 		label,
 		icon,
-		class: className,
 		children,
 		ref = $bindable(null),
 		...restProps
 	}: QueueSectionLabelProps = $props();
 </script>
 
-<span bind:this={ref} class={cn('flex items-center gap-2', className)} {...restProps}>
+<Inline
+	as="span"
+	gap="sm"
+	{...restProps}
+	{@attach (node: HTMLSpanElement) => {
+		ref = node;
+		return () => (ref = null);
+	}}
+>
 	<Icon
 		icon="lucide:chevron-down"
 		class="size-4 transition-transform group-data-[state=closed]:-rotate-90"
@@ -40,4 +48,4 @@
 		{label}
 	</span>
 	{@render children?.()}
-</span>
+</Inline>

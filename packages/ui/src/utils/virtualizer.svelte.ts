@@ -1,28 +1,13 @@
 /**
- * Svelte 5 Runes-based Virtualizer
+ * Svelte 5 runes virtualizer: one vertical (or horizontal) window over a list of `count` items.
  *
- * A lightweight virtualizer using runed primitives and small inlined helpers (e.g. sorted-index binary search).
+ * Sizes start at `estimateSize` and are replaced by `measureElement`, cached by item key so a
+ * reorder, an insertion or a remount keeps what was measured. A list that does not start at the
+ * top of its scrollport (a transcript under a header, a child list inside a parent row) passes
+ * `listElement`; its offset inside the scroll content is subtracted before the window is chosen.
  */
-
-function sortedIndexBy<T>(array: T[], value: T, fn: (item: T) => number): number {
-	let lo = 0;
-	let hi = array.length;
-	while (lo < hi) {
-		const mid = (lo + hi) >>> 1;
-		if (fn(array[mid]) < fn(value)) {
-			lo = mid + 1;
-		} else {
-			hi = mid;
-		}
-	}
-	return lo;
-}
 import { watch } from 'runed';
 import { Predicate } from 'effect';
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export interface VirtualItem {
 	index: number;
@@ -39,22 +24,20 @@ export interface VirtualizerOptions {
 	overscan?: number | (() => number);
 	horizontal?: boolean;
 	getItemKey?: (index: number) => string | number;
+	/** The element the items are laid out in, when it is not the scroll content's origin. */
+	listElement?: () => HTMLElement | null;
 	onChange?: (virtualizer: Virtualizer) => void;
-	initialOffset?: number;
-	indexAttribute?: string;
 }
 
 export interface Virtualizer {
 	readonly virtualItems: VirtualItem[];
 	readonly totalSize: number;
-	readonly scrollOffset: number;
 	scrollToIndex: (index: number, options?: ScrollToIndexOptions) => void;
 	scrollToOffset: (offset: number, options?: ScrollToOffsetOptions) => void;
+	/** Drops every measured size; the next `measureElement` calls re-fill the cache. */
 	measure: () => void;
+	/** Records the size of an element carrying `data-index`. */
 	measureElement: (element: HTMLElement | null) => void;
-	getOffsetForIndex: (index: number, align?: ScrollAlignment) => number;
-	getVirtualItems: () => VirtualItem[];
-	getTotalSize: () => number;
 }
 
 export interface ScrollToIndexOptions {
@@ -68,212 +51,142 @@ export interface ScrollToOffsetOptions {
 
 export type ScrollAlignment = 'start' | 'center' | 'end' | 'auto';
 
-// ============================================================================
-// Implementation
-// ============================================================================
+/** First index whose `pick` is >= `value` in an ascending array. */
+function lowerBound<T>(array: readonly T[], value: number, pick: (item: T) => number): number {
+	let lo = 0;
+	let hi = array.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >>> 1;
+		if (pick(array[mid]!) < value) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
+/** Viewport-less first paint: enough rows to fill a screen before the ResizeObserver reports. */
+const UNMEASURED_WINDOW = 20;
 
 export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
-	const overscan = options.overscan;
-	const getOverscan = Predicate.isFunction(overscan) ? overscan : () => overscan ?? 3;
+	const overscanOption = options.overscan;
+	const getOverscan = Predicate.isFunction(overscanOption)
+		? overscanOption
+		: () => overscanOption ?? 3;
+	const keyAt = (index: number) => options.getItemKey?.(index) ?? index;
+	const axisOffset = (el: HTMLElement) => (options.horizontal ? el.scrollLeft : el.scrollTop);
 
-	// Reactive state
-	let scrollOffset = $state(options.initialOffset ?? 0);
+	let scrollOffset = $state(0);
+	let scrollMargin = $state(0);
 	let viewportSize = $state(0);
 	let measureVersion = $state(0);
+	const measuredSizes = new Map<string | number, number>();
 
-	// Size cache
-	const measuredSizes = new Map<number, number>();
-
-	// Cleanup tracking
-	let cleanup: (() => void) | null = null;
-	let scrollFrame: number | null = null;
-
-	// Computed measurements
 	const measurements = $derived.by(() => {
 		const count = options.count();
-		void measureVersion; // Dependency for re-computation
-
-		const result: Array<{
-			index: number;
-			start: number;
-			size: number;
-			end: number;
-		}> = [];
-		let offset = 0;
-
-		for (let i = 0; i < count; i++) {
-			const size = measuredSizes.get(i) ?? options.estimateSize(i);
-			result.push({ index: i, start: offset, size, end: offset + size });
-			offset += size;
+		void measureVersion;
+		const result: VirtualItem[] = [];
+		let start = 0;
+		for (let index = 0; index < count; index++) {
+			const key = keyAt(index);
+			const size = measuredSizes.get(key) ?? options.estimateSize(index);
+			result.push({ index, key, start, size, end: start + size });
+			start += size;
 		}
-
 		return result;
 	});
 
-	// Computed total size
-	const totalSize = $derived(
-		measurements.length > 0 ? measurements[measurements.length - 1].end : 0
-	);
+	const totalSize = $derived(measurements.at(-1)?.end ?? 0);
 
-	// Computed visible range via binary search over cumulative measurements
-	const visibleRange = $derived.by(() => {
-		const m = measurements;
-		const viewport = viewportSize;
-		const offset = scrollOffset;
-		const overscan = getOverscan();
-
-		if (m.length === 0) {
-			return { startIndex: 0, endIndex: 0 };
-		}
-
-		// If viewport is 0 (not yet measured), render all items up to a reasonable limit
-		// This prevents blank rendering on initial mount before ResizeObserver fires
-		if (viewport === 0) {
-			return { startIndex: 0, endIndex: Math.min(m.length - 1, 20) };
-		}
-
-		// Binary search for visible range
-		const startIndex = Math.max(
-			0,
-			sortedIndexBy(m, { start: offset } as (typeof m)[0], (item) => item.start) - 1 - overscan
-		);
-		const endIndex = Math.min(
-			m.length - 1,
-			sortedIndexBy(m, { end: offset + viewport } as (typeof m)[0], (item) => item.end) + overscan
-		);
-
-		return { startIndex, endIndex };
-	});
-
-	// Computed virtual items
 	const virtualItems = $derived.by(() => {
 		const m = measurements;
-		const { startIndex, endIndex } = visibleRange;
-
 		if (m.length === 0) return [];
-
-		const items: VirtualItem[] = [];
-		for (let i = startIndex; i <= endIndex; i++) {
-			const measurement = m[i];
-			if (measurement) {
-				items.push({
-					index: i,
-					key: options.getItemKey?.(i) ?? i,
-					start: measurement.start,
-					end: measurement.end,
-					size: measurement.size
-				});
-			}
-		}
-		return items;
+		if (viewportSize === 0) return m.slice(0, UNMEASURED_WINDOW + 1);
+		const overscan = getOverscan();
+		const offset = scrollOffset - scrollMargin;
+		const startIndex = Math.max(0, lowerBound(m, offset, (item) => item.end) - overscan);
+		const endIndex = Math.min(
+			m.length - 1,
+			lowerBound(m, offset + viewportSize, (item) => item.end) + overscan
+		);
+		return m.slice(startIndex, endIndex + 1);
 	});
 
-	// Watch scroll element changes and set up listeners
-	watch(
-		() => options.scrollElement(),
-		(el) => {
-			// Cleanup previous listeners
-			cleanup?.();
-			cleanup = null;
+	function readMargin(el: HTMLElement): number {
+		const list = options.listElement?.();
+		if (!list) return 0;
+		const listRect = list.getBoundingClientRect();
+		const portRect = el.getBoundingClientRect();
+		return options.horizontal
+			? listRect.left - portRect.left + el.scrollLeft
+			: listRect.top - portRect.top + el.scrollTop;
+	}
 
+	watch(
+		() => [options.scrollElement(), options.listElement?.()] as const,
+		([el, list]) => {
 			if (!el) {
 				viewportSize = 0;
 				return;
 			}
-
-			const syncScrollOffset = () => {
-				scrollFrame = null;
-				scrollOffset = options.horizontal ? el.scrollLeft : el.scrollTop;
-			};
-
-			const handleScroll = () => {
-				if (scrollFrame !== null) return;
-				scrollFrame = requestAnimationFrame(syncScrollOffset);
-			};
-
-			// Update viewport size
-			const updateViewport = () => {
+			let frame: number | null = null;
+			const sync = () => {
+				frame = null;
+				scrollOffset = axisOffset(el);
+				scrollMargin = readMargin(el);
 				viewportSize = options.horizontal ? el.clientWidth : el.clientHeight;
 			};
-
-			// Initial values
-			updateViewport();
-			scrollOffset = options.horizontal ? el.scrollLeft : el.scrollTop;
-
-			// Set up listeners
-			el.addEventListener('scroll', handleScroll, { passive: true });
-
-			const resizeObserver = new ResizeObserver(updateViewport);
+			const schedule = () => {
+				frame ??= requestAnimationFrame(sync);
+			};
+			sync();
+			el.addEventListener('scroll', schedule, { passive: true });
+			const resizeObserver = new ResizeObserver(schedule);
 			resizeObserver.observe(el);
-
-			cleanup = () => {
-				if (scrollFrame !== null) {
-					cancelAnimationFrame(scrollFrame);
-					scrollFrame = null;
-				}
-				el.removeEventListener('scroll', handleScroll);
+			if (list) resizeObserver.observe(list);
+			return () => {
+				if (frame !== null) cancelAnimationFrame(frame);
+				el.removeEventListener('scroll', schedule);
 				resizeObserver.disconnect();
 			};
 		}
 	);
 
-	// Watch for virtual items changes to call onChange
-	let previousItems: VirtualItem[] = [];
-	watch(
-		() => virtualItems,
-		(items) => {
-			const hasChanged =
-				items.length !== previousItems.length ||
-				items.some((item, i) => item.index !== previousItems[i]?.index);
-
-			if (hasChanged && options.onChange) {
-				options.onChange(virtualizer);
-			}
-			previousItems = items;
-		}
+	const windowSignature = $derived(
+		`${virtualItems[0]?.index ?? -1}:${virtualItems.at(-1)?.index ?? -1}:${measurements.length}`
 	);
+	if (options.onChange) {
+		const onChange = options.onChange;
+		watch(
+			() => windowSignature,
+			() => onChange(virtualizer)
+		);
+	}
 
-	// Methods
 	function scrollToOffset(offset: number, opts?: ScrollToOffsetOptions) {
-		const el = options.scrollElement();
-		if (!el) return;
-
-		el.scrollTo({
+		options.scrollElement()?.scrollTo({
 			[options.horizontal ? 'left' : 'top']: offset,
 			behavior: opts?.behavior ?? 'auto'
 		});
 	}
 
-	function getOffsetForIndex(index: number, align: ScrollAlignment = 'auto'): number {
-		const m = measurements;
-		const viewport = viewportSize;
-		const measurement = m[index];
-
-		if (!measurement) return 0;
-
-		const { start: itemStart, end: itemEnd, size: itemSize } = measurement;
-
-		switch (align) {
-			case 'start':
-				return itemStart;
-			case 'end':
-				return itemEnd - viewport;
-			case 'center':
-				return itemStart + itemSize / 2 - viewport / 2;
-			case 'auto':
-			default: {
-				const currentEnd = scrollOffset + viewport;
-				if (itemStart >= scrollOffset && itemEnd <= currentEnd) return scrollOffset;
-				if (itemStart < scrollOffset) return itemStart;
-				return itemEnd - viewport;
-			}
-		}
-	}
-
 	function scrollToIndex(index: number, opts?: ScrollToIndexOptions) {
-		scrollToOffset(getOffsetForIndex(index, opts?.align), {
-			behavior: opts?.behavior
-		});
+		const item = measurements[index];
+		if (!item) return;
+		const start = item.start + scrollMargin;
+		const end = item.end + scrollMargin;
+		const target = (() => {
+			switch (opts?.align ?? 'auto') {
+				case 'start':
+					return start;
+				case 'end':
+					return end - viewportSize;
+				case 'center':
+					return start + item.size / 2 - viewportSize / 2;
+				case 'auto':
+					if (start >= scrollOffset && end <= scrollOffset + viewportSize) return null;
+					return start < scrollOffset ? start : end - viewportSize;
+			}
+		})();
+		if (target !== null) scrollToOffset(target, { behavior: opts?.behavior });
 	}
 
 	function measure() {
@@ -282,18 +195,21 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 	}
 
 	function measureElement(element: HTMLElement | null) {
-		if (!element) return;
-
-		const indexStr = element.getAttribute(options.indexAttribute ?? 'data-index');
-		if (indexStr == null) return;
-
-		const index = parseInt(indexStr, 10);
-		if (isNaN(index)) return;
-
+		const index = Number(element?.dataset.index);
+		const item = measurements[index];
+		if (!element || !item) return;
 		const size = options.horizontal ? element.offsetWidth : element.offsetHeight;
-		if (measuredSizes.get(index) !== size) {
-			measuredSizes.set(index, size);
-			measureVersion++;
+		if (measuredSizes.get(item.key) === size) return;
+		measuredSizes.set(item.key, size);
+		measureVersion++;
+		// An item above the window changing size would shove everything the reader is looking at.
+		// Absorb the delta into the scroll position — the same anchoring `overflow-anchor` gives flow
+		// layout, which a translated window cannot use.
+		const el = options.scrollElement();
+		if (el && item.start + scrollMargin < axisOffset(el) && size !== item.size) {
+			const next = axisOffset(el) + size - item.size;
+			if (options.horizontal) el.scrollLeft = next;
+			else el.scrollTop = next;
 		}
 	}
 
@@ -304,17 +220,10 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 		get totalSize() {
 			return totalSize;
 		},
-		get scrollOffset() {
-			return scrollOffset;
-		},
 		scrollToIndex,
 		scrollToOffset,
 		measure,
-		measureElement,
-		getOffsetForIndex,
-		getVirtualItems: () => virtualItems,
-		getTotalSize: () => totalSize
+		measureElement
 	};
-
 	return virtualizer;
 }

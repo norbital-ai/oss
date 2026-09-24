@@ -30,6 +30,7 @@
 	 * pasted `62.4, 18.1, 12.9` fills every cell at once. A reading, a tolerance, a coordinate — anything
 	 * a person reads off an instrument as one line.
 	 */
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -131,9 +132,11 @@
 	const sizes = { sm: 'h-8 text-xs', md: 'h-9 text-sm' };
 </script>
 
-<div
+<Inline
+	gap="none"
+	align="stretch"
 	class={cn(
-		'flex w-full items-stretch divide-x divide-input rounded-md border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30',
+		'w-full rounded-md border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30',
 		invalid && 'border-destructive ring-destructive/20 dark:ring-destructive/40',
 		disabled && 'cursor-not-allowed opacity-50 shadow-none',
 		sizes[size],
@@ -144,27 +147,29 @@
 	{#each segments as segment, index (segment.name)}
 		<!-- `size=1` keeps a cell's demand at its digits, not a text input's 20-character default,
 		     so three cells never squeeze each other's input to nothing; the floor keeps room for one. -->
-		<label class="flex min-w-[4.5rem] flex-1 items-center gap-1 px-2">
-			<span class="shrink-0 text-muted-foreground select-none">{segment.label}</span>
-			<input
-				bind:this={cells[index]}
-				id={index === 0 ? id : undefined}
-				type="text"
-				inputmode="decimal"
-				autocomplete="off"
-				spellcheck="false"
-				size={1}
-				class="w-full min-w-0 flex-1 bg-transparent text-right tabular-nums outline-none placeholder:text-muted-foreground/60"
-				value={text(segment.name)}
-				placeholder={segment.placeholder ?? ''}
-				aria-label={segment.label}
-				{disabled}
-				min={segment.min}
-				max={segment.max}
-				step={segment.step}
-				oninput={(event) => onInput(index, event.currentTarget.value)}
-				onkeydown={(event) => onKeydown(index, event)}
-			/>
+		<label class="min-w-18 flex-1 border-input px-2 not-last:border-r">
+			<Inline as="span" gap="xs" class="h-full">
+				<span class="shrink-0 text-muted-foreground select-none">{segment.label}</span>
+				<input
+					bind:this={cells[index]}
+					id={index === 0 ? id : undefined}
+					type="text"
+					inputmode="decimal"
+					autocomplete="off"
+					spellcheck="false"
+					size={1}
+					class="w-full min-w-0 flex-1 bg-transparent text-right tabular-nums outline-none placeholder:text-muted-foreground/60"
+					value={text(segment.name)}
+					placeholder={segment.placeholder ?? ''}
+					aria-label={segment.label}
+					{disabled}
+					min={segment.min}
+					max={segment.max}
+					step={segment.step}
+					oninput={(event) => onInput(index, event.currentTarget.value)}
+					onkeydown={(event) => onKeydown(index, event)}
+				/>
+			</Inline>
 		</label>
 	{/each}
-</div>
+</Inline>

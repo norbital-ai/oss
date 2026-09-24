@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Imposter } from '@norbital-ai/ui/layout';
 	import {
 		commandPrefixChar,
 		type MentionCommand,
@@ -213,13 +213,12 @@
 	const activeValue = $derived(rows[highlightIndex]?.value);
 </script>
 
-<Stack
-	gap="sm"
+<Imposter
+	placement="bottom"
 	id="agent-mention-menu"
 	role="presentation"
 	data-testid="agent-mention-menu"
-	class="inset-x-0 bottom-full z-30"
-	style="position: absolute /* repository-health:allow UI23 -- this transient menu anchors above the composer; no layout primitive owns anchored overlay placement, and a positioning class would trip the raw-positioning rule */"
+	class="bottom-full z-30"
 	onmousedown={(event) => event.preventDefault()}
 >
 	<FinderPalette
@@ -232,4 +231,4 @@
 		onPick={handlePick}
 		onClearScope={onclearscope}
 	/>
-</Stack>
+</Imposter>

@@ -4,10 +4,12 @@ severity: error
 principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/layout/**'
 rule:
   all:
     - kind: svelte:ClassToken
-    - regex: '^(?:space-[xy]-\d|m[tblr]-(?:[2-9]|1\d))$'
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*(?:space-[xy]-\d|m[tblr]-(?:[2-9]|1\d))$'
 examples:
   bad:
     - '<div class="space-y-4"><p>a</p></div>'

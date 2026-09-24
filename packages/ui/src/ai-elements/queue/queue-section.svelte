@@ -1,5 +1,4 @@
 <script lang="ts" module>
-	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { Collapsible as CollapsiblePrimitive } from 'bits-ui';
 
@@ -12,7 +11,6 @@
 	import { Collapsible } from '#lib/collapsible';
 
 	let {
-		class: className,
 		open = $bindable(true),
 		children,
 		ref = $bindable(null),
@@ -20,6 +18,6 @@
 	}: QueueSectionProps = $props();
 </script>
 
-<Collapsible bind:ref bind:open class={cn(className)} {...restProps}>
+<Collapsible bind:ref bind:open {...restProps}>
 	{@render children?.()}
 </Collapsible>

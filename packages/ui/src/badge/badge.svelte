@@ -45,7 +45,10 @@
 	this={href ? 'a' : 'span'}
 	bind:this={ref}
 	{href}
-	class={cn(badgeVariants({ variant }), className)}
+	class={/* repository-health:allow UI25 -- the badge recipe is a tailwind-variants `tv()` whose literal classes live in the module script */ cn(
+		badgeVariants({ variant }),
+		className
+	)}
 	{...restProps}
 >
 	{@render children?.()}

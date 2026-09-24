@@ -27,26 +27,27 @@
 			: t(presentation.messageKey)
 	);
 	const stoppable = $derived(presentation.canStop && taskId !== undefined && onStop !== undefined);
-	const badge = $derived(
-		cn(
-			// One fixed width for both faces, so the hover swap never moves the row.
-			'inline-flex min-w-[6.5rem] items-center justify-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold',
-			status === 'done'
-				? 'bg-success/10 text-success'
-				: status === 'running' || status === 'pending'
-					? 'bg-brand/10 text-brand'
-					: status === 'failed'
-						? 'bg-destructive/10 text-destructive'
-						: 'bg-muted text-muted-foreground',
-			className
-		)
+	const tone = $derived(
+		status === 'done'
+			? 'bg-success/10 text-success'
+			: status === 'running' || status === 'pending'
+				? 'bg-brand/10 text-brand'
+				: status === 'failed'
+					? 'bg-destructive/10 text-destructive'
+					: 'bg-muted text-muted-foreground'
 	);
 </script>
 
 {#if stoppable && taskId !== undefined}
+	<!-- One fixed width for both faces, so the hover swap never moves the row. -->
 	<button
 		type="button"
-		class="{badge} group cursor-pointer hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:outline-none"
+		class={cn(
+			'inline-block min-w-26 rounded-full px-2 py-0.5 text-center text-xs font-semibold',
+			tone,
+			className,
+			'group cursor-pointer hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:outline-none'
+		)}
 		aria-label={t('bolt.automations.stop')}
 		onclick={(event) => {
 			event.stopPropagation();
@@ -54,11 +55,17 @@
 		}}
 	>
 		<span class="group-hover:hidden group-focus-visible:hidden">{label}</span>
-		<span class="hidden items-center gap-1 group-hover:inline-flex group-focus-visible:inline-flex">
-			<Icon icon="lucide:square" class="size-3" />
+		<span class="hidden group-hover:inline group-focus-visible:inline">
+			<Icon icon="lucide:square" class="mr-1 size-3" />
 			{t('bolt.automations.stop')}
 		</span>
 	</button>
 {:else}
-	<span class={badge}>{label}</span>
+	<span
+		class={cn(
+			'inline-block min-w-26 rounded-full px-2 py-0.5 text-center text-xs font-semibold',
+			tone,
+			className
+		)}>{label}</span
+	>
 {/if}
