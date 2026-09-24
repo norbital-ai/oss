@@ -38,6 +38,7 @@ import {
 	runAuthoredHandler
 } from '#lib/runtime/collections/authored.js';
 import { AI, Connector, Files, Geocoding, HostTools } from '#lib/runtime/facilities/services.js';
+import { inferCollectionFilter } from '#lib/runtime/collections/filter-inference.js';
 import { readFileAsset } from '#lib/runtime/collections/file-assets.js';
 import { inferOp } from '#lib/runtime/inference.js';
 import * as Channels from '#lib/runtime/channels/channels.js';
@@ -1129,6 +1130,15 @@ const BINDINGS = [
 				json
 			)
 		)
+	),
+	binding(
+		'collections.inferFilter',
+		{ Command: session('collection query policy') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const now = new Date(yield* Clock.currentTimeMillis).toISOString().slice(0, 10);
+				return json(yield* inferCollectionFilter(context.effectId, principal(context), input, now));
+			})
 	),
 	binding(
 		'collections.findMany',

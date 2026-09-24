@@ -130,7 +130,9 @@ describe('Bolt architecture boundaries', () => {
 			(lines, count) => lines + count,
 			0
 		);
-		expect(tracked.length).toBeLessThanOrEqual(19);
+		// 19 -> 20 (2026-09-24): `compiler/type-index.ts`, the checker pass that ships each
+		// collection's expanded types to agents and refuses a surface that resolved to `any`.
+		expect(tracked.length).toBeLessThanOrEqual(20);
 		// 8,762 is the measured basket, and this ceiling has now been raised three times in one
 		// cutover: 8,688 → 8,691 (user-message supersession) → 8,707 (the agent-runtime contract
 		// declaring itself in the authoring schema) → 8,762 here, as the sync-engine and mutation
@@ -171,7 +173,10 @@ describe('Bolt architecture boundaries', () => {
 		// 9,430 -> 9,440 (2026-09-23): connections read their base URL from the environment and may
 		// carry the credential as a query parameter; a receive binding may be `existingOnly` and a
 		// binding may address the connection root. Measured 9,434.
-		expect(total).toBeLessThanOrEqual(9_440);
+		// 9,440 -> 9,520 (2026-09-24): the sync type index and `any` gate (compiler/type-index.ts),
+		// collection inputs generated from the executed selection instead of `typeof` the module
+		// (which was a TS7022 cycle), and the datatype import computed from its output directory.
+		expect(total).toBeLessThanOrEqual(9_520);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

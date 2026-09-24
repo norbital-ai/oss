@@ -434,6 +434,40 @@ describe('sync engine effective-plan compilation', () => {
 		if (Result.isFailure(unresolved)) expect(unresolved.failure.code).toBe('unresolved-segment');
 	});
 
+	it('refuses an operator the column type cannot answer, naming what applies', () => {
+		const typed = {
+			...definition,
+			collections: [
+				...definition.collections,
+				{
+					name: 'photos',
+					history: true,
+					fields: {
+						flags: { ...field('string'), array: true } as FieldDefinition,
+						facts: field('json')
+					}
+				}
+			]
+		} as typeof definition;
+		const failureOf = (userFilter: unknown) => {
+			const plan = compileEffectiveQueryPlan({
+				definition: typed,
+				rootCollection: 'photos',
+				userFilter,
+				kind: 'findMany',
+				subject,
+				policyFor: unrestricted
+			});
+			return Result.isFailure(plan) ? plan.failure.message : undefined;
+		};
+		// These reached PostgreSQL as `operator does not exist: text[] ~~* unknown` and
+		// `malformed array literal`, which name neither the field nor what would work.
+		expect(failureOf({ flags: { ilike: '%duplicate%' } })).toContain('arrayOverlaps');
+		expect(failureOf({ flags: { in: ['exact_duplicate'] } })).toContain('flags is an array');
+		expect(failureOf({ facts: { ilike: '%00003416%' } })).toContain('jsonPath');
+		expect(failureOf({ flags: { arrayOverlaps: ['exact_duplicate'] } })).toBeUndefined();
+	});
+
 	it('plans plain-text search live and every /command search one-shot', () => {
 		const modeOf = (search: string) =>
 			succeed(

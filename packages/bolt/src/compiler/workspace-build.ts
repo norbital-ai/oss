@@ -31,6 +31,7 @@ import {
 	type WorkspaceMigrationEntry
 } from '../authoring/workspace-schema.js';
 import type { CollectionInputSelection } from '../authoring/collection-schema.js';
+import { buildTypeIndex } from './type-index.js';
 import { platformCustomTypes } from '../authoring/models-schema.js';
 import { SYSTEM_COLLECTION_MODELS } from '../authoring/system-models.js';
 import { SYSTEM_COLLECTION_WRITES } from '../runtime/schema/system-collections.js';
@@ -2042,6 +2043,43 @@ const WorkspaceSynchronization = {
 				],
 				{ concurrency: 'unbounded' }
 			);
+			const typeIndex = yield* Effect.try({
+				try: () =>
+					buildTypeIndex(
+						root,
+						compiledAuthoring.collections
+							.filter((entry) => collectionNames.includes(entry.name))
+							.map((entry) => ({
+								name: entry.name,
+								create: entry.write?.create !== undefined,
+								update: entry.write?.update !== undefined
+							}))
+					),
+				catch: (cause) =>
+					new Error(`Bolt sync could not type-check the workspace: ${String(cause)}`)
+			});
+			if (typeIndex !== undefined && typeIndex.anyPaths.length > 0)
+				return yield* Effect.fail(
+					new Error(
+						[
+							`Bolt sync found ${typeIndex.anyPaths.length} workspace type position(s) that resolve to \`any\`:`,
+							...typeIndex.anyPaths.slice(0, 40).map((path) => `  - ${path}`),
+							'An `any` here is an unresolved import, a dependency release that does not match its',
+							"peer (check the template's `effect` pin against @norbital-ai/bolt's), or a type cycle.",
+							'Agents and forms read these types; they must be exact.'
+						].join('\n')
+					)
+				);
+			const typedAuthoring =
+				typeIndex === undefined
+					? compiledAuthoring
+					: {
+							...compiledAuthoring,
+							collections: compiledAuthoring.collections.map((entry) => {
+								const indexed = typeIndex.collections[entry.name];
+								return indexed === undefined ? entry : { ...entry, types: indexed };
+							})
+						};
 			if (!(yield* fileExists(join(root, 'vite.config.ts')))) {
 				return yield* Effect.fail(
 					new Error(
@@ -2098,7 +2136,7 @@ const WorkspaceSynchronization = {
 				artifactEntry,
 				renderArtifact({
 					metadata,
-					compiledAuthoring,
+					compiledAuthoring: typedAuthoring,
 					collectionFiles: collectionDeclarations,
 					apps: appDescriptors,
 					appGroups: groupEntries,

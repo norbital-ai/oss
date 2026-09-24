@@ -13,6 +13,7 @@
 		type CollectionSurface
 	} from '@norbital-ai/ui/collection-runtime';
 	import { setDataRendererRuntimeContext } from '@norbital-ai/ui/data-renderer';
+	import { setCollectionFilterInference } from '@norbital-ai/ui/collection-filter';
 	import BoltApp from './app.svelte';
 	import { Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
@@ -202,6 +203,28 @@
 	 */
 	// svelte-ignore state_referenced_locally -- the compiled workspace is fixed for this mount.
 	setCollectionClientContext(() => workspace.client);
+
+	// A filter described in words is read by the workspace's own command, as the viewer: the model
+	// can only look records up through the viewer's policies, and its answer lands as editable rows.
+	setCollectionFilterInference((request, signal) =>
+		workspace.frameworkClient.system.collections.inferFilter(
+			{
+				collection: request.collection,
+				text: request.text,
+				fields: request.fields.map((field) => ({
+					...field,
+					...(field.values === undefined ? {} : { values: [...field.values] }),
+					operators: [...field.operators]
+				})),
+				current: request.current.map((condition) => ({
+					field: condition.field,
+					operator: condition.operator,
+					...(condition.value === undefined ? {} : { value: condition.value as Schema.Json })
+				}))
+			},
+			signal
+		)
+	);
 
 	const customTypeRenderer = createCustomTypeRendererResolver(workspace.customTypeRendererLoaders);
 	setDataRendererRuntimeContext({

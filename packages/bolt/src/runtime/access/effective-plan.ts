@@ -792,6 +792,38 @@ const compileReferenceField = (
 	);
 };
 
+const TEXT_MATCH_OPS: ReadonlyArray<string> = ['like', 'ilike', 'notLike', 'notIlike'];
+const ORDER_OPS: ReadonlyArray<string> = ['gt', 'gte', 'lt', 'lte'];
+
+/**
+ * An operator the column's type cannot answer, named before any SQL is built.
+ *
+ * Without this, `ilike` on a `text[]` or a `jsonb` column reached PostgreSQL and came back as
+ * `operator does not exist: text[] ~~* unknown` — true, but it names neither the field nor what
+ * would work, so an agent guessed its way through three more failing reads.
+ */
+const operatorMisuse = (
+	described: FieldDefinition | undefined,
+	field: string,
+	operator: string
+): string | undefined => {
+	if (described === undefined) return undefined;
+	const array = (described as { readonly array?: true }).array === true;
+	if (array) {
+		return TEXT_MATCH_OPS.includes(operator) ||
+			ORDER_OPS.includes(operator) ||
+			operator === 'in' ||
+			operator === 'notIn'
+			? `${field} is an array: ${operator} does not apply. Use arrayOverlaps [values] (has any), arrayContains [values] (has all), arrayContained [values], eq [whole array], or isNull.`
+			: undefined;
+	}
+	if (described.type === 'json')
+		return TEXT_MATCH_OPS.includes(operator) || ORDER_OPS.includes(operator)
+			? `${field} is a JSON value: ${operator} does not apply to the whole value. Compare one of its keys with jsonPath { path: [key, …], type: 'string'|'number'|'boolean'|'instant', eq|in|gt|… }, match an array element with jsonArraySome, or test containment with contains {…}.`
+			: undefined;
+	return undefined;
+};
+
 const compileFieldOperator = (
 	definition: WorkspaceDefinition,
 	collection: string,
@@ -810,6 +842,8 @@ const compileFieldOperator = (
 		return compileJsonPath(definition, collection, field, value, subject, state, node);
 	if (operator === 'jsonArraySome')
 		return compileJsonArraySome(definition, collection, field, value, subject, state, node);
+	const misuse = operatorMisuse(described, field, operator);
+	if (misuse !== undefined) return diagnostic('invalid-node', node, misuse);
 	if (operator === 'approvalParty') {
 		if (value !== true)
 			return diagnostic('invalid-node', node, `Query node ${node} accepts only true.`);

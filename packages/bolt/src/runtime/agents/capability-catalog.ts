@@ -28,6 +28,7 @@ import {
 	type ToolDeclaration,
 	type WorkspaceDefinition
 } from '#lib/authoring/workspace-schema.js';
+import { nestedCreateRoutes } from '#lib/runtime/collections/nested-routes.js';
 import type { CollectionInputSelection } from '#lib/authoring/collection-schema.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
@@ -154,6 +155,7 @@ const SystemToolNames = Schema.Literals([
 	'todo',
 	'compact',
 	'describe_workspace',
+	'describe_type',
 	'list_skills',
 	'read_skill',
 	'search_task_history',
@@ -268,6 +270,19 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 		command: 'platform:describe_workspace'
 	},
 	{
+		name: 'describe_type',
+		description:
+			"The exact TypeScript type of one collection's row, create input or update input, as the compiler resolved it at the last sync — every field's accepted value, which relation writes nest, which keys are optional. Ask this instead of reading source when a write's shape is unclear.",
+		command: 'platform:describe_type',
+		inputSchema: objectInput(
+			{
+				collection: { type: 'string', minLength: 1 },
+				surface: { type: 'string', enum: ['row', 'create', 'update'] }
+			},
+			['collection']
+		)
+	},
+	{
 		name: 'list_skills',
 		description:
 			'List the skills available to this run — the workspace’s, the platform’s and your own. Read a body only when relevant.',
@@ -322,7 +337,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_collection',
 		description:
-			'Read one page of a collection (default 50 rows); continue with cursor. `search` finds records across the collection\'s searchable fields (describe_workspace marks them (search)), closest first — the fastest way to find a record from a person\'s words. Plain text matches words, prefixes, typos and phrases in any script, including by Latin spelling (moskva finds Москва, beijing finds 北京). `/semantic <text>` also ranks by meaning, keeping exact hits first; `/<index> {json}` asks a similarity index the collection lists under search, with its input fields as a JSON object. A ranked search is one page: no cursor. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: \'%kismis%\' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. Read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.',
+			"Read one page of a collection (default 50 rows); continue with cursor. `search` finds records across the collection's searchable fields (describe_workspace marks them (search)), closest first — the fastest way to find a record from a person's words. Plain text matches words, prefixes, typos and phrases in any script, including by Latin spelling (moskva finds Москва, beijing finds 北京). `/semantic <text>` also ranks by meaning, keeping exact hits first; `/<index> {json}` asks a similarity index the collection lists under search, with its input fields as a JSON object. A ranked search is one page: no cursor. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: '%kismis%' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. An array field (`[]`) takes `{ arrayOverlaps: [values] }` (has any) or `{ arrayContains: [values] }` (has all); a JSON field takes `{ jsonPath: { path: [key], type: 'string', eq: value } }`. Read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.",
 		command: 'platform:read_collection',
 		inputSchema: objectInput(
 			{
@@ -361,6 +376,11 @@ export const TodoItem = Schema.Struct({
 export interface TodoItem extends Schema.Schema.Type<typeof TodoItem> {}
 export const TodoList = Schema.Struct({ items: Schema.Array(TodoItem) });
 export interface TodoList extends Schema.Schema.Type<typeof TodoList> {}
+
+const DescribeTypeInput = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	surface: Schema.optionalKey(Schema.Literals(['row', 'create', 'update']))
+});
 
 const SkillNameInput = Schema.Struct({
 	name: Schema.NonEmptyString,
@@ -603,13 +623,23 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
  * `note` says where the source lives for anyone with a file-reading tool.
  */
 const WORKSPACE_NOTE =
-	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when authoring the workspace, never to plan a record change. write_collection takes the listed create/update columns and answers with the stored row; a refusal names exactly what is missing, so write rather than research a write. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's. personalSkills are what this person taught you earlier — read one with read_skill when a request uses its words.";
+	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when authoring the workspace, never to plan a record change. write_collection takes the listed create/update columns and answers with the stored row; a JSON field shows the value it takes, `rel{create,link}` names a relation's nested actions, `nested:` names a parent that files this collection (use it when a column is accepted only there), and describe_type gives the full input type. A refusal names exactly what is missing, so write rather than research a write. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's. personalSkills are what this person taught you earlier — read one with read_skill when a request uses its words.";
 
-/** One field as a token: `customer_id:uuid!->customers`, `status:string=pending|done`. */
+/** A checker-rendered type on one line: the snapshot is a list of tokens, not a declaration file. */
+const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, ' ').replace(/;\s*}/g, ' }');
+
+/**
+ * One field as a token: `customer_id:uuid!->customers`, `status:string=pending|done`.
+ *
+ * A JSON-stored field (`custom()`, `jsonb()`) prints the type the compiler resolved for it at sync —
+ * `amount_charged:{ value: number; currency: string } | null` — because `json` names the storage,
+ * not the value a write must carry, and guessing that value is what sent an agent into the source.
+ */
 const describeField = (
 	name: string,
 	field: WorkspaceDefinition['collections'][number]['fields'][string],
-	relations: ReadonlyArray<RelationDefinition>
+	relations: ReadonlyArray<RelationDefinition>,
+	typeText?: string
 ): string => {
 	const edge = relations.find((relation) => relation.from?.column === name);
 	const targets =
@@ -619,7 +649,7 @@ const describeField = (
 				: [edge.target]
 			: field.reference.targets.map((target) => target.collection);
 	return [
-		`${name}:${field.type}`,
+		`${name}:${field.type === 'json' && typeText !== undefined ? oneLine(typeText) : field.type}`,
 		field.required ? '!' : '',
 		(field as { readonly array?: true }).array === true ? '[]' : '',
 		field.values === undefined ? '' : `=${field.values.join('|')}`,
@@ -663,7 +693,10 @@ const describeCollection = (
 			? null
 			: [
 					...Object.keys(selection.columns ?? {}),
-					...Object.keys(selection.with ?? {}).map((relation) => `${relation}{…}`)
+					// Each relation's accepted actions, so a nested write is named rather than guessed.
+					...Object.entries(selection.with ?? {}).map(
+						([relation, actions]) => `${relation}{${Object.keys(actions).join(',')}}`
+					)
 				].join(', ');
 	const contract = (): Schema.JsonObject | null => {
 		if (write === undefined) return null;
@@ -676,6 +709,15 @@ const describeCollection = (
 			...(write.hasTransform ? { transform: true } : {})
 		};
 	};
+	/**
+	 * Where this collection is written through another's nested input: a column that the collection's
+	 * own contract does not accept (a photo's channel `source`) is often accepted there, and naming
+	 * the path is what stops a writer dropping the column to get past the refusal.
+	 */
+	const filedVia = nestedCreateRoutes(definition, collection.name).map(
+		({ parent, mode, relation, columns }) =>
+			`${parent}.${mode} ${relation}.create{${columns.join(', ')}}`
+	);
 	const search = [
 		...(collection.embedding === undefined ? [] : ['/semantic']),
 		...(write?.similarity ?? []).map((index) => `/${index.name}`)
@@ -698,8 +740,11 @@ const describeCollection = (
 					name !== collection.embedding?.embeddedAtColumn &&
 					name !== collection.embedding?.sourceFingerprintColumn
 			)
-			.map(([name, field]) => describeField(name, field, relations)),
+			.map(([name, field]) =>
+				describeField(name, field, relations, collection.types?.fields[name])
+			),
 		write: contract(),
+		...(filedVia.length === 0 ? {} : { filedVia: [...new Set(filedVia)] }),
 		...(search.length === 0 ? {} : { search }),
 		...(integrations.length === 0 ? {} : { integrations })
 	};
@@ -813,6 +858,9 @@ export const workspaceSnapshot = (
 							...(write['update'] === undefined ? [] : [`    update: ${String(write['update'])}`]),
 							...(write['delete'] === true ? ['    delete: yes'] : [])
 						]),
+				...(collection['filedVia'] === undefined
+					? []
+					: [`    nested: ${(collection['filedVia'] as ReadonlyArray<string>).join('; ')}`]),
 				...(collection['search'] === undefined
 					? []
 					: [`    search: ${(collection['search'] as ReadonlyArray<string>).join(' ')}`])
@@ -823,7 +871,7 @@ export const workspaceSnapshot = (
 		`# Workspace snapshot — valid as of ${asOf} only. Its structure holds for this turn; records change, so read them fresh. describe_workspace refreshes it.`,
 		`workspace: ${definition.name} v${definition.version}`,
 		`you: ${line(context.standing, 200)}`,
-		'fields: name:type ! required, [] array, =enum values, ->reference, (file), (generated), (search) found by read_collection `search` (plain text; `/semantic <text>` adds meaning; a collection\'s `search:` line lists its commands)',
+		"fields: name:type ! required, [] array, =enum values, ->reference, (file), (generated), a JSON field prints its value type, (search) found by read_collection `search` (plain text; `/semantic <text>` adds meaning; a collection's `search:` line lists its commands)",
 		'collections:',
 		...collections,
 		...list(
@@ -849,7 +897,8 @@ export const workspaceSnapshot = (
 		...list(
 			'channels',
 			definition.channels.map(
-				(channel) => `${channel.name}: ${channel.transport} ${authoredPath('channels', channel.name, 'ts')}`
+				(channel) =>
+					`${channel.name}: ${channel.transport} ${authoredPath('channels', channel.name, 'ts')}`
 			)
 		),
 		...list(
@@ -867,7 +916,9 @@ export const workspaceSnapshot = (
 		),
 		...list(
 			'teams',
-			Object.entries(definition.teams ?? {}).map(([team, policies]) => `${team}: ${policies.join(', ')}`)
+			Object.entries(definition.teams ?? {}).map(
+				([team, policies]) => `${team}: ${policies.join(', ')}`
+			)
 		),
 		'more src: policies src/access/policies/+<name>.ts, teams src/access/+teams.ts, relations src/collections/+relationship.ts, workspace prompt src/+agents.md, skills src/capabilities/skills/<name>/SKILL.md',
 		...(context.skills.length === 0
@@ -958,6 +1009,28 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		case 'compact': {
 			const parsed = yield* decode(name, CompactInput, input);
 			return { checkpoint: 'scheduled', reason: parsed.reason };
+		}
+		case 'describe_type': {
+			const parsed = yield* decode(name, DescribeTypeInput, input);
+			if (!context.collectionNames.includes(parsed.collection))
+				return yield* new ToolNotAllowed({
+					agent: context.agentId,
+					tool: `describe_type:${parsed.collection}`
+				});
+			const types = context.workspace.definition.collections.find(
+				(collection) => collection.name === parsed.collection
+			)?.types;
+			const surface = parsed.surface ?? 'create';
+			const text = types === undefined ? undefined : types[surface];
+			return {
+				collection: parsed.collection,
+				surface,
+				type:
+					text ??
+					(types === undefined
+						? 'No compiled types for this collection (the workspace was synced without a tsconfig).'
+						: `${parsed.collection} declares no ${surface}.`)
+			};
 		}
 		case 'describe_workspace': {
 			// The person's own skills ride on the answer every turn opens with, so a shorthand the
@@ -1071,14 +1144,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			const floor = result.horizon.floorAt;
 			return {
 				messages: result.messages.map(
-					({
-						sent_at,
-						sender_id,
-						sender_name,
-						invocation,
-						text,
-						attachments
-					}) => ({
+					({ sent_at, sender_id, sender_name, invocation, text, attachments }) => ({
 						sentAt: sent_at,
 						...(sender_id === null ? {} : { senderId: sender_id }),
 						...(sender_name === null ? {} : { senderName: sender_name }),

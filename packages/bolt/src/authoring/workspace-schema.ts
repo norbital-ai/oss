@@ -242,6 +242,24 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly sourcePath?: string;
 	/** The declared write contract, when the collection declares one. */
 	readonly write?: CompiledCollectionWrite;
+	/** The compiler-expanded TypeScript of this collection's surfaces, written by `bolt sync`. */
+	readonly types?: CollectionTypes;
+}
+
+/**
+ * What the type checker says a collection's surfaces are, as TypeScript text.
+ *
+ * `fields` maps each row column to its value type; `createFields`/`updateFields` map each accepted
+ * input key, prefixed `?` when optional. Text rather than a schema because it is read by people and
+ * models, and it is the checker's own rendering of the generated `$types` — never a second description.
+ */
+export interface CollectionTypes {
+	readonly row: string;
+	readonly fields: Readonly<Record<string, string>>;
+	readonly create?: string;
+	readonly createFields?: Readonly<Record<string, string>>;
+	readonly update?: string;
+	readonly updateFields?: Readonly<Record<string, string>>;
 }
 
 interface CollectionOptions<Fields extends Readonly<Record<string, FieldDefinition>>> {
@@ -910,11 +928,17 @@ export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 	for (const declared of definition.envoys) {
 		const channel = definition.channels.find(({ name }) => name === declared.channel);
 		if (channel === undefined)
-			throw new TypeError(`Envoy ${declared.name} speaks on channel ${declared.channel}, which is not declared in src/channels.`);
+			throw new TypeError(
+				`Envoy ${declared.name} speaks on channel ${declared.channel}, which is not declared in src/channels.`
+			);
 		if (!CONVERSATION_TRANSPORTS.includes(channel.transport))
-			throw new TypeError(`Envoy ${declared.name}: channel ${channel.name} is ${channel.transport}, which carries no conversation.`);
+			throw new TypeError(
+				`Envoy ${declared.name}: channel ${channel.name} is ${channel.transport}, which carries no conversation.`
+			);
 		if (envoyChannels.has(channel.name))
-			throw new TypeError(`Channel ${channel.name} has more than one envoy; one consumer per channel.`);
+			throw new TypeError(
+				`Channel ${channel.name} has more than one envoy; one consumer per channel.`
+			);
 		envoyChannels.add(channel.name);
 	}
 	if (new Set(definition.requiredFacilities).size !== definition.requiredFacilities.length) {

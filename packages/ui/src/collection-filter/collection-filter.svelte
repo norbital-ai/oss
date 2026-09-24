@@ -1,8 +1,10 @@
 <script lang="ts">
 	import type { CollectionField, CollectionFilter } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
-	import { Schema } from 'effect';
+	import { Effect, Schema } from 'effect';
 	import { PersistedState } from 'runed';
+	import { humanize } from '@norbital-ai/std/string';
+	import { getCollectionFilterInference } from './collection-filter-inference.js';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '#lib/data-renderer';
@@ -159,6 +161,87 @@
 		onChange(clauses);
 	}
 
+	/**
+	 * The composer: a description in words becomes the builder's rows.
+	 *
+	 * Offered only when the host supplied an inference. Each answer is the whole filter — the rows
+	 * already applied, refined by the request — and lands as ordinary rows, so every condition the
+	 * model chose can be read, edited or removed exactly like one added by hand. Nothing it could not
+	 * map is applied; those phrases are shown instead.
+	 */
+	const infer = getCollectionFilterInference();
+	const ASK_PAUSE_MS = 450;
+	let askText = $state('');
+	let askPending = $state(false);
+	let askError = $state<string | null>(null);
+	let askUnresolved = $state<readonly string[]>([]);
+	let askTimer: ReturnType<typeof setTimeout> | undefined;
+	let askController: AbortController | undefined;
+
+	function inferenceFields() {
+		return filterFields.slice(0, 300).map((filterField) => ({
+			value: filterField.value,
+			label: filterField.path.map((segment) => humanize(segment)).join(' › '),
+			kind: filterField.field.kind,
+			nullable: filterField.field.nullable,
+			...(filterField.field.array === true ? { array: true } : {}),
+			...(filterField.field.values === undefined ? {} : { values: [...filterField.field.values] }),
+			...(filterField.lookupTarget === undefined ? {} : { target: filterField.lookupTarget }),
+			operators: collectionFilterOperatorOptions(filterField.field).map(({ value }) => value)
+		}));
+	}
+
+	function ask(text: string): void {
+		clearTimeout(askTimer);
+		askController?.abort();
+		if (infer === undefined || text.trim().length === 0) return;
+		const controller = new AbortController();
+		askController = controller;
+		askPending = true;
+		askError = null;
+		const request = {
+			collection: definition.name,
+			text: text.trim().slice(0, 500),
+			fields: inferenceFields(),
+			current: filters.filter(filterIsActive).map((filter) => ({
+				field: filter.field ?? '',
+				operator: filter.operator ?? '',
+				...(filter.value === undefined ? {} : { value: filter.value })
+			}))
+		};
+		Effect.runPromise(infer(request, controller.signal), { signal: controller.signal }).then(
+			(answer) => {
+				if (controller.signal.aborted) return;
+				askPending = false;
+				const offered = new Map(filterFields.map((field) => [field.value, field]));
+				const rows = answer.conditions.flatMap((condition) => {
+					const field = offered.get(condition.field);
+					const operator = collectionFilterOperatorOptions(
+						field?.field ?? { name: '', kind: '', nullable: false }
+					).find((option) => option.value === condition.operator)?.value;
+					return field === undefined || operator === undefined
+						? []
+						: [{ id: nextId++, field: condition.field, operator, value: condition.value }];
+				});
+				if (filters.some((filter) => seededIds.has(filter.id))) markSeedCleared();
+				filters = rows;
+				askUnresolved = answer.unresolved;
+				publish();
+			},
+			(cause: unknown) => {
+				if (controller.signal.aborted) return;
+				askPending = false;
+				askError = cause instanceof Error ? cause.message : String(cause);
+			}
+		);
+	}
+
+	function onAskInput(value: string): void {
+		askText = value;
+		clearTimeout(askTimer);
+		askTimer = setTimeout(() => ask(askText), ASK_PAUSE_MS);
+	}
+
 	function addFilter(): void {
 		filters = [...filters, { id: nextId++, field: null, operator: null, value: undefined }];
 	}
@@ -231,6 +314,49 @@
 					onclick={clear}>{t('table.clearAll')}</Button
 				>{/if}
 		</Inline>
+		{#if infer !== undefined && filterFields.length > 0}
+			<Stack gap="xs" class="border-b px-3 py-2">
+				<Inline gap="xs" align="center" class="min-w-0">
+					<Icon
+						icon="lucide:sparkles"
+						class="size-3.5 shrink-0 text-muted-foreground"
+						aria-hidden="true"
+					/>
+					<input
+						type="text"
+						class="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+						placeholder={t('table.filterAsk')}
+						aria-label={t('table.filterAskLabel')}
+						maxlength={500}
+						value={askText}
+						{disabled}
+						oninput={(event) => onAskInput(event.currentTarget.value)}
+						onkeydown={(event) => {
+							if (event.key === 'Enter') {
+								event.preventDefault();
+								ask(askText);
+							}
+						}}
+					/>
+					{#if askPending}
+						<Icon
+							icon="lucide:loader-circle"
+							class="size-3.5 shrink-0 animate-spin text-muted-foreground"
+							aria-label={t('table.filterAskReading')}
+						/>
+					{/if}
+				</Inline>
+				{#if askError !== null}
+					<p class="text-micro text-destructive" role="alert">
+						{t('table.filterAskFailed', { error: askError })}
+					</p>
+				{:else if askUnresolved.length > 0}
+					<p class="text-micro text-warning" aria-live="polite">
+						{t('table.filterAskUnresolved', { phrases: askUnresolved.join(', ') })}
+					</p>
+				{/if}
+			</Stack>
+		{/if}
 		<Scroll axis="y" name={t('table.appliedFilters')} class="max-h-80 min-w-0 p-3">
 			<Stack gap="xs">
 				{#if filters.length === 0}

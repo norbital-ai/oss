@@ -1,3 +1,4 @@
+import { nestedCreateRoutes } from '#lib/runtime/collections/nested-routes.js';
 import { Secrets } from '#lib/runtime/secrets/secrets.js';
 import { connectionReader } from '#lib/runtime/automations/connection.js';
 import { webReader } from '#lib/runtime/automations/web.js';
@@ -7,22 +8,18 @@ import {
 	RECORD_EMBEDDING_COLUMN
 } from '#lib/authoring/model-introspection.js';
 import { emitChangeEventsMany as emitChangeEventsManyService } from '#lib/runtime/collections/services/change-events.js';
-import { automationChannels, notifyStatements, outboundRows } from '#lib/runtime/channels/channels.js';
+import {
+	automationChannels,
+	notifyStatements,
+	outboundRows
+} from '#lib/runtime/channels/channels.js';
 import type { NotifyInput } from '#lib/authoring/channels-schema.js';
 import { syncOwnershipRefusal } from '#lib/runtime/integrations/integrations.js';
 import {
 	embedRecords as embedRecordsService,
 	embeddingModel
 } from '#lib/runtime/collections/services/embeddings.js';
-import {
-	and,
-	count as countRows,
-	eq,
-	getColumns,
-	isNotNull,
-	sql,
-	type SQL
-} from 'drizzle-orm';
+import { and, count as countRows, eq, getColumns, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { type AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
 	Cause,
@@ -263,10 +260,8 @@ import {
 	type RelationalBuilder
 } from '#lib/runtime/persistence.js';
 
-const {
-	bolt_collection_history: collectionHistoryTable,
-	bolt_task: boltTaskTable
-} = SYSTEM_MODEL_TABLES;
+const { bolt_collection_history: collectionHistoryTable, bolt_task: boltTaskTable } =
+	SYSTEM_MODEL_TABLES;
 
 /** The pgvector operator each accepted metric measures with. */
 const NEAREST_OPERATORS = { cosine: '<=>', l2: '<->', ip: '<#>' } as const;
@@ -1481,7 +1476,11 @@ export const layerWith = (
 				'last_error'
 			] as const;
 			/** The follow-up task a write's outbound work needs, keyed so a batch says it once. */
-			type Follow = Readonly<{ readonly command: string; readonly input: Schema.Json; readonly key: string }>;
+			type Follow = Readonly<{
+				readonly command: string;
+				readonly input: Schema.Json;
+				readonly key: string;
+			}>;
 			const writesOutward = (collection: string): boolean =>
 				workspace.definition.channels.some(({ outbound }) =>
 					outbound.some(({ from }) => from === collection)
@@ -1497,10 +1496,15 @@ export const layerWith = (
 				operation: 'create' | 'update' | 'delete',
 				values: Readonly<Record<string, Schema.Json>>,
 				previous: Readonly<Record<string, unknown>> | undefined
-			): Readonly<{ readonly bookkeeping: ReadonlyArray<PlannedInsert>; readonly follows: ReadonlyArray<Follow> }> => {
+			): Readonly<{
+				readonly bookkeeping: ReadonlyArray<PlannedInsert>;
+				readonly follows: ReadonlyArray<Follow>;
+			}> => {
 				if (!writesOutward(collection)) return { bookkeeping: [], follows: [] };
 				const record =
-					operation === 'delete' ? { ...(previous ?? {}), id } : { ...(previous ?? {}), ...values, id };
+					operation === 'delete'
+						? { ...(previous ?? {}), id }
+						: { ...(previous ?? {}), ...values, id };
 				const messages = outboundRows(
 					workspace.definition.channels,
 					authored.channels,
@@ -1521,39 +1525,43 @@ export const layerWith = (
 				);
 				return {
 					bookkeeping: [
-						...messages.map(
-							(row): PlannedInsert => ({
-								table: 'bolt_channel_outbox',
-								columns: OUTBOX_COLUMNS,
-								values: [
-									deriveRecordId(`${effectId}:${row.channel}:${row.rule}:${id}`),
-									row.channel,
-									row.transport,
-									(row.message ?? null) as Schema.Json,
-									collection,
-									id,
-									row.rule,
-									row.thread,
-									row.error === null ? 'pending' : 'failed',
-									row.error
-								],
-								onConflict: 'on conflict (id) do nothing'
-							})
-						),
-						...syncs.map(
-									({ integration, sync }): PlannedInsert => ({
-										table: 'bolt_integration_pushes',
-										columns: ['id', 'sync', 'record_id'],
-										values: [deriveRecordId(`${integration}.${sync}:${id}`), `${integration}.${sync}`, id],
-										onConflict:
-											"on conflict (sync, record_id) do update set revision = bolt_integration_pushes.revision + 1, status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now()"
-									})
-								)
+						...messages.map((row): PlannedInsert => ({
+							table: 'bolt_channel_outbox',
+							columns: OUTBOX_COLUMNS,
+							values: [
+								deriveRecordId(`${effectId}:${row.channel}:${row.rule}:${id}`),
+								row.channel,
+								row.transport,
+								(row.message ?? null) as Schema.Json,
+								collection,
+								id,
+								row.rule,
+								row.thread,
+								row.error === null ? 'pending' : 'failed',
+								row.error
+							],
+							onConflict: 'on conflict (id) do nothing'
+						})),
+						...syncs.map(({ integration, sync }): PlannedInsert => ({
+							table: 'bolt_integration_pushes',
+							columns: ['id', 'sync', 'record_id'],
+							values: [
+								deriveRecordId(`${integration}.${sync}:${id}`),
+								`${integration}.${sync}`,
+								id
+							],
+							onConflict:
+								"on conflict (sync, record_id) do update set revision = bolt_integration_pushes.revision + 1, status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now()"
+						}))
 					],
 					follows: [
 						...messages
 							.filter(({ error }) => error === null)
-							.map(({ channel }) => ({ command: 'channels.drain', input: { channel }, key: `channels.drain:${channel}` })),
+							.map(({ channel }) => ({
+								command: 'channels.drain',
+								input: { channel },
+								key: `channels.drain:${channel}`
+							})),
 						...syncs.map(({ integration, sync }) => ({
 							command: 'integrations.push',
 							input: { integration, sync },
@@ -1575,7 +1583,10 @@ export const layerWith = (
 			 * The tasks that carry a write's outbound work, in this same transaction: one per channel
 			 * and per sync per batch, keyed `<effectId>:<key>` so a batch of many rows says it once.
 			 */
-			const followRows = (effectId: EffectId, follows: ReadonlyArray<Follow>): ReadonlyArray<PlannedInsert> =>
+			const followRows = (
+				effectId: EffectId,
+				follows: ReadonlyArray<Follow>
+			): ReadonlyArray<PlannedInsert> =>
 				[...new Map(follows.map((follow) => [follow.key, follow])).values()]
 					.toSorted((left, right) => left.key.localeCompare(right.key))
 					.map((follow) => ({
@@ -2372,7 +2383,15 @@ export const layerWith = (
 							],
 							...after
 						});
-					const outward = outwardRows(nodeEffectId, subject, input.collection, input.id, 'create', values, undefined);
+					const outward = outwardRows(
+						nodeEffectId,
+						subject,
+						input.collection,
+						input.id,
+						'create',
+						values,
+						undefined
+					);
 					for (const row of outward.bookkeeping) bookkeeping.push({ ...row, ...after });
 					follows.push(...outward.follows);
 				}
@@ -2435,7 +2454,15 @@ export const layerWith = (
 					columns: entries.map(([name]) => name),
 					values: entries.map(([, value]) => value)
 				};
-				const outward = outwardRows(effectId, subject, input.collection, input.id, 'update', values, previous);
+				const outward = outwardRows(
+					effectId,
+					subject,
+					input.collection,
+					input.id,
+					'update',
+					values,
+					previous
+				);
 				return {
 					row,
 					bookkeeping: [
@@ -2523,7 +2550,14 @@ export const layerWith = (
 				if (!visibility.allowed)
 					return yield* policyDecisionFailure(action, collection, visibility.reason);
 				if (visibility.authorization !== undefined)
-					yield* authorizeOne(effectId, subject, visibility.authorization, action, collection, context);
+					yield* authorizeOne(
+						effectId,
+						subject,
+						visibility.authorization,
+						action,
+						collection,
+						context
+					);
 			});
 			const authorizeOne = Effect.fn('Collections.authorizeOne')(function* (
 				effectId: EffectId,
@@ -3062,6 +3096,20 @@ export const layerWith = (
 			 * per nested action at its input path, so the caller is judged once, on the shape it
 			 * submitted, before any authored code sees it.
 			 */
+			/**
+			 * Where a column this collection's own input refuses is accepted instead: a parent that files
+			 * it through a nested create. Named in the refusal, because a writer that is only told "not
+			 * part of the declared input" drops the column to get through — which is how channel photos
+			 * were stored without their channel provenance.
+			 */
+			const nestedRoute = (collection: string, column: string): string => {
+				const routes = nestedCreateRoutes(workspace.definition, collection)
+					.filter(({ columns }) => columns.includes(column))
+					.map(({ parent, mode, relation }) => `${parent} ${mode} with ${relation}.create`);
+				return routes.length === 0
+					? ''
+					: ` It is accepted when filed through ${[...new Set(routes)].join(' or ')}.`;
+			};
 			const admitSubmission = (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -3104,7 +3152,7 @@ export const layerWith = (
 								declaredRefusal(
 									definition.name,
 									action,
-									`${path}.${key} is not part of the declared ${action} input.`
+									`${path}.${key} is not part of the declared ${action} input.${nestedRoute(definition.name, key)}`
 								)
 							);
 						if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -3464,7 +3512,9 @@ export const layerWith = (
 								...message,
 								collection,
 								ids: [...event.ids],
-								...(event.approval === undefined ? {} : { approvalRequestId: event.approval.requestId })
+								...(event.approval === undefined
+									? {}
+									: { approvalRequestId: event.approval.requestId })
 							}
 						},
 						`${occurrence}:${index}`

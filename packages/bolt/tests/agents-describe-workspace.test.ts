@@ -109,7 +109,7 @@ describe('describe_workspace', () => {
 				'plaque:json(file)',
 				'documents:json(files)'
 			],
-			write: { create: 'customer_id, status', update: 'status, trials{…}', transform: true },
+			write: { create: 'customer_id, status', update: 'status, trials{create}', transform: true },
 			search: ['/colour']
 		});
 		expect(customers).toEqual({
@@ -167,6 +167,61 @@ describe('subjectStanding', () => {
 		);
 	});
 
+	it('prints the compiled value type of a JSON field and where a collection is filed nested', () => {
+		const typed = {
+			...definition,
+			collections: [
+				{
+					name: 'jobs',
+					history: true,
+					fields: {
+						id: field('uuid', { required: true, primaryKey: true }),
+						amount_charged: field('json')
+					},
+					types: {
+						row: '{ amount_charged: { value: number; currency: string; } | null; }',
+						fields: { amount_charged: '{ value: number; currency: string; } | null' }
+					},
+					write: {
+						create: {
+							columns: { amount_charged: true },
+							with: { photos: { create: { columns: { photo: true, source: true } } } }
+						},
+						hasTransform: false
+					}
+				},
+				{
+					name: 'photos',
+					history: true,
+					fields: {
+						id: field('uuid', { required: true, primaryKey: true }),
+						source: field('json')
+					},
+					write: { create: { columns: {} }, hasTransform: false }
+				}
+			],
+			relations: [{ name: 'photos', source: 'jobs', target: 'photos', cardinality: 'many' }]
+		};
+		const snapshot = workspaceSnapshot(
+			{
+				workspace: { definition: typed } as never,
+				collectionNames: ['jobs', 'photos'],
+				readableCollectionNames: ['jobs', 'photos'],
+				writableCollectionNames: ['jobs', 'photos'],
+				readFields: {},
+				standing: 'workspace administrator',
+				toolNames: ['write_collection'],
+				skills: []
+			},
+			'2026-09-24T00:00:00.000Z'
+		);
+		// `json` named the storage; the agent needs the value a write carries.
+		expect(snapshot).toContain('amount_charged:{ value: number; currency: string } | null');
+		expect(snapshot).toContain('    create: amount_charged, photos{create}');
+		// The channel photo's `source` is accepted only through the job's nested create.
+		expect(snapshot).toContain('    nested: jobs.create photos.create{photo, source}');
+	});
+
 	it('puts the same shape in the prompt as a stamped YAML snapshot with every source path', () => {
 		const snapshot = workspaceSnapshot(
 			{
@@ -187,7 +242,7 @@ describe('subjectStanding', () => {
 		);
 		expect(lines).toContain('  projects:');
 		expect(lines).toContain('    src: src/collections/projects/');
-		expect(lines).toContain('    update: status, trials{…}');
+		expect(lines).toContain('    update: status, trials{create}');
 		expect(lines).toContain('  board: "Board" src/apps/+board.svelte');
 		expect(lines).toContain('  nightly: schedule 0 2 * * * src/automations/+nightly.ts');
 		expect(lines).toContain('  sales_whatsapp: whatsapp src/channels/+sales_whatsapp.ts');

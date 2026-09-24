@@ -375,6 +375,52 @@ export const CollectionQueryRequestFields = {
 	after: Schema.optionalKey(Schema.String),
 	columns: Schema.optionalKey(Schema.Json)
 };
+/**
+ * One field a filter picker offers, as the browser shows it: the input a filter inference reads.
+ *
+ * The browser sends its own picker list rather than the server re-deriving one, so the model is asked
+ * about exactly the fields and operators the person can see and edit, and its answer is checked
+ * against that same list. It grants nothing: reads still run under the caller's policies.
+ */
+export const CollectionFilterInferenceField = Schema.Struct({
+	value: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+	label: Schema.String.check(Schema.isMaxLength(256)),
+	kind: Schema.String.check(Schema.isMaxLength(64)),
+	nullable: Schema.Boolean,
+	array: Schema.optionalKey(Schema.Boolean),
+	values: Schema.optionalKey(Schema.Array(Schema.String).check(Schema.isMaxLength(200))),
+	/** A reference field's target collection: its operand is a record id `find_records` resolves. */
+	target: Schema.optionalKey(Schema.String),
+	operators: Schema.Array(Schema.String).check(Schema.isMaxLength(20))
+});
+
+/** One filter row as the builder holds it: a picker field, an operator, and its operand. */
+export const CollectionFilterInferenceCondition = Schema.Struct({
+	field: Schema.String,
+	operator: Schema.String,
+	value: Schema.optionalKey(Schema.Json)
+});
+
+export const CollectionFilterInferenceInput = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)),
+	fields: Schema.Array(CollectionFilterInferenceField).check(Schema.isMaxLength(300)),
+	/** The rows already applied, so a follow-up ("only Bob's") refines rather than restarts. */
+	current: Schema.Array(CollectionFilterInferenceCondition).check(Schema.isMaxLength(50))
+}).annotate({ identifier: 'BoltCollectionFilterInferenceInput' });
+export interface CollectionFilterInferenceInput extends Schema.Schema.Type<
+	typeof CollectionFilterInferenceInput
+> {}
+
+/** The whole filter the request describes, and the phrases that mapped to nothing. */
+export const CollectionFilterInference = Schema.Struct({
+	conditions: Schema.Array(CollectionFilterInferenceCondition),
+	unresolved: Schema.Array(Schema.String)
+}).annotate({ identifier: 'BoltCollectionFilterInference' });
+export interface CollectionFilterInference extends Schema.Schema.Type<
+	typeof CollectionFilterInference
+> {}
+
 export const CollectionQueryRequest = Schema.Struct(CollectionQueryRequestFields).annotate({
 	identifier: 'BoltCollectionQueryRequest'
 });

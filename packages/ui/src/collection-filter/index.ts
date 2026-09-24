@@ -8,3 +8,10 @@ export {
 	type FilterCollectionDefinition
 } from './collection-filter-fields.js';
 export type { CollectionFilterOperator } from './collection-filter-operators.js';
+export {
+	getCollectionFilterInference,
+	setCollectionFilterInference,
+	type CollectionFilterInfer,
+	type CollectionFilterInferenceAnswer,
+	type CollectionFilterInferenceRequest
+} from './collection-filter-inference.js';

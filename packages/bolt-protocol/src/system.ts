@@ -3,6 +3,8 @@ import { Prompt } from 'effect/unstable/ai';
 import { WorkspaceAuthoringManifest } from './bundle.js';
 import {
 	CollectionAnchoredPage,
+	CollectionFilterInference,
+	CollectionFilterInferenceInput,
 	CollectionGroupedQueryRequest,
 	CollectionHistoryAnchor,
 	CollectionMutationPush,
@@ -185,7 +187,6 @@ export const SecretsStatus = Schema.Array(
 ).annotate({ identifier: 'BoltSecretsStatus' });
 export type SecretsStatus = typeof SecretsStatus.Type;
 
-
 const WorkspaceAccessRole = Schema.Literals(['admin', 'manager', 'basic']);
 export const WorkspaceAccess = Schema.Struct({
 	members: Schema.Array(
@@ -262,7 +263,6 @@ const AutomationStopInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString
 });
-
 
 /** The host config key naming the VAPID public key a browser subscribes against. */
 export const WEB_PUSH_PUBLIC_KEY_CONFIG_KEY = 'BOLT_WEB_PUSH_PUBLIC_KEY';
@@ -580,6 +580,13 @@ export const SystemCommandContracts = [
 		name: 'collections.count',
 		input: CollectionQueryRequest,
 		responses: [ok(Schema.Json)]
+	}),
+	commandContract({
+		name: 'collections.inferFilter',
+		input: CollectionFilterInferenceInput,
+		responses: [ok(CollectionFilterInference)],
+		clientPath: ['collections', 'inferFilter'],
+		clientMode: 'operation'
 	}),
 	commandContract({
 		name: 'collections.findMany',

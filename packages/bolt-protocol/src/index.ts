@@ -28,6 +28,8 @@ export {
 	CollectionMutationIdempotencyKey,
 	CollectionAnchoredPage,
 	CollectionQueryRequest,
+	CollectionFilterInference,
+	CollectionFilterInferenceInput,
 	CollectionQueryRequestFields,
 	CollectionSearch,
 	CollectionWriteValues,
@@ -218,11 +220,7 @@ export {
 	WorkbenchId,
 	NotificationRecipient
 } from './facilities.js';
-export type {
-	FacilityBinding,
-	FacilityBindings,
-	TransactionStatement
-} from './facilities.js';
+export type { FacilityBinding, FacilityBindings, TransactionStatement } from './facilities.js';
 
 export { Activation, Invocation, InvocationScope, PluginTrustedContext } from './invocation.js';
 

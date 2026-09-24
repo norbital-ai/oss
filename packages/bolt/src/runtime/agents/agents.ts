@@ -4185,6 +4185,7 @@ export const layer = Layer.effect(
 								...allTools.filter((tool) =>
 									[
 										'describe_workspace',
+										'describe_type',
 										'list_skills',
 										'read_skill',
 										'read_collection',

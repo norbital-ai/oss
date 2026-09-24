@@ -335,7 +335,13 @@ describe('collection declaration in a synced workspace', () => {
 			),
 			writeFile(join(directory, '+model.ts'), modelSource),
 			writeFile(join(directory, '+collection.ts'), collectionSource),
-			writeFile(join(root, 'src', '+agents.md'), '# Fixture desk\n\nAnswer about tickets.\n')
+			writeFile(join(root, 'src', '+agents.md'), '# Fixture desk\n\nAnswer about tickets.\n'),
+			// A tsconfig is what lets sync type-check the workspace and ship its type index. It extends
+			// the generated one, as a template's does; sync rewrites the placeholder before it reads it.
+			writeFile(join(root, 'tsconfig.json'), '{ "extends": "./.norbital/tsconfig.json" }\n'),
+			mkdir(join(root, '.norbital'), { recursive: true }).then(() =>
+				writeFile(join(root, '.norbital', 'tsconfig.json'), '{}\n')
+			)
 		]);
 
 		await Effect.runPromise(generateWorkspaceMigration(root, 'baseline'));
@@ -359,6 +365,9 @@ describe('collection declaration in a synced workspace', () => {
 			expect(artifact).toContain(fragment);
 		}
 		expect(artifact).toContain('collections: { "tickets": _collection_default }');
+		// The checker's own rendering of the collection's surfaces rides on the definition, so an
+		// agent reads a field's accepted value without a compiler at run time.
+		expect(artifact).toMatch(/"types": \{[^]*"createFields": \{ "subject": "string" \}/);
 		expect(artifact).toContain('pipelines: declaredPipelines');
 		expect(artifact).not.toMatch(/hookSourcePaths|declaredHooks/);
 
