@@ -132,4 +132,25 @@ describe('redeeming an envoy registration', () => {
 		expect(await redeem('again', person(dion))).toMatchObject({ state: 'already_registered' });
 		expect(await redeem('other', person(other))).toEqual({ state: 'used' });
 	});
+
+	it('sends the registration link to the sender directly, never into the group that mentioned the envoy', async () => {
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async () => ({ _tag: 'Failure', error: { code: 'unused', message: 'unused' } }) as never
+		};
+		const { sends, binding: communication } = recordingCommunication();
+		harness = await makeBoltTestRuntime(definition, { ai, communication });
+		await harness.runtime.runPromise(
+			receiveChat('whatsapp', {
+				...delivery,
+				conversationId: '120363000000000000@g.us',
+				conversationKind: 'group',
+				messageId: 'group-mention',
+				invocation: 'mention',
+				sender: { id: '11112222333344@lid', displayName: 'Dion' }
+			})
+		);
+		expect(sends).toHaveLength(1);
+		expect(JSON.stringify(sends[0]?.message)).toContain('"to":"11112222333344@lid"');
+		expect(JSON.stringify(sends)).not.toContain('@g.us');
+	});
 });

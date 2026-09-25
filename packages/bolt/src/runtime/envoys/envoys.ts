@@ -706,11 +706,12 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 									Effect.catch(() => Effect.succeed(false))
 								);
 							const claimId = allowed ? yield* issueRegistration(EffectId.make(`${step}:registration`), envoy, senderId) : undefined;
+							// The link goes to the sender alone, never into a group: whoever redeems it links this number.
 							if (claimId !== undefined)
 								yield* deliver(
 									EffectId.make(`${step}:notice`),
 									envoy,
-									row.conversationId,
+									senderId,
 									yield* registrationNotice(`Register this ${envoy.transport} account with ${tenant.tenantId} to continue.`, claimId),
 									envelope._tag === 'email' ? { to: [senderId], subject: `Re: ${envelope.subject}` } : undefined
 								);
