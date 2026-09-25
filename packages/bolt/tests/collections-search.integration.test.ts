@@ -503,4 +503,39 @@ describe('hybrid /semantic search', () => {
 		// No word in common, found by meaning alone.
 		expect(found.meaning[0]).toBe('Sourdough Loaves');
 	});
+
+	it('lands a vector on a row whose updated_at carries microseconds', async () => {
+		harness = await makeBoltTestRuntime(shops, {
+			ai: embedder,
+			authored: {
+				...emptyAuthoredRuntime,
+				collections: { shops: { create: { input: { columns: { name: true } } } } }
+			}
+		});
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.write(harness!.effectId('seed'), adminSubject, [
+					{ collection: 'shops', action: 'create', inputs: [{ id: placeId(0), name: 'Kismis' }] }
+				]);
+			})
+		);
+		// Postgres keeps microseconds; a JS Date drops them. The write guard must still match.
+		await harness.database.query(
+			`update shops set updated_at = '2026-09-25 08:49:35.284198+00'`
+		);
+		const passes = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				return [
+					yield* collections.embedRecords(harness!.effectId('embed:1')),
+					yield* collections.embedRecords(harness!.effectId('embed:2'))
+				];
+			})
+		);
+		expect(passes).toEqual([
+			[{ collection: 'shops', selected: 1, embedded: 1, failed: 0 }],
+			[{ collection: 'shops', selected: 0, embedded: 0, failed: 0 }]
+		]);
+	});
 });
