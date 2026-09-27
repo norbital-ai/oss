@@ -1,19 +1,17 @@
 # `@norbital-ai/std`
 
-Small shared modules for billing, collections, dates, errors, finance, internationalization, JSON,
-rate limits, deterministic computation, secrets, strings, and trees.
+Value libraries for Bolt workspaces: functions over plain data (RFC §3.7).
 
 See the [standard library overview](./docs/README.md) for the package goal and import guidance.
 
 Import the narrowest public export:
 
 ```ts
-import { parseUtcInstant } from '@norbital-ai/std/date';
+import { PlainDate } from '@norbital-ai/std/date';
 ```
 
-Public subpaths are `billing`, `collection`, `date`, `error`, `finance`, `i18n`, `json`, `rate-limit`,
-`reckon`, `secret`, `string`, and `tree`. The package root re-exports the stable general-purpose
-subset.
+Public subpaths are `billing`, `calendar`, `date`, `decimal`, `formula`, `json`, `pdf`, `pricing`, `sheet`,
+`versioned` and `zone`. There is no package root.
 
 ## Development
 

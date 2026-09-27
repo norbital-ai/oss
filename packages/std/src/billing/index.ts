@@ -8,9 +8,13 @@ import {
 	HOURS_PER_BILLING_MONTH
 } from './rate-card.js';
 
+/** The currency every price and invoice is stated in. */
 export const BILLING_CURRENCY = 'SGD' as const;
+/** The trial length of the platform plan, in days. */
 export const DEFAULT_BILLING_TRIAL_DAYS = 30;
+/** Cents per dollar of the billing currency. */
 export const CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT = 100;
+/** The id of the platform product and of its one plan in the catalogue. */
 export const PLATFORM_PRODUCT_ID = 'platform';
 
 /**
@@ -19,13 +23,17 @@ export const PLATFORM_PRODUCT_ID = 'platform';
  * Stripe decodes from the same source of truth the type is derived from.
  */
 export const BillingCatalogueIntervalSchema = Schema.Literals(['month', 'year']);
+/** A price's billing interval: `month` or `year`. */
 export type BillingCatalogueInterval = Schema.Schema.Type<typeof BillingCatalogueIntervalSchema>;
 
+/** The schema of a price's model: `flat`, `per_seat` or `metered`. */
 export const BillingCataloguePriceModelSchema = Schema.Literals(['flat', 'per_seat', 'metered']);
+/** A price's model: `flat`, `per_seat` or `metered`. */
 export type BillingCataloguePriceModel = Schema.Schema.Type<
 	typeof BillingCataloguePriceModelSchema
 >;
 
+/** The meter AI usage is reported to, in micro-SGD of converted provider cost. */
 export const AI_USAGE_METER_ID = 'bolt_ai_cost_sgd_micros_v1';
 
 function stripeDecimalCents(sgdPerUnit: number): string {
@@ -48,6 +56,7 @@ const USAGE_METER_UNIT_AMOUNT_CENTS = {
 	)
 } as const;
 
+/** The meter id of each metered usage: compute, disc, files and AI. */
 export const USAGE_METER_IDS = {
 	compute: 'bolt_compute_seconds_v1',
 	disc: 'bolt_disc_gb_hours_v1',
@@ -55,6 +64,7 @@ export const USAGE_METER_IDS = {
 	ai: AI_USAGE_METER_ID
 } as const;
 
+/** The unit each meter counts in (milliseconds, micro-GB-hours, micro-SGD). */
 export const USAGE_METER_UNITS = {
 	compute: 'millisecond',
 	disc: 'micro-GB-hour',
@@ -78,25 +88,32 @@ export function aiProviderCostSgdMicros(providerCostUsd: number): number {
 	return Math.round(providerCostUsd * AI_SGD_PER_PROVIDER_USD * 1_000_000);
 }
 
+/** The schema of one price tier: the quantity it runs `upTo` (or `inf`) and its amount. */
 export const BillingCatalogueTierSchema = Schema.Struct({
 	upTo: Schema.Union([Schema.Number, Schema.Literal('inf')]),
 	amount: Schema.String
 });
+/** One price tier: the quantity it runs `upTo` (or `inf`) and its amount. */
 export type BillingCatalogueTier = Schema.Schema.Type<typeof BillingCatalogueTierSchema>;
 
+/** The schema of a billing provider environment: `sandbox` or `production`. */
 export const BillingProviderEnvironmentSchema = Schema.Literals(['sandbox', 'production']);
+/** A billing provider environment: `sandbox` or `production`. */
 export type BillingProviderEnvironment = Schema.Schema.Type<
 	typeof BillingProviderEnvironmentSchema
 >;
 
+/** The schema of a price's Stripe ids per environment. */
 export const BillingCatalogueProviderPriceIdsSchema = Schema.Struct({
 	sandbox: Schema.NullishOr(Schema.String),
 	production: Schema.NullishOr(Schema.String)
 });
+/** A price's Stripe price id in the sandbox and in production (`null` where not created). */
 export type BillingCatalogueProviderPriceIds = Schema.Schema.Type<
 	typeof BillingCatalogueProviderPriceIdsSchema
 >;
 
+/** The schema of one catalogue price; hosts decode a catalogue with it before pushing it to Stripe. */
 export const BillingCataloguePriceSchema = Schema.Struct({
 	id: Schema.String,
 	name: Schema.String,
@@ -112,6 +129,9 @@ export const BillingCataloguePriceSchema = Schema.Struct({
 	tiersMode: Schema.optional(Schema.Literals(['graduated', 'volume'])),
 	tiers: Schema.optional(Schema.Array(BillingCatalogueTierSchema))
 });
+/**
+ * One catalogue price: its model and interval, whether checkout subscribes it, its Stripe ids, and a flat amount or a metered unit amount and meter.
+ */
 export type BillingCataloguePrice = Schema.Schema.Type<typeof BillingCataloguePriceSchema>;
 
 /**
@@ -125,8 +145,10 @@ export const BillingCataloguePlanSchema = Schema.Struct({
 	trialDays: Schema.Number,
 	allowPromotionCodes: Schema.Boolean
 });
+/** A plan: the base subscription's id, trial days and whether promotion codes are allowed. */
 export type BillingCataloguePlan = Schema.Schema.Type<typeof BillingCataloguePlanSchema>;
 
+/** The schema of a catalogue product: its prices and plans. */
 export const BillingCatalogueProductSchema = Schema.Struct({
 	id: Schema.String,
 	name: Schema.String,
@@ -134,14 +156,22 @@ export const BillingCatalogueProductSchema = Schema.Struct({
 	prices: Schema.Array(BillingCataloguePriceSchema),
 	plans: Schema.Array(BillingCataloguePlanSchema)
 });
+/** A catalogue product: its name and description, prices and plans. */
 export type BillingCatalogueProduct = Schema.Schema.Type<typeof BillingCatalogueProductSchema>;
 
+/** The schema of the whole billing catalogue. */
 export const BillingCatalogueSchema = Schema.Struct({
 	currency: Schema.Literal(BILLING_CURRENCY),
 	products: Schema.Array(BillingCatalogueProductSchema)
 });
+/** The billing catalogue: its currency and products. */
 export type BillingCatalogue = Schema.Schema.Type<typeof BillingCatalogueSchema>;
 
+/**
+ * An amount in cents as display text in the billing currency.
+ * @example
+ * formatBillingAmountFromMinorUnits(1000) // 'SGD 10'
+ */
 export function formatBillingAmountFromMinorUnits(
 	amountMinorUnits: string | number,
 	options?: {
@@ -183,6 +213,7 @@ export const PLATFORM_FLAT_PRICES = [
 /** The flat base fee in major units — the catalogue amount, not a second literal beside it. */
 export const PLATFORM_BASE_SGD_PER_MONTH = Number(PLATFORM_FLAT_PRICES[0].amount);
 
+/** The metered AI usage price: provider cost converted to micro-SGD at the published rate. */
 export const AI_METERED_PRICES = [
 	{
 		id: 'ai-provider-cost-micros-monthly',
@@ -201,6 +232,9 @@ export const AI_METERED_PRICES = [
 	}
 ] as const satisfies readonly BillingCataloguePrice[];
 
+/**
+ * The current catalogue's products: the platform product with its flat base fee and its compute, disc, files and AI meters.
+ */
 export const LATEST_CATALOGUE_PRODUCTS = [
 	{
 		id: PLATFORM_PRODUCT_ID,
@@ -264,9 +298,13 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 	}
 ] as const satisfies readonly BillingCatalogueProduct[];
 
+/** Every price of the current catalogue. */
 export const LATEST_CATALOGUE_PRICES = LATEST_CATALOGUE_PRODUCTS[0]
 	.prices as readonly BillingCataloguePrice[];
 
+/**
+ * The cost in micro-SGD of `quantity` units of a meter at the current catalogue's unit price; throws on a negative or fractional quantity or an unknown meter.
+ */
 export function calculateCatalogueMeterCostSgdMicros(meterId: string, quantity: number): number {
 	if (!Number.isSafeInteger(quantity) || quantity < 0) {
 		throw new Error('Meter quantity must be a non-negative safe integer');
@@ -278,9 +316,11 @@ export function calculateCatalogueMeterCostSgdMicros(meterId: string, quantity: 
 	return Math.round(quantity * Number(price.unitAmountDecimal) * 10_000);
 }
 
+/** Every plan of the current catalogue. */
 export const LATEST_CATALOGUE_PLANS = LATEST_CATALOGUE_PRODUCTS[0]
 	.plans as readonly BillingCataloguePlan[];
 
+/** The current billing catalogue, as hosts push it to Stripe. */
 export const LATEST_CATALOGUE = {
 	currency: BILLING_CURRENCY,
 	products: LATEST_CATALOGUE_PRODUCTS

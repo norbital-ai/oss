@@ -1,9 +1,15 @@
+<!--
+@component
+Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), optionally laying out its children as a stack, row, cluster or grid.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
+	/** The maximum width a `Center` holds its content to. */
 	export type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
 	type CenterLayout = 'block' | 'stack' | 'inline' | 'cluster' | 'grid';
+	/** The props of `Center`. */
 	export interface CenterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		measure?: CenterMeasure;
@@ -17,8 +23,8 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
-	import { GAP_CLASSES } from '#lib/layout/layout.shared';
+	import { cn } from '../primitives/utils.js';
+	import { GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',

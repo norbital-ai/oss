@@ -1,0 +1,33 @@
+id: HOST1
+summary: a host-neutral package imports bolt-server or a provider SDK
+severity: error
+principles: [modularity, testability]
+files:
+  - '**/packages/bolt/src/engine/**'
+  - '**/packages/bolt/src/client/**'
+  - '**/packages/bolt/src/decl/**'
+  - '**/packages/bolt/src/protocol/**'
+  - '**/packages/bolt/src/shell/**'
+  - '**/packages/std/src/**'
+  - '**/packages/ui/src/**'
+rule:
+  all:
+    - kind: StringLiteral
+    - regex: '^[''"](?:@norbital-ai/bolt-server|openai|pg|@aws-sdk|@slack|stripe|@anthropic-ai)(?:/|[''"])'
+    - any:
+        - inside: { kind: ImportDeclaration }
+        - inside: { kind: ExportDeclaration }
+        - inside:
+            all:
+              - kind: CallExpression
+              - regex: '^(?:import|require)\('
+examples:
+  file: packages/bolt/src/engine/probe.ts
+  bad:
+    - "import Stripe from 'stripe';"
+    - "import { S3 } from '@aws-sdk/client-s3';"
+    - "export { Pool } from 'pg';"
+    - "const pg = await import('pg');"
+  good:
+    - "import { format } from 'pg-format-lite';"
+    - "import { Schema } from 'effect';"

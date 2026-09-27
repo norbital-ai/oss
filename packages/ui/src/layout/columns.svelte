@@ -1,8 +1,14 @@
+<!--
+@component
+A fixed number of equal columns (1–7) that collapse to one per row below a width of the element itself.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
+	/** The number of columns of a `Columns`. */
 	export type ColumnCount = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+	/** The props of `Columns`. */
 	export interface ColumnsProps extends LayoutAttributes {
 		as?: LayoutElement;
 		count?: ColumnCount;
@@ -17,9 +23,9 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { cn } from '../primitives/utils.js';
 	import { setContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES } from '#lib/layout/layout.shared';
+	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',

@@ -36,13 +36,6 @@ type ModelHost = Readonly<{
 	original: string;
 }>;
 
-/** A node's identifier name, when it has one. */
-export function nameOf(node: ts.Node): ts.Identifier | undefined {
-	const name = Reflect.get(node, 'name');
-	if (name === undefined) return undefined;
-	return ts.isIdentifier(name as ts.Node) ? (name as ts.Identifier) : undefined;
-}
-
 export function createNode(
 	kind: string,
 	language: Language,

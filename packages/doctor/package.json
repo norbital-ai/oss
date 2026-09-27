@@ -1,12 +1,11 @@
 {
 	"name": "@norbital-ai/doctor",
-	"version": "0.0.114",
-	"description": "Norbital Doctor: deterministic static code-quality analysis for TypeScript, JavaScript, and Svelte, with a CLI and a type-safe rule authoring surface.",
+	"version": "0.0.115",
+	"description": "The static rules `bolt check` runs: four fixed workspace packs (boundaries, layout, svelte, reactive), plus the realm packs, over TypeScript and Svelte.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
 	"files": [
 		"build",
-		"docs",
 		"engine",
 		"packs",
 		"package.json"
@@ -24,27 +23,24 @@
 		"access": "public",
 		"provenance": true
 	},
-	"bin": {
-		"norbital-doctor": "./build/cli.js"
-	},
 	"exports": {
-		".": "./build/index.js",
-		"./package.json": "./package.json"
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
 	},
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor",
-		"lint": "tsc -p tsconfig.json --noEmit",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
 		"test": "pnpm build && node --test 'tests/*.test.ts'"
 	},
 	"dependencies": {
-		"@norbital-ai/std": "workspace:*",
 		"effect": "4.0.0-rc.112",
 		"typescript": "catalog:",
 		"yaml": "^2.9.0"
 	},
 	"devDependencies": {
-		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
 		"typescript": "catalog:"
 	}

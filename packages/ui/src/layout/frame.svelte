@@ -1,9 +1,14 @@
+<!--
+@component
+Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescreen`, `banner`).
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
 	/** Named media crops. `banner` is the compact overview / sheet hero (2:1). */
 	export type FrameRatio = 'square' | 'portrait' | 'landscape' | 'widescreen' | 'banner';
+	/** The props of `Frame`. */
 	export interface FrameProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: FrameRatio;
@@ -14,7 +19,7 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { cn } from '../primitives/utils.js';
 
 	let {
 		as = 'div',

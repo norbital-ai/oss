@@ -1,120 +1,28 @@
 /**
- * Deterministic static code-quality analysis for TypeScript, JavaScript, and Svelte repositories.
+ * `@norbital-ai/doctor` (RFC §3.3.10, OD-K5′): the static rules `bolt check` runs. Four fixed workspace packs —
+ * `boundaries`, `layout`, `svelte`, `reactive` — and no configuration; every finding is an error. A reviewed
+ * `repository-health:allow <rule> -- <reason>` line is the only exception (`allowances.ts`).
  *
- * Evidence comes from three tiers, and every receipt records which of them ran:
- *
- * - `syntactic` — per file, pure. Always on.
- * - `graph` — whole repository, module graph. On with the built-in detector.
- * - `typeAware` — a TypeScript program per owning tsconfig. Always on.
- *
- * The type-aware tier was optional, and off, until keeping it optional stopped being defensible:
- * `LEGACY2` reads `@deprecated` tags that live in somebody else's `.d.ts`, so with the tier off its
- * silence and its all-clear were the same result. It costs the scan roughly twice its syntactic
- * time and is worth that. `typeAware: false` in a receipt now means only that the selection held no
- * file a program can contain, and `assess` refuses to consolidate a root that reports it.
+ * The realm's own gates select the realm packs by name (`packs/realm/*`): `realm/boundaries`, `realm/graph`,
+ * `realm/overlaps`, `realm/structure`, `realm/effect`, `realm/ceremony`, and `realm/types` (the type-aware tier). An
+ * absolute directory is a host's own pack.
  */
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runAuthored } from './authored.js';
-import { publishEvidence } from './evidence.js';
-import { buildMetrics } from './metrics/emitter.js';
-import { Effect } from 'effect';
-import * as Result from 'effect/Result';
-import * as Schema from 'effect/Schema';
-import { assembleReport } from './analysis/snapshot.js';
-import { loadConfig } from './config.js';
-import { LANGUAGE_HEALTH_PROFILE, mergeHealthProfile } from './health-profile.js';
+import './analyses.js';
+import { applyAllowances } from './allowances.js';
+import { bindCrossFile } from './cross-file.js';
 import { loadPackDirectory } from './patterns-yaml.js';
-import { definePack, type Confidence, type Severity } from './rules.js';
-export { computeCheckpointDelta, deltaSummary } from './analysis/delta.js';
-export type { CheckpointDelta, DeltaOptions, DeltaSide, PillarDelta } from './analysis/delta.js';
-
-export { definePack } from './rules.js';
-export type {
-	Confidence,
-	NodeKind,
-	Pack,
-	Principle,
-	Rule,
-	RuleContext,
-	Severity
-} from './rules.js';
-export { defineConfig, DOCTOR_CONFIG_DIRECTORY, findConfig, loadConfig } from './config.js';
-export type { LoadedConfig, ProbeConfig } from './config.js';
-export {
-	LANGUAGE_HEALTH_PROFILE,
-	assertHealthProfileShape,
-	compileHealthProfile,
-	mergeHealthProfile,
-	matchesAny
-} from './health-profile.js';
-export type { CompiledHealthProfile, HealthProfile } from './health-profile.js';
-export { runRules, searchRules, sourceFiles, svelteScript } from './runner.js';
-export { defineRule, searchRule, verifyExamples, matchSource } from './pattern.js';
-export { loadPackDirectory, loadPatternFiles } from './patterns-yaml.js';
-export { bindingTexts, compile, match, matcherKinds, parsePattern, withUtils } from './matcher.js';
-export { nameOf } from './model.js';
-export { runCrossFile } from './cross-file.js';
-import { loadGraphRules } from './cross-file.js';
-export type {
-	Bindings,
-	Constraints,
-	MatchResult,
-	Matcher,
-	NthChild,
-	PatternStyle,
-	Position,
-	Range,
-	StopBy,
-	Strictness,
-	Utils
-} from './matcher.js';
-export type { ShapeRule, VisitorRule, RuleDefinition, Examples } from './pattern.js';
-export type { Match, RunOptions, SourceFileOptions } from './runner.js';
-
-const SHIPPED_PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
-
-export const structureRules = loadPackDirectory(join(SHIPPED_PACKS, 'structure'));
-export const structurePack = definePack({ name: 'norbital/structure', rules: structureRules });
-export const boundaryRules = loadPackDirectory(join(SHIPPED_PACKS, 'boundaries'));
-export const boundariesPack = definePack({ name: 'norbital/boundaries', rules: boundaryRules });
-export const overlapRules = loadPackDirectory(join(SHIPPED_PACKS, 'overlaps'));
-export const overlapPack = definePack({ name: 'norbital/overlaps', rules: overlapRules });
-// The same documents the graph tier runs: loaded once, shared by reference.
-export const graphRules = loadGraphRules();
-export const graphPack = definePack({ name: 'norbital/graph', rules: graphRules });
-/**
- * The layout contract for `.svelte` source written against `@norbital-ai/ui/layout`: layout is a
- * primitive's props, never raw flex/grid/gap/scroll/position utilities. It ships in the core, not
- * the Norbital pack, because a published template can resolve only this package.
- */
-export const layoutRules = loadPackDirectory(join(SHIPPED_PACKS, 'layout'));
-export const layoutPack = definePack({ name: 'norbital/layout', rules: layoutRules });
-export const stringlyPack = definePack({
-	name: 'norbital/stringly-typed',
-	rules: loadPackDirectory(join(SHIPPED_PACKS, 'stringly'))
-});
-export type StringlyOptions = Readonly<{
-	readonly entities?: ReadonlyArray<string> | undefined;
-}>;
-export const stringlyTyped = (_options: StringlyOptions = {}) => stringlyPack;
-
-/** Where every root writes its findings, receipt, and reports. */
-export const DIAGNOSIS_DIRECTORY = '.norbital/diagnosis';
-
-/** Same discipline as the evidence writer: a temporary file, then an atomic rename. */
-function atomicWriteText(path: string, contents: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const temporary = `${path}.${process.pid}.tmp`;
-	writeFileSync(temporary, contents);
-	renameSync(temporary, path);
-}
+import type { Confidence, Rule, Severity } from './rules.js';
+import type { Constraints, Matcher, Utils } from './matcher.js';
+import { searchRule } from './pattern.js';
+import { runRules, searchRules, sourceFiles, type Match } from './runner.js';
+import { runTypeAware } from './type-aware.js';
 
 export type Finding = Readonly<{
 	readonly severity: Severity;
 	readonly confidence: Confidence;
-	/** Rule identifier, for example `EFF3` or `UI17c`. */
+	/** Rule identifier, for example `UI5` or `R3e`. */
 	readonly rule: string;
 	readonly summary: string;
 	/** `path/to/file.ts:12: source excerpt` */
@@ -122,266 +30,64 @@ export type Finding = Readonly<{
 	readonly principles: ReadonlyArray<string>;
 }>;
 
-export type TierCoverage = Readonly<{
-	readonly syntactic: boolean;
-	readonly graph: boolean;
-	readonly typeAware: boolean;
-}>;
+/** One compiled pack rule. */
+export type DoctorRule = Rule;
 
-export type Receipt = Readonly<{
-	readonly schemaVersion: number;
-	readonly kind: string;
-	readonly scannerVersion: number;
-	readonly root: string;
-	readonly scope: string;
-	readonly includeTests: boolean;
-	readonly tiers: TierCoverage;
-	readonly files: number;
-	readonly findings: string;
-	readonly sourceInventoryDigest: string;
-	readonly ruleSetDigest: string;
-	readonly catalogueDigest: string;
-	readonly counts: Readonly<{
-		error: number;
-		warning: number;
-		hint: number;
-		total: number;
-		principles: Readonly<Record<string, number>>;
-	}>;
-	readonly complete: boolean;
-}>;
-
-export type AuditOptions = Readonly<{
-	/** Repository to analyse. Defaults to the current working directory. */
-	readonly root?: string | undefined;
-	/** Include test and end-to-end sources in the scanned scope. */
-	readonly includeTests?: boolean | undefined;
-	/** Restrict the scan to these repository-relative paths. */
-	readonly paths?: ReadonlyArray<string> | undefined;
-	readonly signal?: AbortSignal | undefined;
-}>;
-
-export type AuditResult = Readonly<{
-	readonly root: string;
-	readonly findings: ReadonlyArray<Finding>;
-	readonly receipt: Receipt;
-	/** 0 clean, 1 actionable debt, 2 evidence incomplete or invalid. */
-	readonly status: number;
-	readonly counts: Readonly<Record<Severity, number>>;
-	/** Absolute path to the canonical `findings.tsv`. */
-	readonly cataloguePath: string;
-	/** Absolute path to the derived metrics table. */
-	readonly metricsPath: string;
-	/** Packs loaded from the repository's `.norbital/config/doctor` config, if it has one. */
-	readonly packs: ReadonlyArray<string>;
-	/** How many findings came from authored rules rather than the built-in detector. */
-	readonly authoredFindings: number;
-}>;
+const PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
+const WORKSPACE = ['boundaries', 'layout', 'svelte', 'reactive'];
+const loaded = new Map<string, ReadonlyArray<DoctorRule>>();
 
 /**
- * Decode a receipt, checking the fields this module actually reads.
- *
- * The receipt is the thing that says whether the evidence can be trusted, so accepting it on an
- * unchecked cast would let a truncated or half-written file present itself as a complete scan —
- * the one failure the three-valued exit code exists to prevent. A malformed receipt is a thrown
- * error, never a quietly empty result.
+ * Every finding of `packs` (the four workspace packs by default) over `root`'s sources, or only `files`
+ * (repository-relative). `realm/graph` indexes the whole selection first; tests reach modules but are never reported.
  */
-export function decodeReceipt(text: string, path: string): Receipt {
-	const parsed = Effect.runSync(
-		Effect.result(
-			// repository-health:allow R6b -- the parse becomes a schema decode on the next step.
-			Effect.try(() => JSON.parse(text))
-		)
-	);
-	/*
-	 * One decode at the boundary. The receipt is a received shape and is understood here and
-	 * nowhere else: the parse becomes a schema decode, and a half-written file fails as the
-	 * thing it is — evidence that never was evidence — rather than as prose.
-	 */
-	return Result.match(parsed, {
-		onFailure: (failure) => {
-			throw new Error(`norbital-doctor: ${path} is not valid JSON: ${String(failure)}`);
-		},
-		onSuccess: (value) => decodeReceiptShape(value, path)
-	});
-}
-
-/** The receipt schema, decoded field by field at the boundary that received it. */
-function decodeReceiptShape(value: unknown, path: string): Receipt {
-	const decoded = Effect.runSync(
-		Effect.result(Schema.decodeUnknownEffect(ReceiptHeadSchema)(value))
-	);
-	return Result.match(decoded, {
-		onFailure: (failure) => {
-			throw new Error(`norbital-doctor: ${path} ${receiptFailureMessage(failure, path)}`);
-		},
-		onSuccess: (receipt) => {
-			// Schema's number check accepts 1.5; a source count must be a safe integer, and the
-			// boundary says so in the message a console reader expects.
-			if (!Number.isSafeInteger(receipt.files))
-				throw new Error(`norbital-doctor: ${path} has no valid source count`);
-			return receipt as Receipt;
-		}
-	});
-}
-
-const ReceiptTierSchema = Schema.Struct({
-	syntactic: Schema.Boolean,
-	graph: Schema.Boolean,
-	typeAware: Schema.Boolean
-});
-
-const ReceiptHeadSchema = Schema.Struct({
-	tiers: ReceiptTierSchema,
-	findings: Schema.String,
-	files: Schema.Number,
-	complete: Schema.Literal(true)
-});
-
-/** Map a Schema failure to the message a scanner receipt consumer expects to read. */
-function receiptFailureMessage(failure: unknown, path: string): string {
-	const text = String(failure);
-	const segments = [...text.matchAll(/\[([^\]]+)\]/g)].map((match) => match[1] ?? '');
-	const slot = segments[segments.length - 1] ?? '';
-	if (text.includes('Expected object') && segments.length === 0) return 'is not a receipt object';
-	const tierSlots = new Set(['syntactic', 'graph', 'typeAware']);
-	if (segments[0] === '"tiers"' && tierSlots.has(clean(slot)))
-		return `has no boolean "${clean(slot)}" tier`;
-	if (segments[0] === '"tiers"') return 'records no tier coverage';
-	if (slot === '"findings"') return 'does not name its catalogue';
-	if (slot === '"files"') return 'has no valid source count';
-	if (slot === '"complete"') return 'describes an incomplete scan';
-	return `cannot be read as evidence (${text.slice(0, 60)})`;
-}
-
-function clean(value: string): string {
-	return value.replace(/"/g, '');
-}
-
-/** Parse the canonical tab-separated catalogue the scanner publishes. */
-export function parseCatalogue(contents: string): ReadonlyArray<Finding> {
-	const findings: Array<Finding> = [];
-	for (const line of contents.split(/\r?\n/)) {
-		if (!line) continue;
-		const columns = line.split('\t');
-		if (columns.length !== 6) throw new Error(`invalid catalogue row: ${line}`);
-		const [severity, confidence, rule, summary, location, principles] = columns as [
-			Severity,
-			Confidence,
-			string,
-			string,
-			string,
-			string
-		];
-		findings.push({
-			severity,
-			confidence,
-			rule,
-			summary,
-			location,
-			principles: principles.split(',').filter(Boolean)
-		});
-	}
-	return findings;
-}
-
-/**
- * Scan one repository and return its findings with the receipt that authenticates them.
- *
- * Exit 2 from the engine means the evidence is incomplete, stale, or invalid — most often because
- * the worktree changed while the scan was running. That is surfaced as a thrown error rather than
- * an empty result, because an empty finding list and an unusable scan must never look alike.
- */
-export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
+export function doctor(
+	options: Readonly<{ root?: string; files?: ReadonlyArray<string>; includeTests?: boolean; packs?: ReadonlyArray<string> }> = {}
+): ReadonlyArray<Finding> {
 	const root = resolve(options.root ?? process.cwd());
-	// Always run: with no config the base pack is still the rule set, so a repository that has
-	// configured nothing is measured rather than skipped.
-	const authored = await runAuthored({
-		root,
-		includeTests: options.includeTests ?? false,
-		paths: options.paths ?? [],
-		signal: options.signal
+	const packs = options.packs ?? WORKSPACE;
+	const rules = packs.filter((pack) => pack !== 'realm/types').flatMap((pack) => {
+		if (!loaded.has(pack)) loaded.set(pack, loadPackDirectory(resolve(PACKS, pack)));
+		return loaded.get(pack)!;
 	});
-
-	if (options.paths?.length && authored.selectedFiles.length === 0)
-		throw new Error(
-			`norbital-doctor: --path selected zero source files (${options.paths.join(', ')}) in ${root}`
-		);
-	const counts: Record<Severity, number> = { error: 0, hint: 0 };
-	for (const finding of authored.findings) counts[finding.severity] += 1;
-
-	// The metrics table is derived evidence: pure computation over sources this audit already
-	// trusts, written beside the catalogue so consolidated reports can cite it without parsing.
-	const metrics = buildMetrics({
-		root,
-		files: authored.allFiles
-	});
-	atomicWriteText(join(root, DIAGNOSIS_DIRECTORY, 'metrics.tsv'), metrics.tsv);
-
-	const receipt = publishEvidence({
-		root,
-		findings: authored.findings,
-		authoredRuleSetDigest: authored.ruleSetDigest,
-		// The graph pass is part of the neutral baseline and always runs.
-		graph: true,
-		typeAware: authored.typeAware.ran,
-		allFiles: authored.allFiles,
-		selectedFileCount: authored.selectedFiles.length,
-		scope: options.paths?.length ? 'path' : 'all',
-		includeTests: options.includeTests
-	});
-	return {
-		root,
-		findings: authored.findings,
-		receipt,
-		status: counts.error > 0 ? 1 : 0,
-		counts,
-		cataloguePath: join(root, DIAGNOSIS_DIRECTORY, 'findings.tsv'),
-		metricsPath: join(root, DIAGNOSIS_DIRECTORY, 'metrics.tsv'),
-		packs: authored.packs,
-		authoredFindings: authored.findings.length
-	};
+	const files = options.files ?? sourceFiles(root, { includeTests: options.includeTests });
+	if (packs.includes('realm/graph')) {
+		const selected = new Set(files);
+		bindCrossFile(root, files, options.files ? [] : sourceFiles(root, { includeTests: true }).filter((file) => !selected.has(file)));
+	}
+	const types = packs.includes('realm/types') ? runTypeAware({ root, files }) : [];
+	return applyAllowances(root, [...runRules({ root, rules, files }), ...types]);
 }
 
-export type AssessOptions = AuditOptions &
-	Readonly<{
-		/** Additional repositories to include in one consolidated report. */
-		readonly roots?: ReadonlyArray<string> | undefined;
-		/** Write the report here; `--format both` adds `.json` and `.md`. */
-		readonly out?: string | undefined;
-		/** Report format. Defaults to `both` when `out` is set, `json` otherwise. */
-		readonly format?: 'json' | 'markdown' | 'both' | undefined;
-	}>;
+export type { Match, Matcher };
+/** An ast-grep rule: a pattern string, or an object whose keys all hold (`{ kind, regex, inside }`). */
+export type SearchRule = Matcher | Readonly<{ [key: string]: unknown }>;
 
-/** Scan every selected root, authenticate each receipt, and emit one consolidated report. */
-export async function assess(
-	options: AssessOptions = {}
-): Promise<Readonly<{ status: number; report: string; stderr: string }>> {
-	const roots = (options.roots?.length ? options.roots : [options.root ?? process.cwd()]).map(
-		(root) => resolve(root)
-	);
-	// Each root spawns a TypeScript program in the type-aware tier, so running them concurrently
-	// thrashes CPU and memory on exactly the large repositories this is for.
-	// repository-health:allow A6 -- roots are scanned one at a time on purpose
-	for (const root of roots) await audit({ ...options, root });
+/**
+ * Where `rule` matches over `files` (repository-relative, read through `read` when given — a draft, an artifact): ast-grep's
+ * rule language, a pattern with `$X` and `$$$`, a kind, and `inside`, `has`, `all`, `any` and `not`, over `.ts` and `.svelte`
+ * alike. File and line order: the first `limit` matches and the total.
+ */
+export function search(options: Readonly<{ rule: SearchRule; utils?: Utils; constraints?: Constraints; root?: string; files: ReadonlyArray<string>;
+	read?: (file: string) => string | undefined; limit?: number }>): Readonly<{ matches: ReadonlyArray<Match>; total: number }> {
+	return searchRules({ root: resolve(options.root ?? '/'), rules: [searchRule(asAstGrep(options.rule), { utils: options.utils, constraints: options.constraints })],
+		files: options.files, read: options.read, limit: options.limit });
+}
 
-	// Consolidation runs in-process now: the analyzer is typed source, byte-proven against the
-	// `.mjs` it replaced, and a subprocess bought nothing but an exec boundary. The receipt of
-	// every root is handed over explicitly, exactly as the argv form did.
-	const profiles = await Promise.all(roots.map(async (root) => (await loadConfig(root)).profile));
-	const healthProfile = profiles.reduce(
-		(combined, profile) => mergeHealthProfile(combined, profile),
-		LANGUAGE_HEALTH_PROFILE
-	);
-	const run = assembleReport({
-		roots,
-		receipts: roots.map((root) => join(root, DIAGNOSIS_DIRECTORY, 'receipt.json')),
-		// Always required, because the tier always runs: a root whose receipt reports otherwise
-		// is describing a scan this consolidation cannot speak for.
-		requireTypeAware: true,
-		format: options.format ?? (options.out ? 'both' : 'json'),
-		out: options.out,
-		healthProfile
-	});
-	return { status: run.exitCode, report: run.stdout, stderr: '' };
+/** ast-grep ANDs an object's keys (`{ kind, regex }`, `{ pattern, inside }`); this engine reads one key per object. */
+function asAstGrep(rule: SearchRule): Matcher {
+	if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) return rule as Matcher;
+	const r = rule as Readonly<Record<string, unknown>>, nested = (v: unknown) => asAstGrep(v as SearchRule);
+	const parts: Matcher[] = [];
+	for (const [k, v] of Object.entries(r)) {
+		if (k === 'stopBy' || k === 'field' || k === 'on') continue;
+		if (k === 'inside' || k === 'has' || k === 'follows' || k === 'precedes')
+			parts.push({ [k]: nested(v), ...(r['stopBy'] === undefined ? {} : { stopBy: r['stopBy'] === 'end' || r['stopBy'] === 'neighbor' ? r['stopBy'] : nested(r['stopBy']) }),
+				...(r['field'] === undefined || k === 'follows' || k === 'precedes' ? {} : { field: r['field'] }) } as Matcher);
+		else if (k === 'all' || k === 'any') parts.push({ [k]: (v as Matcher[]).map(nested) } as unknown as Matcher);
+		else if (k === 'not') parts.push({ not: nested(v) });
+		else if (k === 'regex') parts.push({ regex: v as string, ...(r['on'] === undefined ? {} : { on: r['on'] as string }) });
+		else parts.push({ [k]: v } as Matcher);
+	}
+	return parts.length === 1 ? parts[0]! : { all: parts };
 }

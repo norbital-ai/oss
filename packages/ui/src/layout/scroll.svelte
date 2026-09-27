@@ -1,3 +1,7 @@
+<!--
+@component
+The one scroll owner of a region: scrolls on `axis`, fades edges with content beyond them, and optionally snaps children. `name` identifies it (a page restores its position).
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import type {
@@ -5,9 +9,10 @@
 		LayoutElement,
 		LayoutGap,
 		ScrollAxis
-	} from '#lib/layout/layout.shared';
+	} from './layout.shared.js';
 
 	type ScrollLayout = 'block' | 'inline' | 'stack';
+	/** The props of `Scroll`. */
 	export interface ScrollProps extends LayoutAttributes {
 		as?: LayoutElement;
 		axis?: ScrollAxis;
@@ -43,7 +48,7 @@
 
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { cn } from '#lib/utils';
+	import { cn } from '../primitives/utils.js';
 	import { getContext, setContext } from 'svelte';
 	import {
 		GAP_CLASSES,
@@ -51,7 +56,7 @@
 		SCROLL_AXIS_CLASSES,
 		SCROLL_PORT_CONTEXT,
 		type ScrollPort
-	} from '#lib/layout/layout.shared';
+	} from './layout.shared.js';
 	import { scrollAffordance } from './scroll-affordance.svelte.js';
 	import { ownInset } from './inset.svelte.js';
 

@@ -13,13 +13,11 @@
  * spelled a second way, so nobody noticed it recognised only the first.
  */
 import ts from 'typescript';
-import './analyses/index.js';
 import { projectFile } from './frontend/markup.js';
 import {
 	bindMatchHost,
 	bindingTexts,
 	compile,
-	match,
 	matcherKinds,
 	metavariablesOf,
 	withUtils,
@@ -170,8 +168,7 @@ export function defineRule(definition: RuleDefinition): Rule {
 type Shape = Omit<ShapeRule, 'examples'>;
 
 /**
- * A shape compiled to the visitor the runner executes. The one compiler behind both `defineRule`
- * (an audit rule, which must prove itself with examples) and `searchRule` (a question asked once).
+ * A shape compiled to the visitor the runner executes, behind `defineRule`.
  */
 function compileShape(definition: Shape): Rule {
 	const { rule, utils, constraints, ...rest } = definition;
@@ -214,7 +211,7 @@ function compileShape(definition: Shape): Rule {
 					source: context.sourceFile,
 					original: context.source
 				})) {
-					context.reportAt(lineOf(context.source, matched.range.start), 'matched');
+					context.reportAt(lineOf(context.source, matched.range.start), 'matched', matched.text);
 				}
 			}
 		});
@@ -239,56 +236,13 @@ function compileShape(definition: Shape): Rule {
 	});
 }
 
-/**
- * A shape asked once, not an audit rule: no examples, no id to register. It is the `rule` body a
- * pack's YAML carries (`pattern`, `kind`, `has`, `inside`, `utils`, `constraints`), so a search that
- * finds something is already the body of a rule that would flag it. Run it with `searchRules`.
- */
-export function searchRule(
-	rule: Matcher,
-	options: Readonly<{ utils?: Utils | undefined; constraints?: Constraints | undefined }> = {}
-): Rule {
+/** A search as a rule: ast-grep's rule language (a pattern, kind, relational and composite rules) asked where it matches. */
+export function searchRule(rule: Matcher, options: Readonly<{ utils?: Utils | undefined; constraints?: Constraints | undefined }> = {}): Rule {
 	return compileShape({
-		id: 'search',
-		severity: 'hint',
-		summary: 'search match',
-		// A search judges nothing; a principle is only the registry's price of admission.
-		principles: ['straightforwardness'],
-		rule,
+		id: 'search', severity: 'hint', summary: 'search match',
+		// a search judges nothing; a principle is only the registry's price of admission
+		principles: ['straightforwardness'], rule,
 		...(options.utils === undefined ? {} : { utils: options.utils }),
 		...(options.constraints === undefined ? {} : { constraints: options.constraints })
 	});
-}
-
-/** Run one described rule's own examples against its compiled form, returning the failures. */
-export function verifyExamples(
-	description: Common & Readonly<{ examples: Examples }>,
-	compiled: Rule,
-	run: (source: string, rule: Rule) => number
-): ReadonlyArray<string> {
-	const shorten = (source: string): string => source.replace(/\s+/g, ' ').trim().slice(0, 70);
-	const failures: Array<string> = [];
-	for (const source of description.examples.bad)
-		if (run(source, compiled) === 0)
-			failures.push(`${description.id}: expected a match — ${shorten(source)}`);
-	for (const source of description.examples.good)
-		if (run(source, compiled) > 0)
-			failures.push(`${description.id}: unexpected match — ${shorten(source)}`);
-	return failures;
-}
-
-/** Match one matcher anywhere in a source string. For tests and for authoring. */
-export function matchSource(matcher: Matcher, source: string): boolean {
-	const file = ts.createSourceFile('probe.ts', source, ts.ScriptTarget.Latest, true);
-	let found = false;
-	const visit = (node: ts.Node): void => {
-		if (found) return;
-		if (match(matcher, node, file).matched) {
-			found = true;
-			return;
-		}
-		ts.forEachChild(node, visit);
-	};
-	visit(file);
-	return found;
 }

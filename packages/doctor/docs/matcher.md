@@ -1,7 +1,6 @@
 # The rule algebra
 
-Every pack rule is a YAML file. That is the authoring surface — the same dialect a repository
-adds under `.norbital/config/doctor/`. The algebra is a port of ast-grep's `SerializableRule`
+Every pack rule is a YAML file under `packs/`. The packs are fixed: a workspace adds none. The algebra is a port of ast-grep's `SerializableRule`
 (`crates/config/src/rule/mod.rs`), so a rule written for ast-grep translates construct for
 construct.
 

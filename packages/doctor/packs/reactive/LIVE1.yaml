@@ -1,0 +1,25 @@
+id: LIVE1
+summary: a timer or sleep loop polls a read; `live(…, { every })` is the one sanctioned polling form
+severity: error
+principles: [simplicity, straightforwardness, efficiency, testability, no-bloat]
+rule:
+  any:
+    - all:
+        - kind: CallExpression
+        - pattern: 'setInterval($...A)'
+        - regex: '\bbolt\.(?:read|get|aggregate|history|similar|query)\s*\(|\bfetch\s*\('
+    - all:
+        - any:
+            - kind: ForStatement
+            - kind: WhileStatement
+            - kind: DoStatement
+        - regex: '\b(?:sleep|delay|setTimeout)\s*\('
+        - regex: '\bbolt\.(?:read|get|aggregate|history|similar|query)\s*\(|\bfetch\s*\('
+examples:
+  bad:
+    - "export const timer = setInterval(() => void bolt.read('orders', { all: true }), 5000);"
+    - "export async function watch() { while (true) { await sleep(1000); await bolt.get('orders', id); } }"
+  good:
+    - "export const rows = bolt.live(bolt.read('orders', { all: true }), { every: '30s' });"
+    - 'export const clock = setInterval(() => { now = new Date(); }, 1000);'
+    - "export const later = setTimeout(() => void bolt.read('orders', { all: true }), 300);"

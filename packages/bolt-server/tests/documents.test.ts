@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
-import { extractDocumentText } from '../src/facilities/documents.js';
+import { extractDocumentText } from '../src/documents.ts';
 
 const mime = {
 	xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

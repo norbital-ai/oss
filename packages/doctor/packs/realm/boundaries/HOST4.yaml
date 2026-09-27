@@ -1,0 +1,36 @@
+id: HOST4
+summary: bolt's runtime imports a value from the compiler (the compiler runs at build; the runtime never loads it)
+severity: error
+principles: [modularity, testability]
+files:
+  - '**/packages/bolt/src/engine/**'
+  - '**/packages/bolt/src/client/**'
+  - '**/packages/bolt/src/decl/**'
+  - '**/packages/bolt/src/protocol/**'
+  - '**/packages/bolt/src/shell/**'
+rule:
+  all:
+    - kind: StringLiteral
+    - regex: '^[''"](?:\.\./)+compiler/'
+    - any:
+        - inside:
+            all:
+              - kind: ImportDeclaration
+              - not: { regex: '^import\s+type\b' }
+        - inside:
+            all:
+              - kind: ExportDeclaration
+              - not: { regex: '^export\s+type\b' }
+        - inside:
+            all:
+              - kind: CallExpression
+              - regex: '^(?:import|require)\('
+examples:
+  file: packages/bolt/src/engine/probe.ts
+  bad:
+    - "export { workspaceFiles } from '../compiler/artifact/read.ts';"
+    - "import { discover } from '../../compiler/discover.ts';"
+  good:
+    - "import type { Manifest } from '../compiler/load.ts';"
+    - "export type { Manifest } from '../compiler/load.ts';"
+    - "import { BoltError } from './contracts.ts';"

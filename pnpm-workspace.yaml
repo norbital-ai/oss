@@ -36,8 +36,15 @@ publicHoistPattern:
 allowBuilds:
   '@tailwindcss/oxide': true
   esbuild: true
+  # Loads its shipped prebuild through node-gyp-build at require time; no install script needed.
+  isolated-vm: false
   msgpackr-extract: false
   protobufjs: true
+  '@whiskeysockets/baileys': true
+
+# bolt-server's optional WhatsApp transport; the same fix Colony carries (norbital/patches).
+patchedDependencies:
+  '@whiskeysockets/baileys@7.0.0-rc14': patches/@whiskeysockets__baileys@7.0.0-rc14.patch
 
 overrides:
   kysely: ^0.29.4

@@ -1,7 +1,7 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.114",
-	"description": "Standalone and local-development server shell for immutable Norbital Bolt bundles.",
+	"version": "0.0.115",
+	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
 	"type": "module",
 	"sideEffects": false,
 	"license": "AGPL-3.0-only",
@@ -22,27 +22,20 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-server"
 	},
 	"dependencies": {
-		"@electric-sql/pglite": "^0.5.5",
-		"@electric-sql/pglite-pgvector": "^0.0.6",
-		"@norbital-ai/bolt-protocol": "workspace:*",
-		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/bolt": "workspace:*",
 		"exceljs": "4.4.0",
 		"mammoth": "1.12.2",
 		"pdfjs-dist": "6.3.289",
 		"pg": "^8.23.0",
-		"web-push": "^3.6.7",
-		"ws": "^8.21.3"
+		"web-push": "^3.6.7"
 	},
-	"peerDependencies": {
-		"effect": "4.0.0-rc.112"
+	"optionalDependencies": {
+		"@whiskeysockets/baileys": "7.0.0-rc14"
 	},
 	"devDependencies": {
-		"@effect/vitest": "4.0.0-rc.112",
-		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",
 		"@types/web-push": "^3.6.4",
-		"@types/ws": "^8.18.1",
 		"typescript": "catalog:",
 		"vitest": "4.1.11"
 	},

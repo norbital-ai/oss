@@ -85,7 +85,7 @@ export type RuleContext = Readonly<{
 	 * about it can only name a line. Reporting such a match against the file's root node pointed
 	 * every layout finding at line 1, which is not where the person has to edit.
 	 */
-	reportAt(line: number, evidence?: string): void;
+	reportAt(line: number, evidence?: string, span?: string): void;
 }>;
 
 export type Rule = Readonly<{
@@ -114,11 +114,6 @@ export type Rule = Readonly<{
 	check(node: ts.Node, context: RuleContext): void;
 }>;
 
-export type Pack = Readonly<{
-	readonly name: string;
-	readonly rules: ReadonlyArray<Rule>;
-}>;
-
 /**
  * Validate a visitor-form rule.
  *
@@ -140,15 +135,4 @@ export function defineVisitorRule(rule: Rule): Rule {
 	if (rule.dominates?.includes(rule.id) === true)
 		throw new Error(`norbital-doctor: rule ${rule.id} cannot dominate itself`);
 	return rule;
-}
-
-/** Group rules under a name so a repository can adopt or drop them together. */
-export function definePack(pack: Pack): Pack {
-	const seen = new Set<string>();
-	for (const rule of pack.rules) {
-		if (seen.has(rule.id))
-			throw new Error(`norbital-doctor: pack ${pack.name} declares rule ${rule.id} twice`);
-		seen.add(rule.id);
-	}
-	return pack;
 }

@@ -19,16 +19,7 @@ export function readManifest(filePath) {
 	return parsed.success;
 }
 
-export const publicPackageDirectories = [
-	'bolt',
-	'bolt-protocol',
-	'bolt-server',
-	'config',
-	'doctor',
-	'std',
-	'test-utilities',
-	'ui'
-];
+export const publicPackageDirectories = ['bolt', 'bolt-server', 'doctor', 'std', 'ui'];
 
 export function readPublicPackageEntries(repositoryRoot) {
 	const releaseVersion = readManifest(path.join(repositoryRoot, 'package.json')).version;

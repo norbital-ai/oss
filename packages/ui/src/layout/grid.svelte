@@ -1,8 +1,14 @@
+<!--
+@component
+An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel`), or explicit column `tracks`.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
+	/** The smallest cell width an auto-fit `Grid` keeps before wrapping. */
 	export type GridMinimum = 'compact' | 'card' | 'panel';
+	/** The props of `Grid`. */
 	export interface GridProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
@@ -22,9 +28,9 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { cn } from '../primitives/utils.js';
 	import { setContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES, ROW_GAP_CLASSES } from '#lib/layout/layout.shared';
+	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES, ROW_GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',

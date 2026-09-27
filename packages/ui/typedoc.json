@@ -1,6 +1,10 @@
 {
 	"$schema": "https://typedoc.org/schema.json",
-	"entryPoints": ["build/*/index.d.ts"],
+	"entryPoints": [
+		"build/index.d.ts",
+		"build/layout/index.d.ts",
+		"build/views/capture/index.d.ts"
+	],
 	"tsconfig": "typedoc.tsconfig.json",
 	"alwaysCreateEntryPointModule": true
 }

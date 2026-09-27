@@ -7,5 +7,5 @@
 		"types": ["node"]
 	},
 	"include": ["./**/*.ts"],
-	"exclude": ["./fixtures"]
+	"exclude": []
 }

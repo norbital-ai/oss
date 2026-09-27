@@ -1,0 +1,147 @@
+diff --git a/lib/Socket/messages-recv.js b/lib/Socket/messages-recv.js
+index f2003ac00ef223468c432a1bbe0a0eb02c1453b2..af2d9a081e57bcc5ff83c6c90a0ab1919473e40a 100644
+--- a/lib/Socket/messages-recv.js
++++ b/lib/Socket/messages-recv.js
+@@ -359,7 +359,7 @@ export const makeMessagesRecvSocket = (config) => {
+         }
+     };
+     const sendMessageAck = async (node, errorCode) => {
+-        const stanza = buildAckStanza(node, errorCode, authState.creds.me.id);
++        const stanza = buildAckStanza(node, errorCode, authState.creds.me?.id);
+         logger.debug({ recv: { tag: node.tag, attrs: node.attrs }, sent: stanza.attrs }, 'sent ack');
+         await sendNode(stanza);
+     };
+diff --git a/lib/Socket/socket.js b/lib/Socket/socket.js
+index ae34a8f315a0b9fd101472cc69e59624c6c63861..c4f7bd691b6519b5de90776add128daaf7877f2f 100644
+--- a/lib/Socket/socket.js
++++ b/lib/Socket/socket.js
+@@ -7,6 +7,7 @@ import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, INITIAL_PREKEY_COUNT, MIN_PREKEY_C
+ import { QueryIds, ReachoutTimelockEnforcementType } from '../Types/index.js';
+ import { DisconnectReason, XWAPaths } from '../Types/index.js';
+ import { addTransactionCapability, aesEncryptCTR, bindWaitForConnectionUpdate, buildPairingQRData, bytesToCrockford, configureSuccessfulPairing, Curve, derivePairingCodeKey, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getCompanionPlatformId, getErrorCodeFromStreamError, getNextPreKeysNode, makeEventBuffer, makeNoiseHandler, promiseTimeout, signedKeyPair, xmppSignedPreKey } from '../Utils/index.js';
++import { handleCompanionRegRefresh, makePairingQRRenderer } from '../Utils/index.js';
+ import { assertNodeErrorFree, binaryNodeToString, encodeBinaryNode, getAllBinaryNodeChildren, getBinaryNodeChild, getBinaryNodeChildren, isLidUser, jidDecode, jidEncode, S_WHATSAPP_NET } from '../WABinary/index.js';
+ import { BinaryInfo } from '../WAM/BinaryInfo.js';
+ import { USyncQuery, USyncUser } from '../WAUSync/index.js';
+@@ -690,6 +691,9 @@ export const makeSocket = (config) => {
+     ws.on('close', () => void end(new Boom('Connection Terminated', { statusCode: DisconnectReason.connectionClosed })));
+     // the server terminated the connection
+     ws.on('CB:xmlstreamend', () => void end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed })));
++    // Re-render the QR currently on screen. Set while a pairing QR flow is
++    // live on this connection, undefined otherwise. (Baileys PR #2765)
++    let refreshPairingQR;
+     // QR gen
+     ws.on('CB:iq,type:set,pair-device', async (stanza) => {
+         const iq = {
+@@ -705,25 +709,39 @@ export const makeSocket = (config) => {
+         const refNodes = getBinaryNodeChildren(pairDeviceNode, 'ref');
+         const noiseKeyB64 = Buffer.from(creds.noiseKey.public).toString('base64');
+         const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString('base64');
+-        const advB64 = creds.advSecretKey;
++        // creds.advSecretKey is read per render rather than captured once:
++        // a companion_reg_refresh rotates it mid-flow.
++        const renderer = makePairingQRRenderer(refNodes.map(refNode => refNode.content.toString('utf-8')), ref => ev.emit('connection.update', {
++            qr: buildPairingQRData(ref, noiseKeyB64, identityKeyB64, creds.advSecretKey, browser)
++        }));
++        refreshPairingQR = () => void renderer.refresh();
+         let qrMs = qrTimeout || 60000; // time to let a QR live
+         const genPairQR = () => {
+             if (!ws.isOpen) {
+                 return;
+             }
+-            const refNode = refNodes.shift();
+-            if (!refNode) {
++            if (!renderer.next()) {
+                 void end(new Boom('QR refs attempts ended', { statusCode: DisconnectReason.timedOut }));
+                 return;
+             }
+-            const ref = refNode.content.toString('utf-8');
+-            const qr = buildPairingQRData(ref, noiseKeyB64, identityKeyB64, advB64, browser);
+-            ev.emit('connection.update', { qr });
+             qrTimer = setTimeout(genPairQR, qrMs);
+             qrMs = qrTimeout || 20000; // shorter subsequent qrs
+         };
+         genPairQR();
+     });
++    // the server retiring an unpaired companion's registration material (Baileys PR #2765)
++    ws.on('CB:notification,type:companion_reg_refresh', (node) => {
++        handleCompanionRegRefresh(node, {
++            creds,
++            emitCredsUpdate: update => ev.emit('creds.update', update),
++            // Deliberately re-renders the ref already on screen and leaves
++            // qrTimer alone: that ref has not expired, only the secret it
++            // advertises changed. Spending a ref here would drain the pool the
++            // server allotted and end the flow with 'QR refs attempts ended'.
++            refreshQR: () => refreshPairingQR?.(),
++            logger
++        });
++    });
+     // device paired for the first time
+     // if device pairs successfully, the server asks to restart the connection
+     ws.on('CB:iq,,pair-success', async (stanza) => {
+diff --git a/lib/Utils/companion-reg-client-utils.js b/lib/Utils/companion-reg-client-utils.js
+index f5edebd725cec9a7b62aa5b768826e53bacc810a..292a1c78da260aea1a515cf92f090ec5fcbf7204 100644
+--- a/lib/Utils/companion-reg-client-utils.js
++++ b/lib/Utils/companion-reg-client-utils.js
+@@ -32,4 +32,59 @@ export const buildPairingQRData = (ref, noiseKeyB64, identityKeyB64, advB64, bro
+     return ('https://wa.me/settings/linked_devices#' +
+         [ref, noiseKeyB64, identityKeyB64, advB64, getCompanionPlatformId(browser)].join(','));
+ };
+-//# sourceMappingURL=companion-reg-client-utils.js.map
+\ No newline at end of file
++//# sourceMappingURL=companion-reg-client-utils.js.map// --- Ported from WhiskeySockets/Baileys PR #2765 (companion_reg_refresh handling) ---
++import { randomBytes } from 'crypto';
++import { getBinaryNodeChild } from '../WABinary/index.js';
++/**
++ * Holds the ref currently on screen so it can be re-rendered.
++ *
++ * `render` is called with the ref rather than a finished payload so the caller
++ * can read the adv secret at render time: a `companion_reg_refresh` rotates it
++ * mid-flow, and every QR emitted afterwards has to advertise the new value.
++ */
++export const makePairingQRRenderer = (refs, render) => {
++    let index = 0;
++    let current = undefined;
++    return {
++        next() {
++            const ref = refs[index];
++            if (ref === undefined) {
++                return false;
++            }
++            index += 1;
++            current = ref;
++            render(ref);
++            return true;
++        },
++        refresh() {
++            if (current === undefined) {
++                return false;
++            }
++            render(current);
++            return true;
++        }
++    };
++};
++/** The two children WA Web's parser accepts on this notification. */
++const COMPANION_REG_REFRESH_CHILDREN = ['companion_reg_refresh', 'pair-device-rotate-qr'];
++/**
++ * `<notification type="companion_reg_refresh">` - the server retiring an
++ * unpaired companion's registration material. The adv secret is a quarter of
++ * what the pairing QR advertises, so a client that only acks keeps offering a
++ * QR built on a secret the server has already retired.
++ */
++export const handleCompanionRegRefresh = (node, { creds, emitCredsUpdate, refreshQR, logger }) => {
++    if (!COMPANION_REG_REFRESH_CHILDREN.some(tag => getBinaryNodeChild(node, tag))) {
++        logger.warn({ node }, 'companion_reg_refresh carries neither expected child; ignoring');
++        return 'ignored_malformed';
++    }
++    if (creds.me) {
++        logger.debug({ id: node.attrs.id }, 'companion_reg_refresh on a registered session; keeping the adv secret');
++        return 'ignored_registered';
++    }
++    creds.advSecretKey = randomBytes(32).toString('base64');
++    emitCredsUpdate({ advSecretKey: creds.advSecretKey });
++    logger.info({ id: node.attrs.id }, 'rotated the adv secret the server asked to retire; re-rendering the pairing QR');
++    refreshQR();
++    return 'rotated';
++};

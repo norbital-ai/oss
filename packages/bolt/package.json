@@ -1,7 +1,7 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.114",
-	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
+	"version": "0.0.115",
+	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
 	"type": "module",
 	"sideEffects": [
 		"**/*.css"
@@ -12,139 +12,90 @@
 			"types": "./build/index.d.ts",
 			"default": "./build/index.js"
 		},
-		"./authoring": {
-			"types": "./build/authoring/index.d.ts",
-			"default": "./build/authoring/index.js"
-		},
-		"./authoring/internals": {
-			"types": "./build/authoring/internals.d.ts",
-			"default": "./build/authoring/internals.js"
-		},
 		"./client": {
-			"types": "./build/client.d.ts",
-			"svelte": "./build/client.js",
-			"default": "./build/client.js"
+			"types": "./build/client/index.d.ts",
+			"default": "./build/client/index.js"
 		},
-		"./client/workspace": {
-			"types": "./build/client/ui/shell/mount.svelte.d.ts",
-			"svelte": "./build/client/ui/shell/mount.svelte.js",
-			"default": "./build/client/ui/shell/mount.svelte.js"
+		"./engine": {
+			"types": "./build/engine/index.d.ts",
+			"default": "./build/engine/index.js"
 		},
-		"./client-runtime": {
-			"types": "./build/client/runtime.d.ts",
-			"default": "./build/client/runtime.js"
+		"./artifact": {
+			"types": "./build/compiler/artifact/read.d.ts",
+			"default": "./build/compiler/artifact/read.js"
 		},
-		"./client-platform": {
-			"types": "./build/client/ui/state/platform.d.ts",
-			"default": "./build/client/ui/state/platform.js"
-		},
-		"./client/import-export": {
-			"types": "./build/client/ui/state/import-export.d.ts",
-			"default": "./build/client/ui/state/import-export.js"
-		},
-		"./client/identity": {
-			"types": "./build/client/identity.d.ts",
-			"svelte": "./build/client/identity.js",
-			"default": "./build/client/identity.js"
-		},
-		"./client/settings-table-client": {
-			"types": "./build/client/ui/settings/table-client.d.ts",
-			"default": "./build/client/ui/settings/table-client.js"
-		},
-		"./client/app-header-actions": {
-			"types": "./build/client/ui/shell/header-actions.svelte.d.ts",
-			"svelte": "./build/client/ui/shell/header-actions.svelte",
-			"default": "./build/client/ui/shell/header-actions.svelte"
-		},
-		"./host": {
-			"types": "./build/host.d.ts",
-			"default": "./build/host.js"
-		},
-		"./vite": {
-			"types": "./build/compiler/vite-plugin.d.ts",
-			"default": "./build/compiler/vite-plugin.js"
-		},
-		"./runtime": {
-			"types": "./build/runtime/app.d.ts",
-			"default": "./build/runtime/app.js"
-		},
-		"./search": {
-			"types": "./build/tooling/workspace-search.d.ts",
-			"default": "./build/tooling/workspace-search.js"
+		"./protocol": {
+			"types": "./build/protocol/index.d.ts",
+			"default": "./build/protocol/index.js"
 		},
 		"./type-service": {
 			"types": "./build/tooling/type-service.d.ts",
 			"default": "./build/tooling/type-service.js"
+		},
+		"./docs": {
+			"types": "./build/docs/index.d.ts",
+			"default": "./build/docs/index.js"
+		},
+		"./isolate-globals": {
+			"types": "./build/engine/guest/globals.d.ts",
+			"default": "./build/engine/guest/globals.js"
+		},
+		"./test": {
+			"types": "./build/test/index.d.ts",
+			"default": "./build/test/index.js"
+		},
+		"./test/browser": {
+			"types": "./build/test/browser.d.ts",
+			"default": "./build/test/browser.js"
 		}
 	},
-	"imports": {
-		"#lib/*": "./build/*"
-	},
 	"bin": {
-		"bolt": "./build/compiler/cli.js"
+		"bolt": "./build/cli/main.js"
 	},
 	"files": [
 		"build",
 		"package.json"
 	],
 	"scripts": {
-		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json",
+		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json && node src/cli/docs.ts",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsc -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",
-		"test:integration": "BOLT_TEST_SUITE=integration vitest run && BOLT_TEST_SUITE=latency vitest run",
+		"test:integration": "BOLT_TEST_SUITE=integration vitest run",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {
-		"@iconify/svelte": "catalog:",
+		"@electric-sql/pglite": "^0.5.5",
+		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@jridgewell/trace-mapping": "^0.3.31",
 		"@modelcontextprotocol/client": "2.0.0",
-		"@norbital-ai/bolt-protocol": "workspace:*",
+		"@norbital-ai/doctor": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@tailwindcss/vite": "4.3.3",
 		"@xyflow/svelte": "catalog:",
-		"better-auth": "^1.7.1",
-		"drizzle-kit": "catalog:",
-		"drizzle-orm": "catalog:",
-		"es-module-lexer": "2.3.2",
-		"mode-watcher": "^1.1.0",
-		"qrcode": "^1.5.4",
+		"exifr": "7.1.3",
+		"fast-png": "8.0.0",
+		"isolated-vm": "7.0.1",
+		"jpeg-js": "0.4.4",
+		"libheif-js": "1.23.2",
+		"pdq-wasm": "0.3.9",
 		"runed": "catalog:",
-		"svelte2tsx": "0.7.61",
 		"tailwindcss": "4.3.3",
 		"typescript": "catalog:",
 		"vite": "catalog:"
 	},
 	"peerDependencies": {
-		"@norbital-ai/doctor": "workspace:*",
-		"effect": "4.0.0-rc.112",
 		"svelte": "^5.0.0"
 	},
 	"devDependencies": {
-		"@effect/vitest": "4.0.0-rc.112",
-		"@electric-sql/pglite": "^0.5.5",
-		"@electric-sql/pglite-pgvector": "^0.0.6",
-		"@norbital-ai/config": "workspace:*",
-		"@norbital-ai/doctor": "workspace:*",
-		"@norbital-ai/test-utilities": "workspace:*",
 		"@sveltejs/package": "^2.5.8",
 		"@types/node": "^26.2.0",
-		"@types/qrcode": "^1.5.6",
 		"happy-dom": "^20.11.6",
-		"jiti": "^2.7.0",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
 		"typescript": "catalog:",
 		"vitest": "4.1.11"
-	},
-	"peerDependenciesMeta": {
-		"effect": {
-			"optional": false
-		},
-		"@norbital-ai/doctor": {
-			"optional": true
-		}
 	},
 	"repository": {
 		"type": "git",

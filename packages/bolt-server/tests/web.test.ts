@@ -1,28 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { FacilityCall } from '@norbital-ai/bolt-protocol';
-import {
-	makeWebConnectorBinding,
-	makeRequestPage,
-	isPublicWebAddress
-} from '../src/facilities/web.js';
-import { WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt-protocol';
+import { isPublicWebAddress, makeRequestPage, WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt/engine';
+import { readPublicPage } from '../src/web.ts';
 import { createHash } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { createServer } from 'node:net';
 import { Readable } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import type { request as httpsRequest } from 'node:https';
-import { pdfFixture } from './helpers/pdf-fixture.js';
+import { pdfFixture } from './helpers/pdf-fixture.ts';
 
-const metadata = {} as FacilityCall;
 const signal = new AbortController().signal;
-const read = (binding: ReturnType<typeof makeWebConnectorBinding>, url: string) =>
-	binding.call(metadata, { connector: 'web', operation: 'web.read', input: { url } }, signal);
+/** One read as a tagged result, so a refusal and a page assert alike. */
+type Options = Parameters<typeof readPublicPage>[2];
+const read = async (options: Options, url: string) => {
+	try {
+		return { _tag: 'Success' as const, value: { output: await readPublicPage(url, signal, options) } };
+	} catch (error) {
+		return { _tag: 'Failure' as const, error: { message: error instanceof Error ? error.message : String(error) } };
+	}
+};
 
 describe('public web connector', () => {
 	it('extracts every PDF page with a digest of the original binary source', async () => {
 		const body = pdfFixture(['RESIN-42 Melt flow 12 g/10 min', 'Density 0.92 g/cm3']);
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 			request: async () => ({ status: 200, contentType: 'application/pdf', body })
 		});
@@ -52,7 +53,7 @@ describe('public web connector', () => {
 			new Uint8Array(Buffer.from('%PDF-1.7 broken')),
 			pdfFixture(Array.from({ length: 201 }, () => 'text'))
 		]) {
-			const binding = makeWebConnectorBinding({
+			const binding: Options = ({
 				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 				request: async () => ({ status: 200, contentType: 'application/pdf', body })
 			});
@@ -83,7 +84,7 @@ describe('public web connector', () => {
 
 	it('pins a checked address and returns the final URL after public redirects', async () => {
 		const requests: string[] = [];
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 			request: async (url, addresses) => {
 				expect(addresses).toEqual([{ address: '1.1.1.1', family: 4 }]);
@@ -109,7 +110,7 @@ describe('public web connector', () => {
 
 	it('refuses redirected private networks before opening another socket', async () => {
 		let requests = 0;
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 			request: async () => {
 				requests++;
@@ -127,7 +128,7 @@ describe('public web connector', () => {
 
 	it('refuses mixed DNS answers, non-HTTPS, credentials, binary bodies and oversized UTF-8', async () => {
 		let requests = 0;
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [
 				{ address: '1.1.1.1', family: 4 },
 				{ address: '10.0.0.1', family: 4 }
@@ -150,7 +151,7 @@ describe('public web connector', () => {
 			{ status: 500, contentType: 'text/plain', body: 'failed' },
 			{ status: 200, contentType: 'text/plain', body: '文'.repeat(WEB_PAGE_BYTE_LIMIT / 2) }
 		]) {
-			const reader = makeWebConnectorBinding({
+			const reader: Options = ({
 				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 				request: async () => response
 			});
@@ -217,7 +218,7 @@ describe('public web connector address selection', () => {
 			const body = oversized
 				? 'x'.repeat(WEB_PAGE_BYTE_LIMIT + 1)
 				: '<h1>Thuế thu nhập cá nhân</h1>';
-			const binding = makeWebConnectorBinding({
+			const binding: Options = ({
 				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 				request: makeRequestPage(
 					makeFakeRequest([], gzipSync(body), () => false, {
@@ -244,7 +245,7 @@ describe('public web connector address selection', () => {
 			Buffer.from([0x92]),
 			Buffer.from('s contribution</p>')
 		]);
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 			request: async () => ({ status: 200, contentType, body })
 		});
@@ -257,7 +258,7 @@ describe('public web connector address selection', () => {
 	const processEvents: Array<string> = [];
 	it('reads application/csv datasets without losing multilingual cells', async () => {
 		const body = '投保等級,月投保金額（元）\r\n1,29500\r\n';
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
 			request: async () => ({
 				status: 200,
@@ -285,7 +286,7 @@ describe('public web connector address selection', () => {
 
 	it('answers the lookup on a later macrotask and prefers IPv4 when both families resolve', async () => {
 		const attempts: Array<Attempt> = [];
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [
 				{ address: '2606:4700:4700::1111', family: 6 },
 				{ address: '1.1.1.1', family: 4 }
@@ -300,7 +301,7 @@ describe('public web connector address selection', () => {
 
 	it('moves to the next address after a connect-phase failure and succeeds there', async () => {
 		const attempts: Array<Attempt> = [];
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [
 				{ address: '2606:4700:4700::1111', family: 6 },
 				{ address: '1.0.0.1', family: 4 },
@@ -317,9 +318,9 @@ describe('public web connector address selection', () => {
 		expect(processEvents).toEqual([]);
 	});
 
-	it('returns web.read_failed naming the last cause when every address fails to connect', async () => {
+	it('fails naming the last cause when every address fails to connect', async () => {
 		const attempts: Array<Attempt> = [];
-		const binding = makeWebConnectorBinding({
+		const binding: Options = ({
 			resolve: async () => [{ address: '2606:4700:4700::1111', family: 6 }],
 			request: makeRequestPage(makeFakeRequest(attempts))
 		});
@@ -327,7 +328,6 @@ describe('public web connector address selection', () => {
 		expect(result).toMatchObject({
 			_tag: 'Failure',
 			error: {
-				code: 'web.read_failed',
 				message: expect.stringContaining('last 2606:4700:4700::1111: connect ENETUNREACH')
 			}
 		});

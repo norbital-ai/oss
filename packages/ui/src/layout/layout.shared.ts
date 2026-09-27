@@ -47,7 +47,9 @@ export type LayoutElement =
 	| 'button'
 	| 'a'
 	| 'label';
+/** The spacing scale layout primitives take for `gap`. */
 export type LayoutGap = 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+/** The spacing scale for `pad`: `LayoutGap` without `xl`. */
 export type LayoutPad = Exclude<LayoutGap, 'xl'>;
 
 export type ColumnParentContext =

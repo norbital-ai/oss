@@ -1,7 +1,17 @@
+<!--
+@component
+A vertical flow of children with a gap: the default layout of a page body, a form or a card.
+@example
+<Stack gap="md">
+	<h2>{title}</h2>
+	<Table of="jobs" />
+</Stack>
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
+	/** The props of `Stack`. */
 	export interface StackProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
@@ -31,8 +41,8 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
-	import { GAP_CLASSES } from '#lib/layout/layout.shared';
+	import { cn } from '../primitives/utils.js';
+	import { GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',

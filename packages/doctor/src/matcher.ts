@@ -249,6 +249,10 @@ function variadicName(node: ts.Node): string | undefined {
 		if (ts.isIdentifier(inner) && /^[A-Z][A-Z0-9_]*$/.test(inner.text)) return inner.text;
 	}
 	if (ts.isIdentifier(node) && /^\$\.\.\.[A-Z][A-Z0-9_]*$/.test(node.text)) return node.text;
+	// `$$$` in a parameter list parses as a rest parameter; in a block, as a bare statement behind the `...` it recovered from
+	if (ts.isParameter(node) && node.dotDotDotToken !== undefined && ts.isIdentifier(node.name) && /^[A-Z][A-Z0-9_]*$/.test(node.name.text)) return node.name.text;
+	if (ts.isExpressionStatement(node) && ts.isIdentifier(node.expression) && /^[A-Z][A-Z0-9_]*$/.test(node.expression.text)
+		&& node.getSourceFile().text.slice(0, node.expression.getStart()).trimEnd().endsWith('...')) return node.expression.text;
 	return undefined;
 }
 

@@ -1,7 +1,12 @@
+<!--
+@component
+A layer positioned over its `relative` parent: a scrim, a pinned badge, a bar or a centred dialog body, at a stacking layer.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
+	/** Where an `Imposter` sits over its parent: centred, filling it, along an edge or in a corner. */
 	export type ImposterPlacement =
 		| 'center'
 		| 'fill'
@@ -17,6 +22,7 @@
 		| 'center-end';
 	export type ImposterOffset = 'none' | 'xs' | 'sm' | 'md';
 	export type ImposterLayer = 'under' | 'raised' | 'overlay' | 'modal';
+	/** The props of `Imposter`. */
 	export interface ImposterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		/**
@@ -49,7 +55,7 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { cn } from '../primitives/utils.js';
 
 	let {
 		as = 'div',

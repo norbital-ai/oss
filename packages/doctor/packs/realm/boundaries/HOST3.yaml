@@ -1,0 +1,22 @@
+id: HOST3
+summary: host-neutral code reads ambient configuration from process.env
+severity: error
+principles: [modularity, testability]
+files:
+  - '**/packages/bolt/src/engine/**'
+  - '**/packages/bolt/src/client/**'
+  - '**/packages/bolt/src/decl/**'
+  - '**/packages/bolt/src/protocol/**'
+  - '**/packages/bolt/src/shell/**'
+  - '**/packages/std/src/**'
+  - '**/packages/ui/src/**'
+rule:
+  pattern: process.env
+examples:
+  file: packages/bolt/src/engine/probe.ts
+  bad:
+    - 'export const url = process.env.DATABASE_URL;'
+    - "export const read = (name: string) => process.env[name];"
+  good:
+    - "// the host supplies configuration, never process.env\nexport const note = 'process.env';"
+    - 'export const url = (env: (name: string) => string | undefined) => env("DATABASE_URL");'

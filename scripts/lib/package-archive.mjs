@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { Schema } from 'effect';
-import { safeParse } from '@norbital-ai/std/json';
+import { parseJson } from '@norbital-ai/std/json';
 
 const isObject = Schema.is(
 	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
@@ -18,7 +18,7 @@ function fail(message) {
 }
 
 function parseJsonFragment(text, label) {
-	const parsed = safeParse(text);
+	const parsed = parseJson(text);
 	if (!isRecord(parsed)) {
 		fail(`${label} is not a JSON object.`);
 	}
@@ -62,7 +62,7 @@ const balancedEnd = (output, start) => {
 const reportCandidateFilename = (output, start) => {
 	const end = balancedEnd(output, start);
 	if (end === undefined) return undefined;
-	const result = safeParse(output.slice(start, end));
+	const result = parseJson(output.slice(start, end));
 	if (!isObject(result)) {
 		// Lifecycle scripts may write JSON-like output before the pack report.
 		return undefined;
@@ -134,22 +134,45 @@ const importTargets = (value) => {
 
 const escapeRegularExpression = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Every relative package-import branch must name content that is actually in the archive. */
-function validatePackageImports(manifest, archiveEntries) {
-	for (const [specifier, conditions] of Object.entries(manifest.imports ?? {})) {
-		for (const target of importTargets(conditions)) {
-			if (!target.startsWith('./')) continue;
-			const archivedTarget = `package/${target.slice(2)}`;
-			const present = archivedTarget.includes('*')
-				? archiveEntries.some((entry) =>
-						new RegExp(
-							`^${archivedTarget.split('*').map(escapeRegularExpression).join('.+')}$`
-						).test(entry)
-					)
-				: archiveEntries.includes(archivedTarget);
-			if (!present) fail(`${manifest.name} import ${specifier} targets missing ${target}.`);
+const matches = (pattern, value) =>
+	pattern.includes('*')
+		? new RegExp(`^${pattern.split('*').map(escapeRegularExpression).join('.+')}$`).test(value)
+		: pattern === value;
+
+/** Every relative `imports` and `exports` branch must name content that is actually in the archive. */
+function validatePackageTargets(manifest, archiveEntries) {
+	for (const section of ['imports', 'exports']) {
+		const map = isString(manifest[section]) ? { '.': manifest[section] } : (manifest[section] ?? {});
+		for (const [specifier, conditions] of Object.entries(map)) {
+			for (const target of importTargets(conditions)) {
+				if (!target.startsWith('./')) continue;
+				const archivedTarget = `package/${target.slice(2)}`;
+				if (!archiveEntries.some((entry) => matches(archivedTarget, entry))) {
+					fail(`${manifest.name} ${section.slice(0, -1)} ${specifier} targets missing ${target}.`);
+				}
+			}
 		}
 	}
+}
+
+/**
+ * Every `@norbital-ai/<pkg>[/<sub>]` string literal in first-party source must name an export of that package
+ * (L-BOLT-1002): a `createRequire().resolve('@norbital-ai/bolt-server/next')` compiles and packs, and fails only when a
+ * user runs it. `sources` is `[file, text][]`; `manifests` maps a package name to its manifest. Returns the offenders.
+ */
+export function unexportedSpecifiers(sources, manifests) {
+	const offenders = [];
+	for (const [file, text] of sources) {
+		for (const [, name, sub] of text.matchAll(/['"](@norbital-ai\/[a-z0-9-]+)(\/[^'"`\s$]*)?['"]/g)) {
+			const manifest = manifests.get(name);
+			// a package we do not publish, or a prefix test (`id.startsWith('@norbital-ai/ui/')`), is no specifier
+			if (manifest === undefined || sub?.endsWith('/')) continue;
+			const exports = isString(manifest.exports) ? ['.'] : Object.keys(manifest.exports ?? { '.': '' });
+			const key = `.${sub ?? ''}`;
+			if (!exports.some((pattern) => matches(pattern, key))) offenders.push(`${file}: ${name}${sub ?? ''}`);
+		}
+	}
+	return offenders;
 }
 
 export function inspectPackageArchive(
@@ -180,7 +203,7 @@ export function inspectPackageArchive(
 		name: expectedName,
 		version: expectedVersion
 	});
-	validatePackageImports(manifest, archiveEntries);
+	validatePackageTargets(manifest, archiveEntries);
 	return {
 		manifest,
 		integrity: sha512Integrity(readFileSync(archivePath))

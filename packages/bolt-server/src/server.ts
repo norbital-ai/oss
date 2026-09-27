@@ -1,1304 +1,434 @@
-import {
-	ARTIFACT_ASSET_DIRECTORY,
-	BundleResult,
-	CollectionMutationIdempotencyKey,
-	DispatchResponse,
-	EffectId,
-	Invocation,
-	InvocationId,
-	PluginTrustedContext,
-	PROTOCOL_VERSION,
-	SYNC_CONNECTION_HEADER,
-	SyncAdvanceResponse,
-	SyncCommitResponse,
-	SyncConnectRequest,
-	SyncConnectEvaluation,
-	SyncExtendPrefixEvaluation,
-	SyncExtendPrefixRequest,
-	SyncInitialAnswerTooLargeError,
-	TransportRequest,
-	success,
-	type FacilityBindings,
-	type RealtimeOutput,
-	type SyncScope,
-	type SyncScopedApplyFrame
-} from '@norbital-ai/bolt-protocol';
-import {
-	Clock,
-	Context,
-	Cause,
-	Effect,
-	Fiber,
-	Layer,
-	ManagedRuntime,
-	Option,
-	Result,
-	Schema,
-	Semaphore
-} from 'effect';
+// `bolt start` (§5.11.6, rules 69–72): one workspace from one built artifact on the next engine. Activation checks the
+// artifact and the required facilities, applies the schema plan, pins the channel epoch, bootstraps the founder, loads
+// a seed pack into an empty database, then serves `/__bolt/*` (shell host, then the protocol handler), `/hooks/*`,
+// signed host operations and the artifact's client pages over node:http. Tenant work is admitted FIFO under one
+// compute envelope; SIGTERM drains.
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createReadStream } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { randomUUID } from 'node:crypto';
-import { WebSocket, WebSocketServer } from 'ws';
-import { BundleLoadError, BundleLoader } from './bundle-loader.js';
-import { guardBindings } from './facilities/boundary.js';
-import type { ServerConfiguration } from './config.js';
-import { AdmissionStopped, ServerHealth } from './health.js';
-import type { TaskInvocationControl } from './schedules.js';
-import { systemCommandHeaders } from './system-headers.js';
-import {
-	makeSyncHost,
-	SyncConnectionUnavailable,
-	SyncGuestRejected,
-	type SyncGuestBridge,
-	type SyncInterface,
-	type SyncSink
-} from './sync-host.js';
+import { extname, join, resolve, sep } from 'node:path';
+import { loadPackWithAssets, readArtifact, workspaceFiles, type Artifact } from '@norbital-ai/bolt/artifact';
+import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, engine, fileAttachments, filesHandler, founderBootstrap, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, type Authority, type Bindings, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
+import type { Config } from './config.ts';
+import { devSink, mailSender, mailTransport, type Sender } from './mail.ts';
+import { aiModalityRefusals, facilities, localFiles, nominatim, openAi, publicWeb, s3Files, timekeeper } from './ports.ts';
+import { push } from './push.ts';
+import { telegram, TELEGRAM_HOOK } from './telegram.ts';
+import { whatsapp, type WaOpen, type WhatsApp } from './whatsapp.ts';
 
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isString = Schema.is(Schema.String);
+export type StartOptions = {
+	/** `bolt dev` / `--dev`: the dev mail sink and fixed code, destructive steps accepted, the dev Turnstile (rules 38a(f), 69), connections to `*.localhost` (L-BOLT-366). */
+	dev?: boolean;
+	/** Replaces `BOLT_MAIL` (tests capture mail). */
+	mail?: Sender;
+	/** The WhatsApp socket opener (tests pass a fake). */
+	whatsappOpen?: WaOpen;
+	/** Contract digests this host implements (default: the engine's own); an artifact naming another is refused (§2.3 decision 5). */
+	contracts?: readonly string[];
+	/** The environment's compute envelope (rule 71): concurrent tenant invocations, FIFO beyond. */
+	maxConcurrent?: number;
+	fetch?: typeof fetch;
+	log?: (line: string) => void;
+};
+export type Server = { url: string; engine: Engine; db: TenantDb; whatsapp: WhatsApp | null; warnings: readonly string[]; close(): Promise<void> };
 
-/** Identifies a bounded Node transport operation that could not complete safely. */
-export class ServerTransportError extends Schema.TaggedError<ServerTransportError>()(
-	'BoltServer.ServerTransportError',
-	{
-		operation: Schema.String,
-		message: Schema.NonEmptyString,
-		cause: Schema.optionalKey(Schema.Defect())
-	}
-) {}
-
-/** Gives malformed command bodies a schema-owned client error instead of a JSON defect. */
-export class CommandInputError extends Schema.TaggedError<CommandInputError>()(
-	'BoltServer.CommandInputError',
-	{
-		code: Schema.Literals(['malformed_json', 'invalid_json_value']),
-		message: Schema.NonEmptyString
-	}
-) {}
-
-/** The server lifecycle: the transport it owns and the one-shot gate that closes it. */
-export interface RunningServer {
-	readonly address: { readonly host: string; readonly port: number };
-	// repository-health:allow EFF2 -- Public host finalizers preserve the established Promise lifecycle contract.
-	readonly close: () => Promise<void>;
+export class ActivationError extends Error {
+	constructor(message: string) { super(message); this.name = 'ActivationError'; }
 }
 
-/** The runtime's services: one loader, one health machine, one id-ministing service. */
-type RuntimeServices = BundleLoader | ServerHealth | UuidGeneration;
-type RealtimeEvent = Extract<Invocation, { readonly _tag: 'Realtime' }>['event'];
+const DRAIN_MS = 10_000;
+const JSON_BYTES = LIMITS.argsBytes + 1024 * 1024;
+const ADMIN_TRANSPORT = '/__bolt/transports/whatsapp';
+
+/** `readArtifact` refuses a contract this host does not implement and a manifest that is not the recorded schema (rule 69). */
+function artifactOf(dir: string, contracts: readonly string[] | undefined): Artifact {
+	try {
+		return contracts === undefined ? readArtifact(dir) : readArtifact(dir, contracts);
+	} catch (x) {
+		throw new ActivationError(x instanceof Error ? x.message : String(x));
+	}
+}
+
+/** Rule 69: what this workspace requires of the host, checked before anything is opened. */
+export function requirements(c: Config, m: EngineManifest, o: StartOptions): { errors: string[]; warnings: string[] } {
+	const errors: string[] = [], warnings: string[] = [];
+	if (c.files === null) errors.push('files are required: set BOLT_FILES_PROVIDER (local or s3) and BOLT_FILES_ENDPOINT');
+	if (c.mail === null && o.mail === undefined && o.dev !== true) errors.push('mail is required for sign-in: set BOLT_MAIL');
+	const env = (m.workspace.env ?? {}) as { readonly [n: string]: { secret?: boolean } };
+	const oauth = Object.values(m.connections).some((x) => typeof x['auth'] === 'object' && x['auth'] !== null && 'oauth2' in x['auth']);
+	if (c.masterKey === null && (oauth || Object.values(env).some((d) => d.secret !== false))) errors.push('this workspace declares secrets: set BOLT_MASTER_KEY');
+	const turnstile = Object.values(m.apps).some((a) => JSON.stringify(a['audience'] ?? null).includes('"challenge":"turnstile"'));
+	if (turnstile && c.turnstile === null && o.dev !== true) errors.push('an app declares challenge: turnstile: set BOLT_TURNSTILE_SITE_KEY and BOLT_TURNSTILE_SECRET');
+	const ai = m.workspace.ai as { models?: readonly string[]; embeddings?: readonly string[] } | undefined;
+	const declared = [...ai?.models ?? [], ...ai?.embeddings ?? []];
+	// hook:ai — the AI facility (P35): `sys_1` and `sys_2` both (config.ts refuses one without the other), `embed` beside them
+	if (c.providers.AI_SYS_2 !== undefined) {
+		const unmapped = (ai?.models ?? []).filter((n) => c.ai.sys2[n] === undefined);
+		if (unmapped.length > 0) errors.push(`BOLT_AI_SYS_2_MODELS maps no model to ${unmapped.join(', ')}`);
+	}
+	if (c.providers.AI_EMBED !== undefined) {
+		const unmapped = (ai?.embeddings ?? []).filter((n) => c.ai.embed[n] === undefined);
+		if (unmapped.length > 0) errors.push(`BOLT_AI_EMBED_MODELS maps no model to ${unmapped.join(', ')}`);
+	}
+	const transports = new Set(Object.values(m.channels).map((x) => String(x['transport'])));
+	const optional: [boolean, string][] = [[c.providers.AI_SYS_2 === undefined && (ai?.models !== undefined || ai?.embeddings !== undefined || m.agent.internal !== undefined || m.agent.external !== undefined), 'AI'], [c.providers.GEO === undefined, 'geocoding'],
+		[c.vapid === null, 'web push'], [transports.has('whatsapp') && c.providers.WHATSAPP === undefined, 'WhatsApp'],
+		[transports.has('telegram') && c.providers.TELEGRAM === undefined, 'Telegram'], [transports.has('email') && c.providers.EMAIL_IN === undefined, 'inbound email']];
+	for (const [absent, name] of optional) if (absent) warnings.push(`${name} is not configured: its calls answer Unavailable${name === 'AI' ? '; messages start turns without triage and the AI filter is hidden' : ''}`);
+	return { errors, warnings };
+}
+
+/** TLS unless the URL says `sslmode=disable` (§5.11.6): no `sslmode` means verified TLS; any given mode is the driver's to honour. */
+export const pgOptions = (url: string) => ({ connectionString: url, ...(new URL(url).searchParams.has('sslmode') ? {} : { ssl: true }), max: 10 });
+
+async function openDatabase(c: Config): Promise<{ db: TenantDb; close(): Promise<void> }> {
+	if ('pglite' in c.database) {
+		mkdirSync(c.database.pglite, { recursive: true }); // PGlite creates only the last segment
+		const { db, pg } = await openPglite(c.database.pglite);
+		return { db, close: () => pg.close() };
+	}
+	const { default: pg } = await import('pg');
+	const pool = new pg.Pool(pgOptions(c.database.url));
+	return { db: postgresDb(pool as unknown as PgPool), close: () => pool.end() };
+}
 
 /**
- * How this host mints the random identifiers every invocation and connection needs.
- *
- * A service rather than a direct `randomUUID()` call so the effects that mint identifiers are
- * deterministic under an injected provider, and so the caller of a mint can be held responsible for
- * the source's security posture (the default is `node:crypto`, not a numeric RNG).
+ * Rule 71: FIFO admission under `max`, request-path and platform work ahead of tenant automations. `drain(ms)` (rule
+ * 71a) closes admission, sheds the waiters and resolves once nothing runs or `ms` passed, whichever is first.
  */
-export class UuidGeneration extends Context.Service<
-	UuidGeneration,
-	{ readonly next: () => InvocationId }
->()('@norbital-ai/bolt-server/UuidGeneration') {}
-
-/** Builds the UUID service from an injected source so tests can own a deterministic sequence. */
-const makeUuidGenerationLayer = (nextUuid: () => string) =>
-	Layer.succeed(UuidGeneration, {
-		next: () => InvocationId.make(nextUuid())
-	});
-
-export const uuidGenerationLayer = makeUuidGenerationLayer(randomUUID);
-
-/** The successful facility result is emitted only after the sync lane has fully settled the commit. */
-export const makeSyncCommitFacility = (
-	sync: Pick<SyncInterface, 'committed'>,
-	scope: SyncScope
-): NonNullable<FacilityBindings['syncCommit']> => ({
-	call: async (_metadata, { changes }) => {
-		await sync.committed({ scope, changes, pending: [] });
-		return success(SyncCommitResponse.make({}));
-	}
-});
-
-/** The payload shape a host plugin may send, decoded once instead of field-guessed. */
-const PluginInput = Schema.Struct({
-	input: Schema.optionalKey(Schema.Json),
-	trustedContext: Schema.optionalKey(PluginTrustedContext)
-});
-
-/** Reads a bounded request body while coupling Node stream destruction to Effect interruption. */
-const readBody = (
-	request: IncomingMessage,
-	limit: number
-): Effect.Effect<Uint8Array | undefined, ServerTransportError> =>
-	Effect.callback((resume, signal) => {
-		const chunks: Array<Uint8Array> = [];
-		let length = 0;
-		let settled = false;
-		const cleanup = () => {
-			request.off('data', onData);
-			request.off('end', onEnd);
-			request.off('error', failure);
-			request.off('aborted', onAborted);
-			signal.removeEventListener('abort', onAbort);
-		};
-		const failure = (cause: unknown) => {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			resume(
-				Effect.fail(
-					new ServerTransportError({
-						operation: 'BoltServer.Server.readBody',
-						message: 'Unable to read request body',
-						cause
-					})
-				)
-			);
-		};
-		function onData(chunk: string | Buffer): void {
-			const bytes = isString(chunk) ? new TextEncoder().encode(chunk) : new Uint8Array(chunk);
-			length += bytes.byteLength;
-			if (length > limit) {
-				failure(new Error('request body exceeds configured limit'));
-				request.destroy();
-				return;
-			}
-			chunks.push(bytes);
+export function envelope(max: number) {
+	let running = 0, closed = false;
+	const lanes: [{ go(): void; shed(): void }[], { go(): void; shed(): void }[]] = [[], []];
+	const idle: (() => void)[] = [];
+	const next = () => {
+		while (running < max) {
+			const w = lanes[0].shift() ?? lanes[1].shift();
+			if (w === undefined) break;
+			running++;
+			w.go();
 		}
-		function onEnd(): void {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			if (length === 0) {
-				resume(Effect.succeed(undefined));
-				return;
-			}
-			const body = new Uint8Array(length);
-			let offset = 0;
-			for (const chunk of chunks) {
-				body.set(chunk, offset);
-				offset += chunk.byteLength;
-			}
-			resume(Effect.succeed(body));
-		}
-		function onAborted(): void {
-			failure(new Error('request body stream was aborted'));
-		}
-		function onAbort(): void {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			request.destroy(signal.reason);
-		}
-
-		request.on('data', onData);
-		request.once('end', onEnd);
-		request.once('error', failure);
-		request.once('aborted', onAborted);
-		signal.addEventListener('abort', onAbort, { once: true });
-		return Effect.sync(cleanup);
-	});
-
-/** Writes a terminal JSON response only while the transport remains writable. */
-const writeJson = (response: ServerResponse, status: number, value: unknown): void => {
-	if (response.writableEnded || response.destroyed) return;
-	const body = JSON.stringify(value);
-	if (!response.headersSent) {
-		response.statusCode = status;
-		response.setHeader('content-type', 'application/json; charset=utf-8');
-		response.setHeader('content-length', Buffer.byteLength(body));
-	}
-	response.end(body);
-};
-
-/**
- * Where an artifact's blobs sit: beside the bundle module the host was pointed at.
- *
- * Derived rather than configured, because the compiler writes both and a second setting is a second
- * thing that can disagree with the first. The blob's name is its digest, which the loader has
- * already re-verified against the index at startup.
- */
-const assetDirectoryOf = (bundlePath: string): string =>
-	join(dirname(resolve(bundlePath)), ARTIFACT_ASSET_DIRECTORY);
-
-/**
- * Sends one blob without holding it in memory.
- *
- * A workspace that ships PGlite serves a 13 MB WebAssembly module; buffering it per request is the
- * memory profile this whole change exists to remove, one layer up. `pipeline` also closes the read
- * stream when the client disconnects mid-transfer, which a manual `pipe` does not.
- */
-const streamAssetBlob = (
-	response: ServerResponse,
-	blobPath: string
-): Effect.Effect<void, ServerTransportError> =>
-	Effect.tryPromise({
-		try: () => pipeline(createReadStream(blobPath), response),
-		catch: (cause) =>
-			new ServerTransportError({
-				operation: 'BoltServer.Server.streamAsset',
-				message: `Unable to stream Bolt asset blob ${blobPath}`,
-				cause
-			})
-	});
-
-/** Preserves every incoming HTTP header value while normalizing names for case-insensitive lookup. */
-const rawRequestHeaders = (request: IncomingMessage): Record<string, Array<string>> => {
-	const headers: Record<string, Array<string>> = {};
-	for (let index = 0; index < request.rawHeaders.length; index += 2) {
-		const rawName = request.rawHeaders[index];
-		const value = request.rawHeaders[index + 1];
-		if (rawName === undefined || value === undefined) continue;
-		const name = rawName.toLowerCase();
-		const existing = headers[name];
-		if (existing === undefined) headers[name] = [value];
-		else existing.push(value);
-	}
-	return headers;
-};
-
-/** Converts a schema-validated Bolt dispatch result into one Node response. */
-const writeDispatchResult = (response: ServerResponse, result: BundleResult): void => {
-	if (result._tag === 'Failure') {
-		writeJson(response, result.error.httpStatus ?? 500, result.error);
-		return;
-	}
-
-	response.statusCode = result.response.status;
-	for (const [name, values] of Object.entries(result.response.headers)) {
-		response.setHeader(name, values);
-	}
-	if (result.response.body !== undefined) {
-		response.end(result.response.body);
-	} else if (result.response.value !== undefined) {
-		if (!response.hasHeader('content-type')) {
-			response.setHeader('content-type', 'application/json; charset=utf-8');
-		}
-		response.end(JSON.stringify(result.response.value));
-	} else {
-		response.end();
-	}
-};
-
-/** The live-query wire carries only canonical version transitions and resets. */
-const SYNC_KEEPALIVE_MILLIS = 25_000;
-
-/**
- * How much an SSE response may buffer before its stream is treated as abandoned.
- *
- * One delta frame for a large write is hundreds of kilobytes, and Node buffers it whole; the cap
- * sits well above any single frame so backpressure never reads as a dead consumer.
- */
-const MAX_BUFFERED_SSE_BYTES = 8 * 1024 * 1024;
-const sseEncoder = new TextEncoder();
-const sseApplyBytes = (frame: SyncScopedApplyFrame): Uint8Array =>
-	sseEncoder.encode(`event: apply\ndata: ${JSON.stringify(frame)}\n\n`);
-
-/**
- * The opaque bearer proof a self-hosted connection carries.
- *
- * This host does not decode identity claims itself. The proof is the physical stream's principal
- * authority and the logical scope's guest credential; the guest authenticates it on registration
- * and again during advancement so revocation and policy drift remain visible.
- */
-const bearerCredential = (headers: Record<string, Array<string>>): string => {
-	const value = headers['authorization']?.[0];
-	if (value === undefined) return '';
-	const bare = value.startsWith('Bearer ') ? value.slice('Bearer '.length) : value;
-	return bare.trim();
-};
-
-/**
- * The writer-owned ledger ids one committed invocation settles.
- *
- * The change list carries its mutation ids; `collections.write` also names its idempotency key on
- * the request and echoes it in the response, and terminal outcomes that committed no collection
- * change ride that pair.
- */
-const mutationIdsFrom = (
-	command: string,
-	input: Schema.Json,
-	response: DispatchResponse
-): ReadonlyArray<CollectionMutationIdempotencyKey> => {
-	const pending = new Set<CollectionMutationIdempotencyKey>();
-	for (const change of response.changes ?? []) {
-		if (change.mutationId !== undefined) pending.add(change.mutationId);
-	}
-	if (command !== 'collections.write') return [...pending];
-	const inputId = isRecord(input) ? Reflect.get(input, 'idempotencyKey') : undefined;
-	const responseId = isRecord(response.value)
-		? Reflect.get(response.value, 'mutationId')
-		: undefined;
-	for (const candidate of [inputId, responseId]) {
-		const decoded = Schema.decodeUnknownOption(CollectionMutationIdempotencyKey)(candidate);
-		if (Option.isSome(decoded)) pending.add(decoded.value);
-	}
-	return [...pending];
-};
-
-/**
- * One dispatch into the bundle.
- *
- * There is no wall: what bounds a guest is its CPU budget, and a facility that never answers is
- * reported by that facility's own liveness bound. A client that stops waiting does not reach here either:
- * the request fiber runs under the server's shutdown signal alone (`createServer` below), so the
- * only thing that interrupts a dispatch is the process going away.
- */
-const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
-	invocation: Invocation,
-	facilities: FacilityBindings,
-	taskInvocations?: TaskInvocationControl
-) {
-	const loader = yield* BundleLoader;
-	const health = yield* ServerHealth;
-	return yield* health.admit(
-		Effect.gen(function* () {
-			const bundle = yield* loader.load();
-			const unsafeResult = yield* Effect.tryPromise({
-				try: (signal) => {
-					const controller = taskInvocations?.open(invocation.id);
-					return bundle
-						.dispatch(
-							invocation,
-							facilities,
-							controller === undefined ? signal : AbortSignal.any([signal, controller.signal])
-						)
-						.finally(() => {
-							if (controller !== undefined) taskInvocations?.close(invocation.id, controller);
-						});
-				},
-				catch: (cause) =>
-					new ServerTransportError({
-						operation: 'BoltServer.Server.dispatch',
-						message: 'Bolt bundle dispatch failed',
-						cause
-					})
+		if (running === 0) for (const done of idle.splice(0)) done();
+	};
+	const admit = async <T>(lane: 0 | 1, work: () => Promise<T>): Promise<T> => {
+		if (closed) throw new BoltError('busy', 'admission', 'the server is draining');
+		await new Promise<void>((go, shed) => { lanes[lane].push({ go, shed: () => shed(new BoltError('busy', 'admission', 'the server is draining')) }); next(); });
+		try { return await work(); } finally { running--; next(); }
+	};
+	return Object.assign(admit, {
+		drain: (ms: number): Promise<boolean> => {
+			closed = true;
+			for (const w of [...lanes[0].splice(0), ...lanes[1].splice(0)]) w.shed();
+			if (running === 0) return Promise.resolve(true);
+			return new Promise<boolean>((done) => {
+				const timer = setTimeout(() => done(false), ms);
+				idle.push(() => { clearTimeout(timer); done(true); });
 			});
-			return yield* Schema.decodeUnknownEffect(BundleResult)(unsafeResult).pipe(
-				Effect.mapError(
-					(cause) =>
-						new ServerTransportError({
-							operation: 'BoltServer.Server.decodeResponse',
-							message: 'Bolt bundle returned an invalid response',
-							cause
-						})
-				)
-			);
-		})
-	);
-});
-
-const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(function* (
-	connectionId: string,
-	event: RealtimeEvent,
-	configuration: ServerConfiguration,
-	facilities: FacilityBindings
-) {
-	const now = yield* Clock.currentTimeMillis;
-	const uuid = yield* UuidGeneration;
-	const invocation = Invocation.cases.Realtime.make({
-		protocolVersion: PROTOCOL_VERSION,
-		id: uuid.next(),
-		scope: configuration.scope,
-		connectionId,
-		event
+		},
 	});
-	const result = yield* dispatch(invocation, facilities);
-	if (result._tag === 'Failure') {
-		return yield* new ServerTransportError({
-			operation: 'BoltServer.Server.realtime',
-			message: result.error.message
-		});
-	}
-	let realtime = result.response.realtime;
-	const transport = facilities.transport;
-	if (transport !== undefined) {
-		const transportResult = yield* Effect.tryPromise({
-			try: (signal) =>
-				transport.call(
-					{
-						invocationId: invocation.id,
-						effectId: EffectId.make(`${invocation.id}:transport-pull`),
-						idempotencyKey: `${invocation.id}:transport-pull`
+}
+/** Rule 71a: a bounded wait for what an interrupt already ended; nothing after SIGTERM waits unbounded. */
+const within = (ms: number, work: Promise<unknown>): Promise<unknown> =>
+	Promise.race([work.catch(() => undefined), new Promise((done) => setTimeout(done, ms).unref())]);
+
+const MIME: { readonly [ext: string]: string } = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
+	'.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon',
+	'.woff2': 'font/woff2', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json' };
+const err = (code: string, message: string, status: number) => Response.json({ error: { code, message } }, { status });
+
+export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
+	const log = o.log ?? ((line: string) => console.log(`[bolt] ${line}`));
+	const f = o.fetch ?? fetch;
+	const art = artifactOf(c.artifact, o.contracts);
+	const m = art.manifest;
+	const { errors, warnings } = requirements(c, m, o);
+	if (errors.length > 0) throw new ActivationError(`activation refused:\n  ${errors.join('\n  ')}`);
+	for (const w of warnings) log(`warning: ${w}`);
+
+	const store = await openDatabase(c);
+	const db = store.db;
+	const release = art.artifact.hash.slice(0, 16);
+	const { handle, name } = art.artifact;
+	const files: FilesPort = c.files?.provider === 's3' ? s3Files(c.files.endpoint, c.files.credential, f) : localFiles(c.files?.root ?? join(c.artifact, '.files'));
+	const env = (m.workspace.env ?? {}) as { readonly [n: string]: { secret?: boolean; default?: string } };
+	const secrets = sealedSecrets(db, c.masterKey, env);
+	const admit = envelope(o.maxConcurrent ?? 8);
+	let e: Engine | undefined;
+	/** Rule 71a: the generation scope; SIGTERM aborts it after the grace, disposing every guest isolate. */
+	const generation = new AbortController();
+	const deadlines = timekeeper((scope) => admit(1, () => e!.runs!.tick()).then(() => log(`woke ${scope}`)));
+
+	// optional providers (P19): absent → the port is absent
+	const endpoint = (p: NonNullable<Config['providers']['AI_SYS_2']>) => ({ endpoint: p.endpoint ?? 'https://api.openai.com/v1', credential: p.credential });
+	// hook:ai — P39: every sys_2 and embed model takes images, or activation is refused
+	const refused = c.providers.AI_SYS_2 === undefined ? [] : await aiModalityRefusals([
+		{ system: 'sys_2', endpoint: endpoint(c.providers.AI_SYS_2), models: Object.values(c.ai.sys2), declared: c.ai.modalities.sys2 },
+		...(c.providers.AI_EMBED === undefined ? [] : [{ system: 'embed' as const, endpoint: endpoint(c.providers.AI_EMBED),
+			models: Object.values(c.ai.embed).map((x) => typeof x === 'string' ? x : x.model), declared: c.ai.modalities.embed }])], f);
+	if (refused.length > 0) throw new ActivationError(`activation refused:\n  ${refused.join('\n  ')}`);
+	const ai = c.providers.AI_SYS_1 === undefined || c.providers.AI_SYS_2 === undefined ? undefined
+		: openAi({ sys1: { ...endpoint(c.providers.AI_SYS_1), provider: c.providers.AI_SYS_1.provider }, sys2: endpoint(c.providers.AI_SYS_2), embed: c.providers.AI_EMBED === undefined ? undefined : endpoint(c.providers.AI_EMBED) },
+			c.ai, [...(m.workspace.ai as { models?: string[] } | undefined)?.models ?? ['default']], f);
+	const geocoder = c.providers.GEO === undefined ? undefined : nominatim(c.providers.GEO.endpoint ?? 'https://nominatim.openstreetmap.org', f);
+	const web = c.providers.WEB === undefined ? undefined : publicWeb();
+	const workspace = workspaceFiles(art.dir); // the released source and its type index (`workspace_read`, `workspace_type`)
+	const channelOf = (t: string) => Object.entries(m.channels).find(([, x]) => x['transport'] === t)?.[0];
+	const sender = o.mail ?? (c.mail !== null ? mailSender(c.mail, c.publicUrl, f) : devSink());
+	const email = mailTransport(sender);
+	const tg = c.providers.TELEGRAM?.credential === undefined ? undefined : telegram(c.providers.TELEGRAM.credential, channelOf('telegram') ?? 'telegram', f);
+	const wa = c.providers.WHATSAPP === undefined ? null
+		: whatsapp(c.providers.WHATSAPP.endpoint ?? join(c.artifact, '.whatsapp'), channelOf('whatsapp') ?? 'whatsapp', o.whatsappOpen);
+	const pusher = c.vapid === null ? undefined : push(db, c.vapid, c.publicUrl);
+	const transports: { email: TransportPort; whatsapp?: TransportPort; telegram?: TransportPort; push?: TransportPort } =
+		{ email, ...(wa === null ? {} : { whatsapp: wa }), ...(tg === undefined ? {} : { telegram: tg }), ...(pusher === undefined ? {} : { push: pusher }) };
+
+	try {
+		// the channel epoch (rule 61): minted once per database, so a restart keeps sending what it queued
+		const pack = c.seed === null ? null : readPack(resolve(c.seed));
+		const engineOf = (epoch: string) => engine({
+			manifest: m, db, guest: art.guest, transforms: art.transforms, agent: { attachments: fileAttachments(db, files), ...(workspace === undefined ? {} : { workspace }), ...(geocoder === undefined ? {} : { geocoder }), ...(web === undefined ? {} : { web }) },
+			console: (level: string, ...args: unknown[]) => log(`guest ${level}: ${args.map((a) => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')}`),
+			deadlines, scope: handle, files, connections: { secrets, publicUrl: c.publicUrl,
+				// L-BOLT-366: a dev host's connections may reach a provider on this machine; any other host gets the engine's guard
+				...(o.fetch !== undefined ? { fetch: o.fetch } : o.dev === true ? { fetch: publicFetch({ allowLoopback: true }) } : {}) }, epoch, transports,
+			...(ai === undefined ? {} : { ai }), // hook:ai
+			runs: { facility: facilities({ ...(ai === undefined ? {} : { ai }), ...(geocoder === undefined ? {} : { geocoder }), ...(web === undefined ? {} : { web }), files, db }), env: secrets.env, eventRetainHours: c.telemetryRetainHours,
+				...(pack === null ? {} : { start: pack.meta.start }) },
+			envoys: { workspace: name, registrationLink: (claim) => new URL(`/__bolt/envoys/register?claim=${encodeURIComponent(claim)}`, c.publicUrl).href },
+			signal: generation.signal,
+		} as Parameters<typeof engine>[0]);
+		const probe = engineOf('');
+		try {
+			await probe.migrate(c.accept || o.dev === true ? { accept: true } : {});
+		} catch (x) {
+			throw x instanceof BoltError && x.code === 'destructiveNotAccepted' ? new ActivationError(`${x.message}; start with --accept`) : x;
+		}
+		const [ep] = await db.read([{ text: `SELECT value FROM sys_config WHERE key = 'channels.epoch'`, params: [] }]);
+		e = engineOf(String(ep!.rows[0]?.['value'] ?? randomUUID()));
+		await e.channels.activate();
+		const unsubscribe = [e.channels.subscribe(), e.integrations.subscribe(Object.values(transports), randomUUID)];
+		await secrets.load();
+
+		const now = () => new Date();
+		const keys = await loadKeys(db);
+		const identity: IdentityHost = { db, now, windows: new RateWindows(), keys, mail: email, devSink: o.dev === true, publicUrl: c.publicUrl };
+		const authorities = new Authorities(m, release);
+
+		if (pack !== null) log(await loadPackWithAssets(db, m, pack, files, now().toISOString()) ? `--seed: loaded pack ${pack.meta.name} (${pack.meta.hash.slice(0, 12)})`
+			: '--seed: the database has rows; nothing seeded');
+		if (c.founder !== null) {
+			const [admins] = await db.read([{ text: `SELECT 1 FROM sys_user WHERE admin LIMIT 1`, params: [] }]);
+			if (admins!.rows.length === 0) {
+				const r = await founderBootstrap(identity, c.founder);
+				log(r.ok ? `--founder: ${c.founder} is the administrator; sign in with the emailed code` : `--founder: ${r.message}`);
+			}
+		}
+		await e.runs!.boot();
+		if (tg !== undefined) await tg.activate(c.publicUrl).catch((x: unknown) => log(`warning: Telegram webhook not registered: ${String(x)}`));
+		if (wa !== null) {
+			wa.observe((s) => log(`whatsapp: ${s.state}${'detail' in s ? ` (${s.detail})` : ''}`));
+			await wa.start().catch((x: unknown) => log(`warning: WhatsApp did not resume: ${String(x)}`));
+		}
+
+		const peers = new WeakMap<Request, string>();
+		const shell = shellHost({ manifest: m, identity, authorities, workspace: { name, handle }, ip: (r) => peers.get(r) ?? '0.0.0.0', runs: e.runs!,
+			secure: new URL(c.publicUrl).protocol === 'https:', ai: ai !== undefined, ...(c.environment === null ? {} : { environment: c.environment }),
+			turnstile: c.turnstile !== null ? cloudflareTurnstile(c.turnstile.siteKey, c.turnstile.secret, f) : devTurnstile,
+			secrets: { status: secrets.status, set: secrets.set, clear: secrets.clear }, envoys: e.envoys,
+			...(e.connections === undefined ? {} : { connections: e.connections }),
+			...(c.vapid === null ? {} : { push: { publicKey: c.vapid.publicKey } }) });
+		const bindings = (): Bindings => { const n = now().toISOString(); return { now: n, today: n.slice(0, 10), tz: m.workspace.tz, params: {} }; };
+		const protocol = boltHandler({ engine: e, session: shell.authority, bindings, uuid: randomUUID });
+		const fileRoute = filesHandler({ engine: e, session: shell.authority, bindings });
+		const engineRef = e;
+
+		/** `POST /__bolt/ops` (§7.1 MAC over v1 · env · host · op · ts · nonce · sha256(body); single-use nonce and runId). */
+		async function ops(request: Request): Promise<Response> {
+			if (c.opsKey === null) return err('unavailable', 'host operations are not configured (BOLT_OPS_KEY)', 503);
+			const body = new Uint8Array(await request.arrayBuffer());
+			const ts = request.headers.get('bolt-op-ts') ?? '', nonce = request.headers.get('bolt-op-nonce') ?? '', mac = request.headers.get('bolt-op-mac') ?? '';
+			let x: { op?: unknown; input?: { [k: string]: Json }; runId?: unknown };
+			try { x = JSON.parse(new TextDecoder().decode(body)) as typeof x; } catch { return err('invalid', 'the body is not JSON', 400); }
+			const op = String(x.op ?? '');
+			const want = createHmac('sha256', c.opsKey).update(['v1', handle, new URL(c.publicUrl).host, op, ts, nonce, createHash('sha256').update(body).digest('hex')].join('\n')).digest();
+			const got = Buffer.from(mac, 'base64url');
+			if (got.length !== want.length || !timingSafeEqual(got, want) || !/^[\w-]{16,}$/.test(nonce) || Math.abs(Date.now() - Number(ts)) > 300_000)
+				return err('forbidden', 'the operation is not signed', 403);
+			const once = [`nonce:${nonce}`, ...(typeof x.runId === 'string' ? [`run:${x.runId}`] : [])];
+			const fresh = await db.write({ text: `INSERT INTO bolt_host_nonce (key, at) SELECT k, now() FROM jsonb_array_elements_text($1::jsonb) k ON CONFLICT (key) DO NOTHING RETURNING key`,
+				params: [JSON.stringify(once)] });
+			if (fresh.rows.length !== once.length) return err('replayed', 'the nonce or run was already used', 409);
+			const input = x.input ?? {};
+			const answer = (r: Awaited<ReturnType<typeof mint>>) => r.ok ? Response.json({ value: r.value }) : err(r.code, r.message, r.code === 'notFound' ? 404 : 403);
+			if (op === 'host.ping') return Response.json({ value: { workspace: handle, at: now().toISOString() } }); // L-BOLT-298: the host answers signed operations
+			if (op === 'session.mint' && typeof input['user'] === 'string') return answer(await mint(identity, input['user']));
+			if (op === 'founder.bootstrap' && typeof input['email'] === 'string')
+				return answer(await founderBootstrap(identity, input['email'], typeof input['name'] === 'string' ? input['name'] : undefined));
+			return err('unknownOp', `'${op}' is not a host operation of bolt start`, 404);
+		}
+
+		/** WhatsApp pairing for administrators: state (JSON, or SSE progress), `pair { phone? }`, `logout`. */
+		async function whatsappRoute(request: Request, auth: Authority | null, path: string): Promise<Response> {
+			if (auth === null || auth.actor.kind !== 'member' || !auth.admin) return err('forbidden', 'Only an administrator manages the WhatsApp link.', 403);
+			if (wa === null) return err('unavailable', 'WhatsApp is not configured (BOLT_WHATSAPP_PROVIDER=baileys)', 503);
+			if (request.method === 'GET' && (request.headers.get('accept') ?? '').includes('text/event-stream')) {
+				let off = () => {};
+				const enc = new TextEncoder();
+				return new Response(new ReadableStream<Uint8Array>({
+					start(ctl) {
+						const send = (s: unknown) => { try { ctl.enqueue(enc.encode(`data: ${JSON.stringify(s)}\n\n`)); } catch { off(); } };
+						send(wa.state());
+						off = wa.observe(send);
 					},
-					TransportRequest.cases.Pull.make({ connectionId, maxFrames: 256 }),
-					signal
-				),
-			catch: (cause) =>
-				new ServerTransportError({
-					operation: 'BoltServer.Server.transportPull',
-					message: 'Transport pull failed during realtime dispatch',
-					cause
-				})
-		});
-		if (transportResult._tag === 'Success' && transportResult.value.frames !== undefined) {
-			const transportFrames = transportResult.value.frames.map((frame) => ({
-				cursor: frame.cursor ?? `${connectionId}:${frame.sequence}`,
-				kind: frame.kind,
-				bytes: frame.bytes
-			}));
-			realtime =
-				realtime === undefined
-					? { frames: transportFrames }
-					: { ...realtime, frames: [...realtime.frames, ...transportFrames] };
-		}
-	}
-	return realtime;
-});
-
-const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
-	request: IncomingMessage,
-	response: ServerResponse,
-	configuration: ServerConfiguration,
-	facilities: FacilityBindings,
-	sync: SyncInterface,
-	taskInvocations?: TaskInvocationControl
-) {
-	const loader = yield* BundleLoader;
-	const health = yield* ServerHealth;
-	const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-	if (url.pathname === '/healthz' || url.pathname === '/readyz') {
-		const snapshot = yield* health.snapshot();
-		const available = url.pathname === '/healthz' ? !snapshot.finalized : snapshot.ready;
-		writeJson(response, available ? 200 : 503, snapshot);
-		return;
-	}
-
-	// The live-query wire. One browser profile allocates one physical connection id before opening
-	// EventSource; scope-qualified registrations and monotonic extensions join beneath that transport.
-	if (url.pathname === '/sync/stream') {
-		if (request.method !== 'GET') {
-			response.statusCode = 405;
-			response.setHeader('allow', 'GET');
-			response.end();
-			return;
-		}
-		const principal = bearerCredential(rawRequestHeaders(request));
-		if (principal.length === 0) {
-			writeJson(response, 401, { code: 'bolt_server.sync_credential_required' });
-			return;
-		}
-		const connectionId = url.searchParams.get('connectionId')?.trim() ?? '';
-		if (connectionId.length === 0) {
-			writeJson(response, 400, { code: 'bolt_server.sync_connection_required' });
-			return;
-		}
-		let live = true;
-		let keepalive: ReturnType<typeof setInterval> | undefined;
-		const sink: SyncSink = {
-			/**
-			 * Node accepts every write and buffers it, so `writableNeedDrain` is backpressure, not a
-			 * dead consumer — and one large delta frame (a payroll run's change set is hundreds of
-			 * kilobytes) sets it for the next frame too. Refusing that next frame used to detach the
-			 * whole stream and leave the browser reconnecting, which is why a committed write took
-			 * six seconds to be believed. Only a stream buffering past this cap is treated as dead:
-			 * the keepalive then detaches it, and memory stays bounded per abandoned tab.
-			 */
-			writable: () =>
-				live &&
-				!response.destroyed &&
-				!response.writableEnded &&
-				response.writableLength < MAX_BUFFERED_SSE_BYTES,
-			write: (frame) => {
-				if (!sink.writable()) return false;
-				response.write(sseApplyBytes(frame));
-				return true;
-			},
-			close: () => {
-				if (!live) return;
-				live = false;
-				clearInterval(keepalive);
-				response.end();
+					cancel() { off(); },
+				}), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' } });
 			}
+			if (request.method === 'GET') return Response.json({ value: wa.state() });
+			if (request.method === 'POST' && path === `${ADMIN_TRANSPORT}/pair`) {
+				const b = await request.json().catch(() => ({})) as { phone?: unknown };
+				try { await wa.pair(typeof b.phone === 'string' ? b.phone : undefined); } catch (x) { return err('invalid', x instanceof Error ? x.message : String(x), 400); }
+				return Response.json({ value: wa.state() });
+			}
+			if (request.method === 'POST' && path === `${ADMIN_TRANSPORT}/logout`) { await wa.logout(); return Response.json({ value: wa.state() }); }
+			return err('notFound', 'no such route', 404);
+		}
+
+		async function hooks(request: Request, path: string): Promise<Response> {
+			if (path === TELEGRAM_HOOK && tg !== undefined && request.method === 'POST') return tg.webhook(request);
+			const mail = /^\/hooks\/bolt\.email\/([\w-]+)$/.exec(path);
+			if (mail !== null && request.method === 'POST') {
+				const secret = c.providers.EMAIL_IN?.credential;
+				if (secret === undefined || m.channels[mail[1]!]?.['transport'] !== 'email') return new Response(null, { status: 404 });
+				const event = resendEvent(mail[1]!, Object.fromEntries(request.headers), new Uint8Array(await request.arrayBuffer()), secret, Date.now());
+				if (event === 'unverified') return new Response(null, { status: 401 });
+				if (event !== null) await email.deliver(event);
+				return new Response(null, { status: 200 });
+			}
+			const url = new URL(request.url);
+			const r = await engineRef.runs!.webhook(path.slice('/hooks'.length), { method: request.method, headers: Object.fromEntries(request.headers),
+				body: new Uint8Array(await request.arrayBuffer()), query: Object.fromEntries(url.searchParams) } as Parameters<NonNullable<Engine['runs']>['webhook']>[1]);
+			return new Response(r.body ?? null, { status: r.status });
+		}
+
+		const client = resolve(art.client), artifactDir = resolve(art.dir);
+		/** A file under `base`, or undefined (never outside it). */
+		const under = async (base: string, path: string) => {
+			const file = resolve(base, `.${decodeURIComponent(path)}`);
+			return file.startsWith(base + sep) && await stat(file).then((s) => s.isFile(), () => false) ? file : undefined;
 		};
-		sync.open({ connectionId, principal, sink });
-		response.once('close', () => sync.detach(connectionId));
-		response.writeHead(200, {
-			'content-type': 'text/event-stream; charset=utf-8',
-			'cache-control': 'no-store',
-			connection: 'keep-alive',
-			'x-accel-buffering': 'no'
-		});
-		// Sending the SSE headers is the transport-ready signal. Registration remains a separate
-		// control request and no protocol frame is manufactured for stream readiness.
-		response.flushHeaders();
-		keepalive = setInterval(() => {
-			// A stream the kernel has not drained for a full interval is a dead consumer: detach it
-			// so the registry stops holding state for a tab nobody is reading.
-			if (!sink.writable()) {
-				sync.detach(connectionId);
-				return;
-			}
-			response.write(sseEncoder.encode(': keepalive\n\n'));
-		}, SYNC_KEEPALIVE_MILLIS);
-		keepalive.unref();
-		return;
-	}
+		/** The client build, then the artifact's workspace `assets/**` at `/assets/*`, then the document. */
+		async function page(path: string): Promise<Response> {
+			const hit = await under(client, path) ?? (path.startsWith('/assets/') ? await under(artifactDir, path) : undefined) ?? join(client, 'index.html');
+			if (!existsSync(hit)) return new Response('This artifact carries no client pages.', { status: 404 });
+			return new Response(await readFile(hit), { headers: { 'content-type': MIME[extname(hit)] ?? 'application/octet-stream',
+				'cache-control': hit.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable' } });
+		}
 
-	if (url.pathname === '/sync/connect') {
-		if (request.method !== 'POST') {
-			response.statusCode = 405;
-			response.setHeader('allow', 'POST');
-			response.end();
-			return;
+		async function route(request: Request): Promise<Response> {
+			const path = new URL(request.url).pathname;
+			if (path.startsWith('/hooks/')) return admit(0, () => hooks(request, path));
+			if (path === '/__bolt/ops' && request.method === 'POST') return ops(request);
+			if (path === ADMIN_TRANSPORT || path.startsWith(`${ADMIN_TRANSPORT}/`)) return whatsappRoute(request, await shell.authority(request), path);
+			const own = await shell.handle(request);
+			if (own !== null) return own;
+			if (!path.startsWith('/__bolt/')) return (request.method === 'GET' || request.method === 'HEAD') ? page(path) : err('notFound', 'no such route', 404);
+			if (path.startsWith('/__bolt/files/')) return admit(0, async () => (await fileRoute(request))!);
+			const live = path === '/__bolt/live' && request.method === 'GET';
+			const r = live ? await protocol(request) : await admit(0, () => protocol(request));
+			return r ?? err('notFound', 'no such route', 404);
 		}
-		const connectionId = rawRequestHeaders(request)[SYNC_CONNECTION_HEADER]?.[0]?.trim() ?? '';
-		if (connectionId.length === 0) {
-			writeJson(response, 400, { code: 'bolt_server.sync_connection_required' });
-			return;
-		}
-		const credential = bearerCredential(rawRequestHeaders(request));
-		if (credential.length === 0) {
-			writeJson(response, 401, { code: 'bolt_server.sync_credential_required' });
-			return;
-		}
-		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const registration =
-			body === undefined
-				? yield* Effect.fail(
-						new CommandInputError({
-							code: 'malformed_json',
-							message: 'Bolt sync registration requires a body'
-						})
-					)
-				: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncConnectRequest))(
-						new TextDecoder().decode(body)
-					).pipe(
-						Effect.mapError(
-							() =>
-								new CommandInputError({
-									code: 'malformed_json',
-									message: 'Bolt sync registration body is invalid'
-								})
-						)
-					);
-		if (
-			registration.queries.some(
-				({ input, requestedPrefix }) => input.kind === 'findFirst' && requestedPrefix !== 1
-			)
-		) {
-			return yield* Effect.fail(
-				new CommandInputError({
-					code: 'invalid_json_value',
-					message: 'Bolt sync findFirst registration requires a one-row prefix'
-				})
-			);
-		}
-		const connectStartedAt = yield* Clock.currentTimeMillis;
-		const connected = yield* Effect.tryPromise({
-			try: () =>
-				sync.connect({
-					connectionId,
-					principal: credential,
-					scope: configuration.scope,
-					credential,
-					request: registration
-				}),
-			catch: (cause) => cause
-		}).pipe(Effect.result);
-		if (Result.isFailure(connected)) {
-			const failure = connected.failure;
-			if (failure instanceof SyncGuestRejected) {
-				writeJson(response, failure.status, {
-					code: 'bolt_server.sync_guest_rejected',
-					command: failure.command,
-					message: failure.message
-				});
-			} else if (failure instanceof SyncConnectionUnavailable) {
-				// A connection belongs to exactly one process and pinned release. Losing either is
-				// terminal for this client instance; it closes instead of crossing release authority.
-				writeJson(response, 410, {
-					code: 'bolt_server.sync_connection_unavailable',
-					message: 'sync connection or its pinned release is no longer available'
-				});
-			} else if (failure instanceof SyncInitialAnswerTooLargeError) {
-				// Refused, not failed: the browser splits its batch and asks one key at a time, so the
-				// queries that fit open and this sentence lands on the one that does not. Answered as a
-				// 500 it was a transport failure the browser retried as the identical batch forever.
-				writeJson(response, 400, {
-					code: 'bolt_server.sync_answer_too_large',
-					message: failure.message
-				});
-			} else {
-				writeJson(response, 500, { code: 'bolt_server.internal_error' });
-			}
-			return;
-		}
-		// Host time for this registration, readable from the browser's network panel (RFC/bolt.md B6).
-		const connectFinishedAt = yield* Clock.currentTimeMillis;
-		response.setHeader(
-			'server-timing',
-			`sync-connect;dur=${connectFinishedAt - connectStartedAt};desc="queries=${registration.queries.length}"`
-		);
-		writeJson(response, 200, connected.success);
-		return;
-	}
 
-	if (url.pathname === '/sync/extend') {
-		if (request.method !== 'POST') {
-			response.statusCode = 405;
-			response.setHeader('allow', 'POST');
-			response.end();
-			return;
-		}
-		const headers = rawRequestHeaders(request);
-		const connectionId = headers[SYNC_CONNECTION_HEADER]?.[0]?.trim() ?? '';
-		if (connectionId.length === 0) {
-			writeJson(response, 400, { code: 'bolt_server.sync_connection_required' });
-			return;
-		}
-		const credential = bearerCredential(headers);
-		if (credential.length === 0) {
-			writeJson(response, 401, { code: 'bolt_server.sync_credential_required' });
-			return;
-		}
-		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const extension =
-			body === undefined
-				? yield* Effect.fail(
-						new CommandInputError({
-							code: 'malformed_json',
-							message: 'Bolt sync prefix extension requires a body'
-						})
-					)
-				: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncExtendPrefixRequest))(
-						new TextDecoder().decode(body)
-					).pipe(
-						Effect.mapError(
-							() =>
-								new CommandInputError({
-									code: 'malformed_json',
-									message: 'Bolt sync prefix extension body is invalid'
-								})
-						)
-					);
-		const extended = yield* Effect.tryPromise({
-			try: () =>
-				sync.extendPrefix({
-					connectionId,
-					principal: credential,
-					scope: configuration.scope,
-					credential,
-					request: extension
-				}),
-			catch: (cause) => cause
-		}).pipe(Effect.result);
-		if (Result.isFailure(extended)) {
-			const failure = extended.failure;
-			if (failure instanceof SyncGuestRejected) {
-				writeJson(response, failure.status, {
-					code: 'bolt_server.sync_guest_rejected',
-					command: failure.command,
-					message: failure.message
-				});
-			} else if (failure instanceof SyncConnectionUnavailable) {
-				writeJson(response, 410, {
-					code: 'bolt_server.sync_connection_unavailable',
-					message: 'sync connection or its pinned release is no longer available'
-				});
-			} else {
-				// The lane has already emitted the canonical reset and released this query.
-				writeJson(response, 409, {
-					code: 'bolt_server.sync_prefix_reset',
-					message: failure instanceof Error ? failure.message : 'sync prefix extension reset'
-				});
-			}
-			return;
-		}
-		writeJson(response, 200, extended.success);
-		return;
-	}
-
-	// Host plugins (the Data Browser and anything else the host surfaces) reach Bolt as `Plugin`
-	// invocations. Bolt's dispatcher has always handled them; nothing exposed them over HTTP, so a
-	// self-hosted deployment had no way to serve a host plugin at all.
-	if (url.pathname.startsWith('/_bolt/plugin/')) {
-		if (request.method !== 'POST') {
-			response.statusCode = 405;
-			response.setHeader('allow', 'POST');
-			response.end();
-			return;
-		}
-		const segments = url.pathname.slice('/_bolt/plugin/'.length).split('/');
-		const encodedPlugin = segments[0] ?? '';
-		const encodedCommand = segments[1] ?? '';
-		if (encodedPlugin.length === 0 || encodedCommand.length === 0) {
-			writeJson(response, 400, { code: 'bolt_server.plugin_command_required' });
-			return;
-		}
-		const names = yield* Effect.try({
-			try: () => ({
-				plugin: decodeURIComponent(encodedPlugin),
-				command: decodeURIComponent(encodedCommand)
-			}),
-			catch: (cause) =>
-				new ServerTransportError({
-					operation: 'BoltServer.Server.decodePlugin',
-					message: 'Bolt plugin path is not valid URI data',
-					cause
-				})
-		});
-		const pluginBody = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const parsedPayload = yield* (
-			pluginBody === undefined
-				? Effect.succeed<Schema.Json>({})
-				: Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
-						new TextDecoder().decode(pluginBody)
-					).pipe(
-						Effect.mapError(
-							() =>
-								new CommandInputError({
-									code: 'malformed_json',
-									message: 'Bolt plugin body is not valid JSON'
-								})
-						)
-					)
-		).pipe(Effect.result);
-		if (Result.isFailure(parsedPayload)) {
-			writeJson(response, 400, parsedPayload.failure);
-			return;
-		}
-		const decodedPayload = yield* Schema.decodeUnknownEffect(PluginInput)(
-			parsedPayload.success
-		).pipe(
-			Effect.mapError(
-				() =>
-					new CommandInputError({
-						code: 'invalid_json_value',
-						message: 'Bolt plugin body does not match the plugin input contract'
-					})
-			),
-			Effect.result
-		);
-		if (Result.isFailure(decodedPayload)) {
-			writeJson(response, 400, decodedPayload.failure);
-			return;
-		}
-		const pluginNow = yield* Clock.currentTimeMillis;
-		writeDispatchResult(
-			response,
-			yield* dispatch(
-				Invocation.cases.Plugin.make({
-					protocolVersion: PROTOCOL_VERSION,
-					id: (yield* UuidGeneration).next(),
-					scope: configuration.scope,
-					plugin: names.plugin,
-					command: names.command,
-					input: decodedPayload.success.input ?? null,
-					// Carried from the request rather than from the body, so the credential Bolt
-					// authenticates is the one the caller actually presented on the wire — the body is
-					// the part an attacker writes, and `trustedContext` rides in it.
-					headers: rawRequestHeaders(request),
-					trustedContext: decodedPayload.success.trustedContext ?? {}
-				}),
-				facilities,
-				taskInvocations
-			)
-		);
-		return;
-	}
-
-	if (url.pathname.startsWith('/_bolt/command/')) {
-		if (request.method !== 'POST') {
-			response.statusCode = 405;
-			response.setHeader('allow', 'POST');
-			response.end();
-			return;
-		}
-		const encodedCommand = url.pathname.slice('/_bolt/command/'.length);
-		if (encodedCommand.length === 0) {
-			writeJson(response, 400, { code: 'bolt_server.command_required' });
-			return;
-		}
-		const command = yield* Effect.try({
-			try: () => decodeURIComponent(encodedCommand),
-			catch: (cause) =>
-				new ServerTransportError({
-					operation: 'BoltServer.Server.decodeCommand',
-					message: 'Bolt command path is not valid URI data',
-					cause
-				})
-		});
-		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const decodedInput = yield* (
-			body === undefined
-				? Effect.succeed<Schema.Json>(null)
-				: Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
-						new TextDecoder().decode(body)
-					).pipe(
-						Effect.mapError(
-							() =>
-								new CommandInputError({
-									code: 'malformed_json',
-									message: 'Bolt command body is not valid JSON'
-								})
-						)
-					)
-		).pipe(Effect.result);
-		if (Result.isFailure(decodedInput)) {
-			writeJson(response, 400, decodedInput.failure);
-			return;
-		}
-		const input = decodedInput.success;
-		const now = yield* Clock.currentTimeMillis;
-		const invocation = Invocation.cases.Command.make({
-			protocolVersion: PROTOCOL_VERSION,
-			id: (yield* UuidGeneration).next(),
-			scope: configuration.scope,
-			command,
-			input,
-			headers: rawRequestHeaders(request)
-		});
-		const result = yield* dispatch(invocation, facilities, taskInvocations);
-		if (result._tag === 'Success') {
-			// The data plane (§1.1): whatever this write committed rides the standing streams — the
-			// change list is the invocation's return value, not an API, and the pump turns it into
-			// one frame per attached connection with the writer's outcome riding along.
-			const pending = mutationIdsFrom(command, input, result.response);
-			if ((result.response.changes?.length ?? 0) > 0 || pending.length > 0) {
-				const headers = rawRequestHeaders(request);
-				yield* Effect.tryPromise({
-					try: () =>
-						sync.committed({
-							scope: configuration.scope,
-							writerConnectionId: headers[SYNC_CONNECTION_HEADER]?.[0]?.trim() || undefined,
-							writerCredential: bearerCredential(headers),
-							changes: result.response.changes ?? [],
-							pending
-						}),
-					catch: (cause) =>
-						new ServerTransportError({
-							operation: 'BoltServer.Server.acceptSyncCommit',
-							message: `Sync lane refused the committed transition after ${command}`,
-							cause
-						})
-				});
-			}
-		}
-		writeDispatchResult(response, result);
-		return;
-	}
-
-	const bundle = yield* loader.load();
-	/**
-	 * Static assets answer at the path they were built under, and `/` is not one of them.
-	 *
-	 * This used to rewrite `/` to `/index.html`, which the client build emitted: a document that
-	 * stamped `data-bolt-tenant="local"`, `data-bolt-environment="development"` and no credential
-	 * onto itself, and left the client to read them back. That page is gone. An artifact's client is
-	 * mounted by a host that states who is signed in and which organization is routed; a page that
-	 * answers those questions by asserting them is the defect, not a convenience. `/` now falls
-	 * through to the artifact's own request dispatch, which is where an authored root route lives.
-	 */
-	/**
-	 * Only `browserAssets` is searched, and there is no route that reaches the other half.
-	 *
-	 * `serverAssets` are files the workspace declared for its own runtime — the WebAssembly module an
-	 * authored hook instantiates — and they reach the guest through the asset bridge, by exact
-	 * declared key. They were previously indistinguishable from the client's own output, because the
-	 * plugin copied them into the same directory and the compiler indexed that directory wholesale, so
-	 * declaring a server-side dependency published it. Two lists rather than one list with a flag is
-	 * what makes the omission here structural: there is no field to forget to test.
-	 */
-	// Authored browser URLs use the same public namespace on every host. Artifact keys themselves
-	// are relative to that namespace; the standalone shell also serves their native paths.
-	const assetPath = url.pathname.startsWith('/__bolt/static/')
-		? url.pathname.slice('/__bolt/static'.length)
-		: url.pathname;
-	const asset = bundle.manifest.browserAssets.find(
-		(candidate) => `/${candidate.path.replace(/^\/+/, '')}` === assetPath
-	);
-	if (asset !== undefined && (request.method === 'GET' || request.method === 'HEAD')) {
-		response.statusCode = 200;
-		response.setHeader('content-type', asset.contentType);
-		// The digest is both the ETag and the blob's filename, so a validator can never disagree with
-		// the bytes it was computed from.
-		response.setHeader('etag', `"${asset.sha256}"`);
-		response.setHeader('content-length', asset.byteLength);
-		if (request.method === 'HEAD') {
-			response.end();
-			return;
-		}
-		yield* streamAssetBlob(
-			response,
-			join(assetDirectoryOf(configuration.bundlePath), asset.sha256)
-		);
-		return;
-	}
-
-	const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-	const now = yield* Clock.currentTimeMillis;
-	const invocation = Invocation.cases.Request.make({
-		protocolVersion: PROTOCOL_VERSION,
-		id: (yield* UuidGeneration).next(),
-		scope: configuration.scope,
-		method: request.method ?? 'GET',
-		url: request.url ?? '/',
-		headers: rawRequestHeaders(request),
-		...(body === undefined ? {} : { body })
-	});
-	const result = yield* dispatch(invocation, facilities, taskInvocations);
-	writeDispatchResult(response, result);
-});
-
-/** Completes one realtime frame write through ws's callback API, mapped to the transport error contract. */
-const writeRealtimeFrame = (
-	socket: WebSocket,
-	frame: RealtimeOutput['frames'][number]
-): Effect.Effect<void, ServerTransportError> =>
-	Effect.callback<void, unknown>((resume) => {
-		if (socket.readyState !== WebSocket.OPEN) {
-			resume(Effect.void);
-			return;
-		}
-		socket.send(frame.bytes, { binary: frame.kind === 'binary' }, (error) => {
-			if (error == null) resume(Effect.void);
-			else resume(Effect.fail(error));
-		});
-	}).pipe(
-		Effect.mapError(
-			(cause) =>
-				new ServerTransportError({
-					operation: 'BoltServer.Server.writeRealtimeFrame',
-					message: 'Unable to write Bolt realtime frame',
-					cause
-				})
-		)
-	);
-
-/** Applies frames and an optional close instruction in Bolt cursor order. */
-const applyRealtimeOutput = Effect.fn('BoltServer.Server.applyRealtimeOutput')(function* (
-	socket: WebSocket,
-	output: RealtimeOutput | undefined
-) {
-	if (output === undefined) return;
-	yield* Effect.forEach(output.frames, (frame) => writeRealtimeFrame(socket, frame));
-	if (output.close !== undefined && socket.readyState === WebSocket.OPEN) {
-		socket.close(output.close.code, output.close.reason);
-	}
-});
-
-/** One event, dispatched and drained under a single serial permit; the repeated Pulls depend on each other. */
-const processRealtimeEvent = Effect.fn('BoltServer.Server.processRealtimeEvent')(function* (
-	connectionId: string,
-	event: RealtimeEvent,
-	configuration: ServerConfiguration,
-	facilities: FacilityBindings,
-	socket: WebSocket
-) {
-	const output = yield* dispatchRealtime(connectionId, event, configuration, facilities);
-	yield* applyRealtimeOutput(socket, output);
-	let cursor = output?.nextCursor;
-	while (cursor !== undefined && socket.readyState === WebSocket.OPEN) {
-		const pulled = yield* dispatchRealtime(
-			connectionId,
-			Invocation.cases.Realtime.fields.event.cases.Pull.make({
-				afterCursor: cursor,
-				maxFrames: 64
-			}),
-			configuration,
-			facilities
-		);
-		yield* applyRealtimeOutput(socket, pulled);
-		if ((pulled?.frames.length ?? 0) === 0) return;
-		cursor = pulled?.nextCursor;
-	}
-});
-
-const startServerEffect = <E>(
-	configuration: ServerConfiguration,
-	facilities: FacilityBindings,
-	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>,
-	taskInvocations?: TaskInvocationControl,
-	onFacilitiesReady?: (facilities: FacilityBindings) => void
-): Effect.Effect<RunningServer, ServerTransportError> =>
-	Effect.gen(function* () {
-		const websocketServer = new WebSocketServer({ noServer: true });
-		const shutdown = new AbortController();
-		const cancelConnections = new Set<Effect.Effect<void, never, RuntimeServices>>();
-		let liveFacilities: FacilityBindings;
-
-		/**
-		 * The guest half of the wire, dispatched through one invocation path and decoded once.
-		 * Registration authenticates the connection credential directly. Prefix extension and commit
-		 * advance carry host-filed state and are therefore system-signed.
-		 */
-		const dispatchSyncCommand = (
-			command: 'sync.connect' | 'sync.extendPrefix' | 'sync.advance',
-			scope: SyncScope,
-			input: Schema.Json,
-			headers: Record<string, Array<string>>
-		): Effect.Effect<
-			unknown,
-			SyncGuestRejected | BundleLoadError | AdmissionStopped | ServerTransportError,
-			RuntimeServices
-		> =>
-			Effect.gen(function* () {
-				const now = yield* Clock.currentTimeMillis;
-				const invocation = Invocation.cases.Command.make({
-					protocolVersion: PROTOCOL_VERSION,
-					id: (yield* UuidGeneration).next(),
-					scope,
-					command,
-					input,
-					headers
-				});
-				const result = yield* dispatch(invocation, liveFacilities);
-				if (result._tag === 'Failure') {
-					return yield* Effect.fail(new SyncGuestRejected(result.error.httpStatus ?? 500, command));
+		// ── node:http ↔ fetch ──
+		/** Open SSE bodies: a drain ends them at once (their clients reconnect elsewhere), everything else finishes. */
+		const streams = new Set<() => void>();
+		let draining = false;
+		const server = createServer((req, res) => void serve(req, res));
+		async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
+			// while draining, a connection whose response finished is idle: close it rather than wait out keep-alive
+			res.on('finish', () => { if (draining) setImmediate(() => server.closeIdleConnections()); });
+			try {
+				// every absolute URL is built from BOLT_PUBLIC_URL, never Host (GAPS r5 3)
+				const url = new URL(req.url ?? '/', c.publicUrl);
+				const limit = req.method === 'PUT' && url.pathname.startsWith('/__bolt/files/') ? LIMITS.storedFileBytes : JSON_BYTES;
+				const chunks: Buffer[] = [];
+				let size = 0;
+				if (req.method !== 'GET' && req.method !== 'HEAD') for await (const chunk of req as AsyncIterable<Buffer>) {
+					size += chunk.length;
+					if (size > limit) { res.writeHead(413, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { code: 'tooLarge', message: `the body is over ${limit} bytes` } })); return; }
+					chunks.push(chunk);
 				}
-				return result.response.value ?? null;
-			});
-		const syncBridge: SyncGuestBridge = {
-			connect: async ({ scope, credential, request }) => {
-				const unsafe = await runtime.runPromise(
-					dispatchSyncCommand('sync.connect', scope, request, {
-						authorization: [`Bearer ${credential}`]
-					})
-				);
-				return await Effect.runPromise(
-					Schema.decodeUnknownEffect(SyncConnectEvaluation)(unsafe).pipe(
-						Effect.mapError(() => new SyncGuestRejected(502, 'sync.connect'))
-					)
-				);
-			},
-			extendPrefix: async ({ scope, state, request }) => {
-				const input = { state, request };
-				const headers = await runtime.runPromise(
-					systemCommandHeaders(
-						configuration.gatewaySecret,
-						'sync.extendPrefix',
-						scope.tenantId,
-						input
-					).pipe(Effect.mapError(() => new SyncGuestRejected(503, 'sync.extendPrefix')))
-				);
-				const unsafe = await runtime.runPromise(
-					dispatchSyncCommand('sync.extendPrefix', scope, input, headers)
-				);
-				return await Effect.runPromise(
-					Schema.decodeUnknownEffect(SyncExtendPrefixEvaluation)(unsafe).pipe(
-						Effect.mapError(() => new SyncGuestRejected(502, 'sync.extendPrefix'))
-					)
-				);
-			},
-			advance: async ({ scope, request }) => {
-				const headers = await runtime.runPromise(
-					systemCommandHeaders(
-						configuration.gatewaySecret,
-						'sync.advance',
-						scope.tenantId,
-						request
-					).pipe(Effect.mapError(() => new SyncGuestRejected(503, 'sync.advance')))
-				);
-				const unsafe = await runtime.runPromise(
-					dispatchSyncCommand('sync.advance', scope, request, headers)
-				);
-				return await Effect.runPromise(
-					Schema.decodeUnknownEffect(SyncAdvanceResponse)(unsafe).pipe(
-						Effect.mapError(() => new SyncGuestRejected(502, 'sync.advance'))
-					)
-				);
+				const headers = new Headers();
+				for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) for (const one of Array.isArray(v) ? v : [v]) headers.append(k, one);
+				const request = new Request(url, { method: req.method ?? 'GET', headers, ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }) });
+				peers.set(request, clientAddress(req.socket.remoteAddress ?? '0.0.0.0', req.headers['x-forwarded-for']?.toString(), c.trustProxy));
+				let response: Response;
+				try {
+					response = await route(request);
+				} catch (x) {
+					log(`error ${req.method} ${url.pathname}: ${x instanceof Error ? x.stack ?? x.message : String(x)}`);
+					response = err('internal', 'The request failed.', 500);
+				}
+				const out: { [k: string]: string | string[] } = {};
+				response.headers.forEach((v, k) => { if (k !== 'set-cookie') out[k] = v; });
+				const cookies = response.headers.getSetCookie();
+				if (cookies.length > 0) out['set-cookie'] = cookies;
+				res.writeHead(response.status, out);
+				if (response.body === null || req.method === 'HEAD') { res.end(); return; }
+				const reader = response.body.getReader();
+				const cancel = () => void reader.cancel().catch(() => undefined);
+				res.on('close', cancel);
+				if (response.headers.get('content-type') === 'text/event-stream') streams.add(cancel);
+				res.flushHeaders();
+				try {
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						res.write(value);
+					}
+				} finally {
+					streams.delete(cancel);
+				}
+				res.end();
+			} catch (x) {
+				if (!res.headersSent) res.writeHead(500).end();
+				else res.destroy(x instanceof Error ? x : undefined);
 			}
-		};
-		const sync = makeSyncHost(syncBridge);
-		liveFacilities = guardBindings({
-			...facilities,
-			syncCommit: makeSyncCommitFacility(sync, configuration.scope)
-		});
-		onFacilitiesReady?.(liveFacilities);
-
-		// A client that goes away — a page reload, the composer's own abort — stops waiting and
-		// nothing else: the turn it started is durable work whose truth is the tenant database, so it
-		// runs to its end and writes its own terminal state. Stopping is a write the turn meets at
-		// its next boundary (`conversations.control stop`), never a socket closing. Only shutdown
-		// interrupts a request fiber, which is what lets the drain finish.
-		const server = createServer((request, response) => {
-			runtime.runFork(
-				handleHttp(request, response, configuration, liveFacilities, sync, taskInvocations).pipe(
-					Effect.catchCause((cause) =>
-						Effect.gen(function* () {
-							// The response body stays opaque, but an unexplained 500 with no
-							// server-side record is undiagnosable.
-							yield* Effect.logError(`bolt-server: ${request.method} ${request.url} failed`, cause);
-							yield* Effect.sync(() =>
-								writeJson(response, 500, { code: 'bolt_server.internal_error' })
-							);
-						})
-					)
-				),
-				{ signal: shutdown.signal }
-			);
-		});
-
-		websocketServer.on('connection', (socket, request) => {
-			runtime.runFork(
-				Effect.gen(function* () {
-					const uuid = yield* UuidGeneration;
-					const semaphore = yield* Semaphore.make(1);
-					const connectionId = uuid.next();
-					let sequence = 0;
-					const enqueue = (event: RealtimeEvent) =>
-						Semaphore.withPermit(semaphore)(
-							processRealtimeEvent(connectionId, event, configuration, liveFacilities, socket)
-						).pipe(
-							Effect.catchCause((cause) =>
-								Effect.sync(() => {
-									if (!Cause.hasInterruptsOnly(cause) && socket.readyState === WebSocket.OPEN) {
-										socket.close(1011, 'Bolt realtime dispatch failed');
-									}
-								})
-							)
-						);
-					const cancel = enqueue(
-						Invocation.cases.Realtime.fields.event.cases.Cancel.make({
-							reason: 'Server shutting down'
-						})
-					);
-					cancelConnections.add(cancel);
-
-					runtime.runFork(enqueue(Invocation.cases.Realtime.fields.event.cases.Open.make({})), {
-						signal: shutdown.signal
-					});
-					socket.on('message', (data, isBinary) => {
-						runtime.runFork(
-							enqueue(
-								Invocation.cases.Realtime.fields.event.cases.Input.make({
-									frame: {
-										sequence: sequence++,
-										kind: isBinary ? 'binary' : 'text',
-										bytes: Array.isArray(data)
-											? new Uint8Array(Buffer.concat(data))
-											: new Uint8Array(data)
-									}
-								})
-							),
-							{ signal: shutdown.signal }
-						);
-					});
-					socket.once('close', (code, reason) => {
-						if (shutdown.signal.aborted) {
-							cancelConnections.delete(cancel);
-							return;
-						}
-						runtime.runFork(
-							enqueue(
-								Invocation.cases.Realtime.fields.event.cases.Close.make({
-									code,
-									reason: reason.toString('utf8')
-								})
-							).pipe(Effect.ensuring(Effect.sync(() => cancelConnections.delete(cancel)))),
-							{ signal: shutdown.signal }
-						);
-					});
-				}).pipe(
-					Effect.catch((cause) =>
-						Effect.gen(function* () {
-							yield* Effect.logError('bolt-server: websocket session setup failed', cause);
-							yield* Effect.sync(() => {
-								if (
-									socket.readyState !== WebSocket.CLOSED &&
-									socket.readyState !== WebSocket.CLOSING
-								) {
-									socket.close(1011, 'Bolt websocket session failed');
-								}
-							});
-						})
-					)
-				),
-				{ signal: shutdown.signal }
-			);
-		});
-
-		server.on('upgrade', (request, socket, head) => {
-			const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-			if (url.pathname !== '/__bolt/realtime') {
-				socket.destroy();
-				return;
-			}
-			websocketServer.handleUpgrade(request, socket, head, (websocket) => {
-				websocketServer.emit('connection', websocket, request);
-			});
-		});
-
-		yield* Effect.callback<void, ServerTransportError>((resume) => {
-			const onError = (cause: Error) =>
-				resume(
-					Effect.fail(
-						new ServerTransportError({
-							operation: 'BoltServer.Server.listen',
-							message: 'Bolt server listener failed to start',
-							cause
-						})
-					)
-				);
-			server.once('error', onError);
-			server.listen(configuration.port, configuration.host, () => {
-				server.off('error', onError);
-				resume(Effect.void);
-			});
-			return Effect.sync(() => server.off('error', onError));
-		});
-
-		const address = server.address();
-		// repository-health:allow GUARD2 -- `server.address()` returns Node's own `string | AddressInfo | null` union; discriminating the platform SDK value is the seam itself.
-		if (address === null || typeof address === 'string') {
-			return yield* new ServerTransportError({
-				operation: 'BoltServer.Server.address',
-				message: 'Bolt server listener did not expose a TCP address'
-			});
 		}
+		await new Promise<void>((ok_, fail) => { server.once('error', fail); server.listen(c.port, c.host, () => { server.off('error', fail); ok_(); }); });
+		const address = server.address();
+		const url = `http://${c.host.includes(':') ? `[${c.host}]` : c.host}:${typeof address === 'object' && address !== null ? address.port : c.port}`;
+		log(`serving ${name} (${release}) on ${url} as ${c.publicUrl}`);
 
-		const closeEffect = Effect.gen(function* () {
-			const listener = yield* Effect.forkChild(
-				Effect.callback<void, ServerTransportError>((resume) => {
-					server.close((cause) =>
-						resume(
-							cause === undefined
-								? Effect.void
-								: Effect.fail(
-										new ServerTransportError({
-											operation: 'BoltServer.Server.close',
-											message: 'Bolt server listener failed to close',
-											cause
-										})
-									)
-						)
-					);
-				})
-			);
-			yield* Effect.forEach(cancelConnections, (cancel) => cancel.pipe(Effect.result), {
-				concurrency: 'unbounded',
-				discard: true
-			});
-			shutdown.abort(new Error('Bolt server is shutting down'));
-			for (const client of websocketServer.clients) {
-				client.close(1001, 'Server shutting down');
-			}
-			websocketServer.close();
-			// A restart is a registry loss by design (§2.6): the standing streams drop, every client
-			// reconnects and registers from current truth, and nothing replays.
-			server.closeAllConnections();
-			yield* Fiber.join(listener);
-		});
-		const closeOnce = yield* Effect.cached(closeEffect);
-		const close = () => runtime.runPromise(closeOnce);
-
+		let closing: Promise<void> | undefined;
 		return {
-			address: { host: configuration.host, port: address.port },
-			close
+			url, engine: e, db, whatsapp: wa, warnings,
+			// rule 71a: SIGTERM stops admission (the listener, the timekeeper, the envelope), waits at most DRAIN_MS for
+			// what runs, then interrupts the rest (isolates disposed, facility calls aborted; an interrupted run is re-queued
+			// as a lost lease on the next start); every later wait is bounded
+			close: () => closing ??= (async () => {
+				const stopped = new Promise<void>((done) => server.close(() => done()));
+				draining = true;
+				deadlines.stop();
+				server.closeIdleConnections();
+				for (const cancel of streams) cancel();
+				const deadline = Date.now() + DRAIN_MS;
+				const drained = await Promise.race([stopped.then(() => true), new Promise<boolean>((done) => setTimeout(() => done(false), DRAIN_MS).unref())]);
+				const idle = await admit.drain(Math.max(0, deadline - Date.now()));
+				if (!drained) server.closeAllConnections();
+				if (!idle) log('drain: the grace passed with work running; interrupting it');
+				generation.abort();
+				wa?.stop();
+				for (const off of unsubscribe) off();
+				await within(500, engineRef.envoys.settled());
+				await within(500, store.close());
+				log('stopped');
+			})(),
 		};
-	});
-
-/** Starts the HTTP, static, and WebSocket shell around one loaded Bolt bundle. */
-export const startServer = <E>(
-	configuration: ServerConfiguration,
-	facilities: FacilityBindings,
-	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>,
-	taskInvocations?: TaskInvocationControl,
-	onFacilitiesReady?: (facilities: FacilityBindings) => void
-) =>
-	Effect.runPromise(
-		startServerEffect(configuration, facilities, runtime, taskInvocations, onFacilitiesReady)
-	);
+	} catch (x) {
+		generation.abort();
+		deadlines.stop();
+		wa?.stop();
+		await store.close().catch(() => undefined);
+		throw x;
+	}
+}

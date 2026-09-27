@@ -1,0 +1,36 @@
+id: HOST2
+summary: host-neutral code opens a listener or a process surface its host owns
+severity: error
+principles: [modularity, testability]
+files:
+  - '**/packages/bolt/src/engine/**'
+  - '**/packages/bolt/src/client/**'
+  - '**/packages/bolt/src/decl/**'
+  - '**/packages/bolt/src/protocol/**'
+  - '**/packages/bolt/src/shell/**'
+  - '**/packages/std/src/**'
+  - '**/packages/ui/src/**'
+rule:
+  any:
+    - all:
+        - kind: Identifier
+        - regex: '^(?:createServer|createSecureServer)$'
+    - all:
+        - kind: StringLiteral
+        - regex: '^[''"](?:node:)?(?:cluster|child_process|ws)[''"]'
+        - any:
+            - inside: { kind: ImportDeclaration }
+            - inside: { kind: ExportDeclaration }
+            - inside:
+                all:
+                  - kind: CallExpression
+                  - regex: '^(?:import|require)\('
+examples:
+  file: packages/bolt/src/engine/probe.ts
+  bad:
+    - "import { createServer } from 'node:http';"
+    - "import { spawn } from 'node:child_process';"
+    - "const { WebSocketServer } = await import('ws');"
+  good:
+    - "import { request } from 'node:https';"
+    - "export const note = 'node:child_process';"

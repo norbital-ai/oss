@@ -1,8 +1,14 @@
+<!--
+@component
+One cell of a `Grid` or `Columns` spanning `span` columns (or `all`); it throws outside those parents.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
+	/** How many columns a `Column` spans. */
 	export type ColumnSpan = 1 | 2 | 3 | 4 | 5 | 6 | 'all';
+	/** The props of `Column`. */
 	export interface ColumnProps extends LayoutAttributes {
 		as?: LayoutElement;
 		span?: ColumnSpan;
@@ -11,9 +17,9 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
+	import { cn } from '../primitives/utils.js';
 	import { getContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, type ColumnParentContext } from '#lib/layout/layout.shared';
+	import { COLUMN_PARENT_CONTEXT, type ColumnParentContext } from './layout.shared.js';
 
 	let {
 		as = 'div',

@@ -1,5 +1,5 @@
 {
-	"extends": "@norbital-ai/config/svelte.json",
+	"extends": "../../tsconfig.base.json",
 	"include": ["src/**/*.ts"],
 	"exclude": ["**/*.test.ts", "node_modules", "build"],
 	"compilerOptions": {
@@ -13,6 +13,7 @@
 		"declarationMap": false,
 		"sourceMap": false,
 		"noEmit": false,
-		"types": ["node"]
+		"types": ["node"],
+		"rewriteRelativeImportExtensions": true // src imports its siblings as .ts
 	}
 }

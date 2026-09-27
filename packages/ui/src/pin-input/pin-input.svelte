@@ -1,7 +1,10 @@
-<!-- exported package component rendered by the core OTP challenge -->
+<!--
+@component
+A one-time code in separate cells (bits-ui PinInput): the sign-in code step.
+-->
 <script lang="ts">
-	import { Inline } from '#lib/layout';
-	import { cn } from '#lib/utils';
+	import { Inline } from '../layout/index.js';
+	import { cn } from '../primitives/utils.js';
 	import {
 		PinInput as PinInputPrimitive,
 		REGEXP_ONLY_DIGITS,

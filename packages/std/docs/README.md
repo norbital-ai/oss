@@ -9,9 +9,8 @@ framework package.
 
 ## Public areas
 
-`billing`, `collection`, `date`, `error`, `finance`, `i18n`, `json`, `rate-limit`, `reckon`, `secret`,
-`string`, and `tree` are public subpaths. The package root exposes only the stable general-purpose
-subset.
+`billing`, `calendar`, `date`, `decimal`, `formula`, `json`, `pdf`, `pricing`, `sheet` and `versioned` are
+public subpaths. There is no package root.
 
 Billing is the shared catalogue and calculation authority for Norbital base (per-workspace) and usage
 prices — the website's pricing page reads it directly, and a host reads it to price a plan. It is not a checkout
@@ -22,7 +21,7 @@ UI, a Stripe integration, or an entitlement engine; those concerns belong to the
 Import the narrowest public subpath, for example:
 
 ```ts
-import { parseUtcInstant } from '@norbital-ai/std/date';
+import { PlainDate } from '@norbital-ai/std/date';
 ```
 
 Do not import from `src/` or `build/`. Add a module only when the behaviour is genuinely reusable across

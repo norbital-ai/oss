@@ -1,6 +1,9 @@
+/** The date the current rate card took effect. */
 export const BILLING_RATE_CARD_VERSION = '2026-08-18';
 
+/** The workspace access tiers. */
 export const BILLING_ACCESS_TIERS = ['standard', 'builder'] as const;
+/** A workspace access tier: `standard` or `builder`. */
 export type BillingAccessTier = (typeof BILLING_ACCESS_TIERS)[number];
 
 /**
@@ -10,8 +13,11 @@ export type BillingAccessTier = (typeof BILLING_ACCESS_TIERS)[number];
  * Disc and files are GB-months converted to GB-hours over a 730-hour month.
  */
 export const COMPUTE_SGD_PER_SECOND = 0.0005;
+/** Tenant database storage price, SGD per GB-month. */
 export const DISC_SGD_PER_GB_MONTH = 3;
+/** Tenant object storage price, SGD per GB-month. */
 export const FILES_SGD_PER_GB_MONTH = 0.25;
+/** Hours in a billing month, for converting GB-months to GB-hours. */
 export const HOURS_PER_BILLING_MONTH = 730;
 
 /**
@@ -53,6 +59,7 @@ export const LOCAL_CLOUD_RATE_CARD = {
 	}
 } as const;
 
+/** What the external providers (Neon, R2) charge, in USD, for capacity planning; not a customer price. */
 export const EXTERNAL_CLOUD_RATE_CARD_USD = {
 	neonComputePerCuHour: 0.106,
 	neonStoragePerGbMonth: 0.35,

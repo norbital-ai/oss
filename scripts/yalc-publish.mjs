@@ -40,8 +40,6 @@ const commandEnvironment = {
 	npm_config_cache: packagePaths.hostPnpmCache
 };
 const allPackages = [
-	{ name: '@norbital-ai/bolt-protocol', directory: 'packages/bolt-protocol' },
-	{ name: '@norbital-ai/config', directory: 'packages/config' },
 	{ name: '@norbital-ai/std', directory: 'packages/std' },
 	{ name: '@norbital-ai/ui', directory: 'packages/ui' },
 	{ name: '@norbital-ai/bolt', directory: 'packages/bolt' },
@@ -109,7 +107,7 @@ const runAsync = (command, args, cwd = repositoryRoot) =>
 	});
 
 const workspaceVersions = Object.fromEntries(
-	['bolt-protocol', 'bolt', 'bolt-server', 'std', 'ui', 'config', 'doctor'].flatMap((directory) => {
+	['bolt', 'bolt-server', 'std', 'ui', 'doctor'].flatMap((directory) => {
 		const manifestPath = path.join(repositoryRoot, 'packages', directory, 'package.json');
 		if (!existsSync(manifestPath)) return [];
 		const manifest = readManifest(manifestPath);

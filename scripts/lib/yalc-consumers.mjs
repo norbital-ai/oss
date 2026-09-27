@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { safeParse } from '@norbital-ai/std/json';
+import { parseJson } from '@norbital-ai/std/json';
 import { Effect, Schema } from 'effect';
 import { readPublicPackageEntries } from './package-release.mjs';
 
@@ -145,7 +145,7 @@ const withYalcStore = (storeDirectory, arguments_) => [
 
 export const readJsonIfPresent = (file) => {
 	if (!existsSync(file)) return undefined;
-	return safeParse(readFileSync(file, 'utf8')) ?? undefined;
+	return parseJson(readFileSync(file, 'utf8')) ?? undefined;
 };
 
 /** Locally publishable dependencies, whether clean registry pins or existing overlays. */

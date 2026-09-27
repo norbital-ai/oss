@@ -1,9 +1,9 @@
 {
 	"name": "@norbital-ai/std",
-	"version": "0.0.114",
-	"description": "Shared schema, date, CEL, finance, and utility modules for Norbital.",
+	"version": "0.0.115",
+	"description": "Value libraries for Bolt workspaces: decimals, dates, calendars, sheets, formulas, pricing and billing.",
 	"type": "module",
-	"sideEffects": false,
+	"sideEffects": ["./build/decimal.js", "./src/decimal.ts"],
 	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
@@ -23,65 +23,57 @@
 		"package.json"
 	],
 	"exports": {
-		".": {
-			"types": "./build/index.d.ts",
-			"default": "./build/index.js"
-		},
 		"./billing": {
 			"types": "./build/billing/index.d.ts",
 			"default": "./build/billing/index.js"
 		},
-		"./collection": {
-			"types": "./build/collection/index.d.ts",
-			"default": "./build/collection/index.js"
+		"./calendar": {
+			"types": "./build/calendar.d.ts",
+			"default": "./build/calendar.js"
 		},
 		"./date": {
-			"types": "./build/date/index.d.ts",
-			"default": "./build/date/index.js"
+			"types": "./build/date.d.ts",
+			"default": "./build/date.js"
 		},
-		"./error": {
-			"types": "./build/error/index.d.ts",
-			"default": "./build/error/index.js"
+		"./decimal": {
+			"types": "./build/decimal.d.ts",
+			"default": "./build/decimal.js"
 		},
-		"./finance": {
-			"types": "./build/finance/index.d.ts",
-			"default": "./build/finance/index.js"
+		"./facts": {
+			"types": "./build/facts.d.ts",
+			"default": "./build/facts.js"
 		},
-		"./http": {
-			"types": "./build/http/index.d.ts",
-			"default": "./build/http/index.js"
+		"./formula": {
+			"types": "./build/formula.d.ts",
+			"default": "./build/formula.js"
 		},
 		"./json": {
-			"types": "./build/json/index.d.ts",
-			"default": "./build/json/index.js"
+			"types": "./build/json.d.ts",
+			"default": "./build/json.js"
 		},
-		"./i18n": {
-			"types": "./build/i18n/index.d.ts",
-			"default": "./build/i18n/index.js"
+		"./label": {
+			"types": "./build/label.d.ts",
+			"default": "./build/label.js"
 		},
-		"./reckon": {
-			"types": "./build/reckon/index.d.ts",
-			"default": "./build/reckon/index.js"
+		"./pdf": {
+			"types": "./build/pdf.d.ts",
+			"default": "./build/pdf.js"
 		},
-		"./reckon/hash": {
-			"types": "./build/reckon/hash.d.ts",
-			"default": "./build/reckon/hash.js"
+		"./pricing": {
+			"types": "./build/pricing.d.ts",
+			"default": "./build/pricing.js"
 		},
-		"./rate-limit": {
-			"types": "./build/rate-limit/index.d.ts",
-			"default": "./build/rate-limit/index.js"
+		"./sheet": {
+			"types": "./build/sheet.d.ts",
+			"default": "./build/sheet.js"
 		},
-		"./secret": {
-			"types": "./build/secret/index.d.ts",
-			"default": "./build/secret/index.js"
+		"./versioned": {
+			"types": "./build/versioned.d.ts",
+			"default": "./build/versioned.js"
 		},
-		"./string": {
-			"types": "./build/string/index.d.ts",
-			"default": "./build/string/index.js"
-		},
-		"./tree": {
-			"types": "./build/tree/index.d.ts",
-			"default": "./build/tree/index.js"
+		"./zone": {
+			"types": "./build/zone.d.ts",
+			"default": "./build/zone.js"
 		}
 	},
 	"scripts": {
@@ -97,7 +89,6 @@
 		"effect": "4.0.0-rc.112"
 	},
 	"devDependencies": {
-		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
 		"typescript": "catalog:"
 	}

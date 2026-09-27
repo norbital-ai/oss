@@ -1,11 +1,15 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { Effect } from 'effect';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
-import { inspectPackageArchive, packedArchiveFilename } from './lib/package-archive.mjs';
+import {
+	inspectPackageArchive,
+	packedArchiveFilename,
+	unexportedSpecifiers
+} from './lib/package-archive.mjs';
 import { publicPackageDirectories, readManifest } from './lib/package-release.mjs';
 import { scratchPath } from './lib/scratch.mjs';
 
@@ -43,6 +47,27 @@ function assertArchiveDeclarations(archivePath, directory) {
 	});
 	rmSync(unpacked, { recursive: true, force: true });
 }
+
+/** Every first-party specifier in package source names an export of its package (L-BOLT-1002). */
+function assertSpecifiersExported() {
+	const manifests = new Map(
+		publicPackageDirectories.map((directory) => {
+			const manifest = readManifest(path.join(repositoryRoot, 'packages', directory, 'package.json'));
+			return [manifest.name, manifest];
+		})
+	);
+	const sources = publicPackageDirectories.flatMap((directory) => {
+		const source = path.join(repositoryRoot, 'packages', directory, 'src');
+		return readdirSync(source, { recursive: true })
+			.map(String)
+			.filter((file) => /\.(?:[cm]?[jt]s|svelte)$/.test(file))
+			.map((file) => [`packages/${directory}/src/${file}`, readFileSync(path.join(source, file), 'utf8')]);
+	});
+	const offenders = unexportedSpecifiers(sources, manifests);
+	if (offenders.length > 0) fail(`Source names unexported package entries:\n${offenders.join('\n')}`);
+}
+
+assertSpecifiersExported();
 
 Effect.runSync(
 	Effect.acquireUseRelease(

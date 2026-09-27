@@ -1,5 +1,5 @@
 {
-	"extends": "@norbital-ai/config/svelte.json",
+	"extends": "../../tsconfig.base.json",
 	"include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.svelte", "src/**/*.svelte.ts"],
 	"exclude": ["node_modules", "**/__tests__/**", "build", "**/build/**"],
 	"compilerOptions": {
@@ -16,9 +16,6 @@
 		"noUncheckedIndexedAccess": false,
 		"exactOptionalPropertyTypes": false,
 		"types": ["node"],
-		"customConditions": ["svelte"],
-		"paths": {
-			"#lib/*": ["./src/*"]
-		}
+		"customConditions": ["svelte"]
 	}
 }

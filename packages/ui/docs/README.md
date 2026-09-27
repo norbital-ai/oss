@@ -13,11 +13,11 @@ logic and tenant presentation decisions in the workspace that uses them.
 | ------------------- | ---------------------------------------------------------------------------------------- |
 | Design foundation   | Tokens, base styles, typography, colour, editor themes, logos, and favicons.             |
 | Portable primitives | Buttons, cards, dialogs, inputs, layout primitives, navigation, and feedback components. |
-| Collection surfaces | Shared table, form, kanban, and schema-aware rendering surfaces used by tenant apps.     |
+| Views               | Table, Board, Form, RecordShell and the other collection views of RFC §3.6.              |
 
 ## Boundaries
 
-- Import components through public subpaths, never `src/` or `build/`.
+- Import from `.`, `./layout` or `./capture`, never `src/` or `build/`.
 - Import `@norbital-ai/ui/base.css` once at an application root. Bolt does this for generated tenant
   clients, so a tenant must not add a second base stylesheet or Tailwind integration.
 - Keep tenant-specific workflows, data fetching, collection hooks, and one-off visual treatment out of

@@ -1,0 +1,26 @@
+id: ISO1
+summary: a published package imports the host, a template or the private seed bank
+severity: error
+principles: [modularity, testability]
+files:
+  - '**/packages/*/src/**'
+rule:
+  all:
+    - kind: StringLiteral
+    - regex: '^[''"](?:@norbital/|(?:\.\./)+(?:[^''"]*/)?(?:apps|templates|templates_private|seed_bank)/)'
+    - any:
+        - inside: { kind: ImportDeclaration }
+        - inside: { kind: ExportDeclaration }
+        - inside:
+            all:
+              - kind: CallExpression
+              - regex: '^(?:import|require)\('
+examples:
+  file: packages/bolt/src/probe.ts
+  bad:
+    - "import { host } from '@norbital/app';"
+    - "export { rows } from '../../../templates/crm/src/data.ts';"
+    - "const bank = await import('../../../../seed_bank/crm/rows.json');"
+  good:
+    - "import { Schema } from 'effect';"
+    - "export const note = 'templates are published separately';"

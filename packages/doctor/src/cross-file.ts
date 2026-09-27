@@ -1,21 +1,22 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { Schema } from 'effect';
 import { registerFact, type FactContext } from './facts.js';
-import {
-	LANGUAGE_HEALTH_PROFILE,
-	compileHealthProfile,
-	matchesAny,
-	type HealthProfile
-} from './health-profile.js';
-import type { Finding } from './index.js';
 import { jsonRecord, readJsonObject, recordField } from './manifest.js';
-import { loadPackDirectory } from './patterns-yaml.js';
-import type { Rule } from './rules.js';
-import { runRules } from './runner.js';
+import { svelteScript } from './runner.js';
+
+/**
+ * Files a runtime loads by convention rather than by import: the health profile, fixed for the realm (the language
+ * defaults, plus `+`-named route and role files, which SvelteKit and the Bolt compiler discover by name).
+ */
+const ENTRIES: ReadonlyArray<RegExp> = [
+	/(?:^|\/)(?:index|main|app)\.[cm]?[jt]sx?$/,
+	/(?:^|\/)[^/]*\.config\.[cm]?[jt]s$/,
+	/(?:^|\/)(?:scripts?|bin|cli|tools)\//,
+	/(?:^|\/)\+[^/]+$/
+];
 
 type Parsed = Readonly<{ file: string; source: string; sourceFile: ts.SourceFile }>;
 
@@ -260,7 +261,7 @@ function entrypoints(
 			declaredEntries(manifest, parsed[field], files, roots);
 		scriptEntries(manifest, recordField(parsed, 'scripts'), files, roots);
 	}
-	for (const file of files) if (matchesAny(file, entries)) roots.add(file);
+	for (const file of files) if (entries.some((entry) => entry.test(file))) roots.add(file);
 	return roots;
 }
 
@@ -268,7 +269,6 @@ type CrossFileOptions = Readonly<{
 	readonly root: string;
 	readonly files: ReadonlyArray<Parsed>;
 	readonly consumers?: ReadonlyArray<Parsed> | undefined;
-	readonly profile?: HealthProfile | undefined;
 }>;
 
 function siteKey(file: string, node: ts.Node, sourceFile: ts.SourceFile): string {
@@ -303,7 +303,7 @@ function bodyHash(node: ts.Node): string | undefined {
 }
 
 /** Reachability, dead exports, and duplicate bodies over one repository. */
-export function analyseCrossFile(options: CrossFileOptions): CrossFileIndex {
+function analyseCrossFile(options: CrossFileOptions): CrossFileIndex {
 	const consumers = options.consumers ?? [];
 	const corpus = [...options.files, ...consumers];
 	const known = new Set(corpus.map((parsed) => parsed.file));
@@ -320,9 +320,8 @@ export function analyseCrossFile(options: CrossFileOptions): CrossFileIndex {
 		edges.set(parsed.file, targets);
 	}
 
-	const profile = compileHealthProfile(options.profile ?? LANGUAGE_HEALTH_PROFILE);
 	const roots = new Set([
-		...entrypoints(options.root, known, profile.frameworkEntries),
+		...entrypoints(options.root, known, ENTRIES),
 		...consumers.map((parsed) => parsed.file)
 	]);
 	const reachable = new Set<string>();
@@ -395,10 +394,6 @@ export function analyseCrossFile(options: CrossFileOptions): CrossFileIndex {
 
 const boundIndexes = new Map<string, CrossFileIndex>();
 
-export function bindCrossFileIndex(root: string, index: CrossFileIndex): void {
-	boundIndexes.set(root, index);
-}
-
 function indexFor(context: FactContext): CrossFileIndex {
 	const index = boundIndexes.get(context.root);
 	if (index === undefined)
@@ -428,21 +423,18 @@ registerFact({
 		indexFor(context).duplicateBodies.has(siteKey(context.file, context.node, context.source))
 });
 
-const GRAPH_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs', 'graph');
+const SOURCE = /\.(?:[mc]?tsx?|[mc]?jsx?|svelte)$/;
 
-// repository-health:allow STATE1 -- memoised lazy load of the graph rule pack; the rules are immutable once read and a re-read on every call would reload the pack files each time.
-let graphRules: ReadonlyArray<Rule> | undefined;
-
-export function loadGraphRules(): ReadonlyArray<Rule> {
-	graphRules ??= loadPackDirectory(GRAPH_PACK);
-	return graphRules;
+function parse(root: string, file: string): Parsed | undefined {
+	const absolute = join(root, file);
+	if (!SOURCE.test(file) || !existsSync(absolute)) return undefined;
+	const raw = readFileSync(absolute, 'utf8');
+	const source = file.endsWith('.svelte') ? (svelteScript(raw) ?? '') : raw;
+	return { file, source, sourceFile: ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true) };
 }
 
-export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> {
-	bindCrossFileIndex(options.root, analyseCrossFile(options));
-	return runRules({
-		root: options.root,
-		rules: loadGraphRules(),
-		files: options.files.map((parsed) => parsed.file)
-	});
+/** Index `files` (tests in `consumers` reach but are never reported) so the graph facts can answer for `root`. */
+export function bindCrossFile(root: string, files: ReadonlyArray<string>, consumers: ReadonlyArray<string>): void {
+	const parsed = (list: ReadonlyArray<string>) => list.flatMap((file) => parse(root, file) ?? []);
+	boundIndexes.set(root, analyseCrossFile({ root, files: parsed(files), consumers: parsed(consumers) }));
 }

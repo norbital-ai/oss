@@ -1,4 +1,4 @@
 {
-	"extends": "@norbital-ai/config/svelte.json",
+	"extends": "./tsconfig.base.json",
 	"files": []
 }

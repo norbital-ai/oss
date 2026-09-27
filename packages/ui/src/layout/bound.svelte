@@ -1,8 +1,16 @@
+<!--
+@component
+A region with a named height contract (`compact`, `standard`, `tall`, `fit`, `full`, `auto`), optional padding, inset and clipping: the box a scrollport or a view fills.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutPad } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement, LayoutPad } from './layout.shared.js';
 
+	/**
+	 * A `Bound`'s height contract: fixed panes, `fit` to the viewport, `full` of a definite parent, or `auto` content height.
+	 */
 	export type BoundSize = 'compact' | 'standard' | 'tall' | 'fit' | 'full' | 'auto';
+	/** The props of `Bound`. */
 	export interface BoundProps extends LayoutAttributes {
 		as?: LayoutElement;
 		/**
@@ -26,9 +34,9 @@
 
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { cn } from '#lib/utils';
-	import { INSET_CLASS, PAD_CLASSES } from '#lib/layout/layout.shared';
-	import { ownInset } from '#lib/layout/inset.svelte';
+	import { cn } from '../primitives/utils.js';
+	import { INSET_CLASS, PAD_CLASSES } from './layout.shared.js';
+	import { ownInset } from './inset.svelte.js';
 
 	let {
 		as = 'div',

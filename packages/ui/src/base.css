@@ -2,6 +2,8 @@
 @import '@fontsource-variable/geist-mono';
 @import 'leaflet/dist/leaflet.css';
 @import 'tailwindcss' source(none);
+/* Every ui component; the bolt bundler adds `@source` for the shell and the workspace's own pages. */
+@source './';
 @import 'tw-animate-css';
 @plugin '@tailwindcss/typography';
 @custom-variant dark (&:is(.dark *));

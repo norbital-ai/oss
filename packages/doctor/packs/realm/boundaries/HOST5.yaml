@@ -1,0 +1,37 @@
+id: HOST5
+summary: bolt's browser client imports a value from the server runtime graph (`engine/`); shared code lives in `protocol/`
+severity: error
+principles: [modularity, testability]
+files:
+  - '**/packages/bolt/src/client/**'
+  # the protocol modules the client loads; `protocol/http.ts` and `files.ts` are the server's side of the wire
+  - '**/packages/bolt/src/protocol/wire.ts'
+  - '**/packages/bolt/src/protocol/catalog.ts'
+  - '**/packages/bolt/src/protocol/ir.ts'
+rule:
+  all:
+    - kind: StringLiteral
+    # `engine/contracts.ts` is the engine's vocabulary leaf: it imports types only
+    - regex: '^[''"](?:\.\./)+engine/(?!contracts\.ts[''"])'
+    - any:
+        - inside:
+            all:
+              - kind: ImportDeclaration
+              - not: { regex: '^import\s+type\b' }
+        - inside:
+            all:
+              - kind: ExportDeclaration
+              - not: { regex: '^export\s+type\b' }
+        - inside:
+            all:
+              - kind: CallExpression
+              - regex: '^(?:import|require)\('
+examples:
+  file: packages/bolt/src/client/probe.ts
+  bad:
+    - "import { decodeView } from '../engine/query/ir.ts';"
+    - "export { browserCatalog } from '../engine/query/catalog.ts';"
+  good:
+    - "import { decodeView } from '../protocol/ir.ts';"
+    - "import type { ApprovalView } from '../engine/approvals/approvals.ts';"
+    - "import { BoltError } from '../engine/contracts.ts';"

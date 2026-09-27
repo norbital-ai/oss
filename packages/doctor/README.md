@@ -1,107 +1,26 @@
 # @norbital-ai/doctor
 
-Deterministic static code-quality analysis for TypeScript, JavaScript, and Svelte repositories,
-with a CLI, a programmatic API, and YAML as the rule authoring surface.
+The static rules `bolt check` runs over a workspace's TypeScript and Svelte source (RFC §3.3.10, OD-K5′).
 
-The core is agnostic by construction: it ships no opinionated rules and encodes no product's
-architecture. A repository that configures nothing gets the neutral baseline — module-graph
-reachability, dead exports, duplicate bodies, type-aware deprecation checks, and a per-root
-metrics table. Curated rule sets are named explicitly or not loaded at all.
-
-Rules are ordinary YAML files committed to your repository. A person or an agent adds one, opens
-a pull request, and the next audit enforces it. A `rule` half uses ast-grep's pattern shape; an
-overlap detector is an ordinary rule document under `packs/overlaps/`, not a `detect`/`prefer`
-pair.
-
-## Install
-
-```bash
-pnpm add -D @norbital-ai/doctor
-```
-
-## Audit from a terminal
-
-```bash
-norbital-doctor audit                # this repository
-norbital-doctor audit --include-tests   # include test and e2e sources
-norbital-doctor assess --root . --root ../other --out report.json
-norbital-doctor delta --root . --against master   # file and code-LOC movement per pillar
-```
-
-`delta` answers a question a report cannot: which pillar shrank or grew between a git checkpoint
-and what is on disc right now. The checkpoint's tracked tree is materialized through a temporary
-index — not `git archive`, whose `export-ignore` attributes would thin the baseline — and both
-sides are counted by the same walk, the same comment-excluding LOC classifiers, and the same
-pillar assignment the report uses. `--json` adds each pillar's added, removed, and changed file
-lists. A delta is inventory, not a gate: it carries no verdict, and only invalid evidence (not a
-git work tree, an unknown ref) fails it at exit 2.
-
-Exit codes are the contract, and they are three-valued on purpose:
-
-| Code | Meaning                                                                    |
-| ---- | -------------------------------------------------------------------------- |
-| 0    | the gate completed with no actionable debt                                 |
-| 1    | the analysis is valid and found actionable debt — not a crash              |
-| 2    | the evidence is incomplete, stale, or invalid — do not read scores from it |
-
-Everything runs, or the run exits 2: malformed YAML or a corrupt receipt is exit-2 evidence with
-the fix named in the message — never a quiet all-clear.
-
-Where `@norbital-ai/bolt` is installed, the same audit is available as `bolt audit`.
-
-## Write a rule
-
-```yaml
-# .norbital/config/doctor/no-raw-fetch.yaml
-id: ACME1
-summary: raw fetch bypasses the http client
-severity: error
-principles: [straightforwardness, testability]
-rule:
-	pattern: fetch($$$ARGS)
-```
-
-A misspelled field throws at load time naming the file: "zero findings" must mean "clean", never
-"misconfigured". See `docs/matcher.md` for the full rule algebra.
-
-## Configure
+Four fixed packs, one YAML file per rule under `packs/`: `boundaries`, `layout`, `svelte` and `reactive`. There is no
+configuration, no CLI and no authored-rule API: a workspace adds no rules, and every finding is an error. A reviewed
+`repository-health:allow <rule> -- <reason>` on the reported line, or in the comment block directly above it, suppresses
+that one rule there; a marker without a reason suppresses nothing. `.doctorignore` scopes files and rules.
 
 ```ts
-// .norbital/config/doctor/doctor.config.ts — the complete surface
-import { defineConfig } from '@norbital-ai/doctor';
+import { doctor, type Finding } from '@norbital-ai/doctor';
 
-export default defineConfig({
-	packs: ['norbital']
-});
+const findings: readonly Finding[] = doctor({ root: workspaceRoot });
 ```
 
-YAML extensions sit beside that file under `.norbital/config/doctor/*.yaml` and join automatically.
-
-OSS and Colony audit the monorepo as one `--root`. Templates audit each published template so the
-same config ships in a tenant workspace.
-
-## Tiers
-
-| Pass        | Cost                                     | Runs   |
-| ----------- | ---------------------------------------- | ------ |
-| `syntactic` | per file, pure                           | always |
-| `graph`     | whole repository, module graph           | always |
-| `typeAware` | a TypeScript program per owning tsconfig | always |
-
-## Scope with `.doctorignore`
-
-Some source is deliberately outside a rule set's architecture. `.gitignore` syntax at the
-repository root scopes authored rules, YAML patterns, and built-in checks identically. Prefer it
-over rows of per-line allowances.
-
-## Programmatic use
+The realm's own gates select the realm packs under `packs/realm/` by name: `realm/boundaries` (package isolation and
+host neutrality), `realm/graph` (unreachable modules, unreferenced exports, duplicate bodies; tests reach but are never
+reported), `realm/overlaps`, `realm/structure`, `realm/effect`, `realm/ceremony`, and `realm/types` (the type-aware
+tier: a call resolved to a `@deprecated` signature is `LEGACY2`). An absolute directory selects a host's own pack.
 
 ```ts
-import { audit, assess } from '@norbital-ai/doctor';
-
-const result = await audit({ root: process.cwd() });
-console.log(result.counts, result.packs);
+doctor({ root: ossRoot, packs: ['realm/boundaries', 'realm/graph'] });
 ```
 
-Findings, the authenticating receipt, the metrics table (`metrics.tsv`), and reports are written
-to `.norbital/diagnosis/`.
+- [Rule catalogue](./docs/rules.md)
+- [Rule algebra](./docs/matcher.md) (a port of ast-grep's `SerializableRule`)

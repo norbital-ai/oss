@@ -1,5 +1,5 @@
 {
-	"extends": "@norbital-ai/config/svelte.json",
+	"extends": "../../tsconfig.base.json",
 	"include": ["src/**/*.ts"],
 	"exclude": ["**/*.test.ts", "node_modules", "build", "engine"],
 	"compilerOptions": {

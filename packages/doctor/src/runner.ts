@@ -7,7 +7,6 @@
  * Dispatch is by syntax kind. Every node is visited once and only the rules that asked for that
  * kind are consulted, rather than every rule's guard running against every node.
  */
-import { getErrorMessage } from '@norbital-ai/std';
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import { execFileSync } from 'node:child_process';
@@ -208,11 +207,13 @@ export type RunOptions = Readonly<{
 	readonly read?: ((file: string) => string | undefined) | undefined;
 }>;
 
-/** Where one rule matched: the line a person opens, its text, and what the metavariables bound. */
+/** Where one rule matched: the line a person opens, its text, the matched code, and what the metavariables bound. */
 export type Match = Readonly<{
 	readonly file: string;
 	readonly line: number;
 	readonly text: string;
+	/** The matched node's own source: a whole declaration, call or element. */
+	readonly span: string;
 	readonly evidence: string;
 }>;
 
@@ -260,6 +261,14 @@ function applyDominance(
 	});
 }
 
+/** Where `rules` match (a search: `searchRule`), in file and line order: the first `limit` and the total. */
+export function searchRules(options: RunOptions & Readonly<{ limit?: number | undefined }>): Readonly<{ matches: ReadonlyArray<Match>; total: number }> {
+	if (options.rules.length === 0) return { matches: [], total: 0 };
+	const { findings, site } = execute(options);
+	const matches = findings.flatMap((f) => site.get(f) ?? []).sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+	return { matches: matches.slice(0, options.limit ?? matches.length), total: matches.length };
+}
+
 /** Execute every rule over every selected file and return the findings in catalogue order. */
 export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 	if (options.rules.length === 0) return [];
@@ -271,25 +280,6 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 			a.rule.localeCompare(b.rule) ||
 			a.location.localeCompare(b.location)
 	);
-}
-
-/**
- * Where rules match, as data: the audit engine run as a search. Same files, same parsers (a
- * `.svelte` file's markup and script both), same rule language — so a search that finds something
- * is already the body of a rule that would flag it.
- */
-export function searchRules(
-	options: RunOptions & Readonly<{ limit?: number | undefined }>
-): Readonly<{ matches: ReadonlyArray<Match>; total: number }> {
-	if (options.rules.length === 0) return { matches: [], total: 0 };
-	const { findings, site } = execute(options);
-	const matches = findings
-		.flatMap((finding) => {
-			const matched = site.get(finding);
-			return matched === undefined ? [] : [matched];
-		})
-		.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
-	return { matches: matches.slice(0, options.limit ?? matches.length), total: matches.length };
 }
 
 function execute(options: RunOptions): Readonly<{
@@ -391,11 +381,12 @@ function execute(options: RunOptions): Readonly<{
 					file,
 					line: position.line + 1,
 					text: line.trim(),
+					span: node.getText(sourceFile),
 					evidence: evidence ?? ''
 				});
 				findings.push(reported);
 			},
-			reportAt: (line, evidence) => {
+			reportAt: (line, evidence, span) => {
 				if (active === undefined) return;
 				const lines = raw.split('\n');
 				const index = Math.min(Math.max(line, 1), lines.length) - 1;
@@ -411,6 +402,7 @@ function execute(options: RunOptions): Readonly<{
 					file,
 					line: index + 1,
 					text: (lines[index] ?? '').trim(),
+					span: span ?? (lines[index] ?? '').trim(),
 					evidence: evidence ?? ''
 				});
 				findings.push(reported);
@@ -434,7 +426,7 @@ function execute(options: RunOptions): Readonly<{
 							Result.match(outcome, {
 								onFailure: (error) => {
 									const cause = (error as { cause?: unknown })?.cause ?? error;
-									const detail = getErrorMessage(cause);
+									const detail = (cause instanceof Error ? cause.message : String(cause));
 									return {
 										severity: 'error',
 										confidence: 'high',

@@ -1,9 +1,16 @@
+<!--
+@component
+Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) that stack, or switch with a tab pair, below a width.
+-->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
+	/** How a `Split` divides its width between `start` and `end`. */
 	export type SplitRatio = 'rail' | 'sidebar' | 'third' | 'half' | 'wide';
+	/** What a `Split` does when narrow: `stack` the panes, `switch` between them, or `none`. */
 	export type SplitCollapse = 'stack' | 'switch' | 'none';
+	/** The props of `Split`. */
 	export interface SplitProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: SplitRatio;
@@ -19,8 +26,8 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '#lib/utils';
-	import { GAP_CLASSES } from '#lib/layout/layout.shared';
+	import { cn } from '../primitives/utils.js';
+	import { GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',

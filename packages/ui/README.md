@@ -1,15 +1,15 @@
 # `@norbital-ai/ui`
 
-Svelte components, design tokens, collection surfaces, and layout primitives for Norbital tenant
-applications.
+Svelte views, field inputs, primitives, design tokens and layout primitives for Bolt workspaces.
 
 See the [UI package overview](./docs/README.md) for goals, layering, and styling boundaries.
 
-Import components through their public subpaths:
+Four entries: `.` (views, inputs, editors, primitives), `./layout`, `./capture` (`CaptureKit`, so its
+face engine loads only in pages that import it) and `./base.css`; `./assets/*` holds the logo and favicons.
 
 ```svelte
 <script lang="ts">
-	import { Button } from '@norbital-ai/ui/button';
+	import { Button, Table } from '@norbital-ai/ui';
 	import { Stack } from '@norbital-ai/ui/layout';
 </script>
 ```
@@ -17,9 +17,7 @@ Import components through their public subpaths:
 Import `@norbital-ai/ui/base.css` once at the application root. Bolt's generated client entry imports
 it automatically, so tenant apps do not add a second base stylesheet or Tailwind integration.
 
-The wildcard export exposes one subpath per component directory, including shared
-`collection-navigation`. Additional stable subpaths cover `feature-colors`, JavaScript utilities,
-editor themes, the logo, and favicons. Do not import from `build/` or `src/` directly.
+Do not import from `build/` or `src/` directly.
 
 ## Development
 
