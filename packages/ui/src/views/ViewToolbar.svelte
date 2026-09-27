@@ -120,7 +120,10 @@
 	const indexes = $derived(offered ? searchIndexes(x, onProbe !== undefined, { meaning: t('searchMeaning'), raw: t('searchRaw'), view: t('searchView') }) : []);
 	// the search icon exists only over something searchable: the collection's search fields or a declared index
 	const canSearch = $derived(offered && (lexical || indexes.length > 0));
-	const fieldsSearched = $derived((x?.search ?? []).map((s) => pathLabel(catalog, collection, s, humanize)));
+	// a collection's declared search fields; a local array searches the columns it shows (the roster's people)
+	const fieldsSearched = $derived(collection === ''
+		? Object.keys(catalog[source]?.fields ?? {}).map((f) => pathLabel(catalog, source, f, humanize))
+		: (x?.search ?? []).map((s) => pathLabel(catalog, collection, s, humanize)));
 	let index = $state<string | null>(untrack(() => SEMANTIC_SEARCH.test(q) ? 'semantic' : null));
 	let text = $state(untrack(() => q.replace(SEMANTIC_SEARCH, '')));
 	let values = $state<{ [f: string]: Json }>({});
@@ -169,7 +172,7 @@
 	onDestroy(collection === '' ? () => {} : offerContexts(collection, contexts));
 	const create = () => onAdd ? onAdd() : typeof cfg?.new === 'function' ? cfg.new() : openRecord(collection, 'new', contexts);
 	const searchHint = $derived.by(() => {
-		const f = (x?.search ?? []).slice(0, 3).map((s) => pathLabel(catalog, collection, s, humanize));
+		const f = fieldsSearched.slice(0, 3);
 		return f.length === 0 ? msg(bolt, 'table.search', 'Search') : msg(bolt, 'table.searchIn', 'Search {fields}', { fields: f.join(', ') });
 	});
 
@@ -344,27 +347,27 @@
 							{/if}
 						</div>
 						{#if picking}
-							<div class="grid gap-0.5" role="listbox" data-search-indexes>
+							<div class="grid min-w-0 gap-0.5" role="listbox" data-search-indexes>
 								{#if menuOf.length === 0}<p class="text-muted-foreground px-2 py-1.5 text-sm" data-search-none>{indexes.length === 0 ? t('searchNone') : t('noResults')}</p>{/if}
 								{#each menuOf as i (i.name)}
-									<button type="button" role="option" aria-selected="false" class="hover:bg-accent rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
+									<button type="button" role="option" aria-selected="false" class="hover:bg-accent min-w-0 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
 										disabled={i.why !== null} title={i.why ?? i.hint} onclick={() => pick(i)} data-search-option={i.name}>
-										<span class="block font-medium">/{i.name}</span><span class="text-muted-foreground block text-xs">{i.why ?? i.hint}</span>
+										<span class="block font-medium">/{i.name}</span><span class="text-muted-foreground block truncate text-xs">{i.why ?? i.hint}</span>
 									</button>
 								{/each}
 							</div>
 						{:else if index === null && text === ''}
 							<!-- what this box searches, and the commands `/` offers -->
-							<div class="text-muted-foreground grid gap-1.5 px-1 pb-1 text-xs" data-search-help>
+							<div class="text-muted-foreground grid min-w-0 gap-1.5 px-1 pb-1 text-xs" data-search-help>
 								{#if lexical && fieldsSearched.length > 0}
 									<p data-search-fields>{t('searchFields').replace('{fields}', fieldsSearched.join(', '))}</p>
 								{/if}
 								{#if indexes.length > 0}
 									<p class="font-medium">{t('searchCommands')}</p>
 									{#each indexes as i (i.name)}
-										<button type="button" class="hover:bg-accent hover:text-foreground -mx-1 flex items-baseline gap-2 rounded-sm px-1 py-0.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
+										<button type="button" class="hover:bg-accent hover:text-foreground -mx-1 flex min-w-0 items-baseline gap-2 rounded-sm px-1 py-0.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
 											disabled={i.why !== null} title={i.why ?? i.hint} onclick={() => pick(i)} data-search-command={i.name}>
-											<span class="text-foreground font-mono">/{i.name}</span><span class="truncate">{i.why ?? i.hint}</span>
+											<span class="text-foreground shrink-0 font-mono">/{i.name}</span><span class="min-w-0 flex-1 truncate">{i.why ?? i.hint}</span>
 										</button>
 									{/each}
 								{/if}

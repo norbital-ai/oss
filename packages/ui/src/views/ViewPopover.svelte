@@ -34,7 +34,9 @@
 	let asked = $state(false);
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
 	const count = $derived(view.rows.length + view.order.length);
-	const builder = $derived(asked || count > 0 || bolt.describe === undefined);
+	// describing needs a collection the host reads; a local array (`$local`, the roster's people) has only the builder
+	const describes = $derived(bolt.describe !== undefined && !collection.startsWith('$'));
+	const builder = $derived(asked || count > 0 || !describes);
 	const authorText = $derived.by(() => {
 		if (author === undefined || author === null) return null;
 		const rows = fromWhere(catalog, collection, author);
@@ -69,7 +71,7 @@
 			// one control height: on touch the kit raises buttons to the hit target, so inputs and selects follow
 			'[&_input:not([type=checkbox])]:min-h-(--hit-target) [&_select]:min-h-(--hit-target)')} data-view-panel>
 			<header class="flex items-center gap-2" data-view-header>
-				{#if bolt.describe !== undefined}
+				{#if describes}
 					<form class="min-w-0 flex-1" onsubmit={describe} data-describe>
 						<input class={cn(CONTROL, 'h-9')} type="text" maxlength={500} bind:value={text} disabled={busy}
 							placeholder={msg(bolt, 'view.describe', 'Describe what to show…')} aria-label={msg(bolt, 'view.describe', 'Describe what to show…')} />

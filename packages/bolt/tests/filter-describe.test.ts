@@ -134,6 +134,14 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		expect(r).toEqual({ ok: true, where: { title: { like: '%pump%' } }, orderBy: { assignee: { name: 'asc' } } });
 	});
 
+	it('the sort\'s own words are never offered as a text value', async () => {
+		const port = system1({});
+		await describer(port).describe({ collection: 'jobs', text: 'pump jobs, sorted by title descending', authority: caller(), bindings });
+		const values = choices(port.requests[0]!.questions['c0.value']);
+		expect(values.some((v) => v.endsWith('· pump'))).toBe(true);
+		for (const w of ['sorted', 'descending']) expect(values.some((v) => v.endsWith(`· ${w}`))).toBe(false);
+	});
+
 	it('a date period is offered: in force today, or overlapping a span (staging: "started in 2024" fell to created_at)', async () => {
 		const today = system1({ 'c0.yes': true, 'c0.field': 'Window', 'c0.op': 'Window · in force on', 'c0.value': 'Window · today' });
 		expect(await describer(today).describe({ collection: 'jobs', text: 'jobs in force today', authority: caller(), bindings }))

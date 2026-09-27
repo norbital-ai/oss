@@ -34,7 +34,9 @@ export type Described = { ok: true; where: Json; orderBy?: Json } | { ok: false;
 const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum']);
 const ORDERED = new Set([...NUMERIC, 'date', 'instant', 'time', 'text']);
 const STOP = new Set(['the', 'and', 'that', 'this', 'with', 'for', 'from', 'are', 'aren', 'not', 'isn', 'all', 'any', 'show', 'only',
-	'first', 'last', 'next', 'newest', 'oldest', 'week', 'month', 'year', 'quarter', 'today', 'yesterday', 'days', 'done', 'open', 'what', 'which', 'who', 'whose']);
+	'first', 'last', 'next', 'newest', 'oldest', 'week', 'month', 'year', 'quarter', 'today', 'yesterday', 'days', 'done', 'open', 'what', 'which', 'who', 'whose',
+	// the sort's own words are never a value (staging: "landed sites, sorted by name descending" filtered name = "descending")
+	'sort', 'sorted', 'order', 'ordered', 'ascending', 'descending', 'alphabetical', 'alphabetically', 'reverse', 'highest', 'lowest', 'latest', 'earliest']);
 const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
 const ORDINAL = ['first', 'second', 'third', 'fourth'];
 
