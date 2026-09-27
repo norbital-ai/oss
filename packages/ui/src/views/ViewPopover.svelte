@@ -6,6 +6,7 @@
 	import type { CollectionExposure } from '../kinds/context.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import Combobox from '../primitives/combobox/combobox.svelte';
+	import * as Popover from '../primitives/popover/index.js';
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from './bolt.js';
 	import { useBolt } from './bolt.js';
@@ -28,11 +29,9 @@
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
-	let open = $state(false), text = $state(''), busy = $state(false), root = $state<HTMLElement | null>(null);
+	let open = $state(false), text = $state(''), busy = $state(false);
 	// the builder: shown without a describer, with conditions to edit, or when the viewer asks (reset on every open)
 	let asked = $state(false);
-	// the panel opens toward the side with room: a trigger in the right half lines the panel up with its right edge
-	let align = $state<'start' | 'end'>('start');
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
 	const count = $derived(view.rows.length + view.order.length);
 	const builder = $derived(asked || count > 0 || bolt.describe === undefined);
@@ -51,23 +50,24 @@
 	}
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && open && !e.defaultPrevented) open = false; }}
-	onpointerdown={(e) => { if (open && root !== null && !root.contains(e.target as Node | null)) open = false; }} />
-
-<div class="relative" data-view-popover bind:this={root}>
-	<button type="button" class={cn('hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none', count > 0 && 'bg-accent')} aria-haspopup="dialog" aria-expanded={open}
-		aria-label={msg(bolt, 'view.filterSort', 'Filter and sort')} title={msg(bolt, 'view.filterSort', 'Filter and sort')} data-view-trigger onclick={() => { align = root !== null && root.getBoundingClientRect().left > innerWidth / 2 ? 'end' : 'start'; open = !open; asked = false; }}>
-		<!-- sliders: filter and sort together (P34), not a funnel -->
-		<svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" data-icon="sliders">
-			<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />
-		</svg>
-		{#if count > 0}<span class="bg-primary text-primary-foreground rounded-full px-1.5 text-xs leading-5" data-view-count>{count}</span>{/if}
-	</button>
-	{#if open}
-		<div role="dialog" aria-label={msg(bolt, 'view.filterSort', 'Filter and sort')}
-			class={cn('bg-popover text-popover-foreground absolute top-full z-30', align === 'end' ? 'right-0' : 'left-0', 'mt-1 flex w-[min(46rem,calc(100vw-2rem))] flex-col gap-3 rounded-md border p-3 shadow-md',
-				// one control height: on touch the kit raises buttons to the hit target, so inputs and selects follow
-				'[&_input:not([type=checkbox])]:min-h-(--hit-target) [&_select]:min-h-(--hit-target)')} data-view-panel>
+<!-- portaled, so a sticky table header never paints over it (it sat under the roster's day header on staging) -->
+<Popover.Root bind:open onOpenChange={(o) => { if (o) asked = false; }}>
+	<Popover.Trigger>
+		{#snippet child({ props })}
+			<button {...props} type="button" class={cn('hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none', count > 0 && 'bg-accent')}
+				aria-label={msg(bolt, 'view.filterSort', 'Filter and sort')} title={msg(bolt, 'view.filterSort', 'Filter and sort')} data-view-popover data-view-trigger>
+				<!-- sliders: filter and sort together (P34), not a funnel -->
+				<svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" data-icon="sliders">
+					<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />
+				</svg>
+				{#if count > 0}<span class="bg-primary text-primary-foreground rounded-full px-1.5 text-xs leading-5" data-view-count>{count}</span>{/if}
+			</button>
+		{/snippet}
+	</Popover.Trigger>
+	<Popover.Content align="end" aria-label={msg(bolt, 'view.filterSort', 'Filter and sort')}
+		class={cn('flex w-[min(46rem,calc(100vw-2rem))] flex-col gap-3 p-3',
+			// one control height: on touch the kit raises buttons to the hit target, so inputs and selects follow
+			'[&_input:not([type=checkbox])]:min-h-(--hit-target) [&_select]:min-h-(--hit-target)')} data-view-panel>
 			<header class="flex items-center gap-2" data-view-header>
 				{#if bolt.describe !== undefined}
 					<form class="min-w-0 flex-1" onsubmit={describe} data-describe>
@@ -123,6 +123,5 @@
 			{/if}
 				</div>
 			{/if}
-		</div>
-	{/if}
-</div>
+	</Popover.Content>
+</Popover.Root>

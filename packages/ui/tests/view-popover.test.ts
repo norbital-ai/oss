@@ -127,31 +127,31 @@ test('Table: a link with bad clauses and keys drops them with one notice and app
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'] }, s.bolt, `/?jobs.where=${bad}&jobs.order=hours:desc,meta:asc`);
 	assert.deepEqual(s.last().where, { status: { eq: 'done' } });
 	assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
-	assert.equal(v.target.querySelectorAll('[data-view-notice]').length, 1);
-	assert.equal(v.target.querySelector('[data-read=error]'), null);
-	assert.ok(v.target.querySelector('tbody tr'), 'the rows still render');
+	assert.equal(document.querySelectorAll('[data-view-notice]').length, 1);
+	assert.equal(document.querySelector('[data-read=error]'), null);
+	assert.ok(document.querySelector('tbody tr'), 'the rows still render');
 	v.done();
 });
 
 test('Table: one sliders popover; by default only the describe input, the builder hidden behind a quiet "Edit conditions"', async () => {
 	const s = scripted({ describe: async () => ({ where: { status: { eq: 'done' } }, orderBy: { created_at: 'desc' } }) });
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'], where: { hours: { gt: 1 } } }, s.bolt);
-	assert.equal(v.target.querySelectorAll('[data-view-trigger]').length, 1);
-	assert.ok(v.target.querySelector('[data-view-trigger] [data-icon=sliders]'));
-	v.target.querySelector('[data-view-trigger]').click();
+	assert.equal(document.querySelectorAll('[data-view-trigger]').length, 1);
+	assert.ok(document.querySelector('[data-view-trigger] [data-icon=sliders]'));
+	document.querySelector('[data-view-trigger]').click();
 	flushSync();
-	const header = v.target.querySelector('[data-view-header]');
+	const header = document.querySelector('[data-view-header]');
 	assert.ok(header.querySelector('[data-describe] input[placeholder="Describe what to show…"]'));
 	// the default state: nothing but the input and the quiet reveal — no builder, no Clear all, no author scope
-	assert.equal(v.target.querySelector('[data-view-builder]'), null);
-	assert.equal(v.target.querySelector('[data-clear]'), null);
-	assert.equal(v.target.querySelector('[data-author-where]'), null);
-	assert.equal(v.target.querySelector('details'), null, 'no accordion chrome');
-	v.target.querySelector('[data-show-builder]').click();
+	assert.equal(document.querySelector('[data-view-builder]'), null);
+	assert.equal(document.querySelector('[data-clear]'), null);
+	assert.equal(document.querySelector('[data-author-where]'), null);
+	assert.equal(document.querySelector('details'), null, 'no accordion chrome');
+	document.querySelector('[data-show-builder]').click();
 	flushSync();
-	assert.ok(v.target.querySelector('[data-view-builder] [data-add-condition]'));
-	assert.match(v.target.querySelector('[data-author-where]').textContent, /Hours before|Hours after|Hours/);
-	assert.equal(v.target.querySelector('[data-author-where] [data-remove]'), null, 'the author scope has no remove');
+	assert.ok(document.querySelector('[data-view-builder] [data-add-condition]'));
+	assert.match(document.querySelector('[data-author-where]').textContent, /Hours before|Hours after|Hours/);
+	assert.equal(document.querySelector('[data-author-where] [data-remove]'), null, 'the author scope has no remove');
 	// the description becomes editable rows and a sort, ANDed under the author's where
 	header.querySelector('[data-describe] input').value = 'done ones, newest first';
 	header.querySelector('[data-describe] input').dispatchEvent(new Event('input', { bubbles: true }));
@@ -159,47 +159,47 @@ test('Table: one sliders popover; by default only the describe input, the builde
 	await settle();
 	assert.deepEqual(s.last().where, { and: [{ hours: { gt: 1 } }, { status: { eq: 'done' } }] });
 	assert.deepEqual(s.last().orderBy, [{ created_at: 'desc' }]);
-	assert.equal(v.target.querySelectorAll('[data-filter-rows] [data-cond="status"]').length, 1);
-	assert.ok(v.target.querySelector('[data-clear]'), 'conditions exist: Clear all shows');
+	assert.equal(document.querySelectorAll('[data-filter-rows] [data-cond="status"]').length, 1);
+	assert.ok(document.querySelector('[data-clear]'), 'conditions exist: Clear all shows');
 	// reopened with conditions, the builder is revealed at once
-	v.target.querySelector('[data-view-trigger]').click(); flushSync();
-	v.target.querySelector('[data-view-trigger]').click(); flushSync();
-	assert.ok(v.target.querySelector('[data-view-builder]'));
+	document.querySelector('[data-view-trigger]').click(); flushSync();
+	document.querySelector('[data-view-trigger]').click(); flushSync();
+	assert.ok(document.querySelector('[data-view-builder]'));
 	v.done();
 });
 
 test('Table: a described relation filter and sort are editable rows ANDed under the author where (rule 16a)', async () => {
 	const s = scripted({ describe: async () => ({ where: { and: [{ lines: { some: { qty: { gt: 2 } } } }, { account: { is: { name: { like: '%acme%' } } } }] }, orderBy: { hours: 'desc' } }) });
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'], where: { status: { eq: 'done' } } }, s.bolt);
-	v.target.querySelector('[data-view-trigger]').click();
+	document.querySelector('[data-view-trigger]').click();
 	flushSync();
-	const form = v.target.querySelector('[data-describe]');
+	const form = document.querySelector('[data-describe]');
 	form.querySelector('input').value = 'acme jobs with more than 2 of a line, most hours first';
 	form.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
 	form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 	await settle();
 	assert.deepEqual(s.last().where, { and: [{ status: { eq: 'done' } }, { and: [{ lines: { some: { qty: { gt: 2 } } } }, { account: { is: { name: { like: '%acme%' } } } }] }] });
 	assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
-	assert.ok(v.target.querySelector('[data-filter-rows] [data-many=lines]'), 'the relation group is a row the viewer edits');
+	assert.ok(document.querySelector('[data-filter-rows] [data-many=lines]'), 'the relation group is a row the viewer edits');
 	v.done();
 });
 
 test('Table: a 200-row page renders a window of rows between two spacers in both layouts, keyed by id', async () => {
 	const rows = Array.from({ length: 200 }, (_, i) => ({ id: `r${i}`, title: `Row ${i}` }));
 	const v = await show('table', { of: rows, columns: ['title'] }, scripted().bolt);
-	const wide = v.target.querySelectorAll('[data-table-wide] tbody tr:not([aria-hidden])');
-	const narrow = v.target.querySelectorAll('[data-table-list] li:not([aria-hidden])');
+	const wide = document.querySelectorAll('[data-table-wide] tbody tr:not([aria-hidden])');
+	const narrow = document.querySelectorAll('[data-table-list] li:not([aria-hidden])');
 	assert.ok(wide.length > 0 && wide.length < 200, `wide: ${wide.length} rows mounted`);
 	assert.ok(narrow.length > 0 && narrow.length < 200, `narrow: ${narrow.length} rows mounted`);
 	assert.match(wide[0].textContent, /Row 0/);
-	assert.ok(v.target.querySelector('[data-table-wide] tbody tr[aria-hidden]'), 'a spacer holds the unmounted rows\' height');
+	assert.ok(document.querySelector('[data-table-wide] tbody tr[aria-hidden]'), 'a spacer holds the unmounted rows\' height');
 	v.done();
 });
 
 test('Table: a related-records row is built in the popover: relation ▸ quantifier, nested conditions indented under it', async () => {
 	const s = scripted();
 	const v = await show('table', { of: 'jobs', columns: ['title'] }, s.bolt);
-	const $ = (sel) => v.target.querySelector(sel);
+	const $ = (sel) => document.querySelector(sel);
 	// a Combobox: open its trigger, click the option; the list is portalled to the body
 	const pick = async (trigger, value) => { trigger.click(); flushSync(); await tick(); document.querySelector(`[role=option][data-value="${value}"] button`).click(); flushSync(); };
 	$('[data-view-trigger]').click(); flushSync();
@@ -226,13 +226,13 @@ test('Table: a header never sorts; its menu moves and hides the column, kept per
 	const s = scripted();
 	localStorage.removeItem('ui.table.jobs');
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'], orderBy: { title: 'asc' } }, s.bolt);
-	const heads = () => [...v.target.querySelectorAll('[data-table-wide] th[data-column]')].map((th) => th.dataset.column);
-	assert.equal(v.target.querySelector('[data-sort-header]'), null, 'sorting is the toolbar popover\'s');
+	const heads = () => [...document.querySelectorAll('[data-table-wide] th[data-column]')].map((th) => th.dataset.column);
+	assert.equal(document.querySelector('[data-sort-header]'), null, 'sorting is the toolbar popover\'s');
 	const item = (text) => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === text);
-	v.target.querySelector('[data-column-menu=hours]').click(); flushSync();
+	document.querySelector('[data-column-menu=hours]').click(); flushSync();
 	item('Move left').click(); flushSync();
 	assert.deepEqual(heads(), ['hours', 'title']);
-	v.target.querySelector('[data-column-menu=title]').click(); flushSync();
+	document.querySelector('[data-column-menu=title]').click(); flushSync();
 	item('Hide column').click(); flushSync();
 	assert.deepEqual(heads(), ['hours']);
 	assert.deepEqual(JSON.parse(localStorage.getItem('ui.table.jobs')).hidden, ['title']);
@@ -245,8 +245,8 @@ test('Table: initialFilter seeds clearable rows, and a cleared choice survives a
 	const props = { of: 'jobs', columns: ['title'], initialFilter: { status: { eq: 'scheduled' } } };
 	let v = await show('table', props, s.bolt);
 	assert.deepEqual(s.last().where, { status: { eq: 'scheduled' } });
-	v.target.querySelector('[data-view-trigger]').click(); flushSync();
-	v.target.querySelector('[data-clear]').click(); await settle();
+	document.querySelector('[data-view-trigger]').click(); flushSync();
+	document.querySelector('[data-clear]').click(); await settle();
 	assert.equal(s.last().where, undefined);
 	const url = location.pathname + location.search;
 	assert.match(url, /jobs\.where=%7B%7D/);
@@ -269,28 +269,15 @@ test('Table: a relative-date filter stays live with a refresh, as the hub requir
 	v.done();
 });
 
-test('the panel opens toward the side with room: a trigger in the right half lines up with its right edge', async () => {
-	const s = scripted();
-	const v = await show('table', { of: 'jobs', columns: ['title'] }, s.bolt);
-	const root = v.target.querySelector('[data-view-popover]');
-	for (const [left, side] of [[innerWidth - 40, 'right-0'], [10, 'left-0']]) {
-		root.getBoundingClientRect = () => ({ left, right: left + 40, top: 0, bottom: 30, width: 40, height: 30 });
-		v.target.querySelector('[data-view-trigger]').click(); flushSync();
-		assert.ok(v.target.querySelector('[data-view-panel]').classList.contains(side), side);
-		v.target.querySelector('[data-view-trigger]').click(); flushSync();
-	}
-	v.done();
-});
-
 test('Board: the viewer sort orders the cards within each lane and the lanes keep their order', async () => {
 	const s = scripted();
 	const v = await show('board', { of: 'jobs', by: 'status', card: ['title'] }, s.bolt, '/?jobs.order=hours:desc');
-	const lanes = [...v.target.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'));
+	const lanes = [...document.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'));
 	assert.deepEqual(lanes, ['"scheduled"', '"done"']);
 	const laneReads = s.reads.filter((r) => r.c === 'jobs');
 	assert.ok(laneReads.length >= 2);
 	for (const r of laneReads) assert.deepEqual(r.o.orderBy, [{ hours: 'desc' }]);
-	assert.equal(v.target.querySelectorAll('[data-view-trigger]').length, 1);
+	assert.equal(document.querySelectorAll('[data-view-trigger]').length, 1);
 	v.done();
 });
 
@@ -332,7 +319,7 @@ test('Table: a relation cell shows the label with a single- or multi-link glyph,
 	const v = await show('table', { of: 'jobs', columns: ['title', 'account', 'lines'] }, s.bolt, '/', relCatalog);
 	assert.equal(s.reads.filter((r) => r.c !== 'jobs').length, 0, 'no read per related record');
 	assert.deepEqual(s.last().select.lines, { select: { name: true }, limit: MANY_SHOWN + 1 });
-	const row = v.target.querySelector('[data-table-wide] tbody tr:not([aria-hidden])');
+	const row = document.querySelector('[data-table-wide] tbody tr:not([aria-hidden])');
 	const one = row.querySelector('[data-ref=one]');
 	assert.ok(one.querySelector('[data-icon=link]'));
 	assert.equal(one.textContent.trim(), 'Acme');
@@ -351,7 +338,7 @@ test('Table: a column\'s custom cell renderer gets the row and value; other cell
 	const cell = createRawSnippet((x) => ({ render: () => `<b data-custom>${x().row.id}:${x().value}</b>` }));
 	const s = scripted({ read: (c, o) => ({ read: { m: 'read', a: [c, o] }, then: (ok, bad) => Promise.resolve({ rows: relRows, next: null }).then(ok, bad) }) });
 	const v = await show('table', { of: 'jobs', columns: [{ field: 'title', cell }, 'done'] }, s.bolt, '/', relCatalog);
-	const row = v.target.querySelector('[data-table-wide] tbody tr:not([aria-hidden])');
+	const row = document.querySelector('[data-table-wide] tbody tr:not([aria-hidden])');
 	assert.equal(row.querySelector('[data-custom]').textContent, 'j1:One');
 	assert.doesNotMatch(row.textContent, /true/, 'a boolean is drawn by its kind, not printed');
 	v.done();
@@ -365,7 +352,7 @@ test('Board: each lane reads its first page by its condition; nearing the lane e
 		const rows = Array.from({ length: o.limit ?? 1 }, (_, i) => ({ id: `${JSON.stringify(o.where)}-${i}`, title: 'x' }));
 		return { read: { m: 'read', a: [c, o] }, then: (ok, bad) => Promise.resolve({ rows, next: (o.limit ?? 1) >= 2 ? null : 'c1' }).then(ok, bad) }; } });
 	const v = await show('board', { of: 'jobs', by: 'status', card: ['title'], pageSize: 1 }, s.bolt);
-	const lane = v.target.querySelector('[data-lane=\'"done"\']');
+	const lane = document.querySelector('[data-lane=\'"done"\']');
 	assert.ok(s.reads.some((r) => JSON.stringify(r.o.where) === JSON.stringify({ status: { eq: 'done' } }) && r.o.limit === 1), 'a lane reads by its lane condition, one page');
 	assert.ok(lane.querySelector('[data-lane-more]'));
 	const io = seen.find((x) => lane.contains(x.el));
@@ -389,47 +376,53 @@ test('Table: `/` lists the search indexes and never filters; /semantic reads by 
 		queries: { closest: { description: 'Jobs closest in hours', input: { hours: { kind: 'number' } },
 			output: { kind: 'list', of: { kind: 'object', fields: { job: { kind: 'id', of: 'jobs' }, score: { kind: 'number' } } } } } } } };
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'] }, s.bolt, '/', cat);
-	const type = (text) => { const i = v.target.querySelector('[data-search]'); i.value = text; i.dispatchEvent(new Event('input', { bubbles: true })); flushSync(); };
+	// the search is an icon: its popover opens focused on the box, naming the fields searched and the `/` commands
+	assert.equal(document.querySelector('[data-search]'), null, 'no box until the icon is clicked');
+	document.querySelector('[data-search-toggle]').click(); flushSync(); await tick();
+	assert.equal(document.activeElement, document.querySelector('[data-search]'), 'the box is focused');
+	assert.match(document.querySelector('[data-search-fields]').textContent, /Title/);
+	assert.deepEqual([...document.querySelectorAll('[data-search-command]')].map((b) => b.dataset.searchCommand), ['semantic', 'near', 'pdq', 'closest']);
+	const type = (text) => { const i = document.querySelector('[data-search]'); i.value = text; i.dispatchEvent(new Event('input', { bubbles: true })); flushSync(); };
 	type('/');
-	assert.deepEqual([...v.target.querySelectorAll('[data-search-option]')].map((b) => [b.dataset.searchOption, b.disabled]), [['semantic', false], ['near', false], ['pdq', true], ['closest', false]]);
+	assert.deepEqual([...document.querySelectorAll('[data-search-option]')].map((b) => [b.dataset.searchOption, b.disabled]), [['semantic', false], ['near', false], ['pdq', true], ['closest', false]]);
 	type('/zz');
-	assert.ok(v.target.querySelector('[data-search-none]'), 'a `/` matching no index says so');
+	assert.ok(document.querySelector('[data-search-none]'), 'a `/` matching no index says so');
 	await new Promise((r) => setTimeout(r, 350));
 	await settle();
 	assert.equal(s.last().search, undefined, 'a `/…` picking an index is never a search term');
 	type('/semantic ');
-	assert.ok(v.target.querySelector('[data-search-index=semantic]'));
+	assert.ok(document.querySelector('[data-search-index=semantic]'));
 	type('lamp');
 	await new Promise((r) => setTimeout(r, 350));
 	await settle();
 	assert.equal(s.last().search, '/semantic lamp');
 	type('');
-	v.target.querySelector('[data-search]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+	document.querySelector('[data-search]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
 	flushSync();
-	assert.equal(v.target.querySelector('[data-search-index]'), null, 'Backspace on an empty box is back to plain search');
+	assert.equal(document.querySelector('[data-search-index]'), null, 'Backspace on an empty box is back to plain search');
 	type('/');
-	v.target.querySelector('[data-search-option=near]').click();
+	document.querySelector('[data-search-option=near]').click();
 	await settle();
-	assert.equal(v.target.querySelector('[data-search]'), null, 'the text box gives way to the index input');
-	const hours = v.target.querySelector('[data-similar-input=near] [data-similar-field=hours] input');
+	assert.equal(document.querySelector('[data-search]'), null, 'the text box gives way to the index input');
+	const hours = document.querySelector('[data-similar-input=near] [data-similar-field=hours] input');
 	hours.value = '3';
 	hours.dispatchEvent(new Event('input', { bubbles: true }));
 	flushSync();
-	v.target.querySelector('[data-similar-input]').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	document.querySelector('[data-similar-input]').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 	await settle();
 	assert.deepEqual(similar.at(-1).n, 'near');
 	assert.deepEqual(similar.at(-1).input, { hours: 3 });
 	// a named query: its input, called through `query`, its `id`-of-jobs output read back as the table's rows
-	v.target.querySelector('[data-search-index] button').click();
+	document.querySelector('[data-search-index] button').click();
 	flushSync();
 	type('/');
-	v.target.querySelector('[data-search-option=closest]').click();
+	document.querySelector('[data-search-option=closest]').click();
 	await settle();
-	const q = v.target.querySelector('[data-similar-input=closest] [data-similar-field=hours] input');
+	const q = document.querySelector('[data-similar-input=closest] [data-similar-field=hours] input');
 	q.value = '2';
 	q.dispatchEvent(new Event('input', { bubbles: true }));
 	flushSync();
-	v.target.querySelector('[data-similar-input]').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	document.querySelector('[data-similar-input]').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 	await settle();
 	assert.deepEqual(asked.at(-1), { n: 'jobs.closest', input: { hours: 2 } });
 	assert.deepEqual(s.last().where, { id: { in: ['j1'] } });

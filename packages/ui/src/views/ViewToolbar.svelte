@@ -111,13 +111,16 @@
 	const x = $derived(catalog[collection] ?? kinds.catalog?.[collection]);
 	const title = $derived(cfg?.title === false ? '' : cfg?.title ?? (collection === '' ? '' : label(bolt, collection)));
 	const about = $derived(cfg?.description === false ? '' : cfg?.description ?? x?.description ?? '');
-	const canSearch = $derived(searchable && cfg?.search !== false);
+	const offered = $derived(searchable && cfg?.search !== false);
 	// L-BOLT-495: `/` at the start of the box lists the collection's search indexes; the picked one is a chip. `semantic`
 	// keeps the box as its text (`/semantic <text>`, rule 16); a typed similarity swaps the box for its input's editors and
 	// hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the lexical search.
 	const t = uiText();
 	const lexical = $derived(collection === '' || (x?.search?.length ?? 0) > 0);
-	const indexes = $derived(canSearch ? searchIndexes(x, onProbe !== undefined, { meaning: t('searchMeaning'), raw: t('searchRaw'), view: t('searchView') }) : []);
+	const indexes = $derived(offered ? searchIndexes(x, onProbe !== undefined, { meaning: t('searchMeaning'), raw: t('searchRaw'), view: t('searchView') }) : []);
+	// the search icon exists only over something searchable: the collection's search fields or a declared index
+	const canSearch = $derived(offered && (lexical || indexes.length > 0));
+	const fieldsSearched = $derived((x?.search ?? []).map((s) => pathLabel(catalog, collection, s, humanize)));
 	let index = $state<string | null>(untrack(() => SEMANTIC_SEARCH.test(q) ? 'semantic' : null));
 	let text = $state(untrack(() => q.replace(SEMANTIC_SEARCH, '')));
 	let values = $state<{ [f: string]: Json }>({});
@@ -213,7 +216,8 @@
 	const menu = $derived(entries.length > 0);
 
 	let searchOpen = $state(false), menuOpen = $state(false), busy = $state(false);
-	const shown = $derived(searchOpen || text !== '' || index !== null);
+	// the icon reads as on while a search holds the view
+	const searching = $derived(text !== '' || index !== null);
 	let picker = $state<HTMLInputElement>();
 	let form = $state<string | null>(null);
 	let notice = $state<string | null>(null);
@@ -303,45 +307,71 @@
 			<span class="flex-1"></span>
 			{#if cfg.controls}<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-controls>{@render cfg.controls()}</div>{/if}
 			{#if canSearch}
-				<!-- a wide container shows the box; a narrow one an icon that opens it on its own line -->
-				<Button size="icon" variant="ghost" class="@xl:hidden {shown ? 'bg-accent' : ''}" hint={searchHint} aria-label={searchHint}
-					aria-expanded={searchOpen} onclick={() => (searchOpen = !searchOpen)} data-search-toggle><Glyph name="search" /></Button>
-				<div class="relative order-last w-full {chosen?.input === undefined ? '@xl:order-none @xl:block @xl:w-56' : ''} {shown ? 'block' : 'hidden'}">
-					<div class="border-input bg-background focus-within:ring-ring/50 flex min-h-8 flex-wrap items-center gap-1 rounded-sm border px-2 shadow-xs focus-within:ring-[3px]">
-						<Glyph name="search" class="text-muted-foreground size-4 shrink-0" />
-						{#if index !== null}
-							<span class="bg-accent inline-flex h-6 shrink-0 items-center gap-1 rounded-full pr-1 pl-2 text-xs" title={chosen?.hint} data-search-index={index}>
-								/{index}<button type="button" class="hover:bg-background grid size-4 place-items-center rounded-full" aria-label={t('searchClear')} onclick={clear}><Glyph name="x" class="size-3" /></button>
-							</span>
-						{/if}
-						{#if chosen?.input !== undefined}
-							<!-- a typed similarity: its input fields' own editors, run on submit through the view's similar read -->
-							<form class="flex flex-1 flex-wrap items-end gap-2 py-1.5" data-similar-input={index}
-								onsubmit={(e) => { e.preventDefault(); if (ready) onProbe?.({ name: index!, via: chosen?.via ?? 'similar', input: { ...values } }); }}>
-								{#each Object.entries(chosen.input) as [f, k] (f)}
-									<div class="grid min-w-24 gap-1 text-xs" data-similar-field={f}><span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
-										<Editor kind={k} value={values[f] ?? null} onChange={(v) => (values = { ...values, [f]: v })} name={f} /></div>
-								{/each}
-								<Button type="submit" size="sm" disabled={!ready} data-similar-run><Glyph name="search" />{t('searchRun')}</Button>
-							</form>
-						{:else}
-							<input bind:this={box} class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm" type="search"
-								placeholder={index === 'semantic' ? t('searchMeaning') : lexical ? searchHint : t('searchPick')} aria-label={searchHint}
-								value={text} oninput={(e) => typing(e.currentTarget.value)} onkeydown={key} data-search />
-						{/if}
-					</div>
-					{#if picking}
-						<div class="bg-popover text-popover-foreground absolute top-full right-0 left-0 z-50 mt-1 grid gap-0.5 rounded-md border p-1 shadow-md" role="listbox" data-search-indexes>
-							{#if menuOf.length === 0}<p class="text-muted-foreground px-2 py-1.5 text-sm" data-search-none>{indexes.length === 0 ? t('searchNone') : t('noResults')}</p>{/if}
-							{#each menuOf as i (i.name)}
-								<button type="button" role="option" aria-selected="false" class="hover:bg-accent rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
-									disabled={i.why !== null} title={i.why ?? i.hint} onclick={() => pick(i)} data-search-option={i.name}>
-									<span class="block font-medium">/{i.name}</span><span class="text-muted-foreground block text-xs">{i.why ?? i.hint}</span>
-								</button>
-							{/each}
+				<!-- the search is an icon: its popover opens with the box focused, and says what it searches and which
+				     `/` commands the collection offers -->
+				<Popover.Root bind:open={searchOpen}>
+					<Popover.Trigger>
+						{#snippet child({ props })}
+							<Button {...props} size="icon" variant="ghost" class={searching ? 'bg-accent' : ''} hint={searchHint} aria-label={searchHint} data-search-toggle>
+								<Glyph name="search" />
+							</Button>
+						{/snippet}
+					</Popover.Trigger>
+					<Popover.Content align="end" class="flex w-[min(26rem,calc(100vw-1rem))] flex-col gap-2 p-2" data-search-panel
+						onOpenAutoFocus={(e) => { e.preventDefault(); box?.focus(); }}>
+						<div class="border-input bg-background focus-within:ring-ring/50 flex min-h-8 flex-wrap items-center gap-1 rounded-sm border px-2 shadow-xs focus-within:ring-[3px]">
+							<Glyph name="search" class="text-muted-foreground size-4 shrink-0" />
+							{#if index !== null}
+								<span class="bg-accent inline-flex h-6 shrink-0 items-center gap-1 rounded-full pr-1 pl-2 text-xs" title={chosen?.hint} data-search-index={index}>
+									/{index}<button type="button" class="hover:bg-background grid size-4 place-items-center rounded-full" aria-label={t('searchClear')} onclick={clear}><Glyph name="x" class="size-3" /></button>
+								</span>
+							{/if}
+							{#if chosen?.input !== undefined}
+								<!-- a typed similarity: its input fields' own editors, run on submit through the view's similar read -->
+								<form class="flex flex-1 flex-wrap items-end gap-2 py-1.5" data-similar-input={index}
+									onsubmit={(e) => { e.preventDefault(); if (ready) onProbe?.({ name: index!, via: chosen?.via ?? 'similar', input: { ...values } }); }}>
+									{#each Object.entries(chosen.input) as [f, k] (f)}
+										<div class="grid min-w-24 gap-1 text-xs" data-similar-field={f}><span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
+											<Editor kind={k} value={values[f] ?? null} onChange={(v) => (values = { ...values, [f]: v })} name={f} /></div>
+									{/each}
+									<Button type="submit" size="sm" disabled={!ready} data-similar-run><Glyph name="search" />{t('searchRun')}</Button>
+								</form>
+							{:else}
+								<input bind:this={box} class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm" type="search"
+									placeholder={index === 'semantic' ? t('searchMeaning') : lexical ? `${searchHint}${indexes.length > 0 ? ` · ${t('searchCommands')}` : ''}` : t('searchPick')} aria-label={searchHint}
+									value={text} oninput={(e) => typing(e.currentTarget.value)}
+									onkeydown={(e) => { if (e.key === 'Enter' && !picking) searchOpen = false; else key(e); }} data-search />
+							{/if}
 						</div>
-					{/if}
-				</div>
+						{#if picking}
+							<div class="grid gap-0.5" role="listbox" data-search-indexes>
+								{#if menuOf.length === 0}<p class="text-muted-foreground px-2 py-1.5 text-sm" data-search-none>{indexes.length === 0 ? t('searchNone') : t('noResults')}</p>{/if}
+								{#each menuOf as i (i.name)}
+									<button type="button" role="option" aria-selected="false" class="hover:bg-accent rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
+										disabled={i.why !== null} title={i.why ?? i.hint} onclick={() => pick(i)} data-search-option={i.name}>
+										<span class="block font-medium">/{i.name}</span><span class="text-muted-foreground block text-xs">{i.why ?? i.hint}</span>
+									</button>
+								{/each}
+							</div>
+						{:else if index === null && text === ''}
+							<!-- what this box searches, and the commands `/` offers -->
+							<div class="text-muted-foreground grid gap-1.5 px-1 pb-1 text-xs" data-search-help>
+								{#if lexical && fieldsSearched.length > 0}
+									<p data-search-fields>{t('searchFields').replace('{fields}', fieldsSearched.join(', '))}</p>
+								{/if}
+								{#if indexes.length > 0}
+									<p class="font-medium">{t('searchCommands')}</p>
+									{#each indexes as i (i.name)}
+										<button type="button" class="hover:bg-accent hover:text-foreground -mx-1 flex items-baseline gap-2 rounded-sm px-1 py-0.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
+											disabled={i.why !== null} title={i.why ?? i.hint} onclick={() => pick(i)} data-search-command={i.name}>
+											<span class="text-foreground font-mono">/{i.name}</span><span class="truncate">{i.why ?? i.hint}</span>
+										</button>
+									{/each}
+								{/if}
+							</div>
+						{/if}
+					</Popover.Content>
+				</Popover.Root>
 			{/if}
 			{#if canFilter && view !== undefined}<ViewPopover {view} {catalog} collection={source} {author} {sortable} />{/if}
 			{#if menu}

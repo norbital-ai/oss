@@ -38,7 +38,7 @@ export const UI_ZH: { readonly [k in UiTextKey]: string } = {
 	upToFiles: '最多 {n} 个文件', sizeEach: '每个 {size}', fileCount: '{n} 个文件', download: '下载', preview: '预览', retry: '重试',
 	uploadFailed: '上传失败', countryCode: '国家代码', invalidPhone: '请输入有效的电话号码', currency: '货币',
 	searchMeaning: '按语义搜索', searchPick: '输入 / 选择搜索方式', searchClear: '返回普通搜索', searchRun: '搜索',
-	searchRaw: '{field} 是原始向量：请从页面中运行此搜索', searchView: '此视图无法显示排序结果：请在表格中打开', searchNone: '此处没有搜索索引',
+	searchRaw: '{field} 是原始向量：请从页面中运行此搜索', searchView: '此视图无法显示排序结果：请在表格中打开', searchNone: '此处没有搜索索引', searchFields: '搜索 {fields}', searchCommands: '输入 / 使用命令',
 };
 
 export const SHELL_ZH: { readonly [key: string]: string } = {

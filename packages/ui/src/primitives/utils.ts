@@ -47,7 +47,8 @@ export const UI_TEXT = {
 	sizeEach: '{size} each', fileCount: '{n} files', download: 'Download', preview: 'Preview', retry: 'Retry', uploadFailed: 'Upload failed',
 	countryCode: 'Country code', invalidPhone: 'Enter a valid phone number', currency: 'Currency',
 	searchMeaning: 'Search by meaning', searchPick: 'Type / to choose a search', searchClear: 'Back to plain search', searchRun: 'Search',
-	searchRaw: '{field} is a raw vector: run this search from a page', searchView: 'This view cannot show ranked rows: open it in a table', searchNone: 'No search indexes here'
+	searchRaw: '{field} is a raw vector: run this search from a page', searchView: 'This view cannot show ranked rows: open it in a table', searchNone: 'No search indexes here',
+	searchFields: 'Searches {fields}', searchCommands: 'Type / for a command'
 } as const;
 /** A key of the kit's own chrome strings. */
 export type UiTextKey = keyof typeof UI_TEXT;
