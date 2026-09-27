@@ -199,7 +199,7 @@ describe('G1 scale fixture', () => {
 	it('fails the __verify line with one message per cross-file mistake', () => {
 		const r = check(12, true);
 		expect(r.status).not.toBe(0);
-		expect(r.out.split('\n').filter((l) => l.includes('error TS') && !l.includes('/names.ts('))).toEqual([]);
+		expect(r.out.split('\n').filter((l) => l.includes('error TS') && !/(^|\/)names\.ts\(/.test(l))).toEqual([]);
 		for (const message of [
 			"m0: label names unknown field 'nmae'",
 			"m0: status.edit names unknown field 'a_off'",
