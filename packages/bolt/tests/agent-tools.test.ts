@@ -20,6 +20,24 @@ const ctx = (over: Stub = {}, engine: Stub = {}) => ({
 const tool = (x: ToolContext, name: string) => catalogue(x).find((t) => t.name === name);
 const result = async (x: ToolContext, name: string, input: Json) => (await tool(x, name)!.run(input, 'call')) as { result: Json } | { confirm: true };
 
+describe('tool schemas', () => {
+	it('every parameter declares its type: an untyped one reaches a routed model as { item: … } (Jev, staging)', () => {
+		const untyped: string[] = [];
+		const walk = (schema: Json, at: string): void => {
+			if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return;
+			const s = schema as { [k: string]: Json };
+			if (at !== '' && s['type'] === undefined && s['anyOf'] === undefined && s['enum'] === undefined) untyped.push(at);
+			for (const [k, v] of Object.entries((s['properties'] ?? {}) as { [k: string]: Json })) walk(v, `${at}.${k}`);
+			if (s['items'] !== undefined) walk(s['items'], `${at}[]`);
+		};
+		const workspace = { files: async () => [], read: async () => null, types: async () => null };
+		const tools = [...catalogue(ctx({ inApp: false })), ...catalogue(ctx({ workspace, authority: member() }))];
+		expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(['read', 'act', 'workspace_search']));
+		for (const t of tools) walk(t.input, t.name);
+		expect(untyped).toEqual([]);
+	});
+});
+
 describe('fewer calls for the common paths', () => {
 	it('read takes several reads in one call, each answered in order and refused on its own', async () => {
 		const reads: Json[] = [];

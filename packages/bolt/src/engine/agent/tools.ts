@@ -101,6 +101,11 @@ export type Tool = { name: string; description: string; input: Json; run(input: 
 
 /** How a period field (a `…_range`) is filtered: staging's Norbius spent four calls finding `contains`. */
 const PERIODS = 'A period field (effective_range and the like) takes contains: a date or { today: "" } (in force today), or overlaps / within: { from, to } (to null is open).';
+/**
+ * Every JSON type, for a parameter that takes any value. A parameter with no type at all is not free: a routed model
+ * (Jev, staging) wraps its value as { item: … }, so every such call failed until the schema said what it may be.
+ */
+const ANY = ['object', 'array', 'string', 'number', 'boolean', 'null'];
 const obj = (properties: { [k: string]: Json }, required: string[] = []): Json => ({ type: 'object', properties, required, additionalProperties: false });
 const str = (description: string): Json => ({ type: 'string', description });
 const int = (description: string): Json => ({ type: 'integer', description });
@@ -322,13 +327,13 @@ export function catalogue(x: ToolContext): Tool[] {
 		+ `Text matches with like: "%Nihon%". ${PERIODS} `
 		+ 'similar takes { name, input } for a collection\'s declared similarity search. Long values are clipped unless you name the field in select.'
 		+ (agent && can.queries.size > 0 ? ` A collection query runs as { query, input }: ${[...can.queries].map(([k, q]) => `${k}${q.description ? ` (${q.description})` : ''}`).join('; ')}.` : ''),
-		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: anyObj('fields and relations'), orderBy: { description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
+		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: anyObj('fields and relations'), orderBy: { type: ['string', 'object', 'array'], description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
 			search: str('text search'), limit: { type: 'integer' }, after: str('cursor'),
 			aggregate: obj({ count: { type: 'boolean', description: 'count the rows' }, sum: { type: 'array', items: { type: 'string' }, description: 'numeric fields to total' },
 				avg: { type: 'array', items: { type: 'string' }, description: 'numeric fields to average' }, min: { type: 'array', items: { type: 'string' }, description: 'fields' },
 				max: { type: 'array', items: { type: 'string' }, description: 'fields' },
-				by: { description: 'group by: a field name, { day | week | month | quarter | year: dateField } for time buckets, or a list of these' } }),
-			similar: obj({ name: str('similarity'), input: { description: 'what to match' } }, ['name']), asOf: str('an instant: the record as it was (with id)'),
+				by: { type: ['string', 'object', 'array'], description: 'group by: a field name, { day | week | month | quarter | year: dateField } for time buckets, or a list of these' } }),
+			similar: obj({ name: str('similarity'), input: { type: ANY, description: 'what to match' } }, ['name']), asOf: str('an instant: the record as it was (with id)'),
 			query: str('collection.query to run instead of a read'), input: anyObj('the query input'),
 			reads: { type: 'array', maxItems: 8, items: { type: 'object' }, description: 'several reads in one call, each with these same keys (collection, id, where, aggregate, …); answers their results in order' } }),
 		async (i, id) => {
@@ -360,8 +365,8 @@ export function catalogue(x: ToolContext): Tool[] {
 		+ 'create, update and upsert take one row or an array of rows: many rows (an import from a sheet) are one call and one statement. '
 		+ `Several different writes: actions [{ callable, input }] (at most ${BATCH}) run in order, stopping at the first that does not commit. `
 		+ (can.acts.has(APPROVE) ? `${APPROVE} decides a pending approval request you are an approver of. ` : '') + 'A committed write answers the stored rows.',
-		obj({ callable: str('collection.verb, collection.action, approvals.process or automation.<name>'), input: { description: 'the input the callable accepts' },
-			actions: { type: 'array', maxItems: BATCH, items: obj({ callable: { type: 'string' }, input: {} }, ['callable']), description: 'several writes, in order' } }),
+		obj({ callable: str('collection.verb, collection.action, approvals.process or automation.<name>'), input: { type: ANY, description: 'the input the callable accepts' },
+			actions: { type: 'array', maxItems: BATCH, items: obj({ callable: { type: 'string' }, input: { type: ANY } }, ['callable']), description: 'several writes, in order' } }),
 		async (i, id) => {
 			const writes = writesOf(i);
 			if (writes.length === 0 || writes.length > BATCH) return err(`Give callable, or actions: 1 to ${BATCH} { callable, input }.`);
@@ -495,7 +500,7 @@ export function catalogue(x: ToolContext): Tool[] {
 		+ 'pattern, kind (a TypeScript SyntaxKind, or svelte:Element / svelte:Attribute), regex, inside, has, all, any and not; each match answers its whole '
 		+ 'code. text finds lines containing it (case-insensitive) in any file (.md, .json too). path reads one file as numbered lines, from and to a range. '
 		+ 'Nothing lists the files. paths narrows to path prefixes.',
-		obj({ rule: { description: 'an ast-grep rule: a pattern string or a rule object' }, text: str('text a line contains'), path: str('a file to read'),
+		obj({ rule: { type: ['string', 'object'], description: 'an ast-grep rule: a pattern string or a rule object' }, text: str('text a line contains'), path: str('a file to read'),
 			from: int('first line, default 1'), to: int('last line'), paths: { type: 'array', items: { type: 'string' }, description: 'path prefixes, e.g. src/lib/' },
 			draft: { type: 'boolean', description: 'your Studio draft instead of the release' }, limit: int('at most 100 matches, default 30') }),
 		async (i) => {
