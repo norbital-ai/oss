@@ -5,6 +5,7 @@
 // capabilities name, and host tools (Workspace Studio, browser, personal skills) only on in-app turns of staff members. The catalogue lists only
 // what the actor may invoke; every call runs as the actor, so a refusal is the engine's answer, never the agent's judgement.
 import { randomUUID } from 'node:crypto';
+import { RUN_VIEW_COLUMNS, runView } from '../runs/index.ts';
 import type { Json } from '../../decl/values.ts';
 import { docs } from '../../docs/index.ts';
 import { BoltError, callPort, type Authority, type Bindings, type GeocoderPort, type Outcome } from '../contracts.ts';
@@ -67,6 +68,7 @@ export function jobs() {
 			return { job: got, label: j.label, result: j.result };
 		},
 		pending: () => [...all].map(([id, j]) => ({ job: id, label: j.label, done: j.done })),
+		has: (id: string) => all.has(id),
 	};
 }
 
@@ -106,6 +108,18 @@ const PERIODS = 'A period field (effective_range and the like) takes contains: a
  * (Jev, staging) wraps its value as { item: … }, so every such call failed until the schema said what it may be.
  */
 const ANY = ['object', 'array', 'string', 'number', 'boolean', 'null'];
+/**
+ * A routed model (Jev, staging) sends a list nested in a free-form value as { item: [...] }: that one shape is the list.
+ * ponytail: a record field named `item` given a bare list (`where: { item: [...] }`) reads as the list; name it with an
+ * operator (`{ item: { in: [...] } }`) if such a field ever exists.
+ */
+const unItem = (v: Json): Json => {
+	if (Array.isArray(v)) return v.map(unItem);
+	if (v === null || typeof v !== 'object') return v;
+	const o = v as { readonly [k: string]: Json }, keys = Object.keys(o);
+	if (keys.length === 1 && keys[0] === 'item' && Array.isArray(o['item'])) return (o['item'] as Json[]).map(unItem);
+	return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, unItem(x)]));
+};
 const obj = (properties: { [k: string]: Json }, required: string[] = []): Json => ({ type: 'object', properties, required, additionalProperties: false });
 const str = (description: string): Json => ({ type: 'string', description });
 const int = (description: string): Json => ({ type: 'integer', description });
@@ -277,7 +291,7 @@ export function catalogue(x: ToolContext): Tool[] {
 	const e = x.engine, a = x.authority, can = callablesFor(e, a), agent = x.mode === 'agent';
 	const tools: Tool[] = [];
 	const add = (name: string, description: string, input: Json, run: (i: { [k: string]: Json }, callId: string) => Promise<ToolAnswer>) =>
-		tools.push({ name, description, input, run: (i, id) => guard(() => run((i ?? {}) as { [k: string]: Json }, id)) });
+		tools.push({ name, description, input, run: (i, id) => guard(() => run(unItem(i ?? {}) as { [k: string]: Json }, id)) });
 
 	const runQuery = async (i: { [k: string]: Json }, id: string): Promise<ToolAnswer> => {
 		const name = String(i['query']), spec = can.queries.get(name);
@@ -327,7 +341,7 @@ export function catalogue(x: ToolContext): Tool[] {
 		+ `Text matches with like: "%Nihon%". ${PERIODS} `
 		+ 'similar takes { name, input } for a collection\'s declared similarity search. Long values are clipped unless you name the field in select.'
 		+ (agent && can.queries.size > 0 ? ` A collection query runs as { query, input }: ${[...can.queries].map(([k, q]) => `${k}${q.description ? ` (${q.description})` : ''}`).join('; ')}.` : ''),
-		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: anyObj('fields and relations'), orderBy: { type: ['string', 'object', 'array'], description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
+		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: { type: 'object', additionalProperties: { type: ['boolean', 'object'] }, description: 'fields and relations: { field: true, relation: { field: true } }' }, orderBy: { type: ['string', 'object', 'array'], description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
 			search: str('text search'), limit: { type: 'integer' }, after: str('cursor'),
 			aggregate: obj({ count: { type: 'boolean', description: 'count the rows' }, sum: { type: 'array', items: { type: 'string' }, description: 'numeric fields to total' },
 				avg: { type: 'array', items: { type: 'string' }, description: 'numeric fields to average' }, min: { type: 'array', items: { type: 'string' }, description: 'fields' },
@@ -579,11 +593,26 @@ export function catalogue(x: ToolContext): Tool[] {
 				}
 			});
 	}
-	add('wait', 'Wait for background work (sub-agents, long host calls) to finish: the first of the given jobs (all when none) to settle, or nothing at the bound (at most 600 s).',
+	add('wait', 'Wait for background work to finish: jobs (sub-agents, long host calls) or automation runs (the run id act answered): the first of the given ones (every job when none) to settle, or nothing at the bound (at most 600 s).',
 		obj({ jobs: { type: 'array', items: { type: 'string' } }, seconds: int('at most 600, default 120') }),
 		async (i) => {
 			const ids = Array.isArray(i['jobs']) ? i['jobs'].map(String) : [];
-			const got = await x.jobs.wait(ids, Math.min(Math.max(1, Number(i['seconds'] ?? 120)), 600) * 1000);
+			const ms = Math.min(Math.max(1, Number(i['seconds'] ?? 120)), 600) * 1000;
+			// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
+			// statutory research run for ten minutes and never heard it finish)
+			if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
+				const deadline = Date.now() + ms;
+				for (;;) {
+					const [rows] = await x.engine.db.read([{ text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY($1::text[])`, params: [ids] }]);
+					const views = (rows?.rows ?? []).map((r) => runView(a, r)).filter((v) => v !== null);
+					if (views.length === 0) return err(`No job or automation run ${ids.join(', ')}.`);
+					const ended = views.find((v) => v.status !== 'queued' && v.status !== 'running');
+					if (ended !== undefined) return ok({ settled: ended as unknown as Json });
+					if (Date.now() >= deadline) return ok({ settled: null, running: views as unknown as Json });
+					await new Promise((resolve) => setTimeout(resolve, Math.min(3_000, Math.max(0, deadline - Date.now()))));
+				}
+			}
+			const got = await x.jobs.wait(ids, ms);
 			return ok(got === null ? { settled: null, pending: x.jobs.pending() as unknown as Json } : { settled: got, pending: x.jobs.pending() as unknown as Json });
 		});
 

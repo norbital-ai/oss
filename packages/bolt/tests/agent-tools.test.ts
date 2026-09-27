@@ -111,10 +111,27 @@ describe('read runs queries and act starts automations', () => {
 		expect(tool(x, 'act')!.description).toContain('tasks.pipeline(mode: import, file?: a stored file id)');
 		await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import', file: 'f1' } });
 		expect(started[1]).toMatchObject({ automation: 'tasks.pipeline', input: { mode: 'import', file: 'f1' } });
+		// a list a routed model sent as { item: [...] } is the list (Jev on staging wrapped an import's rows so)
+		await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import', rows: { item: [{ a: 1 }] } } });
+		expect(started[2]).toMatchObject({ input: { rows: [{ a: 1 }] } });
+		started.pop();
 		// the same start while that run is queued or running answers it, and queues nothing
 		active = 'run-1';
 		expect(await result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })).toEqual({ result: { run: 'run-1', alreadyActive: true } });
 		expect(started).toHaveLength(2);
+	});
+});
+
+describe('wait', () => {
+	it('follows an automation run act started until it ends, and says when there is no such run', async () => {
+		let state = 'running';
+		const row = () => ({ id: 'run-1', automation: 'tidy', cause: 'start', state, due_at: 'd', started: 's', progress: null, output: state === 'succeeded' ? { ok: true } : null,
+			error: null, attempts: 1, results: [], input: {}, actor: null, starter: null });
+		const db = { read: async (q: { params: Json[] }[]) => [{ rows: (q[0]!.params[0] as string[]).includes('run-1') ? [row()] : [] }] };
+		const x = ctx({}, { db });
+		setTimeout(() => { state = 'succeeded'; }, 50);
+		expect(await result(x, 'wait', { jobs: ['run-1'], seconds: 10 })).toMatchObject({ result: { settled: { id: 'run-1', status: 'succeeded', result: { ok: true } } } });
+		expect(await result(x, 'wait', { jobs: ['nope'] })).toEqual({ result: { error: 'No job or automation run nope.' } });
 	});
 });
 
