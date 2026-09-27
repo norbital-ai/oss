@@ -80,7 +80,9 @@ describe('read runs queries and act starts automations', () => {
 		const manifest = { collections: { tasks: { read: { fields: 'all' }, queries: { open: { description: 'Open tasks' } } } }, models: { tasks: { fields: {} } }, relationships: {},
 			workspace: { tz: 'UTC' }, agent: { skills: {} }, policies: {}, automations: { tidy: { input: { day: { kind: 'date', optional: true } } } }, pipelines: { tasks: { import: {} } } };
 		const calls = { query: async (q: Stub) => (queried.push(q), { count: 2 }), start: async (s: Stub) => (started.push(s), { kind: 'queued' }) };
-		const x = ctx({ authority: { ...member({ admin: true }), automations: ['tidy'] }, inApp: false }, { manifest, calls });
+		let active: string | null = null;
+		const db = { read: async () => [{ rows: active === null ? [] : [{ id: active }] }] };
+		const x = ctx({ authority: { ...member({ admin: true }), automations: ['tidy'] }, inApp: false }, { manifest, calls, db });
 		expect(tool(x, 'read')!.description).toContain('tasks.open (Open tasks)');
 		expect(await result(x, 'read', { query: 'tasks.open', input: {} })).toEqual({ result: { count: 2 } });
 		expect(queried[0]).toMatchObject({ collection: 'tasks', query: 'open' });
@@ -91,6 +93,10 @@ describe('read runs queries and act starts automations', () => {
 		expect(tool(x, 'act')!.description).toContain('tasks.pipeline(mode: import, file?: a stored file id)');
 		await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import', file: 'f1' } });
 		expect(started[1]).toMatchObject({ automation: 'tasks.pipeline', input: { mode: 'import', file: 'f1' } });
+		// the same start while that run is queued or running answers it, and queues nothing
+		active = 'run-1';
+		expect(await result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })).toEqual({ result: { run: 'run-1', alreadyActive: true } });
+		expect(started).toHaveLength(2);
 	});
 });
 

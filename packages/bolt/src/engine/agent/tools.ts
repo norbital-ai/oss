@@ -99,6 +99,8 @@ export type ToolContext = {
 export type ToolAnswer = { result: Json; bounded?: true } | { confirm: true };
 export type Tool = { name: string; description: string; input: Json; run(input: Json, callId: string): Promise<ToolAnswer> };
 
+/** How a period field (a `…_range`) is filtered: staging's Norbius spent four calls finding `contains`. */
+const PERIODS = 'A period field (effective_range and the like) takes contains: a date or { today: "" } (in force today), or overlaps / within: { from, to } (to null is open).';
 const obj = (properties: { [k: string]: Json }, required: string[] = []): Json => ({ type: 'object', properties, required, additionalProperties: false });
 const str = (description: string): Json => ({ type: 'string', description });
 const int = (description: string): Json => ({ type: 'integer', description });
@@ -204,8 +206,15 @@ export async function perform(x: Pick<ToolContext, 'engine' | 'authority' | 'bin
 			...(typeof d.reason === 'string' ? { reason: d.reason } : {}) }) as unknown as Json;
 	}
 	if (callable.startsWith(`${AUTOMATION}.`)) {
+		const automation = callable.slice(AUTOMATION.length + 1), args = input ?? {};
+		// the same automation over the same input, queued or running, is that run: a model asking again must not queue a
+		// second one (a local probe started one review three times while the first placed 426 photos)
+		const [active] = await x.engine.db.read([{ text: `SELECT id FROM sys_run WHERE automation = $1 AND state IN ('queued', 'running')
+			AND input = $2::jsonb ORDER BY due_at LIMIT 1`, params: [automation, JSON.stringify(args)] }]);
+		const existing = active?.rows[0]?.['id'];
+		if (typeof existing === 'string') return { run: existing, alreadyActive: true };
 		const run = randomUUID();
-		return { run, outcome: await x.engine.calls.start({ automation: callable.slice(AUTOMATION.length + 1), input: input ?? {}, id: run, authority: x.authority, bindings: x.bindings }) as unknown as Json };
+		return { run, outcome: await x.engine.calls.start({ automation, input: args, id: run, authority: x.authority, bindings: x.bindings }) as unknown as Json };
 	}
 	const dot = callable.lastIndexOf('.');
 	const [collection, name] = [callable.slice(0, dot), callable.slice(dot + 1)];
@@ -302,7 +311,7 @@ export function catalogue(x: ToolContext): Tool[] {
 			// what the model may name instead, so its next call differs (staging: a dozen failing reads, then silence)
 			return { result: { error: x.message, fields: [...visible(a, c, Object.keys(e.manifest.models[c]?.fields ?? {}))],
 				relations: Object.keys(e.manifest.relationships).filter((k) => k.startsWith(`${c}.`)).map((k) => k.slice(c.length + 1)),
-				hint: 'A filter is { field: { eq, ne, lt, lte, gt, gte, in, nin, isNull or like: value } }, combined with and, or, not; a date is YYYY-MM-DD. '
+				hint: `A filter is { field: { eq, ne, lt, lte, gt, gte, in, nin, isNull or like: value } }, combined with and, or, not; a date is YYYY-MM-DD. ${PERIODS} `
 					+ 'An aggregate is { count: true, sum: [field], by: field or { month: dateField } }. '
 					+ 'Name only these fields (workspace_type collections.' + c + '.row gives their types). If the data cannot answer the question, say so.' } };
 		}
@@ -310,6 +319,7 @@ export function catalogue(x: ToolContext): Tool[] {
 	if (can.reads.length > 0 || (agent && can.queries.size > 0)) add('read', `Read records you may see. Collections: ${can.reads.join(', ')}. Give an id to read one record, where { id: { in: [...] } } for several, or where/orderBy/limit (default 50, at most 200) to read a list. `
 		+ 'To count, total, average or compare over time, use aggregate: ONE read answers it, grouped in the database; never page through rows to count them. '
 		+ 'Example, leavers per month in 2026: { collection, where: { ended_on: { gte: "2026-01-01", lt: "2027-01-01" } }, aggregate: { count: true, by: { month: "ended_on" } } }. '
+		+ `Text matches with like: "%Nihon%". ${PERIODS} `
 		+ 'similar takes { name, input } for a collection\'s declared similarity search. Long values are clipped unless you name the field in select.'
 		+ (agent && can.queries.size > 0 ? ` A collection query runs as { query, input }: ${[...can.queries].map(([k, q]) => `${k}${q.description ? ` (${q.description})` : ''}`).join('; ')}.` : ''),
 		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: anyObj('fields and relations'), orderBy: { description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
