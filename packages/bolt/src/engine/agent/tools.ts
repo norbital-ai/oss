@@ -372,16 +372,37 @@ export function catalogue(x: ToolContext): Tool[] {
 		const modes = ['import', 'export'].filter((k) => (f as { [k: string]: unknown })[k] !== undefined && (a.admin || (k === 'export' ? can.reads.includes(c) : (a.collections[c]?.create.length ?? 0) > 0)));
 		return modes.length === 0 ? [] : [[`${c}.pipeline` as string, modes.join(' | ')] as const];
 	}));
+	/** An `inputFile`: a JSON file this member's sandbox wrote (a `sys_file` they created), at most 8 MiB. */
+	const inputOfFile = async (fileId: string): Promise<{ input: Json } | { error: string }> => {
+		const member = a.actor.kind === 'member' ? a.actor.id : null;
+		if (e.files === undefined || member === null) return { error: 'This host stores no files; give input.' };
+		const [rows] = await e.db.read([{ text: 'SELECT key, size FROM sys_file WHERE id = $1 AND created_by = $2', params: [fileId, member] }]);
+		const f = rows?.rows[0];
+		if (f === undefined) return { error: `No file ${fileId} of yours; give the id sandbox_run answered for a file in /outputs.` };
+		if (Number(f['size']) > 8 * 1024 * 1024) return { error: 'That file is over 8 MiB; split the input.' };
+		try {
+			return { input: JSON.parse(new TextDecoder().decode(await e.files.get(String(f['key']), 8 * 1024 * 1024, AbortSignal.timeout(30_000)))) as Json };
+		} catch (x) {
+			return { error: `That file is not JSON: ${x instanceof Error ? x.message : String(x)}` };
+		}
+	};
 	const mayStart = (c: string) => c.startsWith(`${AUTOMATION}.`) && (a.automations.includes(c.slice(AUTOMATION.length + 1)) || feeds.has(c.slice(AUTOMATION.length + 1)));
 	if (agent && (can.acts.size > 0 || a.automations.length > 0 || feeds.size > 0)) add('act', `Write: create, update, delete or upsert records, run a collection action, decide an approval, or start an automation. Callables: ${[...can.acts.keys()].join(', ')}. `
 		+ (a.automations.length > 0 || feeds.size > 0 ? `Automations and import or export pipelines start as automation.<name> with their input (an omitted input runs over everything): ${[...a.automations.map(signature), ...[...feeds].map(([n, modes]) => `${n}(mode: ${modes}, file?: a stored file id)`)].join('; ')}. ` : '')
 		+ 'workspace_type collections.<c>.create (or update, an action) gives the exact input; nested relation writes go inside the input as the collection declares them. A file field takes a file reference { id, name, mime } as a message or tool lists it. '
 		+ 'create, update and upsert take one row or an array of rows: many rows (an import from a sheet) are one call and one statement. '
 		+ `Several different writes: actions [{ callable, input }] (at most ${BATCH}) run in order, stopping at the first that does not commit. `
+		+ (e.files !== undefined ? 'An input too large to write out (a month of work days, a sheet of orders): build it with sandbox_run as JSON in /outputs and give that file\'s id as inputFile instead of input. ' : '')
 		+ (can.acts.has(APPROVE) ? `${APPROVE} decides a pending approval request you are an approver of. ` : '') + 'A committed write answers the stored rows.',
 		obj({ callable: str('collection.verb, collection.action, approvals.process or automation.<name>'), input: { type: ANY, description: 'the input the callable accepts' },
+			inputFile: str('instead of input: the id of a JSON file you wrote with sandbox_run; its contents are the input'),
 			actions: { type: 'array', maxItems: BATCH, items: obj({ callable: { type: 'string' }, input: { type: ANY } }, ['callable']), description: 'several writes, in order' } }),
 		async (i, id) => {
+			if (typeof i['inputFile'] === 'string') {
+				const read = await inputOfFile(i['inputFile']);
+				if ('error' in read) return err(read.error);
+				i = { ...i, input: read.input };
+			}
 			const writes = writesOf(i);
 			if (writes.length === 0 || writes.length > BATCH) return err(`Give callable, or actions: 1 to ${BATCH} { callable, input }.`);
 			const denied = writes.find((w) => !can.acts.has(w.callable) && !mayStart(w.callable));

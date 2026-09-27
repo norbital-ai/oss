@@ -115,6 +115,15 @@ describe('read runs queries and act starts automations', () => {
 		await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import', rows: { item: [{ a: 1 }] } } });
 		expect(started[2]).toMatchObject({ input: { rows: [{ a: 1 }] } });
 		started.pop();
+		// an input too large to write out is a JSON file the member's sandbox wrote; another member's file is not theirs
+		const big = { mode: 'import', rows: [{ a: 1 }, { a: 2 }] };
+		const withFiles = ctx({ authority: { ...member({ admin: true }), automations: ['tidy'] }, inApp: false }, { manifest, calls,
+			db: { read: async (q: { params: Json[] }[]) => [{ rows: q[0]!.params[1] === 'ann' && q[0]!.params[0] === 'f-json' ? [{ key: 'k1', size: 20 }] : [] }] },
+			files: { get: async () => new TextEncoder().encode(JSON.stringify(big)) } });
+		await result(withFiles, 'act', { callable: 'automation.tasks.pipeline', inputFile: 'f-json' });
+		expect(started[2]).toMatchObject({ automation: 'tasks.pipeline', input: big });
+		started.pop();
+		expect(await result(withFiles, 'act', { callable: 'automation.tasks.pipeline', inputFile: 'someone-else' })).toMatchObject({ result: { error: expect.stringContaining('No file someone-else of yours') } });
 		// the same start while that run is queued or running answers it, and queues nothing
 		active = 'run-1';
 		expect(await result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })).toEqual({ result: { run: 'run-1', alreadyActive: true } });
