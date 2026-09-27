@@ -14,7 +14,7 @@ const manifest = {
 		audits: { description: 'a', label: 'note', fields: { note: { kind: 'text' } } },
 		jobs: { description: 'j', label: 'title', fields: {
 			title: { kind: 'text' }, hours: { kind: 'decimal', scale: 1 }, notes: { kind: 'text', optional: true }, internal_code: { kind: 'text' },
-			scheduled_on: { kind: 'date' },
+			scheduled_on: { kind: 'date' }, window: { kind: 'period', of: 'date', optional: true },
 			status: { kind: 'state', initial: 'open', states: { open: { to: ['done'] }, done: {} } } } },
 		job_lines: { description: 'l', label: 'item', fields: { item: { kind: 'text' }, qty: { kind: 'int' }, amount: { kind: 'money' } } },
 	},
@@ -27,7 +27,7 @@ const manifest = {
 		members: { read: { fields: 'all' } },
 		job_lines: { read: { fields: 'all' } },
 		// `internal_code` and the `audit` relation are not exposed; `audits` is no collection at all
-		jobs: { read: { fields: ['title', 'hours', 'notes', 'scheduled_on', 'status', 'assignee'], relations: ['assignee', 'lines'] } },
+		jobs: { read: { fields: ['title', 'hours', 'notes', 'scheduled_on', 'window', 'status', 'assignee'], relations: ['assignee', 'lines'] } },
 	},
 	integrations: {}, pipelines: {}, policies: {}, teams: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {},
 	customFields: {}, agent: { skills: {} },
@@ -132,6 +132,15 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			'c0.yes': true, 'c0.field': 'Title', 'c0.op': 'Title · contains', 'c0.value': 'Title · pump' });
 		const r = await describer(port).describe({ collection: 'jobs', text: 'pump jobs by assignee name', authority: caller(), bindings });
 		expect(r).toEqual({ ok: true, where: { title: { like: '%pump%' } }, orderBy: { assignee: { name: 'asc' } } });
+	});
+
+	it('a date period is offered: in force today, or overlapping a span (staging: "started in 2024" fell to created_at)', async () => {
+		const today = system1({ 'c0.yes': true, 'c0.field': 'Window', 'c0.op': 'Window · in force on', 'c0.value': 'Window · today' });
+		expect(await describer(today).describe({ collection: 'jobs', text: 'jobs in force today', authority: caller(), bindings }))
+			.toEqual({ ok: true, where: { window: { contains: { today: '' } } } });
+		const year = system1({ 'c0.yes': true, 'c0.field': 'Window', 'c0.op': 'Window · overlaps', 'c0.value': 'Window · this year' });
+		expect(await describer(year).describe({ collection: 'jobs', text: 'jobs running at any time this year', authority: caller(), bindings }))
+			.toEqual({ ok: true, where: { window: { overlaps: { from: { startOf: 'year' }, to: { startOf: 'year', shift: 1 } } } } });
 	});
 
 	it('a child aggregate condition decodes to the aggregate grammar', async () => {

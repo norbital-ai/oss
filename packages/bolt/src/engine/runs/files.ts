@@ -9,7 +9,7 @@ import { sizeBytes } from '../callables/upload.ts';
 import type { CrossAnswer, CrossCall, EngineManifest, FilesPort, TenantDb } from '../contracts.ts';
 import { LIMITS } from '../contracts.ts';
 import { PATHS } from '../../protocol/wire.ts';
-import { xlsxCells } from '../../shell/data.ts';
+import { xlsxCells, xlsxSheets } from '../agent/xlsx.ts';
 
 export const FILE_METHODS = new Set(['meta', 'get', 'url', 'put', 'image', 'text', 'table', 'sheet']);
 type Row = { id: string; name: string; mime: string; size: number; key: string; sha256: string; field: string };
@@ -101,10 +101,11 @@ export function runFiles(o: { manifest: EngineManifest; db: TenantDb; files: Fil
 					params: [r.id, r.name, r.mime, r.size, r.key, r.sha256, r.field, o.now] });
 				return { ok: true, value: refOf(r) };
 			}
-			// ponytail: an xlsx is its first worksheet, named after the file; read every worksheet when a template needs them
+			// an xlsx: `sheet` is every worksheet by its own name (a scheduling workbook's Settings, Roster, Time entries…),
+			// `table` its first
 			if (call.method !== 'text' && isXlsx(f)) {
-				const rows = xlsxCells(bytes);
-				return { ok: true, value: call.method === 'sheet' ? [{ name: f.name, rows }] : rows.map((r) => r.map((c) => c === null ? '' : String(c))) };
+				if (call.method === 'sheet') return { ok: true, value: xlsxSheets(bytes).map((name, n) => ({ name, rows: xlsxCells(bytes, n) })) as Json };
+				return { ok: true, value: xlsxCells(bytes).map((r) => r.map((c) => c === null ? '' : String(c))) };
 			}
 			if (!TEXT.test(f.mime)) return invalid(`files.${call.method} reads text${call.method === 'text' ? '' : ', CSV or xlsx'}; ${f.name} is ${f.mime}`);
 			let text: string;

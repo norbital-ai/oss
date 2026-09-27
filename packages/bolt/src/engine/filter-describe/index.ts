@@ -67,6 +67,12 @@ function condition(f: Field, op: string, v: V | undefined): Json | undefined {
 	if (op === 'is empty' || op === 'is not empty') return f.put({ isNull: op === 'is empty' });
 	if (v === undefined) return undefined;
 	const one = (o: string, x: Json): Json => f.put({ [o]: x });
+	if (f.kind === 'period') {
+		// ponytail: a preset's upper bound is exclusive and a period's `to` a day, so a span ends one day late at its edge
+		if (op === 'in force on') return 'lit' in v ? one('contains', v.lit) : undefined;
+		if ((op === 'overlaps' || op === 'within') && 'range' in v) return one(op, { from: v.range[0], to: v.range[1] });
+		return undefined;
+	}
 	if ('range' in v) {
 		const [lo, hi] = v.range;
 		return op === 'within' || op === 'is' ? f.put({ gte: lo, lt: hi }) : op === 'before' ? one('lt', lo) : op === 'on or after' ? one('gte', lo) : undefined;
@@ -109,6 +115,12 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			ops = ['within', 'before', 'on or after'];
 			for (const [l, v] of presets(f.kind)) add(l, v);
 			if (f.kind === 'date') for (const d of lit.dates) add(d, { lit: d });
+		} else if (f.kind === 'period' && f.periodOf === 'date') {
+			// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
+			ops = ['in force on', 'overlaps', 'within'];
+			add('today', { lit: { today: '' } });
+			for (const [l, v] of presets('date')) add(l, v);
+			for (const d of lit.dates) add(d, { lit: d });
 		} else return undefined;
 		if (s?.optional === true) ops.push('is empty', 'is not empty');
 		return { ops, values };

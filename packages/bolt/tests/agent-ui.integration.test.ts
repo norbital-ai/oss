@@ -9,7 +9,8 @@ import { conversationId } from '../src/engine/channels/store.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { boltHandler } from '../src/protocol/http.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
-import { conversationList, xlsxCells, xlsxSheets } from '../src/shell/data.ts';
+import { conversationList } from '../src/shell/data.ts';
+import { xlsxCells, xlsxSheets } from '../src/engine/agent/xlsx.ts';
 import { respondSystem1, testWorkspace } from '../src/test/index.ts';
 
 const manifest = {

@@ -1,6 +1,7 @@
 // The agent's tool catalogue over stub ports (rule 58): batched reads and writes, queries through `read`, approval
 // decisions and automation starts through `act`, `workspace_search` over the released source or a draft, and `sandbox_run` (a host capability: in-app staff holding it, its
 // inputs this conversation's own attachments, its outputs stored as the member's files).
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import { catalogue, jobs, type SandboxPort, type ToolContext } from '../src/engine/agent/tools.ts';
@@ -171,5 +172,18 @@ describe('sandbox_run', () => {
 		expect(written[0]).toEqual([got.result.files[0]!.id, 'chart.png', 'image/png', 2, 'k-out', 'h', '2026-09-26T00:00:00.000Z', 'ann']);
 		expect(x.files).toHaveLength(1);
 		expect(await result(x, 'sandbox_run', { command: 'node', files: [{ seq: 9 }] })).toEqual({ result: { error: 'Message 9 has no stored file 0.' } });
+	});
+	it('hands a workbook with one CSV per worksheet beside it, so a program never unzips it', async () => {
+		const book = new Uint8Array(readFileSync(new URL('./fixtures/files/items.xlsx', import.meta.url)));
+		const jobsRun: Parameters<SandboxPort['run']>[0][] = [];
+		const sandbox: SandboxPort = { async run(job) { jobsRun.push(job); return { code: 0, stdout: '', stderr: '', files: [] }; } };
+		const engine = { files: { get: async () => book }, db: { read: async () => [{ rows: [{ key: 'k', name: 'items.xlsx' }] }], write: async () => ({ rows: [] }) } };
+		const x = ctx({ authority: member({ admin: true }), sandbox, row: async () => ({ seq: 1, files: [{ id: 'f', name: 'items.xlsx' }] }) }, engine);
+		await result(x, 'sandbox_run', { command: 'node', files: [{ seq: 1 }] });
+		const names = jobsRun[0]!.files.map((f) => f.name);
+		expect(names[0]).toBe('items.xlsx');
+		const csv = jobsRun[0]!.files.find((f) => /^items\.xlsx\.0\..+\.csv$/.test(f.name));
+		expect(csv, names.join()).toBeDefined();
+		expect(new TextDecoder().decode(csv!.bytes).split('\n')[0]).toContain(',');
 	});
 });

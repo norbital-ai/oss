@@ -73,9 +73,9 @@ describe('ctx.files.text, table, sheet', () => {
 		expect(await read('photo.png', 'image/png', 'text')).toMatchObject({ kind: 'invalid' });
 	});
 
-	it('reads an xlsx as a table of strings and as a typed sheet', async () => {
+	it('reads an xlsx as a table of strings (its first worksheet) and as typed sheets, each by its worksheet name', async () => {
 		const xlsx = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 		expect(await read('items.xlsx', xlsx, 'table')).toEqual([['name', 'qty', 'ok'], ['Bolt, M8', '4', 'true'], ['Nut', '2.5', 'false']]);
-		expect(await read('items.xlsx', xlsx, 'sheet')).toEqual([{ name: 'items.xlsx', rows: [['name', 'qty', 'ok'], ['Bolt, M8', 4, true], ['Nut', 2.5, false]] }]);
+		expect(await read('items.xlsx', xlsx, 'sheet')).toEqual([{ name: 'Stock', rows: [['name', 'qty', 'ok'], ['Bolt, M8', 4, true], ['Nut', 2.5, false]] }]);
 	});
 });
