@@ -13,7 +13,7 @@ import { acceptInvitation, authenticateKey, inspectInvitation } from '../engine/
 import { authenticate, forget, sendCode, sha256, verifyCode, type IdentityHost, type Result } from '../engine/identity/session.ts';
 import type { Envoys } from '../engine/envoys/index.ts';
 import type { Runs } from '../engine/runs/index.ts';
-import { BOLT, HEADERS, PATHS, SW } from '../protocol/wire.ts';
+import { basePath, BOLT, HEADERS, PATHS, SW, under } from '../protocol/wire.ts';
 import { sse } from '../protocol/http.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import { conversationList, events, inbox, runList, settings, settingsOp, type LogLevel, type SecretsPort } from './data.ts';
@@ -25,7 +25,7 @@ const SESSION_S = 7 * 86_400, VISITOR_S = 30 * 86_400;
 /** The service worker's source: it shows a pushed notice and opens its link. */
 const WORKER = `self.addEventListener('push', (e) => {
 	const n = e.data ? e.data.json() : {};
-	e.waitUntil(self.registration.showNotification(n.title || '', { body: n.body || undefined, data: { url: n.url || '/inbox' } }));
+	e.waitUntil(self.registration.showNotification(n.title || '', { body: n.body || undefined, data: { url: new URL((n.url || '/inbox').replace(/^[/]/, ''), self.registration.scope).href } }));
 });
 self.addEventListener('notificationclick', (e) => {
 	e.notification.close();
@@ -119,7 +119,7 @@ export function shellHost(c: ShellHostConfig) {
 	const uuid = c.uuid ?? (() => crypto.randomUUID());
 	const windows = new RateWindows();
 	const cookie = (name: string, value: string, maxAge: number | null) =>
-		`${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
+		`${name}=${encodeURIComponent(value)}; Path=${basePath(h.publicUrl) || '/'}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
 	const publicApp = (name: string | null): string | null =>
 		name !== null && audienceOf(m.apps[name] as AppSpec | undefined) === 'public' ? name : null;
 
@@ -345,7 +345,7 @@ export function shellHost(c: ShellHostConfig) {
 
 	/** `GET /manifest.webmanifest` (§5.10, L-BOLT-295): scope and start_url from the configured public origin, never `Host`. */
 	function webmanifest(): Response {
-		const scope = new URL('/', h.publicUrl).href;
+		const scope = under(h.publicUrl, '/');
 		return new Response(JSON.stringify({ id: c.workspace.handle, name: c.workspace.name, short_name: c.workspace.name, scope, start_url: scope,
 			display: 'standalone', icons: c.workspace.icons ?? [] }), { headers: { 'content-type': 'application/manifest+json' } });
 	}
@@ -357,7 +357,7 @@ export function shellHost(c: ShellHostConfig) {
 		try {
 			if (path === CALLBACK) {
 				const connection = await auth.callback(url.searchParams.get('state') ?? '', url.searchParams.get('code') ?? '', a.actor.id);
-				return new Response(null, { status: 302, headers: { location: new URL(`/?connected=${encodeURIComponent(connection)}`, auth.publicUrl).href } });
+				return new Response(null, { status: 302, headers: { location: under(auth.publicUrl, `/?connected=${encodeURIComponent(connection)}`) } });
 			}
 			const name = /^\/__bolt\/connections\/([\w-]+)\/connect$/.exec(path)?.[1];
 			if (name === undefined || m.connections[name] === undefined) return refused('notFound', 'no such connection', 404);
@@ -378,7 +378,7 @@ export function shellHost(c: ShellHostConfig) {
 				if (path === SW && request.method === 'GET') return new Response(WORKER, { headers: { 'content-type': 'text/javascript', 'service-worker-allowed': '/', 'cache-control': 'no-cache' } });
 				// the engine's default registration link: the shell's page for it
 				if (path === `${BOLT}/envoys/register` && request.method === 'GET')
-					return new Response(null, { status: 303, headers: { location: `/register/${encodeURIComponent(new URL(request.url).searchParams.get('claim') ?? '')}` } });
+					return new Response(null, { status: 303, headers: { location: under(h.publicUrl, `/register/${encodeURIComponent(new URL(request.url).searchParams.get('claim') ?? '')}`) } });
 				let memo: Promise<Caller> | undefined;
 				const x = () => memo ??= caller(request);
 				if (path.startsWith(`${BOLT}/session/`)) return await session(request, path, x);

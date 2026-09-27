@@ -4,6 +4,10 @@ import type { Json } from '../decl/values.ts';
 import type { EngineActor, Outcome } from '../engine/contracts.ts';
 
 export const BOLT = '/__bolt';
+/** A workspace path under its public URL, which may carry a path (`https://host/acme`: one host serving many workspaces). */
+export const under = (publicUrl: string, path: string): string => `${publicUrl.replace(/\/+$/, '')}${path}`;
+/** The path a workspace is served under (`/acme`), `''` at the root; cookies and the service worker are scoped to it. */
+export const basePath = (publicUrl: string): string => new URL(publicUrl).pathname.replace(/\/+$/, '');
 /** The C8 wire table's data endpoints; hooks, the manifest and host ops are routed by their own owners. */
 export const PATHS = {
 	q: `${BOLT}/q`, act: `${BOLT}/act`, live: `${BOLT}/live`, files: `${BOLT}/files/`,

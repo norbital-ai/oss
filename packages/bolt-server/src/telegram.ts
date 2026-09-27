@@ -29,7 +29,7 @@ export function telegram(token: string, channel: string, f: typeof fetch = fetch
 		async activate(publicUrl) {
 			const me = await call('getMe', {});
 			bot = { id: me['id'] as number, username: me['username'] as string };
-			await call('setWebhook', { url: new URL(TELEGRAM_HOOK, publicUrl).href, secret_token: secret, allowed_updates: ['message', 'edited_message'] });
+			await call('setWebhook', { url: `${publicUrl.replace(/\/+$/, '')}${TELEGRAM_HOOK}`, secret_token: secret, allowed_updates: ['message', 'edited_message'] });
 		},
 		async send(_channel, message, signal) {
 			const m = message as { to: string; text: string };

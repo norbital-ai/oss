@@ -5,6 +5,7 @@
 <script lang="ts">
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Button, Input, Label, PinInput, Spinner } from '@norbital-ai/ui';
+	import { based } from './nav.ts';
 	import type { ShellApi } from './runtime.ts';
 
 	/** `handle`: the tenant handle, named under "Signing in to" as staging did; the workspace name when absent. */
@@ -27,7 +28,7 @@
 		const r = sent ? await api.verify(address, code) : await api.sendCode(address);
 		busy = false;
 		if (!r.ok) return void (error = r.error.message);
-		if (sent) location.assign(next);
+		if (sent) location.assign(based(next));
 		else sent = true;
 	}
 </script>

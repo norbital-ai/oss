@@ -86,7 +86,8 @@ mountShell(document.getElementById('bolt'), { manifest: ${key(shell)}, pages: { 
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
 	representations: { ${reps.join(', ')} }, customFields: { ${customFields.join(', ')} } });`;
 	const result = await build({
-		configFile: false, logLevel: 'silent', root, base: '/',
+		// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
+		configFile: false, logLevel: 'silent', root, base: './',
 		// hook:shell — the account menu's versions (L-BOLT-073): the workspace's, this Bolt's and the building Node's
 		define: { __BOLT_BUILD__: key({ workspace: version(join(root, 'package.json')), bolt: version(new URL('../../../package.json', import.meta.url)), node: process.versions.node }) },
 		// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group

@@ -12,7 +12,7 @@
 	import { Button, Drawer, Icon, Sheet, Toaster, cn, openRecord, provideBolt, provideKinds, provideRepresentations, setUiText, type ViewBolt } from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
-	import { isOpenRoute, recordsOf, route, withRecords, type AppSpec, type ShellBoot } from './nav.ts';
+	import { based, isOpenRoute, logical, recordsOf, route, withRecords, type AppSpec, type ShellBoot } from './nav.ts';
 	import { chosenLocale, frameworkText, setLocale, uiTextFor } from './i18n.ts';
 	import type { SyncStatus } from '../client/bolt.ts';
 	import { activeApp, media, navigationModel, NORBIUS } from './model.ts';
@@ -57,7 +57,9 @@
 		theme = x;
 	};
 
-	let url = $state(new URL(location.href));
+	/** The page's URL as the workspace names it: without the base path the host serves it under. */
+	const here = () => logical(location.href) ?? new URL(location.href);
+	let url = $state(here());
 	let boot = $state<ShellBoot | null>(null);
 	// a signed-out caller's boot is refused, but names the workspace the access pages show
 	let guest = $state<ShellBoot['workspace'] | null>(null);
@@ -69,10 +71,10 @@
 	// it pushes the param, closing removes it, a switch of conversation replaces it; a reload, back, forward or a shared
 	// link reopens it on that conversation
 	function agentUrl(value: string | null, replace = false): void {
-		const next = new URL(location.href);
+		const next = here();
 		if (value === null) next.searchParams.delete('agent');
 		else next.searchParams.set('agent', value);
-		if (next.href !== location.href) navigate(next.href, replace);
+		if (next.href !== here().href) navigate(next.href, replace);
 	}
 	agent.subscribe((r) => {
 		if (r === agentRequest) return; // the subscription's first call: the URL decides (below)
@@ -123,17 +125,18 @@
 	const kiosk = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.kiosk === true);
 	const publicApp = $derived(current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined);
 
+	/** `href` is a workspace URL (`/inbox`); the history entry carries the base path. */
 	function navigate(href: string, replace = false): void {
-		const next = new URL(href, location.href);
+		const next = new URL(href, url);
 		if (next.origin !== location.origin) return void (location.href = next.href);
-		history[replace ? 'replaceState' : 'pushState'](null, '', next);
+		history[replace ? 'replaceState' : 'pushState'](null, '', `${based(next.pathname)}${next.search}${next.hash}`);
 		url = next;
 	}
 	// a moved page (`/runs`, `/logs`) replaces its URL with its new home
 	watch(() => current, (r) => { if (r.kind === 'redirect') navigate(r.to, true); });
 	/** Settings → Automations' open run is `?run=<id>`, beside whatever the table keeps in the URL. */
 	function openRun(id: string | null): void {
-		const next = new URL(location.href);
+		const next = here();
 		if (id === null) next.searchParams.delete('run');
 		else next.searchParams.set('run', id);
 		navigate(next.href);
@@ -142,8 +145,8 @@
 	function intercept(event: MouseEvent): void {
 		const a = (event.target as Element | null)?.closest?.('a');
 		if (a === null || a === undefined || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || a.target) return;
-		const next = new URL(a.href, location.href);
-		if (next.origin !== location.origin || next.pathname.startsWith('/__bolt/')) return;
+		const next = logical(a.href);
+		if (next === null || next.pathname.startsWith('/__bolt/')) return;
 		event.preventDefault();
 		navigate(next.href);
 	}
@@ -177,7 +180,7 @@
 
 	async function signOut(): Promise<void> {
 		await api.signOut();
-		location.assign('/sign-in');
+		location.assign(based('/sign-in'));
 	}
 	async function endPreview(): Promise<void> {
 		await api.preview(null);
@@ -233,7 +236,7 @@
 	const closeRecord = (depth: number) => navigate(withRecords(url, depth).href);
 </script>
 
-<svelte:window onpopstate={() => (url = new URL(location.href))} onkeydown={shortcut} />
+<svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
 
 {#snippet content()}
 	{#if current.kind === 'home' && model !== null}
@@ -255,7 +258,7 @@
 					<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
 						<Inline gap="none" class="w-fit max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]">
 							{#each app.pages as p (p.key)}
-								<a href={p.href} aria-current={p.active ? 'page' : undefined}
+								<a href={based(p.href)} aria-current={p.active ? 'page' : undefined}
 									class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm">
 									{#if p.icon}<Icon name={p.icon} class="size-3.5" />{/if}{p.label}
 								</a>
@@ -372,7 +375,7 @@
 					{#if boot.notice !== undefined}
 						<Inline role="status" justify="between" class={['px-4 py-2 text-xs', boot.notice.tone === 'warning' ? 'bg-warning/15' : 'bg-muted']}>
 							<span>{boot.notice.text}</span>
-							{#if boot.notice.href !== undefined}<Button size="sm" variant="outline" href={boot.notice.href}>{boot.notice.action ?? t('Open')}</Button>{/if}
+							{#if boot.notice.href !== undefined}<Button size="sm" variant="outline" href={based(boot.notice.href)}>{boot.notice.action ?? t('Open')}</Button>{/if}
 						</Inline>
 					{/if}
 					{#if boot.preview !== null}

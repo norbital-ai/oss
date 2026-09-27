@@ -22,6 +22,19 @@ export const COOKIES = { session: 'nb_s', preview: 'nb_p', visitor: '__bolt_v' }
 /** The public app a visitor page's requests run under; it only ever narrows the caller to that app's visitor. */
 export const VISITOR_APP = 'Bolt-App';
 export const SHELL = `${BOLT}/shell`;
+/** The browser's base path: the host names it in `<meta name="bolt-base">` when the workspace is served under a path (`/acme`). */
+export const BASE = typeof document === 'undefined' ? '' : document.querySelector('meta[name="bolt-base"]')?.getAttribute('content') ?? '';
+/** The browser URL of a workspace path (`/inbox` → `/acme/inbox`); anything else as it is. */
+export const based = (path: string): string => path.startsWith('/') && !path.startsWith('//') ? `${BASE}${path}` : path;
+/** A browser URL as the workspace names it (`/acme/inbox` → `/inbox`), or `null` for one outside the workspace. */
+export function logical(u: string | URL): URL | null {
+	const x = new URL(u, location.href);
+	if (x.origin !== location.origin) return null;
+	if (BASE === '') return x;
+	if (x.pathname !== BASE && !x.pathname.startsWith(`${BASE}/`)) return null;
+	x.pathname = x.pathname.slice(BASE.length) || '/';
+	return x;
+}
 
 export type ShellBoot = {
 	/** `logo`: the host's first brand icon, the page's organization mark (`bolt.org`). */

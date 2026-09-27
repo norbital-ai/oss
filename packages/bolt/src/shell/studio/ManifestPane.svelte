@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
 	import { Button, Icon, Tabs } from '@norbital-ai/ui';
+	import { based } from '../nav.ts';
 	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { SECTIONS, type Section, type StudioView } from '../studio.ts';
 
@@ -46,7 +47,7 @@
 							</Inline>
 							<Cluster gap="sm" justify="end" shrink={false}>
 								{#if e.href !== undefined}
-									<Button size="sm" variant="outline" class="h-7 px-2 text-micro" href={e.href}><Icon name="lucide:external-link" class="size-3" />{t('Open')}</Button>
+									<Button size="sm" variant="outline" class="h-7 px-2 text-micro" href={based(e.href)}><Icon name="lucide:external-link" class="size-3" />{t('Open')}</Button>
 								{/if}
 								<button type="button" class="shrink-0 text-micro text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" title={e.path} onclick={() => onopen(e.path)}>
 									<Inline as="span" gap="xs"><Icon name="lucide:arrow-right-circle" class="size-3" />{t('Source')}</Inline>

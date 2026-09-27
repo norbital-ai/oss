@@ -7,6 +7,7 @@
 	import { watch } from 'runed';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Table } from '@norbital-ai/ui';
+	import { based } from './nav.ts';
 	import SystemPage from './SystemPage.svelte';
 	import type { AgentRow } from '../protocol/wire.ts';
 	import type { ShellApi, ShellBolt } from './runtime.ts';
@@ -31,7 +32,7 @@
 	const when = (at: unknown) => typeof at === 'string' ? new Date(at).toLocaleString() : '';
 	/** A row opens its conversation: a URL change the shell follows, as `openRecord`'s. */
 	function open(c: string): void {
-		history.pushState(history.state, '', `/conversations/${encodeURIComponent(c)}`);
+		history.pushState(history.state, '', based(`/conversations/${encodeURIComponent(c)}`));
 		dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
 	}
 </script>
@@ -56,7 +57,7 @@
 {:else}
 <Stack gap="md" class="p-6">
 		<Inline justify="between">
-			<a href="/conversations" class="text-sm hover:underline">← {t('Conversations')}</a>
+			<a href={based('/conversations')} class="text-sm hover:underline">← {t('Conversations')}</a>
 			<span class="text-xs text-muted-foreground" data-read-only>{t('The envoy answers on the channel.')}</span>
 		</Inline>
 		<ol class="space-y-2 text-sm" aria-live="polite">

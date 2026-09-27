@@ -4,7 +4,7 @@
 // popover: Settings (People, Organization, Audit, Automations), System (Channels, Integrations, Environment secrets,
 // Workspace Studio, whose runtime log is the workspace log) and Kiosks (every `kiosk: true` page the viewer may open — device surfaces, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
-import type { NavNode, NavPage, ShellBoot } from './nav.ts';
+import { based, type NavNode, type NavPage, type ShellBoot } from './nav.ts';
 
 /** Norbius's row is no page: the shell opens the agent when the navigator is handed this href. */
 export const NORBIUS = '#norbius';
@@ -27,7 +27,7 @@ export interface NavModel {
 const under = (path: string, href: string) => path === href || path.startsWith(`${href}/`) || path.startsWith(`${href}?`);
 
 /** A workspace media path (`app-media/x.webp`, relative to the workspace's `assets/`) as the URL it is served at; absolute ones pass. */
-export const media = (src: string): string => /^([a-z][a-z0-9+.-]*:|\/)/i.test(src) ? src : `/assets/${src}`;
+export const media = (src: string): string => /^([a-z][a-z0-9+.-]*:|\/)/i.test(src) ? src : based(`/assets/${src}`);
 
 function item(n: NavNode, path: string, t: Translate): NavItem {
 	const children = n.kind === 'group' ? n.children.map((c) => item(c, path, t)) : [];

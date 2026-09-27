@@ -89,10 +89,11 @@ const boot = async (j: Jar, app?: string) => {
 	return { status: r.status, boot: r.body?.value as ShellBoot };
 };
 
+let identity: IdentityHost;
 beforeAll(async () => {
 	t = await testWorkspace({ manifest, seed: { openings: [{ id: OPEN, title: 'Engineer', status: 'open' }] } });
 	const mail: TransportPort = { send: async (_c, msg) => { mailbox.push(msg as { to: string; text: string }); return { providerId: 'x' }; }, subscribe: () => () => {} };
-	const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, devSink: true, publicUrl: ORIGIN };
+	identity = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, devSink: true, publicUrl: ORIGIN };
 	const authorities = new Authorities(manifest, 'test');
 	const shell = shellHost({ manifest, identity, authorities, workspace: { name: 'Acme', handle: 'acme' }, ip: () => '203.0.113.9', turnstile: devTurnstile, runs: t.engine.runs!, studio, ai: false,
 		apex: 'https://example.test/pick', organization: { write: async (_auth, b) => { branded.push(b); } } });
@@ -263,6 +264,14 @@ describe('shell host (§5.10)', () => {
 	it('serves the PWA manifest from the configured origin, never the Host header', async () => {
 		const res = await handle(new Request('https://evil.example/manifest.webmanifest', { headers: { host: 'evil.example' } }));
 		expect(await res.json()).toMatchObject({ id: 'acme', name: 'Acme', scope: `${ORIGIN}/`, start_url: `${ORIGIN}/` });
+	});
+
+	it('serves a workspace under a path (one host, many workspaces): scope, cookies and links carry it', async () => {
+		const under = shellHost({ manifest, identity: { ...identity, publicUrl: `${ORIGIN}/acme` }, authorities: new Authorities(manifest, 'test'),
+			workspace: { name: 'Acme', handle: 'acme' }, ip: () => '203.0.113.9', ai: false });
+		expect(await (await under.handle(new Request(`${ORIGIN}/manifest.webmanifest`)))!.json()).toMatchObject({ scope: `${ORIGIN}/acme/`, start_url: `${ORIGIN}/acme/` });
+		expect((await under.handle(new Request(`${ORIGIN}/__bolt/session/signout`, { method: 'POST' })))!.headers.get('set-cookie')).toContain('; Path=/acme;');
+		expect((await under.handle(new Request(`${ORIGIN}/__bolt/envoys/register?claim=c1`)))!.headers.get('location')).toBe(`${ORIGIN}/acme/register/c1`);
 	});
 
 	it('signs out: the session row goes and the cookie is cleared', async () => {

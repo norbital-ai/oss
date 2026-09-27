@@ -12,6 +12,7 @@
 	import { Frame, Imposter, Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { SyncStatus } from '../client/bolt.ts';
 	import { NORBIUS, type NavItem, type NavModel, type Translate } from './model.ts';
+	import { based } from './nav.ts';
 	import { LANGUAGE, LOCALES } from './i18n.ts';
 	import { THEMES, type Theme } from './theme.ts';
 
@@ -94,7 +95,7 @@
 	<li class="relative">
 		{#snippet link({ props }: { props: Record<string, unknown> })}
 			{@const disclosure = expanded && item.children !== undefined}
-			<svelte:element this={disclosure ? 'button' : 'a'} {...props} type={disclosure ? 'button' : undefined} href={disclosure ? undefined : item.href}
+			<svelte:element this={disclosure ? 'button' : 'a'} {...props} type={disclosure ? 'button' : undefined} href={disclosure ? undefined : based(item.href)}
 				aria-current={!disclosure && item.active ? 'page' : undefined} aria-expanded={disclosure ? open[item.key] === true : undefined}
 				aria-haspopup={item.href === NORBIUS ? 'dialog' : undefined} data-active={item.active ? 'true' : undefined} data-testid={item.href === NORBIUS ? 'workspace-agent-trigger' : undefined}
 				class={cn(ROW, expanded ? 'h-7 p-2 pr-7' : 'size-8 justify-center p-1')}
@@ -124,7 +125,7 @@
 
 {#snippet sub(item: NavItem)}
 	<li>
-		<a href={item.href} aria-current={item.active ? 'page' : undefined} data-active={item.active ? 'true' : undefined} class={SUB}
+		<a href={based(item.href)} aria-current={item.active ? 'page' : undefined} data-active={item.active ? 'true' : undefined} class={SUB}
 			onclick={(e) => { moreOpen = false; follow(e, item.href); }}>
 			<Frame as="span" ratio="square" shrink={false} class="size-6"><Icon name={item.icon ?? 'lucide:file'} class="size-3.5" /></Frame>
 			<span class={LABEL}>{item.label}</span>

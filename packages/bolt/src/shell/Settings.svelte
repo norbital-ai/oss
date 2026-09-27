@@ -12,7 +12,7 @@
 	import { Button, Checkbox, Combobox, Dialog, Input, Table, Tabs } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
 	import type { Settings } from './data.ts';
-	import type { SettingsTab, ShellBoot } from './nav.ts';
+	import { based, type SettingsTab, type ShellBoot } from './nav.ts';
 	import type { ShellApi, ShellBolt } from './runtime.ts';
 	import type { Act } from './Acts.svelte';
 	import Acts from './Acts.svelte';
@@ -48,7 +48,7 @@
 	/** Rule 39: a member id, or `{ team }`. */
 	async function preview(target: string | { team: string }): Promise<void> {
 		const r = await api.preview(target);
-		if (r.ok) location.assign('/');
+		if (r.ok) location.assign(based('/'));
 		else error = r.error.message;
 	}
 	// `access.explain` (L-BOLT-234): what a member or team holds, in a sheet

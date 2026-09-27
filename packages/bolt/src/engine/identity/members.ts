@@ -2,6 +2,7 @@
 // teams and assignments, API keys. Every verb is admin-only, never grantable, and one write statement.
 import { timingSafeEqual } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
+import { under } from '../../protocol/wire.ts';
 import { BoltError, callPort, DbError, LIMITS, type Authority, type EngineManifest, type Lock, type MembershipPort } from '../contracts.ts';
 import {
 	acceptPieces, announceMembership, by, MEMBERSHIP, historyOf, IMAGES, jsonb, newId, ok, projection, refuse, requireAdmin, sha256, stmt, type IdentityHost, type Invitation, type Result
@@ -40,7 +41,7 @@ VALUES (${s.p(id)}, ${s.p(input.email.trim())}, ${s.p(input.team ?? null)}, ${s.
 	${s.p(jsonb(input.party))}::jsonb, ${s.p(auth.actor.kind === 'member' ? auth.actor.id : null)}, ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz) ${IMAGES}),
 ${historyOf(s, 'sys_invitation', 'ins', now, by(auth))} SELECT 1`);
 	if (!r.ok) return r;
-	const link = new URL(`/invite/${id}`, h.publicUrl).href;
+	const link = under(h.publicUrl, `/invite/${id}`);
 	await callPort('email', h.mail, LIMITS.callMs.other, (mail, signal) =>
 		mail.send('email', { to: input.email, subject: 'You are invited to a workspace', text: `Accept your invitation: ${link}`, link }, signal));
 	return ok({ id });
@@ -97,7 +98,7 @@ export async function resendInvitation(h: IdentityHost, auth: Authority, id: str
 WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${historyOf(s, 'sys_invitation', 'u', now, by(auth))} SELECT n->>'email' AS email FROM u`, undefined,
 		(row) => row === undefined ? refuse('notFound', 'No open invitation.') : ok(String(row['email'])));
 	if (!r.ok) return r;
-	const link = new URL(`/invite/${id}`, h.publicUrl).href;
+	const link = under(h.publicUrl, `/invite/${id}`);
 	await callPort('email', h.mail, LIMITS.callMs.other, (mail, signal) =>
 		mail.send('email', { to: r.value, subject: 'You are invited to a workspace', text: `Accept your invitation: ${link}`, link }, signal));
 	return ok(null);

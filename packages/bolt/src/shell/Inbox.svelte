@@ -13,6 +13,7 @@
 	import DetailSheet from './DetailSheet.svelte';
 	import SystemPage from './SystemPage.svelte';
 	import { SW } from '../protocol/wire.ts';
+	import { based } from './nav.ts';
 
 	/** `onCount`: what waits on the viewer (decidable requests, unread notices) as it changes: the sidebar's badge. */
 	let { api, bolt, t, push = null, onCount }: { api: ShellApi; bolt: ShellBolt; t: (key: string) => string; push?: string | null; onCount?: (n: number) => void } = $props();
@@ -69,7 +70,7 @@
 	let pushed = $state<'off' | 'on' | 'denied'>('off');
 	async function enablePush(key: string): Promise<void> {
 		try {
-			const reg = await navigator.serviceWorker.register(SW, { scope: '/' });
+			const reg = await navigator.serviceWorker.register(based(SW), { scope: based('/') });
 			const raw = atob(key.replace(/-/g, '+').replace(/_/g, '/'));
 			const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
 			const r = await api.push(sub.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } });

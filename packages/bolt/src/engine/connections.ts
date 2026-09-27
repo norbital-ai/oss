@@ -10,6 +10,7 @@ import { decodeInput, type InputSpec } from './callables/decode.ts';
 import type { CrossAnswer, CrossCall, EngineManifest } from './contracts.ts';
 import type { HttpPort, HttpRequest } from './integrations/runner.ts';
 import { publicFetch } from './net.ts';
+import { under } from '../protocol/wire.ts';
 import type { Secrets } from './secrets.ts';
 import type { Json } from '../decl/values.ts';
 
@@ -35,7 +36,7 @@ export function oauth(m: EngineManifest, env: (name: string) => string | undefin
 	f: typeof fetch = fetch, now: () => number = Date.now) {
 	const cache = new Map<string, Stored>();
 	const pending = new Map<string, { connection: string; owner: string; member: string; verifier: string; at: number }>();
-	const redirect = new URL(CALLBACK, publicUrl).href;
+	const redirect = under(publicUrl, CALLBACK);
 	const specOf = (connection: string): OAuth2 => {
 		const s = (m.connections[connection] as { auth?: { oauth2?: OAuth2 } } | undefined)?.auth?.oauth2;
 		if (s === undefined) throw new Error(`connection '${connection}' is not OAuth2`);

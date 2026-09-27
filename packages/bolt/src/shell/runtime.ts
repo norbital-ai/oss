@@ -8,7 +8,7 @@ import { createBolt, type BoltConfig } from '../client/bolt.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
 import type { Claim, Redemption } from '../engine/envoys/registration.ts';
 import { BOLT, HEADERS, PATHS, uuidv7, type AgentRow, type PushBody } from '../protocol/wire.ts';
-import { href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
+import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
 /** `workspace`: on a signed-out boot, what the access pages show (name, logo, environment). */
 export type ShellError = { code: string; message: string; workspace?: ShellBoot['workspace'] };
@@ -18,7 +18,7 @@ export type Answer<T> = { ok: true; value: T } | { ok: false; error: ShellError;
 export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 	async function call<T>(method: 'GET' | 'POST', path: string, body?: Json): Promise<Answer<T>> {
 		try {
-			const res = await f(path, { method, credentials: 'same-origin', ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) });
+			const res = await f(based(path), { method, credentials: 'same-origin', ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) });
 			if (res.status === 204) return { ok: true, value: null as T };
 			const b = await res.json() as { value?: T; error?: ShellError };
 			if (!res.ok) return { ok: false, error: b.error ?? { code: 'internal', message: 'The request failed.' }, status: res.status };
@@ -31,7 +31,7 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 	/** One `/act` of the agent's callables: the outcome (a refusal included), or the wire error. */
 	async function act(callable: string, input: Json): Promise<Answer<Outcome>> {
 		try {
-			const res = await f(PATHS.act, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', [HEADERS.key]: uuidv7() },
+			const res = await f(based(PATHS.act), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', [HEADERS.key]: uuidv7() },
 				body: JSON.stringify({ callable, input, issuedAt: new Date().toISOString() }) });
 			const b = await res.json() as { outcome?: Outcome; error?: ShellError };
 			return b.outcome !== undefined ? { ok: true, value: b.outcome } : { ok: false, error: b.error ?? { code: 'internal', message: 'The request failed.' }, status: res.status };
@@ -79,7 +79,7 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 			/** hook:attachments — one panel attachment to `/__bolt/files/sys_message.files`: its `FileRef`, or the refusal. */
 			async upload(file: File): Promise<Answer<{ id: string; name: string; mime: string; bytes: number }>> {
 				try {
-					const res = await f(`${PATHS.files}sys_message.files`, { method: 'PUT', credentials: 'same-origin', body: file, headers: { [HEADERS.key]: crypto.randomUUID(),
+					const res = await f(based(`${PATHS.files}sys_message.files`), { method: 'PUT', credentials: 'same-origin', body: file, headers: { [HEADERS.key]: crypto.randomUUID(),
 						'content-type': file.type || 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}` } });
 					const b = await res.json() as { id: string; name: string; mime: string; bytes: number } | { error: ShellError };
 					return 'error' in b ? { ok: false, error: b.error, status: res.status } : { ok: true, value: b };
@@ -134,7 +134,7 @@ export type ChallengeQueue = ReturnType<typeof challengeQueue>;
 export function visitorFetch(app: string, challenge: ChallengeQueue | null, f: typeof fetch = (i, o) => fetch(i, o)): typeof fetch {
 	return async (input, init = {}) => {
 		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-		const path = new URL(url, 'http://x').pathname;
+		const path = new URL(url, 'http://x').pathname.slice(BASE.length);
 		if (!path.startsWith(`${BOLT}/`)) return f(input, init);
 		const headers = new Headers(init.headers);
 		headers.set(VISITOR_APP, app);
@@ -226,13 +226,13 @@ export function shellBolt(boot: ShellBoot, options: { messages?: BoltConfig['mes
 	fetch?: typeof fetch; openStream?: BoltConfig['openStream']; models?: () => readonly string[] } = {}) {
 	const visitor = boot.visitor;
 	const f = visitor === null ? options.fetch : visitorFetch(visitor.app, visitor.siteKey === undefined ? null : options.challenge ?? null, options.fetch);
-	const client = createBolt({ actor: boot.actor as Json, locale: boot.workspace.locale, catalog: boot.catalog, /* hook:query (bolt.decode) */ describe: boot.visitor === null && boot.aiUnconfigured !== true, /* hook:decisions (rule 16a) */ ...(options.messages === undefined ? {} : { messages: options.messages }),
+	const client = createBolt({ base: BASE, actor: boot.actor as Json, locale: boot.workspace.locale, catalog: boot.catalog, /* hook:query (bolt.decode) */ describe: boot.visitor === null && boot.aiUnconfigured !== true, /* hook:decisions (rule 16a) */ ...(options.messages === undefined ? {} : { messages: options.messages }),
 		...(f === undefined ? {} : { fetch: f }), ...(options.openStream === undefined ? {} : { openStream: options.openStream }), ...(boot.contract === undefined ? {} : { contract: boot.contract }) });
 	const agent = options.agent ?? agentPanel();
 	const api = shellApi(options.fetch);
 	return Object.assign(client, {
 		/** The path of an app page, optionally opening a record: `bolt.href(app, page?, record?)`. */
-		href,
+		href: (...a: Parameters<typeof href>) => based(href(...a)),
 		/** The page's organization: the workspace name and its brand logo (the host's first icon), or `null`. */
 		org: { name: boot.workspace.name, logo: boot.workspace.logo ?? null },
 		/** `bolt.runs(automation, …)`, and `bolt.runs.stop(id)`: the run as stopped, rejecting when it is not found or not the caller's to stop. */ // hook:runtime

@@ -23,7 +23,7 @@
 	import WorkbenchToolbar from './studio/WorkbenchToolbar.svelte';
 	import { foldLog, foldPhase, type PhaseState, reviewAge, reviewFreshness, reviewNextOwner, settleDrafts, type StudioFrame, type StudioMergeRequest,
 		type StudioOp, type StudioPhase, type StudioView } from './studio.ts';
-	import { SHELL, type StudioTab } from './nav.ts';
+	import { based, SHELL, type StudioTab } from './nav.ts';
 	import type { ShellApi } from './runtime.ts';
 
 	// ponytail: `admin` defaults to true until the shell passes `boot.admin`; the host refuses a non-administrator's admin ops either way
@@ -56,7 +56,7 @@
 	void load();
 	onMount(() => {
 		if (typeof EventSource === 'undefined') return;
-		const events = new EventSource(`${SHELL}/studio/events`, { withCredentials: true });
+		const events = new EventSource(based(`${SHELL}/studio/events`), { withCredentials: true });
 		events.onmessage = (e: MessageEvent<string>) => {
 			const frame = JSON.parse(e.data) as StudioFrame;
 			if (view === null) return;

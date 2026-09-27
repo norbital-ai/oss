@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
 	import { Icon } from '@norbital-ai/ui';
+	import { based } from './nav.ts';
 	import { Center, Frame, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { NavItem, NavModel } from './model.ts';
 
@@ -15,7 +16,7 @@
 </script>
 
 {#snippet card(app: NavItem)}
-	<a href={app.href} onclick={(e) => { e.preventDefault(); onNavigate(app.href); }}
+	<a href={based(app.href)} onclick={(e) => { e.preventDefault(); onNavigate(app.href); }}
 		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
 		<Stack gap="none">
 			<Frame ratio="banner" shrink={false} class="bg-linear-to-br from-muted via-background to-brand/10">

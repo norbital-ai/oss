@@ -5,6 +5,7 @@
 <script lang="ts">
 	import { Stack } from '@norbital-ai/ui/layout';
 	import { Button } from '@norbital-ai/ui';
+	import { based } from './nav.ts';
 	import type { ShellApi } from './runtime.ts';
 	import SignIn from './SignIn.svelte';
 
@@ -15,7 +16,7 @@
 
 	async function accept(): Promise<void> {
 		const r = await api.accept(id);
-		if (r.ok) location.assign('/');
+		if (r.ok) location.assign(based('/'));
 		else error = r.error.message;
 	}
 </script>
