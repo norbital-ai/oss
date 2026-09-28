@@ -73,6 +73,19 @@ function sixDigits(): string {
 	}
 }
 
+/** The sign-in mail's HTML body: tables and inline styles only, so every client renders it. `code` is our own six digits. */
+const codeEmail = (code: string) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>Your sign-in code</title></head>
+<body style="margin:0;padding:0;background:#f4f4f5;color:#18181b">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5"><tr><td align="center" style="padding:32px 16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#ffffff;border:1px solid #e4e4e7;border-radius:8px">
+<tr><td style="padding:32px 32px 0;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;color:#18181b">Norbital</td></tr>
+<tr><td style="padding:24px 32px 8px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:22px;color:#3f3f46">Your sign-in code is:</td></tr>
+<tr><td style="padding:8px 32px;font-family:'SFMono-Regular',Menlo,Consolas,'Courier New',monospace;font-size:36px;font-weight:700;letter-spacing:8px;color:#18181b">${code}</td></tr>
+<tr><td style="padding:8px 32px 32px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:#52525b">It expires in 10 minutes. If you did not ask for this code, you can ignore this email.</td></tr>
+</table></td></tr></table></body></html>`;
+
 /**
  * Rule 38a(a–c): persists the challenge (replacing any earlier one) and only then hands the code to the mail port,
  * whether or not the address is a member. A mail refusal is returned; a fresh `sendCode` is allowed at once.
@@ -93,7 +106,7 @@ ch AS (INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
 SELECT count(*)::int AS saved FROM ch` });
 	if (saved.rows[0]!.saved !== 1) return refuse('rateLimited', 'Too many attempts. Try again later.', retryAfter(h));
 	const sent = await callPort('email', h.mail, LIMITS.callMs.other, (m, signal) =>
-		m.send('email', { to: email, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in 10 minutes.` }, signal));
+		m.send('email', { to: email, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in 10 minutes.`, html: codeEmail(code) }, signal));
 	return 'kind' in sent ? refuse(sent.kind === 'unavailable' ? 'unavailable' : sent.kind === 'timeout' ? 'timeout' : 'upstream', 'The code could not be sent.') : ok(null);
 }
 

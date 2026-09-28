@@ -42,8 +42,8 @@ const m = {
 let pg: PGlite;
 let db: TenantDb;
 let clock = Date.parse('2026-09-25T00:00:00Z');
-const outbox: { to: string; text: string }[] = [];
-const mail: TransportPort = { send: async (_c, msg) => { outbox.push(msg as { to: string; text: string }); return { providerId: 'x' }; }, subscribe: () => () => {} };
+const outbox: { to: string; text: string; html?: string }[] = [];
+const mail: TransportPort = { send: async (_c, msg) => { outbox.push(msg as { to: string; text: string; html?: string }); return { providerId: 'x' }; }, subscribe: () => () => {} };
 let h: IdentityHost;
 const lastCode = () => /(\d{6})/.exec(outbox.at(-1)!.text)![1]!;
 const one = async (text: string, ...params: Json[]) => (await db.read([{ text, params }]))[0]!.rows;
@@ -92,6 +92,7 @@ describe('engine/identity (§5.11, rules 37–39)', () => {
 		const failing: TransportPort = { send: () => Promise.reject(new Error('smtp down')), subscribe: () => () => {} };
 		expect(await sendCode({ ...h, mail: failing }, 'mailfail@acme.example', '9.9.9.1')).toMatchObject({ ok: false, code: 'upstream' });
 		await sendCode({ ...h, devSink: true }, 'boss@acme.example', '9.9.9.1');
+		expect(outbox.at(-1)).toMatchObject({ text: expect.stringContaining('123456'), html: expect.stringContaining('>123456<') });
 		expect((await verifyCode(h, 'boss@acme.example', '123456', '9.9.9.1')).ok).toBe(true);
 	});
 
