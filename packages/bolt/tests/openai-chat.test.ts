@@ -35,6 +35,12 @@ describe('openAiChat', () => {
 		expect(r).toEqual({ content: '', toolCalls: [{ id: 't1', name: 'read_messages', input: { limit: 3 } }], finish: 'tool', usage: { input: 11, output: 2 } });
 	});
 
+	it('a tool call with malformed arguments comes back marked invalid, not thrown (the turn answers it and goes on)', async () => {
+		const { f } = capture(() => Response.json({ choices: [{ message: { content: '', tool_calls: [{ id: 't1', function: { name: 'read_collection', arguments: '{"a":1,}' } }] } }], usage: {} }));
+		const r = await openAiChat({ endpoint: 'https://llm.test/v1', models: { default: 'gpt-x' } }, f)({ model: 'default', messages: [{ role: 'user', content: { text: 'hi' } }] }, AbortSignal.timeout(1000));
+		expect(r.toolCalls).toEqual([{ id: 't1', name: 'read_collection', input: {}, invalid: expect.stringMatching(/JSON/) }]);
+	});
+
 	it('streams: text deltas reach onDelta as they arrive, tool calls assemble from their pieces, usage and cost from the last chunk', async () => {
 		const sse = [': OPENROUTER PROCESSING', 'data: {"id":"gen-1","choices":[{"delta":{"content":"Mar"}}]}', 'data: {"id":"gen-1","choices":[{"delta":{"content":"ch"}}]}',
 			'data: {"id":"gen-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"read_collection","arguments":"{\\"aggr"}}]}}]}',

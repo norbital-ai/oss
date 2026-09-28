@@ -110,7 +110,11 @@ export function openAiChat(config: OpenAiChatConfig, f: typeof fetch = fetch): A
 		if (!res.ok) throw Object.assign(new Error(`the model provider refused the request (HTTP ${res.status}): ${(await res.text()).slice(0, 500)}`), { status: res.status });
 		const { text, reasoning, id, usage, calls } = await read(res, onDelta, signal, onProgress);
 		if (typeof usage.cost === 'number' && id !== '') await config.meter?.(usage.cost, id);
-		const toolCalls = calls.map((c) => ({ id: c.id, name: c.name, input: (c.args === '' ? {} : JSON.parse(c.args)) as Json }));
+		// a model can stream malformed arguments (staging: "Expected double-quoted property name"); the call answers it, the turn goes on
+		const toolCalls = calls.map((c) => {
+			try { return { id: c.id, name: c.name, input: (c.args === '' ? {} : JSON.parse(c.args)) as Json }; }
+			catch (e) { return { id: c.id, name: c.name, input: {}, invalid: e instanceof Error ? e.message : String(e) }; }
+		});
 		let content: Json = text;
 		if (r.output !== undefined && toolCalls.length === 0) try { content = JSON.parse(text) as Json; } catch { /* the caller reads the text */ }
 		return { content, toolCalls, finish: toolCalls.length > 0 ? 'tool' : 'stop', ...(reasoning === '' ? {} : { reasoning }),

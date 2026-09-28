@@ -457,7 +457,7 @@ export function agents(config: AgentConfig) {
 				const text: string = (cut?.text ?? '') + textOf(r.content);
 				// L-BOLT-412: reasoning is an ordinary part of the reply, stored verbatim beside its text and sent back with it
 				const reasoning: string = (cut?.reasoning ?? '') + (r.reasoning ?? '');
-				const calls: ToolCall[] = r.toolCalls.map((c) => ({ id: c.id, name: c.name, input: c.input }));
+				const calls: ToolCall[] = r.toolCalls.map((c) => ({ id: c.id, name: c.name, input: c.input, ...(c.invalid === undefined ? {} : { invalid: c.invalid }) }));
 				// a reply while background work runs is interim: the turn collects the work and goes on (today's child report-back)
 				const collecting = r.finish !== 'cut' && calls.length === 0 && work.pending().length > 0;
 				const done = r.finish !== 'cut' && calls.length === 0 && !collecting;
@@ -513,6 +513,7 @@ export function agents(config: AgentConfig) {
 					// the same call that already failed this often is not run again
 					const skip = tool === undefined || (failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure;
 					const answer = tool === undefined ? { result: { error: `No tool '${call.name}'.` } as Json }
+						: call.invalid !== undefined ? { result: { error: `Not run: the arguments were not valid JSON (${call.invalid}). Call ${call.name} again with valid JSON arguments.` } as Json }
 						: skip ? { result: { error: 'Not run: this exact call already failed several times this turn.' } as Json }
 						: await tool.run(call.input, call.id);
 					if ('confirm' in answer && options.child === true) {

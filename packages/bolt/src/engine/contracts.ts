@@ -328,7 +328,7 @@ export type AiMessage = { role: 'user' | 'assistant' | 'tool'; content: Json };
 export type AiRequest = { model: string; system?: string; messages: readonly AiMessage[]; tools?: readonly { name: string; description: string; input: Json }[];
 	output?: Json; files?: readonly { mime: string; bytes: Uint8Array }[]; continuation?: string };
 /** `cut`: the 60 s wall ended a stream; `continuation` resumes it as the next step (rule 63). */
-export type AiResponse = { content: Json; toolCalls: readonly { id: string; name: string; input: Json }[];
+export type AiResponse = { content: Json; toolCalls: readonly { id: string; name: string; input: Json; /** why the arguments did not parse; the call is answered with it, not run */ invalid?: string }[];
 	finish: 'stop' | 'tool' | 'cut'; continuation?: string;
 	/** L-BOLT-412: the provider's reasoning, verbatim, stored beside the text and sent back with it. */ reasoning?: string;
 	usage: { input: number; output: number; /** hook:agent — USD, for the cost disclosure */ cost?: number; /** L-BOLT-432: the provider's call id (the metering key) */ call?: string } };

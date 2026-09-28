@@ -37,7 +37,7 @@ export type Meta =
 export type Usage = { input: number; output: number; calls: number; cost?: number;
 	/** On a reply: the last model call's input tokens (the context it filled) and the model's window (the panel's context meter). */ context?: number; window?: number;
 	/** On a reply: the model class that wrote it (the panel's model-change divider, L-BOLT-547). */ model?: string };
-export type ToolCall = { id: string; name: string; input: Json };
+export type ToolCall = { id: string; name: string; input: Json; invalid?: string };
 /** Rule 59: one per write outcome of a turn. */
 export type Receipt = { outcome: 'committed' | 'pendingApproval'; callable: string; records: readonly { collection: string; id: string }[]; requestId?: string };
 export type MessageRow = {

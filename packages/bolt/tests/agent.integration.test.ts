@@ -669,6 +669,17 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 		expect(ai.requests).toHaveLength(6);
 	});
 
+	it('a tool call whose arguments did not parse is answered with the parse error and the turn goes on', async () => {
+		const garbled: Step = () => ({ content: '', toolCalls: [{ id: 'g1', name: 'read', input: {}, invalid: 'Expected double-quoted property name in JSON at position 12' }], finish: 'tool', usage: { input: 1, output: 1 } });
+		const { ai, agent, user } = await setup([garbled, say('Fixed it.')]);
+		const root = await user('root', { admin: true });
+		const c = await agent.start({ owner: root });
+		await agent.post({ conversation: c, as: { member: root }, text: 'How many quotes?' });
+		await agent.drain(c);
+		expect(toolResults(ai.requests[1]!)[0]).toEqual({ error: expect.stringContaining('not valid JSON (Expected double-quoted') });
+		expect(visible(await agent.transcript(c))).toEqual([expect.objectContaining({ text: 'Fixed it.' })]);
+	});
+
 	it('an empty reply after a successful read is asked for once more, then answered with a visible message', async () => {
 		const { agent, user } = await setup([use('read', { collection: 'quotes' }), say(''), say('')]);
 		const root = await user('root', { admin: true });
