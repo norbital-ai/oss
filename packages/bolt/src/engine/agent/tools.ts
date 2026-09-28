@@ -133,8 +133,11 @@ const err = (message: string): { result: Json } => ({ result: { error: message }
 const VERBS = ['create', 'update', 'delete', 'upsert'] as const;
 /** `act`'s callable for a decision on an approval request (§3.8 `bolt.approvals.process`). */
 const APPROVE = 'approvals.process';
-/** `act { callable: 'automation.<name>' }` starts an automation now. */
-const AUTOMATION = 'automation';
+/** `act { callable: 'automation.<name>' }` starts an automation now; `<collection>.pipeline` and `<collection>.integration`
+ * run that collection's feed or integration (each a platform run of that name). */
+const AUTOMATION = 'automation', COLLECTION_RUNS = ['.pipeline', '.integration'] as const;
+const collectionRun = (m: Engine['manifest'], callable: string): boolean => COLLECTION_RUNS.some((k) => callable.endsWith(k)
+	&& (k === '.pipeline' ? m.pipelines : m.integrations)?.[callable.slice(0, -k.length)] !== undefined);
 const DECISIONS = new Set(['APPROVED', 'REJECTED', 'REQUEST_FOR_CHANGE']);
 /** `act { actions }`: at most this many writes in one call. */
 const BATCH = 20;
@@ -225,8 +228,10 @@ export async function perform(x: Pick<ToolContext, 'engine' | 'authority' | 'bin
 		return await x.engine.approvals.process({ requestId: d.requestId, status: d.status as 'APPROVED', authority: x.authority, now: x.bindings.now,
 			...(typeof d.reason === 'string' ? { reason: d.reason } : {}) }) as unknown as Json;
 	}
-	if (callable.startsWith(`${AUTOMATION}.`)) {
-		const automation = callable.slice(AUTOMATION.length + 1), args = input ?? {};
+	// a pipeline or integration is its collection's (`<c>.pipeline`), run as the platform run of that name
+	const started = callable.startsWith(`${AUTOMATION}.`) ? callable.slice(AUTOMATION.length + 1) : collectionRun(x.engine.manifest, callable) ? callable : null;
+	if (started !== null) {
+		const automation = started, args = input ?? {};
 		// the same automation over the same input, queued or running, is that run: a model asking again must not queue a
 		// second one (a local probe started one review three times while the first placed 426 photos)
 		const [active] = await x.engine.db.read([{ text: `SELECT id FROM sys_run WHERE automation = $1 AND state IN ('queued', 'running')
@@ -239,9 +244,11 @@ export async function perform(x: Pick<ToolContext, 'engine' | 'authority' | 'bin
 	const dot = callable.lastIndexOf('.');
 	const [collection, name] = [callable.slice(0, dot), callable.slice(dot + 1)];
 	const common = { authority: x.authority, bindings: x.bindings, invocationId: `${x.turn}:${callId}`, key: `agent:${x.turn}:${callId}`, issuedAt: x.bindings.now };
+	// an upsert updates the record its row's id names (rule 28); a model that wrote `onConflict` into the row means the option
+	const { onConflict = 'update', ...row } = name === 'upsert' && input !== null && typeof input === 'object' && !Array.isArray(input) ? input as { onConflict?: 'update' | 'keep' } : {};
 	const r = (VERBS as readonly string[]).includes(name)
-		? await x.engine.act({ ...common, collection, verb: name as (typeof VERBS)[number], input,
-			...(name === 'upsert' ? { onConflict: ((input as { onConflict?: 'update' | 'keep' } | null)?.onConflict ?? 'update') } : {}) })
+		? await x.engine.act({ ...common, collection, verb: name as (typeof VERBS)[number], input: name === 'upsert' && !Array.isArray(input) ? row as Json : input,
+			...(name === 'upsert' ? { onConflict } : {}) })
 		: await x.engine.calls.action({ ...common, collection, action: name, input, from: 'client' });
 	const rc = receipt(callable, r.outcome);
 	if (rc !== null) x.receipts.push(rc);
@@ -387,10 +394,17 @@ export function catalogue(x: ToolContext): Tool[] {
 			return { error: `That file is not JSON: ${x instanceof Error ? x.message : String(x)}` };
 		}
 	};
-	const mayStart = (c: string) => c.startsWith(`${AUTOMATION}.`) && (a.automations.includes(c.slice(AUTOMATION.length + 1)) || feeds.has(c.slice(AUTOMATION.length + 1)));
-	if (agent && (can.acts.size > 0 || a.automations.length > 0 || feeds.size > 0)) add('act', `Write: create, update, delete or upsert records, run a collection action, decide an approval, or start an automation. Callables: ${[...can.acts.keys()].join(', ')}. `
-		+ (a.automations.length > 0 || feeds.size > 0 ? `Automations and import or export pipelines start as automation.<name> with their input (an omitted input runs over everything): ${[...a.automations.map(signature), ...[...feeds].map(([n, modes]) => `${n}(mode: ${modes}, file?: a stored file id)`)].join('; ')}. ` : '')
-		+ 'workspace_type collections.<c>.create (or update, an action) gives the exact input; nested relation writes go inside the input as the collection declares them. A file field takes a file reference { id, name, mime } as a message or tool lists it. '
+	// an integration (`<collection>.integration`) is granted by that name among the policy's automations (as the app's toolbar reads it)
+	const syncs = Object.keys(e.manifest.integrations ?? {}).map((c) => `${c}.integration`).filter((n) => a.admin || a.automations.includes(n));
+	const automations = a.automations.filter((n) => !syncs.includes(n));
+	const mayStart = (c: string) => feeds.has(c) || syncs.includes(c) || (c.startsWith(`${AUTOMATION}.`) && automations.includes(c.slice(AUTOMATION.length + 1)));
+	if (agent && (can.acts.size > 0 || automations.length > 0 || feeds.size > 0 || syncs.length > 0)) add('act', `Write: create, update, delete or upsert records, run a collection action, decide an approval, or start an automation. Callables: ${[...can.acts.keys()].join(', ')}. `
+		+ (automations.length > 0 ? `Automations start as automation.<name> with their input (an omitted input runs over everything): ${automations.map(signature).join('; ')}. ` : '')
+		+ (syncs.length > 0 ? `A collection's integration runs as <collection>.integration with { mode: pull | push | reconcile }: ${syncs.join(', ')}. ` : '')
+		+ (feeds.size > 0 ? `A collection's import or export pipeline runs as <collection>.pipeline with { mode, file? } (an import reads a stored file id; an export's run output is its file): ${[...feeds].map(([n, modes]) => `${n}(mode: ${modes})`).join('; ')}. ` : '')
+		+ 'Inputs: create takes the row ({ column, rel: { create: [rows] } }); update takes { target: id, set: { column, rel: { create: [rows] } } }; delete takes { target: id }; '
+		+ 'upsert takes the row with the id of the record it updates, or no id to create one ({ id?, column, rel: {…} }): look the record up, then one upsert either way. '
+		+ 'The workspace outline names each collection\'s writable columns and nested relation writes; workspace_type collections.<c>.create (or update, an action) gives a field\'s exact type. A file field takes a file reference { id, name, mime } as a message or tool lists it. '
 		+ 'create, update and upsert take one row or an array of rows: many rows (an import from a sheet) are one call and one statement. '
 		+ `Several different writes: actions [{ callable, input }] (at most ${BATCH}) run in order, stopping at the first that does not commit. `
 		+ (e.files !== undefined ? 'An input too large to write out (a month of work days, a sheet of orders): build it with sandbox_run as JSON in /outputs and give that file\'s id as inputFile instead of input. ' : '')

@@ -29,6 +29,7 @@ export const orders = collection('orders', {
 export const order_lines = collection('order_lines', { read: { fields: 'all' } });
 export const notices = collection('notices', { read: { fields: 'all' }, queries: {
 	recent: { description: 'Latest notices', input: {}, output: { kind: 'list', of: { kind: 'id', of: 'notices' } } } } });
-export const notice_notes = collection('notice_notes', { read: { fields: 'all' }, create: { input: { columns: ['notice', 'note'] } } });
+export const notice_notes = collection('notice_notes', { read: { fields: 'all' }, create: { input: { columns: ['notice', 'note'] } },
+	update: { input: { columns: ['note'] } } });
 export const sites = collection('sites', { read: { fields: ['name', 'location', 'customer', 'open'], relations: [] },
 	update: { input: { columns: ['name', 'location'] } } });

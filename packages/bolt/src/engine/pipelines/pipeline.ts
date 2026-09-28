@@ -1,5 +1,5 @@
 // Pipelines (§3.3.5, rule 30): a collection's recurring import and export feeds. An import's rows enter through the
-// collection's write pipeline as the caller, in one act (upsert on a keyed collection, else create); an export is
+// collection's write pipeline as the caller, in one act (an import on a keyed collection, else create); an export is
 // `read({ all: true })` under the caller's scope and masks, encoded and stored as a file. From the browser each is a run of
 // the platform automation `<c>.pipeline` (input `{ mode: 'import', file } | { mode: 'export' }`), started as its caller
 // (the run's `starter`), so `RunStatus` shows it and an export's `FileRef` is the run's output.
@@ -13,7 +13,7 @@ import { decodeInput, type InputSpec } from '../callables/decode.ts';
 import type { Engine } from '../index.ts';
 import { mappingBody } from '../integrations/runner.ts';
 import * as ir from '../../protocol/ir.ts';
-import { upsertKey } from '../write/flatten.ts';
+import { modelKey } from '../write/flatten.ts';
 import { untag } from '../write/sql.ts';
 
 type ImportData = { onConflict?: 'update' | 'keep'; known?: unknown; input?: InputSpec };
@@ -43,7 +43,7 @@ export function pipelines(config: PipelinesConfig) {
 			const body = mappingBody(config, caller.authority, caller.bindings, caller.key);
 			const records = await body(`pipeline.${c}.spec.import.records`, [input]);
 			if (!Array.isArray(records)) throw new BoltError('invalidRecords', 'guest', 'an import\'s records returns a list');
-			const on = upsertKey(m, c), field = on.length === 1 ? on[0]! : undefined;
+			const on = modelKey(m, c), field = on.length === 1 ? on[0]! : undefined;
 			let known: Obj = {};
 			if (spec.known !== undefined && field !== undefined) {
 				const keys = records.flatMap((r) => isObj(r) && r[field] !== null && r[field] !== undefined ? [String(r[field])] : []);
@@ -56,10 +56,10 @@ export function pipelines(config: PipelinesConfig) {
 				if (row !== null) rows.push(row);
 			}
 			if (rows.length === 0) return { kind: 'committed', output: [], records: [] };
+			// a keyed collection's rows match on its natural key: that is the import verb's (rule 30), never an upsert (by id)
 			const keyed = on.length > 0;
-			return (await config.engine.act({ collection: c, verb: keyed ? 'upsert' : 'create', input: rows, key: caller.key, issuedAt: caller.issuedAt,
-				authority: caller.authority, bindings: caller.bindings, invocationId: caller.key,
-				...(keyed ? { onConflict: spec.onConflict ?? 'update' } : {}) })).outcome;
+			return (await config.engine.act({ collection: c, verb: keyed ? 'import' : 'create', input: keyed ? { rows, onConflict: spec.onConflict ?? 'update' } : rows,
+				key: caller.key, issuedAt: caller.issuedAt, authority: caller.authority, bindings: caller.bindings, invocationId: caller.key })).outcome;
 		},
 
 		/** Every row the caller may read, the declared fields only, masked as the caller sees them. */

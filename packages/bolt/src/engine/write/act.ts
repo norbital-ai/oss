@@ -14,7 +14,7 @@ import { compileGets } from '../query/sql.ts';
 import { constraintIndex, type ConstraintMeta } from '../schema/ddl.ts';
 import { schemaSlice } from '../schema/plan.ts';
 import { compileCommit, compileOutcomeRecord, type Commit, type OwnedLock, type RateCharge, type Write } from './commit.ts';
-import { changed, Flattener, upsertKey, withDefaults, type Item, type Sel } from './flatten.ts';
+import { changed, Flattener, modelKey, withDefaults, type Item, type Sel } from './flatten.ts';
 import { canonical, Chain, decided, hex, KEY_REUSE, minter, sha256, untag, type Fingerprint } from './sql.ts';
 import type { EventLog } from '../guest/telemetry.ts';
 import { erase } from './erase.ts';
@@ -22,6 +22,8 @@ import { importPlan, importRefs, type ImportPlan } from './import.ts';
 import { embedQueued, embedWrites } from '../integrations/embed.ts'; // hook:integrations
 
 /** The generated verbs (X-24): `import` (rule 30) and `erase` (rule 38e) included. */
+type Obj = { readonly [k: string]: Json };
+const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
 export type Verb = 'create' | 'update' | 'delete' | 'upsert' | 'import' | 'erase';
 export type ActRequest = {
 	collection: string; verb: Verb; input: Json;
@@ -146,8 +148,10 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 	if (spec === undefined) throw new BoltError('unknownCollection', 'decode', `unknown collection '${r.collection}'`);
 	const sel = (r.integration ? { columns: r.integration.fields } // hook:integrations
 		: r.verb === 'update' ? spec.update?.input : r.verb === 'delete' ? spec.delete && { columns: [] } : spec.create?.input) as Sel | undefined;
-	const key0 = r.integration ? [r.integration.identity] : upsertKey(m, r.collection); // hook:integrations
-	if (sel === undefined || (r.verb === 'upsert' && (key0.length === 0 || r.onConflict === undefined)))
+	const key0 = r.integration ? [r.integration.identity] : modelKey(m, r.collection); // hook:integrations
+	// rule 28: an upsert names its record by `id` (an integration's by its declared identity), so it needs both arms
+	const byId = r.verb === 'upsert' && !r.integration;
+	if (sel === undefined || (r.verb === 'upsert' && (r.onConflict === undefined || (byId ? spec.update === undefined : key0.length === 0))))
 		return none(refused('forbidden', `${r.collection} does not accept ${r.verb}.`));
 	// rule 30: an import's options and its refs by key values, resolved before decode (one read per target)
 	let imp: ImportPlan | undefined;
@@ -161,10 +165,27 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 	const mint = await minter(r.invocationId, b.now);
 	const f = new Flattener(m, cat, mint);
 	const inputs = imp?.rows ?? list(r.input, r.verb);
+	if (byId) {
+		const invalid = inputs.findIndex((x) => !isObj(x));
+		if (invalid >= 0) return none(refused('invalidInput', 'Expected an object.', inputs.length > 1 || Array.isArray(r.input) ? [invalid] : []));
+		const badId = inputs.findIndex((x) => isObj(x) && x['id'] !== undefined && typeof x['id'] !== 'string');
+		if (badId >= 0) return none(refused('invalidInput', 'Expected an id.', [...(inputs.length > 1 || Array.isArray(r.input) ? [badId] : []), 'id']));
+	}
+	// rule 28: an upsert row whose `id` is on file is an update of it (`keep`: left as it is), resolved here, before the
+	// transform, so the transform sees the stored row; a row without an id is a create; an id on no row is refused
+	const upserted: (string | null)[] = [];
+	const onFile = byId ? await readRows(e.db, inputs.flatMap((x) => isObj(x) && typeof x['id'] === 'string' ? [[r.collection, x['id']] as const] : [])) : new Map<string, RowData>();
+	const missing = byId ? inputs.findIndex((x) => isObj(x) && x['id'] !== undefined && !onFile.has(k(r.collection, String(x['id'])))) : -1;
+	if (missing >= 0) return none(refused('notFound', `No ${r.collection} has this id.`, [...(inputs.length > 1 || Array.isArray(r.input) ? [missing] : []), 'id']));
 	inputs.forEach((x, i) => {
 		const path = inputs.length > 1 || Array.isArray(r.input) || imp !== undefined ? [i] : [];
 		if (r.verb === 'create' || (imp !== undefined && imp.onConflict === undefined)) f.create(r.collection, sel, x, path);
 		else if (imp !== undefined) f.create(r.collection, sel, x, path, undefined, { on: key0, onConflict: imp.onConflict === 'update' ? 'update' : 'keep' });
+		else if (byId) {
+			const { id, ...row } = x as Obj;
+			if (typeof id !== 'string') { const at = f.items.length; f.create(r.collection, sel, row, path); upserted.push(f.items[at]?.change.id ?? null); }
+			else { upserted.push(id); if (r.onConflict === 'update') f.update(r.collection, spec.update!.input as Sel, id, row, r.observed?.[id] ?? null, path); }
+		}
 		else if (r.verb === 'upsert') f.create(r.collection, sel, x, path, undefined, { on: key0, onConflict: r.onConflict! });
 		else if (r.verb === 'update') f.update(r.collection, sel, (x as { target?: Json }).target, (x as { set?: Json }).set, r.observed?.[String((x as { target?: Json }).target)] ?? null, path);
 		else f.delete(r.collection, (x as { target?: Json }).target, r.observed?.[String((x as { target?: Json }).target)] ?? null, path);
@@ -192,6 +213,8 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 	// the host reads (rule 20's `a`): every existing row the input names and every ref it supplies, one round trip
 	const pre = await readRows(e.db, [
 		...f.items.filter((i) => i.change.op === 'update' || i.change.op === 'delete').map((i) => [i.change.collection, i.change.id] as const),
+		...f.items.flatMap((i) => i.change.op === 'upsert' && i.change.on.length === 1 && i.change.on[0] === 'id' && typeof i.change.values['id'] === 'string'
+			? [[i.change.collection, i.change.values['id']] as const] : []),
 		...f.items.flatMap((i) => i.refs.map((x) => [x.to, x.id] as const)),
 	]);
 	for (const [key, row] of r.pending ?? []) if (!pre.has(key)) pre.set(key, row); // hook:callables
@@ -210,14 +233,22 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 		const id = row[rel], hit = typeof id === 'string' ? pre.get(k(target, id)) ?? created.get(k(target, id)) : undefined;
 		return hit === undefined ? [] : [hit];
 	} };
+	if (byId && r.onConflict === 'keep') for (const id of upserted) {
+		if (id === null) continue;
+		const row = onFile.get(k(r.collection, id));
+		if (row === undefined) continue;
+		if (!readableBy(env, r.collection, row)) return none(refused('notFound', 'The record does not exist.'));
+		if (!auth.admin && judgePre(auth, env, r.collection, 'update', row, []) !== true) return none(refused('forbidden', 'You may not make this change.'));
+	}
 
 	// 4. the caller, judged once on the shape it submitted (rules 19, 34, 35, 36)
 	const readable = (c: string, row: RowData) => readableBy(env, c, row);
 	for (const it of f.items) {
-		const c = it.change, row = pre.get(k(c.collection, c.id));
+		const c = it.change, named = c.op === 'upsert' && c.on.length === 1 && c.on[0] === 'id' && typeof c.values['id'] === 'string' ? c.values['id'] : c.id;
+		const row = pre.get(k(c.collection, named)), action = c.op === 'upsert' && row !== undefined ? 'update' : op(c.op);
 		// a relation action on a collection the caller holds no grant on is judged `via` its parent (the parent row was)
 		const via = it.parent !== undefined && auth.collections[c.collection] === undefined;
-		if (c.op === 'update' || c.op === 'delete') {
+		if (action === 'update' || c.op === 'delete') {
 			if (row === undefined || (!via && !readable(c.collection, row))) return none(refused('notFound', 'The record does not exist.', c.path));
 			if (it.belongs === 'parent' && row[it.parent!.fk] !== it.parent!.id) return none(refused('notFound', 'The record does not belong here.', c.path));
 		}
@@ -225,8 +256,8 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 			const target = pre.get(k(ref.to, ref.id));
 			if (target === undefined || !readable(ref.to, target)) return none(refused('notFound', `No readable ${ref.to} has this id.`, [...c.path, ref.field]));
 		}
-		if (auth.admin || (it.parent !== undefined && (auth.collections[c.collection]?.[op(c.op)] ?? []).length === 0)) continue; // `via` the parent
-		const verdict = judgePre(auth, env, c.collection, op(c.op), row ?? null, it.supplied);
+		if (auth.admin || (it.parent !== undefined && (auth.collections[c.collection]?.[action] ?? []).length === 0)) continue; // `via` the parent
+		const verdict = judgePre(auth, env, c.collection, action, row ?? null, it.supplied);
 		if (verdict !== true) return none(refused('forbidden', 'You may not make this change.', verdict.field === undefined ? c.path : [...c.path, verdict.field]));
 		const state = stateField(m, c.collection);
 		const next = c.op === 'update' ? c.set[state ?? ''] : undefined;
@@ -236,7 +267,8 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 
 	// 5. holds (rule 46) and the observed revision (rule 25), before anything runs
 	for (const it of f.items) {
-		const c = it.change, row = pre.get(k(c.collection, c.id));
+		const c = it.change, named = c.op === 'upsert' && c.on.length === 1 && c.on[0] === 'id' && typeof c.values['id'] === 'string' ? c.values['id'] : c.id;
+		const row = pre.get(k(c.collection, named));
 		if (row === undefined) continue;
 		const held = row['approval_id'];
 		if (typeof held === 'string' && !auth.admin && !(await e.approval?.participant(held, auth)))
@@ -253,7 +285,7 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 		return none((res.rows[0]?.['outcome'] as Outcome | null) ?? await stored() ?? outcome);
 	};
 	for (let attempt = 0; ; attempt++) {
-		const planned = await plan(e, r, env, f.items, pre, imp);
+		const planned = await plan(e, r, env, f.items, pre, imp, byId ? upserted : undefined);
 		if ('outcome' in planned) return planned.guest && r.sink === undefined ? record(planned.outcome) : none(planned.outcome);
 		if (r.sink !== undefined) { // hook:callables
 			r.sink(planned);
@@ -366,7 +398,7 @@ export async function readRows(db: TenantDb, want: readonly (readonly [string, s
 type Planned = { guest: boolean } & ({ outcome: Outcome } | { commit: Omit<Commit, 'key' | 'digest' | 'issuedAt' | 'rate'>; lock?: { tables: string[]; mode: 'SHARE ROW EXCLUSIVE' } });
 
 /** Steps 6–8: the transform, defaults, upsert resolution, model rules, post-image scope and the approval route. */
-async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: readonly Item[], pre: Map<string, RowData>, imp?: ImportPlan): Promise<Planned> {
+async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: readonly Item[], pre: Map<string, RowData>, imp?: ImportPlan, upserted?: (string | null)[]): Promise<Planned> {
 	const m = e.manifest, auth = env.authority!, b = r.bindings, cat = env.cat; // hook:integrations — the act's judged authority
 	let items = submitted, readTables: readonly string[] = [], fingerprints: readonly Fingerprint[] = [];
 	const deleteGuard = r.verb === 'delete' && m.collections[r.collection]?.delete !== undefined && 'transform' in m.collections[r.collection]!.delete!;
@@ -380,7 +412,10 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 		const inputs = imp?.rows ?? list(r.input, r.verb);
 		const invocation: Invocation = {
 			id: r.invocationId, kind: 'transform', target: r.collection,
-			input: roots.map((it, i) => it.change.op === 'delete' ? { $delete: true } : r.verb === 'update' ? (inputs[i] as { set: Json }).set : inputs[i]!),
+			input: roots.map((it, i) => {
+				const input = it.change.op === 'delete' ? { $delete: true } : r.verb === 'update' ? (inputs[i] as { set: Json }).set : inputs[i]!;
+				return r.verb === 'upsert' && !r.integration && isObj(input) ? Object.fromEntries(Object.entries(input).filter(([field]) => field !== 'id')) : input;
+			}),
 			ctx: { actor: auth.actor, now: b.now, today: b.today, tz: b.tz, seed: r.invocationId,
 				existing: await wireRows(e.db, cat, r.collection, roots.map((it) => pre.has(k(it.change.collection, it.change.id)) ? it.change.id : null), b) },
 			budget: { cpuMs: LIMITS.guestCpuMs, crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes },
@@ -432,10 +467,16 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 				output.push(String(found['id']));
 				pre.set(k(c.collection, String(found['id'])), found);
 				const set = c.onConflict === 'keep' ? {} : changed(found, Object.fromEntries(Object.entries(c.values).filter(([f]) => !c.on.includes(f))));
+				if (c.on.length === 1 && c.on[0] === 'id' && !r.integration) {
+					const locked = modelRules(m, c.collection, found, set);
+					if (locked !== null && !(r.delivery && locked.code === 'locked')) return stop(refused(locked.code, locked.message, [...c.path, locked.field]));
+				}
 				if (root) report.push({ index: Number(c.path[0]), id: String(found['id']), action: Object.keys(set).length > 0 ? 'updated' : 'kept' });
 				if (Object.keys(set).length > 0) writes.push({ write: { collection: c.collection, id: String(found['id']), op: 'update', set, revision: Number(found['revision']) }, item: it });
 				continue;
 			}
+			// rule 28: a nested upsert by id names a child on file; it never creates one under an id it made up
+			if (c.on.length === 1 && c.on[0] === 'id' && !r.integration) return stop(refused('notFound', `No ${c.collection} has this id.`, [...c.path, 'id']));
 			// rule 30: `onMissing: 'skip'` only updates rows already on file
 			if (root && imp!.onMissing === 'skip') { report.push({ index: Number(c.path[0]), id: null, action: 'skipped' }); continue; }
 			output.push(c.id);
@@ -494,7 +535,7 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 	return {
 		guest,
 		commit: { now: b.now, today: b.today, actor: auth.actor, writes: plain, owned: ownedLocks(m, cat, writes.map((w) => w.write), pre),
-			runs: queued, notices: approval === undefined ? await committedNotices(m, r, auth, routedRows(writes, pre)) : [], outbox: [], output: r.verb === 'upsert' ? output : imp !== undefined ? { rows: report } : null, ...(approval === undefined ? {} : { approval }),
+			runs: queued, notices: approval === undefined ? await committedNotices(m, r, auth, routedRows(writes, pre)) : [], outbox: [], output: upserted ?? (r.verb === 'upsert' ? output : imp !== undefined ? { rows: report } : null), ...(approval === undefined ? {} : { approval }),
 			...(guest && fingerprints.length > 0 ? { fingerprints } : {}),
 			...(r.integration?.pieces === undefined ? {} : { pieces: r.integration.pieces }) },
 		...(guest && readTables.length > 0 ? { lock: { tables, mode: 'SHARE ROW EXCLUSIVE' as const } } : {}),

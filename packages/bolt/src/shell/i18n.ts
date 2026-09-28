@@ -29,7 +29,7 @@ export const UI_ZH: { readonly [k in UiTextKey]: string } = {
 	useMyLocation: '使用我的位置', latitude: '纬度', longitude: '经度', searchAddress: '搜索地址',
 	pickOnMap: '在地图上选择', mapUnavailable: '地图不可用', locationDenied: '无法获取位置', from: '从', to: '至',
 	openEnded: '无结束', pendingApproval: '已提交审批', conflict: '此记录在您打开后已被更改。请检查后再次保存。',
-	unknown: '结果尚未确定。重试前请再次检查。', select: '请选择…', search: '搜索…', noResults: '无结果',
+	unknown: '结果尚未确定。重试前请再次检查。', select: '请选择…', search: '搜索…', noResults: '无结果', optionsUnavailable: '无法加载选项',
 	required: '必填', invalid: '无效的值', noAccess: '无权访问', notFound: '未找到或无权访问', field: '字段', kind: '类型', optional: '可选', fields: '字段',
 	today: '今天', previous: '上一个', next: '下一个', more: '还有 {n} 项', day: '日', week: '周', month: '月', notifications: '通知',
 	fullScreen: '全屏', exitFullScreen: '退出全屏', createdAt: '{who} 于 {when} 创建', updatedAt: '{who} 于 {when} 更新',

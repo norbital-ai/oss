@@ -10,7 +10,7 @@ import { q, type Catalog } from '../../protocol/catalog.ts';
 import * as ir from '../../protocol/ir.ts';
 import { whereSql } from '../query/sql.ts';
 import type { Item } from './flatten.ts';
-import { upsertKey } from './flatten.ts';
+import { modelKey } from './flatten.ts';
 import { untag } from './sql.ts';
 
 export type ImportPlan = {
@@ -85,7 +85,7 @@ export async function importRefs(db: TenantDb, m: EngineManifest, cat: Catalog, 
 			return isObj(v) && !Object.keys(v).some((x) => x.startsWith('$')) ? [{ row: i, v }] : [];
 		});
 		if (at.length === 0) continue;
-		const key = upsertKey(m, target);
+		const key = modelKey(m, target);
 		if (key.length === 0) return { kind: 'refused', code: 'invalidInput', message: `${target} has no key; name it by id`, field: fk, row: at[0]!.row };
 		wants.set(fk, { fk, target, key, at });
 	}

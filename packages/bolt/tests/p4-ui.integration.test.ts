@@ -140,7 +140,7 @@ describe('sweep() (§3.7, G5)', () => {
 });
 
 describe('G5 UI', () => {
-	it('the location picker: one address box the value follows, typed and located points, a keyless map and geocoder', async () => {
+	it('the location picker opens its search and map on demand; typed and located points follow the address', async () => {
 		const errors: unknown[] = [];
 		const original = console.error;
 		console.error = (...a: unknown[]) => errors.push(a);
@@ -151,10 +151,13 @@ describe('G5 UI', () => {
 			const geocoder = { search: async () => [{ point: { lat: 1.304, lng: 103.832 }, address: 'Orchard Road, Singapore' }], reverse: async () => 'Bishan, Singapore' };
 			const picker = show(Point as Component<Record<string, unknown>>, { kinds: { geocoder }, onChange: (v: Json) => got.push(v) });
 			flushSync();
-			const box = picker.querySelector<HTMLInputElement>('input')!;
-			expect(picker.querySelectorAll('input')).toHaveLength(1); // one search box, no latitude/longitude pair
-			picker.querySelector<HTMLButtonElement>('button[type="button"]')!.click();
+			expect(picker.querySelectorAll('input')).toHaveLength(0);
+			picker.querySelector<HTMLButtonElement>('[data-point-picker]')!.click();
 			flushSync();
+			const panel = document.querySelector<HTMLElement>('[data-point-options]')!;
+			const box = panel.querySelector<HTMLInputElement>('input')!;
+			expect(panel.querySelectorAll('input')).toHaveLength(1);
+			panel.querySelector<HTMLButtonElement>(`button[aria-label="Use my location"]`)!.click();
 			expect(got.at(-1)).toEqual({ lat: 1.352123, lng: 103.819877 });
 			box.value = '1.29, 103.85';
 			box.dispatchEvent(new Event('input', { bubbles: true }));

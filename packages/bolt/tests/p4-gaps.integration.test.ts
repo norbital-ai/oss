@@ -150,7 +150,7 @@ describe('envoy registration through the shell host (§3.9)', () => {
 		const claim = (await issueClaim(t.db, 'field', 'whatsapp', '6591234567:3@s.whatsapp.net', t.clock.now()))!;
 		const link = await get(`/__bolt/envoys/register?claim=${claim}`, false);
 		expect(link!.status).toBe(303);
-		expect(link!.headers.get('location')).toBe(`/register/${claim}`);
+		expect(link!.headers.get('location')).toBe(`https://acme.example/register/${claim}`);
 		const seen = await (await get(`/__bolt/shell/register?claim=${claim}`))!.json() as { value: Json };
 		expect(seen.value).toEqual({ state: 'ready', envoy: 'field', transport: 'whatsapp', handle: '6591234567' });
 		expect((await get(`/__bolt/shell/register?claim=${claim}`, false))!.status).toBe(401);
@@ -179,4 +179,3 @@ describe('the journal crash test (rule 55, t.crash)', () => {
 		await expect(t.crash(String(run!['id']))).rejects.toThrow(/did not run/);
 	});
 });
-

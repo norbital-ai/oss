@@ -90,7 +90,8 @@ interface Clock { actor: Actor; now: Instant; today: PlainDate; tz: IanaZone; to
 
 // ── writes ──
 type Cols<Sel> = Sel extends { columns: readonly (infer P extends string)[] } ? P : never;
-type RelValues<T, A> = { readonly [V in keyof A]?: V extends 'create' | 'upsert' ? readonly SelValues<T, A[V], 'insert'>[]
+type RelValues<T, A> = { readonly [V in keyof A]?: V extends 'create' ? readonly SelValues<T, A[V], 'insert'>[]
+	: V extends 'upsert' ? readonly (SelValues<T, A[V], 'insert'> | ({ id: Id<T & string> } & SelValues<T, A[V], 'patch'>))[]
 	: V extends 'update' ? readonly { target: Id<T & string>; set: SelValues<T, A[V], 'patch'> }[] : readonly Id<T & string>[] };
 type WithValues<M, Sel> = Sel extends { with: infer W } ? { readonly [R in keyof W]?: RelValues<RelTarget<M, R>, W[R]> } : {};
 type Filled<Sel> = Sel extends { filled: readonly (infer P extends string)[] } ? P : never;
@@ -113,7 +114,8 @@ export type Insert<C> = SelValues<C, InputSel<C, 'create'>, 'insert'>;
 export type Patch<C> = SelValues<C, InputSel<C, 'update'>, 'patch'>;
 
 export type Keyed<C> = NamesPart<'models'> extends { [P in C & string]: { key: readonly unknown[] } | { unique: readonly unknown[] } } ? true : false;
-type Verbs<C, S = CollectionSpecOf<C>> = (S extends { create: unknown } ? 'create' | (Keyed<C> extends true ? 'upsert' | 'import' : never) : never)
+// an upsert names its record by id (rule 28), so it needs both arms; an import matches the natural key (rule 30)
+type Verbs<C, S = CollectionSpecOf<C>> = (S extends { create: unknown } ? 'create' | (Keyed<C> extends true ? 'import' : never) | (S extends { update: unknown } ? 'upsert' : never) : never)
 	| (S extends { update: unknown } ? 'update' : never) | (S extends { delete: unknown } ? 'delete' : never);
 /** Every callable: a collection's generated verb or declared action (X-1, X-24). */
 export type Callable = { [C in CollectionName]: `${C}.${Verbs<C> | ActionName<C>}` }[CollectionName];
@@ -123,7 +125,8 @@ type ActionArg<C, X> = X extends { target: 'record' } ? { target: Targets<C> } &
  * The input a callable takes (`'<c>.create'`, `'<c>.update'`, `'<c>.<action>'`, …): an insert, `{ target, set }`, `{ target }` or the action's declared input.
  */
 export type ActInput<N> = N extends `${infer C}.${infer V}`
-	? V extends 'create' | 'upsert' ? Insert<C> | readonly Insert<C>[]
+	? V extends 'create' ? Insert<C> | readonly Insert<C>[]
+	: V extends 'upsert' ? Insert<C> | ({ id: Id<C> } & Patch<C>) | readonly (Insert<C> | ({ id: Id<C> } & Patch<C>))[]
 	: V extends 'import' ? readonly Insert<C>[]
 	: V extends 'update' ? { target: Targets<C>; set: Patch<C> } | readonly { target: Id<C>; set: Patch<C> }[]
 	: V extends 'delete' ? { target: Targets<C> }
@@ -131,7 +134,7 @@ export type ActInput<N> = N extends `${infer C}.${infer V}`
 	: never;
 /** The output an action callable returns: its declared `output` value, `undefined` for a generated verb. */
 export type ActOutput<N> = N extends `${infer C}.${infer V}` ? V extends ActionName<C> ? Out<ActionsOfC<C>[V]> : undefined : never;
-/** `onConflict` is required on `upsert` (rule 28): `update` merges into the keyed row, `keep` leaves it. */
+/** `onConflict` is required on `upsert` (rule 28): `update` merges into the row its `id` names, `keep` leaves it. */
 export type ActOptions = { key?: string; once?: string; onConflict?: 'update' | 'keep' };
 type OptionsOf<N> = N extends `${string}.upsert` ? [options: ActOptions & { onConflict: 'update' | 'keep' }] : [options?: ActOptions];
 

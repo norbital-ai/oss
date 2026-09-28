@@ -30,6 +30,7 @@ type V = { lit: Json } | { range: readonly [Json, Json] } | { set: readonly Json
 /** `sort`: the field's `OrderBy` path (`name`, `assignee.name`) where it may order the records. */
 type Field = { name: string; label: string; kind: string; ops: readonly string[]; values: Map<string, V>; put: (ops: { [op: string]: Json }) => Json; own: boolean; sort?: string };
 export type Described = { ok: true; where: Json; orderBy?: Json } | { ok: false; code: string; message: string };
+export type LocalFilterField = { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean };
 
 const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum']);
 const ORDERED = new Set([...NUMERIC, 'date', 'instant', 'time', 'text']);
@@ -96,7 +97,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 	const m = cfg.manifest, cat = catalogOf(m);
 
 	/** The operators and values a field of kind `k` is offered with, or `undefined` when no option can express it. */
-	function options(f: FieldInfo, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[]): { ops: string[]; values: Map<string, V> } | undefined {
+	function options(f: Pick<FieldInfo, 'kind' | 'periodOf'>, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[]): { ops: string[]; values: Map<string, V> } | undefined {
 		const values = new Map<string, V>();
 		const add = (label: string, v: V) => { let l = label, n = 2; while (values.has(l)) l = `${label} (${n++})`; values.set(l, v); };
 		let ops: string[];
@@ -223,12 +224,19 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 	}
 
 	/** `filter.describe` as the caller: `{ collection, text }` → a decoded `Where` and optional `OrderBy`, or a typed failure. */
-	async function describe(o: { collection: string; text: string; authority: Authority; bindings: Bindings }): Promise<Described> {
+	async function describe(o: { collection: string; text: string; authority: Authority; bindings: Bindings; localFields?: readonly LocalFilterField[] }): Promise<Described> {
 		const fail = (message: string): Described => ({ ok: false, code: 'invalid', message });
 		if (o.text.trim() === '' || o.text.length > FILTER_MAX_TEXT) return fail(`A description is 1–${FILTER_MAX_TEXT} characters.`);
-		if (!cat.collections.has(o.collection) || (!o.authority.admin && (o.authority.collections[o.collection]?.read.length ?? 0) === 0))
+		const local = o.collection === '$local';
+		if (!local && (!cat.collections.has(o.collection) || (!o.authority.admin && (o.authority.collections[o.collection]?.read.length ?? 0) === 0)))
 			return { ok: false, code: 'notFound', message: 'Not found or no access.' };
-		const fields = await offer(o.collection, o.text, o.authority, o.bindings);
+		if (local && (o.localFields === undefined || o.localFields.length === 0 || o.localFields.length > 50 ||
+			o.localFields.some((f) => !/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(f.name) || f.label.length > 100 || !['text', 'number', 'bool'].includes(f.kind))))
+			return fail('Invalid local filter fields.');
+		const fields = local ? o.localFields!.map((f): Field => {
+			const optionsFor = options(f, f.optional ? { optional: true } : undefined, literals(o.text, m.workspace.locale), words(o.text))!;
+			return { name: f.name, label: f.label, kind: f.kind, ...optionsFor, own: true, put: (ops) => ({ [f.name]: ops }), sort: f.name };
+		}) : await offer(o.collection, o.text, o.authority, o.bindings);
 		if (fields.length === 0) return fail('Nothing here can be filtered by a description.');
 		const byLabel = new Map(fields.map((f) => [f.label, f]));
 		const qual = (f: Field, x: string) => `${f.label} · ${x}`;
@@ -299,7 +307,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const dir: Json = choiceOf(r1, 'sort.dir') === DIRS.asc ? 'asc' : 'desc';
 		const orderBy: Json | undefined = sortField === undefined ? undefined : sortField.sort!.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), dir);
 		try { // rule 11a: the same strict decode as any read literal, held to the caller's exposure
-			decodeDescribed(cat, o.authority, o.collection, { where, ...(orderBy === undefined ? {} : { orderBy }) });
+			if (!local) decodeDescribed(cat, o.authority, o.collection, { where, ...(orderBy === undefined ? {} : { orderBy }) });
 		} catch (e) {
 			return fail(e instanceof BoltError ? e.message : 'Could not build a filter from that description.');
 		}

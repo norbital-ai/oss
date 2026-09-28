@@ -218,13 +218,23 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 	it('a relation-action upsert states its conflict rule: keep leaves the existing row, update takes it over', async () => {
 		const [a, b] = [await order('a'), await order('b')];
 		ok((await run({ verb: 'update', input: { target: a, set: { tags: { upsert: [{ name: 't' }] } } } })).outcome);
+		const tag = String((await one(`select id::text from tags where name = 't'`))['id']);
 		const tagOrder = async () => (await one(`select "order"::text o from tags where name = 't'`))['o'];
-		ok((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ values: { name: 't' }, onConflictDoUpdate: false }] } } } })).outcome);
+		ok((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ values: { id: tag }, onConflictDoUpdate: false }] } } } })).outcome);
 		expect(await tagOrder()).toBe(a);
-		ok((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ values: { name: 't' }, onConflictDoUpdate: true }] } } } })).outcome);
+		ok((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ values: { id: tag }, onConflictDoUpdate: true }] } } } })).outcome);
 		expect(await tagOrder()).toBe(b);
-		expect((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ values: { name: 't' }, onConflictDoUpdate: 'x' }] } } } })).outcome)
+		expect((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ values: { id: tag }, onConflictDoUpdate: 'x' }] } } } })).outcome)
 			.toMatchObject({ code: 'invalidInput' });
+	});
+
+	it('judges a nested id upsert as an update of the stored child', async () => {
+		const [a, b] = [await order('a'), await order('b')];
+		ok((await run({ verb: 'update', input: { target: a, set: { tags: { upsert: [{ name: 't' }] } } } })).outcome);
+		const tag = String((await one(`select id::text from tags where name = 't'`))['id']);
+		const caller = authority({ orders: grants(), tags: grants({ create: [arm(undefined, [])], update: [arm()] }) });
+		ok((await run({ verb: 'update', input: { target: b, set: { tags: { upsert: [{ id: tag, name: 't' }] } } }, authority: caller })).outcome);
+		expect((await one(`select "order"::text as id from tags where id = '${tag}'`))['id']).toBe(b);
 	});
 
 	it('a nested change to an owned child of a frozen parent is locked; an administrator still deletes the frozen parent with its children', async () => {

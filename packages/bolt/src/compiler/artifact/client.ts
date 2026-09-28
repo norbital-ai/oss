@@ -49,10 +49,22 @@ const document = (title: string, entry: string, css: readonly string[]) => `<!do
 <link rel="apple-touch-icon" href="/assets/bolt-apple-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <script>(function(){var t;try{t=localStorage.getItem('bolt.theme')}catch(e){}var d=t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');document.documentElement.style.colorScheme=d?'dark':'light'})()</script>
+<style>
+body{margin:0}
+#bolt-loading{position:fixed;inset:0;z-index:1;display:grid;place-items:center;background:var(--background,#f2f1ed);color:var(--foreground,#26251e);font:500 .875rem Geist,system-ui,sans-serif}
+.dark #bolt-loading{background:var(--background,#191815);color:var(--foreground,#f7f7f4)}
+#bolt-loading-content{display:flex;flex-direction:column;align-items:center;gap:1rem}
+#bolt-loading img{width:2.75rem;height:2.75rem;border-radius:.5rem}
+#bolt-loading p{margin:0;opacity:.7}
+#bolt-loading-track{width:8rem;height:2px;overflow:hidden;background:rgba(127,127,127,.25)}
+#bolt-loading-track::after{content:"";display:block;width:40%;height:100%;background:var(--brand-500,#e87432);animation:bolt-opening 1.3s ease-in-out infinite alternate}
+@keyframes bolt-opening{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
+@media(prefers-reduced-motion:reduce){#bolt-loading-track::after{animation:none;transform:translateX(75%)}}
+</style>
 ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 <script type="module" src="/${entry}"></script>
 </head>
-<body><div id="bolt"></div></body>
+<body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite"><div id="bolt-loading-content"><img src="/assets/bolt-apple-icon.png" alt=""><strong>Norbital</strong><p>Opening workspace…</p><div id="bolt-loading-track" aria-hidden="true"></div></div></div></body>
 </html>
 `;
 

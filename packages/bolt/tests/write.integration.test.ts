@@ -121,12 +121,29 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 			.toEqual({ kind: 'conflict', records: [{ collection: 'orders', id, fields: [] }] });
 	});
 
-	it('upsert updates the row its key names and returns its id; keep writes nothing (rule 28)', async () => {
+	it('upsert matches by id, creates without one, and keep writes nothing (rule 28)', async () => {
 		const id = await order('desk');
-		const kept = committed((await run({ verb: 'upsert', input: { title: 'desk', note: 'x' }, onConflict: 'keep' })).outcome);
+		const kept = committed((await run({ verb: 'upsert', input: { id, note: 'x' }, onConflict: 'keep' })).outcome);
 		expect(kept).toMatchObject({ output: [id], records: [] });
-		const updated = committed((await run({ verb: 'upsert', input: { title: 'desk', note: 'x' }, onConflict: 'update' })).outcome);
+		const updated = committed((await run({ verb: 'upsert', input: { id, note: 'x' }, onConflict: 'update' })).outcome);
 		expect(updated).toMatchObject({ output: [id], records: [{ id, revision: 2 }] });
+		const made = (await run({ verb: 'upsert', input: { title: 'chair' }, onConflict: 'update' })).outcome;
+		if (made.kind !== 'committed') throw new Error(JSON.stringify(made));
+		expect(made.output).toEqual([made.records[0]!.id]);
+		expect((await run({ verb: 'upsert', input: { id: '0199a000-0000-7000-8000-0000000000aa', note: 'x' }, onConflict: 'update' })).outcome)
+			.toMatchObject({ code: 'notFound', field: 'id' });
+		expect((await run({ verb: 'upsert', input: null, onConflict: 'update' })).outcome).toMatchObject({ code: 'invalidInput' });
+		expect((await run({ verb: 'upsert', input: { id: 4, note: 'x' }, onConflict: 'update' })).outcome)
+			.toMatchObject({ code: 'invalidInput', field: 'id' });
+	});
+
+	it('upserts a collection without a natural key', async () => {
+		const parent = await order('desk');
+		const made = committed((await run({ collection: 'lines', verb: 'upsert', input: { order: parent, label: 'part', amount: '1' }, onConflict: 'update' })).outcome);
+		const id = made.records[0]!.id;
+		expect(made).toMatchObject({ output: [id] });
+		const changed = committed((await run({ collection: 'lines', verb: 'upsert', input: { id, amount: '2' }, onConflict: 'update' })).outcome);
+		expect(changed).toMatchObject({ output: [id], records: [{ id, revision: 2 }] });
 	});
 });
 
@@ -184,6 +201,18 @@ function transformEngine(body: (inv: Invocation) => GuestOutcome, calls: Invocat
 }
 
 describe('engine/write: the transform (rules 19, 27)', () => {
+	it('gives an id upsert its stored row, without passing id to the transform payload', async () => {
+		const calls: Invocation[] = [];
+		const engine = transformEngine((inv) => ({ kind: 'ok', cpuMs: 1, output: inv.input }), calls);
+		const id = await order('desk');
+		const changed = committed((await run({ verb: 'upsert', input: { id, note: 'measured', lines: { create: [{ label: 'tile', amount: '2' }] } }, onConflict: 'update' }, engine)).outcome);
+		expect(changed).toMatchObject({ output: [id] });
+		expect(calls[0]!.input).toEqual([{ note: 'measured', lines: { create: [{ label: 'tile', amount: '2' }] } }]);
+		expect(calls[0]!.ctx.existing![0]).toMatchObject({ id, title: 'desk' });
+		expect(await rows(`select note from orders`)).toEqual([{ note: 'measured' }]);
+		expect(await rows(`select label from lines`)).toEqual([{ label: 'tile' }]);
+	});
+
 	it('runs once per batch with ctx.existing, and its payload is the write', async () => {
 		const calls: Invocation[] = [];
 		const engine = transformEngine((inv) => ({ kind: 'ok', cpuMs: 1, output: (inv.input as object[]).map((x) => ({ ...x, note: 'derived' })) }), calls);

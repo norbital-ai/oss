@@ -5,6 +5,7 @@ import type { Json } from '../decl/values.ts';
 import type { Authority, EngineManifest, FilesPort, TenantDb } from '../engine/contracts.ts';
 import type { AttachmentPort } from '../engine/agent/tools.ts';
 import { xlsxCells, xlsxSheets } from '../engine/agent/xlsx.ts';
+import { imageJob } from '../engine/runs/files.ts';
 export type { Cell } from '../engine/agent/xlsx.ts';
 import { canApprove, canSupersede, type Request } from '../engine/approvals/route.ts';
 import * as members from '../engine/identity/members.ts';
@@ -233,6 +234,8 @@ export async function settingsOp(h: IdentityHost, m: EngineManifest, auth: Autho
 // The agent's `read_attachment` for any host with a files port: a message's stored file as text, an image, or a sheet.
 // An xlsx sheet is read into std/sheet's `Cell[][]` (its first worksheet, header row first); other sheets as CSV text.
 const TEXT = /^(text\/|application\/(json|xml|csv))/;
+/** The image types model providers take as they are. */
+const MODEL_IMAGE = /^image\/(jpeg|png|webp|gif)$/;
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 /** A sheet's rows the agent sees at most; the rest is reported, not read. */
 export const SHEET_ROWS = 2_000;
@@ -246,7 +249,11 @@ export function fileAttachments(db: TenantDb, files: FilesPort): AttachmentPort 
 			if (row === undefined) throw new Error('the file is not stored');
 			const mime = String(row['mime']), bytes = await files.get(String(row['key']), 20 * 1024 * 1024, signal);
 			const name = String((ref as { name?: Json }).name ?? '');
-			if (as === 'image') { if (!mime.startsWith('image/')) throw new Error(`a ${mime} file is not an image`); return { mime, bytes }; }
+			if (as === 'image') {
+				if (!mime.startsWith('image/')) throw new Error(`a ${mime} file is not an image`);
+				// a phone's HEIC is no type a model reads: it goes as a derived JPEG (a raw one stalled the turn)
+				return MODEL_IMAGE.test(mime) ? { mime, bytes } : { mime: 'image/jpeg', bytes: await imageJob(bytes, 2048, signal) as Uint8Array };
+			}
 			if (as === 'document') { if (mime !== 'application/pdf') throw new Error(`a ${mime} file is not a PDF`); return { mime, bytes }; }
 			if (mime === XLSX || name.toLowerCase().endsWith('.xlsx')) { // hook:agent-ui
 				const sheets = xlsxSheets(bytes), cells = xlsxCells(bytes, sheet);

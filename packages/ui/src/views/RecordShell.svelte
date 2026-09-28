@@ -134,11 +134,11 @@
 	});
 	// the owner's toggle and scrubber sit in the sheet's title bar beside full screen and close; no shell below claims them
 	const CHROME = Symbol.for('ui.sheet.chrome');
-	const toChrome = getContext<((c: { tools: Snippet; timeline: Snippet } | null) => void) | undefined>(CHROME);
+	const toChrome = getContext<((c: { tools: Snippet } | null) => void) | undefined>(CHROME);
 	setContext(CHROME, undefined);
 	$effect(() => {
 		if (toChrome === undefined || !owner) return;
-		toChrome({ tools, timeline });
+		toChrome({ tools });
 		return () => toChrome(null);
 	});
 
@@ -247,12 +247,9 @@
 					{#if t.key === 'approval' && heldBy !== null}<span class="bg-brand ring-popover absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2" aria-hidden="true"></span>{/if}
 				</button>
 			{/each}
+			{#if latest >= 1}<RecordTimeline {of} {latest} {viewing} {history} onload={() => (wanted = true)} onpick={pick} />{/if}
 		</div>
 	{/if}
-{/snippet}
-
-{#snippet timeline()}
-	{#if latest >= 1}<RecordTimeline {of} {latest} {viewing} {history} onload={() => (wanted = true)} onpick={pick} />{/if}
 {/snippet}
 
 {#snippet pastPill(p: Row)}
@@ -305,8 +302,8 @@
 
 {#if owner}
 	{#if toChrome === undefined && live !== null}
-		<!-- a page-level record: the toggle and scrubber above it -->
-		<div class="mb-3 flex flex-col gap-1" data-record-chrome><div class="flex justify-end empty:hidden">{@render tools()}</div>{@render timeline()}</div>
+		<!-- a page-level record: the actions above it -->
+		<div class="mb-3 flex justify-end" data-record-chrome>{@render tools()}</div>
 	{/if}
 	{#if past !== null}<div class="mb-3">{@render pastPill(past)}</div>{/if}
 	{#if onApproval}{@render approval()}{/if}

@@ -50,7 +50,7 @@ export type ViewBolt = {
 	/** §3.5 rule 11a in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
 	decode?(collection: string, q: { where?: Json; orderBy?: Json }): { where: Json; orderBy?: Json; dropped: readonly { path: string; message: string }[] };
 	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai` (P19); rejects when no filter could be built. */
-	describe?(collection: string, text: string): PromiseLike<{ where: Json; orderBy?: Json }>;
+	describe?(collection: string, text: string, fields?: readonly { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean }[]): PromiseLike<{ where: Json; orderBy?: Json }>;
 	approvals: {
 		process(requestId: string, decision: { status: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED'; reason?: string }): Promise<Outcome>;
 		withdraw(requestId: string): Promise<Outcome>;

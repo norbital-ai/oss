@@ -142,7 +142,7 @@ export type ModelSpec = {
 	 * document's own revision mark is a field such as `document_revision` (`bolt check`: `load/reserved-field`).
 	 */
 	fields: { readonly [name: string]: FieldKind };
-	/** The natural key (never null): what `upsert` and imports match rows by. */
+	/** The natural key (never null): what imports match rows by. Upsert matches by `id`. */
 	key?: readonly string[];
 	/** Unique field sets, optionally partial (`where`). */
 	unique?: readonly { fields: readonly string[]; where?: object; name?: string }[];

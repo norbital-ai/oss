@@ -26,6 +26,7 @@ is<Eq<'refuse' extends keyof AutomationCtx ? 1 : 0, 0>>();   // automations have
 // (2) upsert from an action takes onConflict
 c.orders.action('renote', async (_, ctx) => {
 	await ctx.act('notice_notes.upsert', { notice: 'n' as Id<'notices'>, note: 'x' }, { onConflict: 'update' });
+	await ctx.act('notice_notes.upsert', { id: 'n1' as Id<'notice_notes'>, note: 'y' }, { onConflict: 'update' });
 	return 1;
 });
 // @ts-expect-error U1 upsert without onConflict (rule 28)

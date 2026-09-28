@@ -648,7 +648,7 @@
 			{:else if row.role === 'user'}
 				{@const label = triageLabel(row, index)}
 				<li {@attach turns.measure(itemKey(at))} class="ml-auto w-fit max-w-[85%] rounded-[1.25rem] bg-muted px-4 py-2.5 break-words whitespace-pre-wrap" class:opacity-60={row.state === 'pending' || row.tag === 'ambient'} data-role="user" data-pending={row.state === 'pending' || undefined}><span data-text>{row.text}</span>{#each row.files ?? [] as f, i (i)}{@const href = f.id === undefined ? null : bolt.fileUrl({ id: f.id } as FileRef)}<span class="mt-1 block text-xs text-muted-foreground" data-attachment>
-						{#if href !== null && f.mime.startsWith('image/')}<img src={href} alt={f.name} class="mb-1 max-h-32 rounded" />{/if}{t('Attached')}: {#if href !== null}<a {href} target="_blank" rel="noreferrer" class="underline">{f.name}</a>{:else}{f.name}{/if}</span>{/each}
+						{#if href !== null && f.mime.startsWith('image/')}<img src={/^image\/hei[cf]$/.test(f.mime) ? `${href}?preview=jpeg` : href} alt={f.name} class="mb-1 max-h-32 rounded" />{/if}{t('Attached')}: {#if href !== null}<a {href} target="_blank" rel="noreferrer" class="underline">{f.name}</a>{:else}{f.name}{/if}</span>{/each}
 					{#if !thread && row.state === 'consumed' && revisable(row)}<Button size="sm" variant="ghost" class="mt-1 h-6 px-1 text-xs" onclick={() => revise(row)}>{t('Revise')}</Button>{/if}
 					{#if label !== null}
 						<span class="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground" data-triage={row.state === 'pending' ? 'waiting' : row.tag === 'ambient' ? 'ambient' : 'responding'}

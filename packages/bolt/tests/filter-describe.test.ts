@@ -106,6 +106,14 @@ const bindings = { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'As
 const choices = (q: DecisionQuestion | undefined) => q?.type === 'choice' ? Object.keys(q.criteria) : [];
 
 describe('filter.describe offers System 1 the exposure and maps its choices onto the grammar', () => {
+	it('describes a local roster from its supplied fields without a collection read', async () => {
+		const port = system1({ 'c0.yes': true, 'c0.field': 'Number', 'c0.op': 'Number · more than', 'c0.value': 'Number · 20',
+			'sort.yes': true, 'sort.field': 'Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' });
+		const fields = [{ name: 'number', label: 'Number', kind: 'number' as const }, { name: 'name', label: 'Name', kind: 'text' as const }];
+		const r = await describer(port).describe({ collection: '$local', text: 'people numbered above 20, by name', localFields: fields, authority: caller({}), bindings });
+		expect(r).toEqual({ ok: true, where: { number: { gt: 20 } }, orderBy: { name: 'asc' } });
+		expect(choices(port.requests[0]!.questions['c0.field'])).toEqual(['Number', 'Name']);
+	});
 	it('the field options are the caller\'s exposure: relations one hop, nothing masked or unexposed', async () => {
 		const port = system1({});
 		await describer(port).describe({ collection: 'jobs', text: 'jobs with more than 2 pumps', authority: caller(), bindings });

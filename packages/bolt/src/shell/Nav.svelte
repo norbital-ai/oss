@@ -12,13 +12,13 @@
 	import { Frame, Imposter, Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { SyncStatus } from '../client/bolt.ts';
 	import { NORBIUS, type NavItem, type NavModel, type Translate } from './model.ts';
-	import { based } from './nav.ts';
+	import { based, type ShellNotice } from './nav.ts';
 	import { LANGUAGE, LOCALES } from './i18n.ts';
 	import { THEMES, type Theme } from './theme.ts';
 
 	let {
 		model, expanded = true, mobile = false, t, environment = null, locale = 'en', onLocale, theme = 'system', onTheme, sync = 'idle',
-		previewing = false, loadTeams, onPreviewTeam, onEndPreview, onSearch, onToggle, onNavigate, onSignOut, bell,
+		previewing = false, loadTeams, onPreviewTeam, onEndPreview, onSearch, onToggle, onNavigate, onSignOut, bell, notice,
 	}: {
 		model: NavModel; expanded?: boolean; mobile?: boolean; t: Translate; environment?: string | null; locale?: string;
 		onLocale?: (locale: string) => void; theme?: Theme; onTheme?: (theme: Theme) => void; sync?: SyncStatus;
@@ -27,6 +27,8 @@
 		onSearch?: () => void; onToggle?: () => void; onNavigate: (href: string) => void; onSignOut: () => void | Promise<void>;
 		/** The notification bell (it reads the live inbox the shell owns). */
 		bell?: Snippet<[boolean]>;
+		/** The host's notice (a billing reminder): a footer line here, so it never takes the page's height. */
+		notice?: ShellNotice | undefined;
 	} = $props();
 
 	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
@@ -215,6 +217,13 @@
 	</div>
 
 	<Stack gap="sm" class="shrink-0 border-t border-border bg-muted/30 px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]">
+		{#if notice !== undefined}
+			<a href={notice.href === undefined ? undefined : based(notice.href)} title={expanded ? undefined : notice.text} aria-label={expanded ? undefined : notice.text} data-shell-notice
+				class={cn('flex items-center gap-2 rounded-md px-2 py-1.5 text-xs', notice.tone === 'warning' ? 'bg-warning/15' : 'bg-muted', !expanded && 'mx-auto size-8 justify-center p-0')}>
+				<Icon name="lucide:circle-alert" class="size-3.5 shrink-0" />
+				{#if expanded}<span class="min-w-0 flex-1">{notice.text}</span>{#if notice.href !== undefined}<span class="shrink-0 font-medium underline">{notice.action ?? t('Open')}</span>{/if}{/if}
+			</a>
+		{/if}
 		{#if expanded}
 			<Inline justify="between" align="center" gap="xs" class="h-7 px-1">
 				<Inline gap="xs">

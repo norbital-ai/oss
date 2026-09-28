@@ -71,11 +71,15 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 		setOrder(next: readonly SortKey[]) { order = next; },
 		clear() { rows = []; order = []; touched = true; notice = null; },
 		/** Rule 16a: the description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
-		async describe(text: string): Promise<void> {
-			const fail = () => void (notice = msg(bolt, 'view.describeFailed', 'Could not build a filter from that description'));
-			if (bolt.describe === undefined || text.trim() === '') return;
+		async describe(text: string): Promise<boolean> {
+			const fail = () => { notice = msg(bolt, 'view.describeFailed', 'Could not build a filter from that description'); return false; };
+			if (bolt.describe === undefined || text.trim() === '') return false;
 			try {
-				const r = await bolt.describe(o.collection(), text.trim());
+				const c = o.collection();
+				const fields = c.startsWith('$') ? Object.entries(o.catalog()[c]?.fields ?? {}).flatMap(([name, field]) =>
+					field.kind === 'text' || field.kind === 'number' || field.kind === 'bool'
+						? [{ name, label: field.label ?? name, kind: field.kind, optional: field.optional === true }] : []) : undefined;
+				const r = await bolt.describe(c, text.trim(), fields);
 				const parts = clauses(r.where).map((cl) => fromWhere(o.catalog(), o.collection(), cl));
 				const keys = r.orderBy === undefined ? null : parseOrder(orderText(orderKeys(r.orderBy)), sortable(o.catalog()[o.collection()], !o.collection().startsWith('$'), o.catalog()));
 				if (parts.some((p) => p === null) || (keys !== null && keys.dropped > 0)) return fail();
@@ -83,8 +87,9 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 				touched = true;
 				notice = null;
 				if (keys !== null) order = keys.keys;
+				return true;
 			} catch {
-				fail();
+				return fail();
 			}
 		},
 	};

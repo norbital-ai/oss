@@ -1,4 +1,5 @@
 // The workspace shell's pure halves (§5.10, §3.9): app visibility, the nav tree, routes, and the visitor fetch.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import { canOpen, exposure, href, isOpenRoute, nav, route, surfaces, type ShellManifest } from '../src/shell/nav.ts';
@@ -296,6 +297,13 @@ describe('read_attachment over the files port', () => {
 		await expect(a.read({ id: 'f3' }, 'text', signal)).rejects.toThrow(/cannot be read/);
 		await expect(a.read({ id: 'nope' }, 'text', signal)).rejects.toThrow(/not stored/);
 	});
+	it('reads a HEIC attachment as a derived JPEG, the image a model takes', async () => {
+		const db = { read: async () => [{ rows: [{ key: 'k', mime: 'image/heic' }], affected: 0 }] } as never;
+		const files = { get: async () => new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url))) } as never;
+		const got = await fileAttachments(db, files).read({ id: 'f' }, 'image', AbortSignal.timeout(30_000)) as { mime: string; bytes: Uint8Array };
+		expect(got.mime).toBe('image/jpeg');
+		expect([...got.bytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+	}, 30_000);
 });
 
 describe('workspace media', () => {

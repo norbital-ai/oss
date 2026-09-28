@@ -4,6 +4,7 @@ import { LIMITS, type Authority, type Bindings } from '../engine/contracts.ts';
 import { chargesFor, RateWindows } from '../engine/access/rate.ts';
 import { upload } from '../engine/callables/upload.ts';
 import { readableFile } from '../engine/decisions/index.ts';
+import { imageJob } from '../engine/runs/files.ts';
 import type { Engine } from '../engine/index.ts';
 import { HEADERS, PATHS, statusOf } from './wire.ts';
 
@@ -46,7 +47,10 @@ export function filesHandler(h: FilesHttp): (request: Request) => Promise<Respon
 		if (row === undefined || !await readableFile({ manifest, db, read: h.engine.read, authority: auth, bindings: b }, rest, String(row['field'])))
 			return err('notFound', 'Not found or no access.', 404);
 		const bytes = await files.get(String(row['key']), LIMITS.storedFileBytes, AbortSignal.timeout(LIMITS.callMs.other));
-		return new Response(new Uint8Array(bytes), { headers: { 'content-type': String(row['mime']), 'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(String(row['name']))}`,
+		const preview = new URL(request.url).searchParams.get('preview') === 'jpeg' && /^image\/hei[cf]$/.test(String(row['mime']));
+		const body = preview ? await imageJob(bytes, 512, AbortSignal.timeout(LIMITS.callMs.image)) as Uint8Array : bytes;
+		const name = preview ? String(row['name']).replace(/\.[^./]*$/, '') + '.jpg' : String(row['name']);
+		return new Response(new Uint8Array(body), { headers: { 'content-type': preview ? 'image/jpeg' : String(row['mime']), 'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
 			'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' } });
 	};
 }

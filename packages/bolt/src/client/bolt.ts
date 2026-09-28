@@ -297,8 +297,8 @@ export function createBolt(config: BoltConfig) {
 			return decodeView(decoder ??= browserCatalog(config.catalog), collection, view);
 		},
 		/** Rule 16a `filter.describe` as the caller: a description → `{ where, orderBy? }`; rejects when no filter could be built. */
-		...(config.describe === true ? { async describe(collection: string, text: string): Promise<{ where: Json; orderBy?: Json }> {
-			const o = await send('filter.describe', { collection, text }, uuid());
+		...(config.describe === true ? { async describe(collection: string, text: string, fields?: readonly { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean }[]): Promise<{ where: Json; orderBy?: Json }> {
+			const o = await send('filter.describe', { collection, text, ...(fields === undefined ? {} : { fields }) }, uuid());
 			if (o.kind !== 'committed') throw new Error(o.kind === 'refused' ? o.message : 'Could not build a filter from that description.');
 			return o.output as { where: Json; orderBy?: Json };
 		} } : {}),

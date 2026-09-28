@@ -43,25 +43,34 @@ async function show(live) {
 	const app = mount(Harness, { target, props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } } });
 	await settle();
 	mounted.push(() => { unmount(app); target.remove(); });
-	return { target, calls, slider: () => target.querySelector('header [data-record-timeline] [role=slider]') };
+	return { target, calls, slider: () => document.querySelector('[data-record-timeline] [role=slider]'),
+		openHistory: async () => { target.querySelector('header [data-timeline-trigger]').click(); await settle(); } };
 }
 const key = async (el, k) => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); await settle(); };
 const edit = (t) => [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Edit');
 
 test('the scrubber sits in the sheet header; no per-field history and no History tab', async () => {
 	const v = await show(LIVE);
+	const trigger = v.target.querySelector('header [data-timeline-trigger]');
+	assert.ok(trigger, 'history opens from the sheet header');
+	assert.equal(trigger.parentElement, v.target.querySelector('header [data-record-toggle]'), 'history shares the record and approval action row');
+	assert.equal(trigger.textContent.trim(), '', 'history is a single icon');
+	assert.equal(trigger.getAttribute('aria-label'), 'History');
+	assert.equal(v.slider(), null, 'the ruler is hidden until opened');
+	assert.equal(v.calls.history, 0, 'history loads lazily');
+	await v.openHistory();
 	const s = v.slider();
-	assert.ok(s, 'the scrubber is in the sheet header');
+	assert.ok(s);
 	assert.equal(s.getAttribute('aria-valuemax'), '3');
 	assert.equal(s.getAttribute('aria-valuenow'), '3');
 	assert.equal(v.target.querySelector('[data-field-history]'), null);
 	assert.equal([...v.target.querySelectorAll('[role=tab]')].some((t) => /history/i.test(t.textContent)), false);
-	assert.equal(v.calls.history, 0, 'history loads lazily');
 });
 
 test('a past revision shows read-only, then End returns to the live, editable record', async () => {
 	const v = await show(LIVE);
 	assert.ok(edit(v.target));
+	await v.openHistory();
 	await key(v.slider(), 'ArrowLeft');
 	assert.ok(v.calls.gets.some((g) => g.c === 'jobs' && g.revision === 2), 'read as of revision 2');
 	assert.ok(v.target.querySelector('[data-record-past]'));
@@ -76,14 +85,11 @@ test('a past revision shows read-only, then End returns to the live, editable re
 	assert.ok(edit(v.target));
 });
 
-test('hover loads the history once and the card says when, who and what changed', async () => {
+test('opening history loads it once and the selected revision says when, who and what changed', async () => {
 	const v = await show(LIVE);
-	const strip = v.target.querySelector('[data-record-timeline]');
-	strip.dispatchEvent(new PointerEvent('pointerenter'));
-	strip.dispatchEvent(new PointerEvent('pointerenter'));
-	await settle();
+	await v.openHistory();
 	await key(v.slider(), 'ArrowLeft');
-	const card = v.target.querySelector('[data-timeline-card="2"]');
+	const card = document.querySelector('[data-timeline-card="2"]');
 	assert.ok(card);
 	assert.equal(v.calls.history, 1);
 	assert.match(card.textContent, /Automation/);
@@ -106,6 +112,7 @@ test('a held record: the header toggles between the record and its approval', as
 
 test('every stored record: both toggles and a one-tick scrubber on revision 1; approval says there is none', async () => {
 	const v = await show({ ...LIVE, revision: 1 });
+	await v.openHistory();
 	assert.ok(v.target.querySelector('header [data-record-pane=record]'));
 	const approval = v.target.querySelector('header [data-record-pane=approval]');
 	assert.ok(approval);
@@ -113,7 +120,7 @@ test('every stored record: both toggles and a one-tick scrubber on revision 1; a
 	assert.equal(v.slider().getAttribute('aria-valuemax'), '1');
 	v.slider().focus();
 	await settle();
-	assert.match(v.target.querySelector('[data-timeline-card="1"]')?.textContent ?? '', /Created/);
+	assert.match(document.querySelector('[data-timeline-card="1"]')?.textContent ?? '', /Created/);
 	approval.click();
 	await settle();
 	assert.match(v.target.textContent, /No approval on this record/);

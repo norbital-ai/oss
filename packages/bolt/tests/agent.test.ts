@@ -3,9 +3,9 @@
 import { respondSystem1 } from '../src/test/index.ts'; // hook:decisions
 import { describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
-import type { AiPort, AiRequest, AiResponse, CrossCall } from '../src/engine/contracts.ts';
+import type { AiPort, AiRequest, AiResponse, CrossCall, EngineManifest } from '../src/engine/contracts.ts';
 import { inferFacility, modelCall } from '../src/engine/agent/ai.ts';
-import { bound, BOUNDS, messages, projection, system } from '../src/engine/agent/context.ts';
+import { bound, BOUNDS, messages, outline, projection, system } from '../src/engine/agent/context.ts';
 import { preview, type MessageRow } from '../src/engine/agent/schema.ts';
 
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
@@ -56,6 +56,23 @@ describe('the context projection (rule 60)', () => {
 		const s = system({ channel: true, brief: 'Brief.', task: 'Task.', skills: { pricing: '---\ndescription: How we price\n---\nbody' } });
 		expect(s).toContain('Brief.\n\nTask.\n\nSkills (read one with the skill tool):\n- pricing: How we price');
 		expect(s).not.toMatch(/20\d\d|clock|timezone/i);
+	});
+});
+
+describe('the workspace outline', () => {
+	it("names each collection's write contract and nested relation writes, so a write needs no type lookup", () => {
+		const m = {
+			models: { sites: { fields: { name: {}, code: { optional: true } } }, jobs: { fields: { title: {}, done: {} }, unique: [{ fields: ['title'] }] } },
+			collections: {
+				sites: { create: { input: { columns: ['name', 'code'], with: { tasks: { create: { columns: ['title', 'site_id'] }, link: {} } } } },
+					update: { input: { columns: ['name', 'code'], with: { tasks: { create: { columns: ['title', 'site_id'] }, link: {} } } } }, delete: {} },
+				jobs: { create: { input: { columns: ['title'] } }, update: { input: { columns: ['title', 'done'] } } }
+			},
+			relationships: { 'jobs.site_id': { to: 'sites', inverse: 'tasks', optional: true } }, pipelines: { jobs: { import: {}, export: {} } }, customFields: {}, apps: {}, automations: {}, policies: {}
+		} as unknown as EngineManifest;
+		const lines = outline(m, null).split('\n');
+		expect(lines.find((l) => l.startsWith('- sites'))).toContain('create(name, code?, tasks{create(title, site_id?), link}), update(as create), upsert, delete');
+		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('create(title), update(title, done), upsert, pipeline(import|export)');
 	});
 });
 

@@ -97,7 +97,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 	{#each tabs as tab (tab.name)}
 		{#if tab.name === active || (tab.keepAlive && visited[tab.name])}
 			<!-- a kept-alive panel stays in the DOM, hidden, outside bits-ui's own unmounting -->
-			<div role="tabpanel" hidden={tab.name !== active} class="min-h-0 min-w-0">
+			<div role="tabpanel" hidden={tab.name !== active} class="min-h-0 min-w-0 overflow-x-clip overflow-y-auto [scrollbar-gutter:stable]">
 				{@render tab.body()}
 			</div>
 		{/if}

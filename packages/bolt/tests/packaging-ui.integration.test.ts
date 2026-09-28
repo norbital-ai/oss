@@ -101,6 +101,9 @@ describe('the client build', () => {
 		expect(c.errors).toEqual([]);
 		const out = join(root, '.norbital', 'artifact', 'client');
 		const { entry } = await buildClient(root, discover(root).files, c.manifest!, out, 'Good');
+		const html = readFileSync(join(out, 'index.html'), 'utf8');
+		expect(html).toContain('id="bolt-loading" role="status"');
+		expect(html).toContain('Opening workspace…');
 		const js = readFileSync(join(out, entry), 'utf8');
 		expect(js).toMatch(/representations:\{orders:\(\)=>/);
 		expect(js).toMatch(/customFields:\{rating:\{shape:\{/);

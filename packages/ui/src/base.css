@@ -901,6 +901,16 @@
 *:hover {
 	scrollbar-color: var(--color-border) transparent;
 }
+/* A table's scroll port: its vertical bar starts under the sticky header (h-9), not beside it. Chrome
+	reads the `::-webkit-scrollbar` rules only while both standard properties are `auto`; Firefox has no
+	track margin, so its bar still spans the header. */
+[data-table-wide] {
+	scrollbar-width: auto;
+	scrollbar-color: auto;
+}
+[data-table-wide]::-webkit-scrollbar-track:vertical {
+	margin-top: 2.25rem;
+}
 
 /* ---- overflow affordance ----
 	`scrollAffordance` stamps `data-overflow` with the edges that have content beyond

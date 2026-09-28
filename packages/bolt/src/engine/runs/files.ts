@@ -37,7 +37,7 @@ function csvRows(text: string): string[][] {
 }
 
 /** One image job in a worker under the image wall and a heap cap, so a hostile file cannot stall or exhaust the host. */
-function imageJob(bytes: Uint8Array, maxEdge: number | undefined, signal: AbortSignal): Promise<Json | Uint8Array> {
+export function imageJob(bytes: Uint8Array, maxEdge: number | undefined, signal: AbortSignal): Promise<Json | Uint8Array> {
 	const bounded = AbortSignal.any([signal, AbortSignal.timeout(LIMITS.callMs.image)]);
 	// a concatenated specifier, so a bundler's worker and asset plugins leave the URL alone
 	const script = new URL('./image-worker' + (import.meta.url.endsWith('.ts') ? '.ts' : '.js'), import.meta.url);

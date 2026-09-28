@@ -61,7 +61,7 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 		await t.engine.agents.post({ conversation: c, as: { member: 'ann' }, text: 'How do I triage a notice?' });
 		expect((await t.engine.agents.drain(c)).reply?.text).toBe('Read it first.');
 		expect(ai.requests[0]!.system).toContain('- triage: Triage a notice');
-		expect(ai.requests[0]!.system).toMatch(/# Workspace outline[\s\S]*## Collections\n- customers/);
+		expect(ai.requests[0]!.system).toMatch(/# Workspace outline[\s\S]*## Collections\n[^\n]+\n- customers/);
 		expect(names(ai.requests[0])).toEqual(expect.arrayContaining(['skill', 'workspace_type', 'workspace_search']));
 		expect(results(ai.requests[1]!)[0]).toBe('## Steps\nRead it.\n');
 		expect(results(ai.requests[2]!)[1]).toMatchObject({ type: '{\n\tinput: {};\n\toutput: number;\n}', source: 'src/data/collection/orders/+collection.ts:6' });

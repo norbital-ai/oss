@@ -1,9 +1,9 @@
 <script lang="ts">
 	// The view popover of `Table` and `Board` (rule 16b, P34): one filter-and-sort toolbar icon. The main control is
 	// "Describe what to show…" (when the host can describe, rule 16a); the author's scope read-only, relations by their
-	// label; the explicit conditions and sort (≤ 4 keys) stay hidden until there are some, there is no describer, or the
-	// viewer asks for them (a quiet "Edit conditions"); the author's scope shows with them.
+	// label; explicit conditions and sort (≤ 4 keys) stay in a collapsed accordion when a describer is available.
 	import type { CollectionExposure } from '../kinds/context.js';
+	import Icon from '@iconify/svelte';
 	import { CONTROL } from '../kinds/classes.js';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
@@ -29,14 +29,11 @@
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
-	let open = $state(false), text = $state(''), busy = $state(false);
-	// the builder: shown without a describer, with conditions to edit, or when the viewer asks (reset on every open)
-	let asked = $state(false);
+	let open = $state(false), text = $state(''), busy = $state(false), applied = $state(false);
+	let details: HTMLDetailsElement | null = $state(null);
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
 	const count = $derived(view.rows.length + view.order.length);
-	// describing needs a collection the host reads; a local array (`$local`, the roster's people) has only the builder
-	const describes = $derived(bolt.describe !== undefined && !collection.startsWith('$'));
-	const builder = $derived(asked || count > 0 || !describes);
+	const describes = $derived(bolt.describe !== undefined);
 	const authorText = $derived.by(() => {
 		if (author === undefined || author === null) return null;
 		const rows = fromWhere(catalog, collection, author);
@@ -47,13 +44,15 @@
 	const move = (i: number, d: -1 | 1) => { const o = [...view.order]; [o[i], o[i + d]] = [o[i + d]!, o[i]!]; view.setOrder(o); };
 	async function describe(e: SubmitEvent) {
 		e.preventDefault();
+		if (text.trim() === '') return;
 		busy = true;
-		try { await view.describe(text); } finally { busy = false; }
+		applied = false;
+		try { applied = await view.describe(text); } finally { busy = false; }
 	}
 </script>
 
 <!-- portaled, so a sticky table header never paints over it (it sat under the roster's day header on staging) -->
-<Popover.Root bind:open onOpenChange={(o) => { if (o) asked = false; }}>
+<Popover.Root bind:open onOpenChange={(o) => { if (o) { applied = false; if (details) details.open = !describes; } }}>
 	<Popover.Trigger>
 		{#snippet child({ props })}
 			<button {...props} type="button" class={cn('hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none', count > 0 && 'bg-accent')}
@@ -72,20 +71,27 @@
 			'[&_input:not([type=checkbox])]:min-h-(--hit-target) [&_select]:min-h-(--hit-target)')} data-view-panel>
 			<header class="flex items-center gap-2" data-view-header>
 				{#if describes}
-					<form class="min-w-0 flex-1" onsubmit={describe} data-describe>
-						<input class={cn(CONTROL, 'h-9')} type="text" maxlength={500} bind:value={text} disabled={busy}
+					<form class="flex min-w-0 flex-1 gap-2" onsubmit={describe} data-describe>
+						<input class={cn(CONTROL, 'h-9 min-w-0 flex-1')} type="text" maxlength={500} bind:value={text} oninput={() => (applied = false)} disabled={busy}
 							placeholder={msg(bolt, 'view.describe', 'Describe what to show…')} aria-label={msg(bolt, 'view.describe', 'Describe what to show…')} />
+						<button type="submit" disabled={busy || text.trim() === ''} class="bg-primary text-primary-foreground grid size-9 shrink-0 place-items-center rounded-md disabled:opacity-50" aria-label={msg(bolt, 'view.apply', 'Apply filter and sort')}>
+							<Icon icon={busy ? 'lucide:loader-circle' : 'lucide:arrow-right'} class={cn('size-4', busy && 'animate-spin')} />
+						</button>
 					</form>
 				{:else}<p class="flex-1 text-sm font-medium">{msg(bolt, 'view.title', 'Filters & sort')}</p>{/if}
 				{#if count > 0}
 					<button type="button" class="text-muted-foreground hover:text-foreground shrink-0 text-xs" data-clear onclick={() => view.clear()}>{msg(bolt, 'view.clearAll', 'Clear all')}</button>
 				{/if}
 			</header>
+			{#if busy}<p role="status" class="text-muted-foreground text-xs" data-view-loading>{msg(bolt, 'view.applying', 'Applying filter and sort…')}</p>
+			{:else if applied}<p role="status" class="text-xs text-primary" data-view-applied>{msg(bolt, 'view.applied', 'Filter and sort applied')}</p>{/if}
 			{#if view.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>{view.notice}</p>{/if}
-			{#if !builder}
-				<button type="button" class="text-muted-foreground hover:text-foreground self-start text-xs" data-show-builder onclick={() => (asked = true)}>{msg(bolt, 'view.editConditions', 'Edit conditions')}</button>
-			{:else}
-				<div class="flex flex-col gap-3" data-view-builder>
+			<details bind:this={details} open={!describes} class="group" data-view-details>
+				<summary class="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1 text-xs" data-show-builder>
+					<Icon icon="lucide:chevron-right" class="size-3.5 transition-transform group-open:rotate-90" />
+					{msg(bolt, 'view.editConditions', 'Edit conditions')}{#if count > 0} ({count}){/if}
+				</summary>
+				<div class="mt-3 flex flex-col gap-3" data-view-builder>
 			{#if authorText !== null}
 				<p class="bg-muted/50 text-muted-foreground rounded-sm px-2 py-1.5 text-xs" data-author-where><Glyph name="lock" class="mr-1 inline size-3 align-[-2px]" />{msg(bolt, 'view.always', 'Always')}: {authorText}</p>
 			{/if}
@@ -124,6 +130,6 @@
 			</section>
 			{/if}
 				</div>
-			{/if}
+			</details>
 	</Popover.Content>
 </Popover.Root>

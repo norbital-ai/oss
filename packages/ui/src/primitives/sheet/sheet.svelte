@@ -45,9 +45,9 @@ screen from its header.
 	// hook:view-ui — a record view inside claims this header for its label, pills and actions: one header, not two
 	let claimed = $state<Snippet | null>(null);
 	setContext(Symbol.for('ui.sheet.header'), (s: Snippet | null) => (claimed = s));
-	// hook:view-ui — the record's toggle (beside full screen) and history scrubber (the header's lower edge)
-	let chrome = $state<{ tools: Snippet; timeline: Snippet } | null>(null);
-	setContext(Symbol.for('ui.sheet.chrome'), (c: { tools: Snippet; timeline: Snippet } | null) => (chrome = c));
+	// hook:view-ui — the record's actions beside full screen
+	let chrome = $state<{ tools: Snippet } | null>(null);
+	setContext(Symbol.for('ui.sheet.chrome'), (c: { tools: Snippet } | null) => (chrome = c));
 	// an overlay is a new page edge, a new tab hierarchy and a new record frame (an opener's carried record is not a parent)
 	resetInset(true);
 	setContext(TAB_LEVEL, undefined);
@@ -199,7 +199,6 @@ screen from its header.
 			>
 				<svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
 			</button>
-			{#if chrome}<div class="mt-1 -mb-2.5 basis-full empty:hidden">{@render chrome.timeline()}</div>{/if}
 		</header>
 		<div class="min-h-0 flex-1 overflow-auto p-4" data-sheet-body>{@render children()}</div>
 	</div>

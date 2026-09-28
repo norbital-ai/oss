@@ -88,9 +88,10 @@ export class Flattener {
 		return false;
 	}
 
-	create(model: string, sel: Sel, value: unknown, path: InputPath, parent?: Item['parent'], upsert?: { on: readonly string[]; onConflict: 'update' | 'keep' }): void {
+	create(model: string, sel: Sel, value: unknown, path: InputPath, parent?: Item['parent'], upsert?: { on: readonly string[]; onConflict: 'update' | 'keep' }, named?: string): void {
 		const d = this.columns(model, sel, value, path);
 		if (d === null) return;
+		if (named !== undefined) d.values['id'] = named; // an upsert by id: resolution reads it, and it is never written
 		// the parent key a relation action implies is not a caller-supplied ref (rule 36)
 		const refs = this.refsOf(model, d.values);
 		if (parent !== undefined) d.values[parent.fk] = parent.id;
@@ -117,16 +118,19 @@ export class Flattener {
 	}
 
 	/**
-	 * A relation-action upsert (rule 28): `{ values, onConflictDoUpdate }` states the conflict rule; a bare values object
-	 * (the transform payload's shape) updates.
+	 * A relation-action upsert (rule 28): the child row names its record by `id`: a row with an id updates that child (or,
+	 * `{ values, onConflictDoUpdate: false }`, leaves it), a row without one is created. A bare values object (the
+	 * transform payload's shape) updates.
 	 */
 	private upsert(model: string, sel: Sel, v: Json, path: InputPath, parent: Item['parent']): void {
-		const on = upsertKey(this.m, model);
-		if (on.length === 0) { this.bad(path, `${model} has no key or unique to upsert on`); return; }
 		const wrapped = isObj(v) && 'values' in v && 'onConflictDoUpdate' in v;
 		if (wrapped && (typeof v['onConflictDoUpdate'] !== 'boolean' || Object.keys(v).length !== 2)) { this.bad(path, 'expected { values, onConflictDoUpdate }'); return; }
-		this.create(model, sel, wrapped ? v['values'] : v, wrapped ? [...path, 'values'] : path, parent,
-			{ on, onConflict: wrapped && v['onConflictDoUpdate'] === false ? 'keep' : 'update' });
+		const at = wrapped ? [...path, 'values'] : path, row = wrapped ? v['values'] : v;
+		if (!isObj(row)) { this.bad(at, 'expected an object'); return; }
+		const { id, ...values } = row;
+		if (id === undefined) { this.create(model, sel, values, at, parent); return; }
+		if (typeof id !== 'string') { this.bad([...at, 'id'], 'expected an id'); return; }
+		this.create(model, sel, values, at, parent, { on: ['id'], onConflict: wrapped && v['onConflictDoUpdate'] === false ? 'keep' : 'update' }, id);
 	}
 
 	/** Explicit relation actions (rule 22): each names its rows; an empty array or an omitted key does nothing. */
@@ -160,8 +164,11 @@ export class Flattener {
 }
 
 const SYSTEM = new Set(['id', 'revision', 'approval_id', 'created_at', 'created_by', 'updated_at', 'updated_by']);
-/** A keyed model's upsert target: its `key`, else its first declared `unique` (rule 28). */
-export const upsertKey = (m: EngineManifest, model: string): readonly string[] =>
+/**
+ * A model's natural key: its `key`, else its first declared `unique`. An import matches rows and names refs by it
+ * (rule 30); an upsert never does (rule 28: an upsert names its record by `id`).
+ */
+export const modelKey = (m: EngineManifest, model: string): readonly string[] =>
 	m.models[model]?.key ?? m.models[model]?.unique?.[0]?.fields ?? [];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;

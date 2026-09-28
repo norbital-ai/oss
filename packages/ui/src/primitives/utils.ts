@@ -38,7 +38,7 @@ export const UI_TEXT = {
 	useMyLocation: 'Use my location', latitude: 'Latitude', longitude: 'Longitude', searchAddress: 'Search address',
 	pickOnMap: 'Pick on map', mapUnavailable: 'Map unavailable', addressSearchUnavailable: 'Address search unavailable', locationDenied: 'Location unavailable', from: 'From', to: 'To',
 	openEnded: 'Open-ended', pendingApproval: 'Submitted for approval', conflict: 'This record changed since you opened it. Review and save again.',
-	unknown: 'The outcome is not known yet. Check again before retrying.', select: 'Select…', search: 'Search…', noResults: 'No results',
+	unknown: 'The outcome is not known yet. Check again before retrying.', select: 'Select…', search: 'Search…', noResults: 'No results', optionsUnavailable: 'Could not load options',
 	required: 'Required', invalid: 'Invalid value', noAccess: 'No access', notFound: 'Not found or no access', field: 'Field', kind: 'Kind', optional: 'Optional', fields: 'Fields',
 	today: 'Today', previous: 'Previous', next: 'Next', more: '+{n} more', day: 'Day', week: 'Week', month: 'Month', notifications: 'Notifications',
 	fullScreen: 'Full screen', exitFullScreen: 'Exit full screen', createdAt: 'Created {when} by {who}', updatedAt: 'Updated {when} by {who}',

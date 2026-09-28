@@ -139,8 +139,9 @@ export function messages(rows: readonly MessageRow[]): AiMessage[] {
 
 /**
  * The workspace outline in the system prompt: every collection, app, automation, policy and agent with where its source
- * lives, from the manifest and the released file list. Names and enum values, not types (`workspace_type` answers a
- * type; the tools answer what this person may do). One line per thing; static per release, so providers cache it.
+ * lives, from the manifest and the released file list. Names, enum values and each collection's write contract (the
+ * columns a create/update takes and the relation writes nested inside it), not types (`workspace_type` answers a type;
+ * the tools answer what this person may do). One line per thing; static per release, so providers cache it.
  */
 export function outline(m: EngineManifest, files: readonly string[] | null): string {
 	const short = (s: unknown, n = 90) => { const t = typeof s === 'string' ? s.replace(/\s+/g, ' ').trim() : ''; return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
@@ -149,12 +150,36 @@ export function outline(m: EngineManifest, files: readonly string[] | null): str
 		const dot = k.indexOf('.');
 		rels.set(k.slice(0, dot), [...rels.get(k.slice(0, dot)) ?? [], `${k.slice(dot + 1)}→${(r as { to: string }).to}`]);
 	}
+	// the write contract: a selection's columns, then each nested relation's actions (`jobs{create(a, b), link}`)
+	type Writes = { create?: { input: Sel }; update?: { input: Sel }; delete?: object };
+	// a create marks what it may omit (`col?`): an optional or defaulted field, or one its transform fills
+	type Sel = { columns: readonly string[]; filled?: readonly string[]; with?: { readonly [r: string]: { readonly [a: string]: Sel | {} } } };
+	// a nested `with` names the inverse of a child's relation to `c`: the child model is that relation's owner
+	const child = (c: string, r: string) => Object.entries(m.relationships).find(([, x]) =>
+		(x as { to: string; inverse?: string }).to === c && (x as { inverse?: string }).inverse === r)?.[0].split('.')[0] ?? r;
+	const sel = (c: string, x: Sel, create: boolean): string => [...x.columns.map((f) => {
+		const d = (m.models[c]?.fields as { [f: string]: { optional?: boolean; default?: unknown } } | undefined)?.[f];
+		const fk = m.relationships[`${c}.${f}`] as { optional?: boolean } | undefined;
+		return create && (d?.optional === true || d?.default !== undefined || fk?.optional === true || x.filled?.includes(f) === true) ? `${f}?` : f;
+	}), ...Object.entries(x.with ?? {}).map(([r, acts]) =>
+		`${r}{${Object.entries(acts).map(([a, y]) => 'columns' in y ? `${a}(${sel(child(c, r), y as Sel, a !== 'update')})` : a).join(', ')}}`)].join(', ');
+	const writes = (c: string, w: Writes): string[] => {
+		const create = w.create === undefined ? null : sel(c, w.create.input, true), update = w.update === undefined ? null : sel(c, w.update.input, false);
+		const same = w.create !== undefined && w.update !== undefined && JSON.stringify(w.create.input) === JSON.stringify(w.update.input);
+		return [...create === null ? [] : [`create(${create})`], ...update === null ? [] : [`update(${same ? 'as create' : update})`],
+			...create !== null && update !== null ? ['upsert'] : [], ...w.delete === undefined ? [] : ['delete']];
+	};
 	const out = ['# Workspace outline', 'Source under src/: collection c is data/model/c/+model.ts (fields) and data/collection/c/+collection.ts (reads, writes, '
 		+ 'queries, actions; +representation.svelte its record view); relations in data/+relationship.ts; app a is app/a/+app.ts with +<page>.page.svelte; automation n is '
-		+ 'automation/+n.automation.ts; policy p is access/+p.policy.ts; envoy e is agent/envoy/+e.envoy.ts. Search or read any path with workspace_search.', '', '## Collections'];
+		+ 'automation/+n.automation.ts; policy p is access/+p.policy.ts; envoy e is agent/envoy/+e.envoy.ts. Search or read any path with workspace_search.', '',
+		'## Collections', 'Each line: description | fields | relations | writes, queries, actions, its import/export pipeline and its integration. create(a, b?, rel{create(c, d), link}) names the columns a write '
+		+ 'takes (b? may be omitted); upsert is create or update by the row\'s id; a nested rel{…} goes inside that same call (`{ a, rel: { create: [{ c, d }] } }`) and commits with it in one statement.'];
 	for (const [c, spec] of Object.entries(m.collections)) {
 		const model = m.models[c] as { description?: string; label?: string; fields?: object } | undefined, x = spec as { queries?: object; actions?: object };
-		const ops = [...Object.keys(x.queries ?? {}).map((q) => `query ${q}`), ...Object.keys(x.actions ?? {}).map((a) => `action ${a}`)];
+		const feed = m.pipelines?.[c] as { import?: unknown; export?: unknown } | undefined;
+		const modes = feed === undefined ? [] : (['import', 'export'] as const).filter((k) => feed[k] !== undefined);
+		const ops = [...writes(c, spec as Writes), ...Object.keys(x.queries ?? {}).map((q) => `query ${q}`), ...Object.keys(x.actions ?? {}).map((a) => `action ${a}`),
+			...modes.length === 0 ? [] : [`pipeline(${modes.join('|')})`], ...m.integrations?.[c] === undefined ? [] : ['integration(pull|push|reconcile)']];
 		// names, and an enum's values (the words a filter or a write takes)
 		const fields = Object.entries((model?.fields ?? {}) as { [f: string]: { kind?: string; values?: readonly string[] } })
 			.map(([f, x]) => x.kind === 'enum' && x.values !== undefined ? `${f}(${x.values.join('|')})` : f);

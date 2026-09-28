@@ -4,7 +4,7 @@
 	before any page chunk loads.
 -->
 <script lang="ts">
-	import type { Component } from 'svelte';
+	import { tick, type Component } from 'svelte';
 	import { watch } from 'runed';
 	import { PersistedState } from 'runed';
 	import { MediaQuery } from 'svelte/reactivity';
@@ -124,6 +124,9 @@
 	// a `kiosk: true` page renders alone, as staging's kiosk: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
 	const kiosk = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.kiosk === true);
 	const publicApp = $derived(current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined);
+	watch(() => failure !== null || boot !== null || current.kind === 'signIn' || current.kind === 'invite' || current.kind === 'register', (ready) => {
+		if (ready) void tick().then(() => document.getElementById('bolt-loading')?.remove());
+	});
 
 	/** `href` is a workspace URL (`/inbox`); the history entry carries the base path. */
 	function navigate(href: string, replace = false): void {
@@ -329,7 +332,7 @@
 			<Nav model={model!} expanded={open} mobile={narrow.current} {t} environment={boot?.workspace.environment ?? null} {locale} onLocale={setLocale}
 				{theme} onTheme={chooseTheme} {sync} previewing={boot?.preview !== null} onEndPreview={endPreview}
 				{...boot?.admin && boot.surfaces.settings && boot.preview === null ? { loadTeams: teams, onPreviewTeam: previewTeam } : {}}
-				onSearch={() => { navOpen = false; finding = true; }} onNavigate={go} onSignOut={signOut}
+				onSearch={() => { navOpen = false; finding = true; }} onNavigate={go} onSignOut={signOut} notice={boot?.notice}
 				{...narrow.current ? {} : { onToggle: () => (expanded.current = !expanded.current) }}>
 				{#snippet bell(wide)}{#if bolt !== null}<Bell {api} {bolt} {t} expanded={wide} onNavigate={(href) => { navOpen = false; navigate(href); }} />{/if}{/snippet}
 			</Nav>
@@ -370,12 +373,6 @@
 						<Inline role="alert" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
 							<span>{t('This workspace was updated. Reload to continue with the new version.')}</span>
 							<Button size="sm" variant="outline" onclick={() => location.reload()}>{t('Reload')}</Button>
-						</Inline>
-					{/if}
-					{#if boot.notice !== undefined}
-						<Inline role="status" justify="between" class={['px-4 py-2 text-xs', boot.notice.tone === 'warning' ? 'bg-warning/15' : 'bg-muted']}>
-							<span>{boot.notice.text}</span>
-							{#if boot.notice.href !== undefined}<Button size="sm" variant="outline" href={based(boot.notice.href)}>{boot.notice.action ?? t('Open')}</Button>{/if}
 						</Inline>
 					{/if}
 					{#if boot.preview !== null}

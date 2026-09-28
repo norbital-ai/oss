@@ -30,6 +30,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		onSearch?(query: string): void;
 		onOpenChange?(open: boolean): void;
 		loading?: boolean;
+		failed?: boolean;
 		size?: 'sm' | 'default';
 		/** `ghost`: no border, fill or shadow, small text; for a combobox in chrome or a toolbar, not a form. */
 		variant?: 'default' | 'ghost';
@@ -56,7 +57,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	const GHOST = 'h-7 min-w-0 rounded-md bg-transparent px-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive';
 
 	let {
-		options, value, onChange, clearable = false, placeholder, display, searchable, onSearch, onOpenChange, loading = false,
+		options, value, onChange, clearable = false, placeholder, display, searchable, onSearch, onOpenChange, loading = false, failed = false,
 		size = 'default', variant = 'default', id, readonly: ownReadonly, disabled: ownDisabled, invalid = false, class: className, 'aria-label': ariaLabel
 	}: ComboboxProps<V> = $props();
 	const t = uiText();
@@ -173,7 +174,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 				</li>
 				{/if}
 			{:else}
-				<li class="p-2 text-xs text-muted-foreground">{loading ? t('search') : t('noResults')}</li>
+				<li class="p-2 text-xs text-muted-foreground">{loading ? t('search') : failed ? t('optionsUnavailable') : t('noResults')}</li>
 			{/each}
 			{#if win.after > 0}<li role="presentation" style="height:{win.after}px"></li>{/if}
 		</ul>

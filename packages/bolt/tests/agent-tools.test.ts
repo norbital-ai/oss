@@ -94,7 +94,7 @@ describe('workspace_search', () => {
 });
 
 describe('read runs queries and act starts automations', () => {
-	it('a collection query is { query, input } on read; automation.<name> on act starts a run or an import pipeline the actor may start', async () => {
+	it('a collection query is { query, input } on read; act starts automation.<name> and a collection\'s <c>.pipeline the actor may start', async () => {
 		const queried: Stub[] = [], started: Stub[] = [];
 		const manifest = { collections: { tasks: { read: { fields: 'all' }, queries: { open: { description: 'Open tasks' } } } }, models: { tasks: { fields: {} } }, relationships: {},
 			workspace: { tz: 'UTC' }, agent: { skills: {} }, policies: {}, automations: { tidy: { input: { day: { kind: 'date', optional: true } } } }, pipelines: { tasks: { import: {} } } };
@@ -109,11 +109,13 @@ describe('read runs queries and act starts automations', () => {
 		expect(await result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })).toMatchObject({ result: { outcome: { kind: 'queued' } } });
 		expect(started[0]).toMatchObject({ automation: 'tidy', input: { day: '2026-09-01' } });
 		expect(await result(x, 'act', { callable: 'automation.purge' })).toEqual({ result: { error: "You may not run 'automation.purge'." } });
-		expect(tool(x, 'act')!.description).toContain('tasks.pipeline(mode: import, file?: a stored file id)');
-		await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import', file: 'f1' } });
+		expect(tool(x, 'act')!.description).toContain('runs as <collection>.pipeline with { mode, file? }');
+		expect(tool(x, 'act')!.description).toContain('tasks.pipeline(mode: import)');
+		expect(await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import' } })).toEqual({ result: { error: "You may not run 'automation.tasks.pipeline'." } });
+		await result(x, 'act', { callable: 'tasks.pipeline', input: { mode: 'import', file: 'f1' } });
 		expect(started[1]).toMatchObject({ automation: 'tasks.pipeline', input: { mode: 'import', file: 'f1' } });
 		// a list a routed model sent as { item: [...] } is the list (Jev on staging wrapped an import's rows so)
-		await result(x, 'act', { callable: 'automation.tasks.pipeline', input: { mode: 'import', rows: { item: [{ a: 1 }] } } });
+		await result(x, 'act', { callable: 'tasks.pipeline', input: { mode: 'import', rows: { item: [{ a: 1 }] } } });
 		expect(started[2]).toMatchObject({ input: { rows: [{ a: 1 }] } });
 		started.pop();
 		// an input too large to write out is a JSON file the member's sandbox wrote; another member's file is not theirs
@@ -121,10 +123,19 @@ describe('read runs queries and act starts automations', () => {
 		const withFiles = ctx({ authority: { ...member({ admin: true }), automations: ['tidy'] }, inApp: false }, { manifest, calls,
 			db: { read: async (q: { params: Json[] }[]) => [{ rows: q[0]!.params[1] === 'ann' && q[0]!.params[0] === 'f-json' ? [{ key: 'k1', size: 20 }] : [] }] },
 			files: { get: async () => new TextEncoder().encode(JSON.stringify(big)) } });
-		await result(withFiles, 'act', { callable: 'automation.tasks.pipeline', inputFile: 'f-json' });
+		await result(withFiles, 'act', { callable: 'tasks.pipeline', inputFile: 'f-json' });
 		expect(started[2]).toMatchObject({ automation: 'tasks.pipeline', input: big });
 		started.pop();
-		expect(await result(withFiles, 'act', { callable: 'automation.tasks.pipeline', inputFile: 'someone-else' })).toMatchObject({ result: { error: expect.stringContaining('No file someone-else of yours') } });
+		expect(await result(withFiles, 'act', { callable: 'tasks.pipeline', inputFile: 'someone-else' })).toMatchObject({ result: { error: expect.stringContaining('No file someone-else of yours') } });
+		// a collection's integration is its own callable, granted by its run name; never automation.<c>.integration
+		const synced = ctx({ authority: { ...member(), automations: ['tidy', 'tasks.integration'] }, inApp: false },
+			{ manifest: { ...manifest, integrations: { tasks: {} } }, calls, db });
+		expect(tool(synced, 'act')!.description).toContain('runs as <collection>.integration with { mode: pull | push | reconcile }: tasks.integration');
+		expect(tool(synced, 'act')!.description).not.toContain('tasks.integration()');
+		await result(synced, 'act', { callable: 'tasks.integration', input: { mode: 'pull' } });
+		expect(started.at(-1)).toMatchObject({ automation: 'tasks.integration', input: { mode: 'pull' } });
+		started.pop();
+		expect(await result(synced, 'act', { callable: 'automation.tasks.integration', input: { mode: 'pull' } })).toEqual({ result: { error: "You may not run 'automation.tasks.integration'." } });
 		// the same start while that run is queued or running answers it, and queues nothing
 		active = 'run-1';
 		expect(await result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })).toEqual({ result: { run: 'run-1', alreadyActive: true } });

@@ -4,6 +4,7 @@
 import type { Json } from '../decl/values.ts';
 import type { Authority, Bindings, Outcome, ReadIR, RowData } from '../engine/contracts.ts';
 import type { Decision, DecideInput } from '../engine/approvals/approvals.ts';
+import type { LocalFilterField } from '../engine/filter-describe/index.ts';
 import { BoltError } from '../engine/contracts.ts';
 import { chargesFor, RateWindows } from '../engine/access/rate.ts';
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
@@ -186,9 +187,15 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 			const x = obj(input), filters = h.engine.filters;
 			if (filters === undefined) return refusal('notFound', 'Describing a filter is not available here.');
 			if (typeof x['collection'] !== 'string' || typeof x['text'] !== 'string') throw new BoltError('invalid', 'decode', 'filter.describe takes { collection, text }');
+			const raw = x['fields'];
+			if (raw !== undefined && (!Array.isArray(raw) || raw.some((v) => typeof v !== 'object' || v === null || Array.isArray(v) ||
+				typeof v['name'] !== 'string' || typeof v['label'] !== 'string' || !['text', 'number', 'bool'].includes(String(v['kind'])) ||
+				(v['optional'] !== undefined && typeof v['optional'] !== 'boolean'))))
+				throw new BoltError('invalid', 'decode', 'filter.describe fields are invalid');
 			const v = windows.charge(chargesFor(authority, ['agent'], { actor: authority.actor.kind === 'member' ? authority.actor.id : authority.key }), Date.parse(b.now)); // rule 16a: one against `agent`
 			if (!v.ok) return refusal('rateLimited', `Too many requests; retry in ${v.retryAfter} s.`);
-			const r = await filters.describe({ collection: x['collection'], text: x['text'], authority, bindings: b });
+			const r = await filters.describe({ collection: x['collection'], text: x['text'], authority, bindings: b,
+				...(raw === undefined ? {} : { localFields: raw as LocalFilterField[] }) });
 			return r.ok ? committed({ where: r.where, ...(r.orderBy === undefined ? {} : { orderBy: r.orderBy }) })
 				: refusal(r.code === 'notFound' ? 'notFound' : 'invalidInput', r.message);
 		},

@@ -15,7 +15,8 @@ const manifest = {
 			update: { input: { columns: ['value'] } },
 			queries: { check: { description: 'Refuses', input: {}, output: { kind: 'int' } } },
 			actions: {
-				put: { description: 'Upsert one rate', input: { code: { kind: 'text' }, v: { kind: 'union', of: [{ kind: 'bool' }, { kind: 'number' }, { kind: 'text' }] } },
+				put: { description: 'Upsert one rate', input: { code: { kind: 'text' }, id: { kind: 'id', of: 'rates', optional: true },
+					v: { kind: 'union', of: [{ kind: 'bool' }, { kind: 'number' }, { kind: 'text' }] } },
 					output: { kind: 'text' } },
 			},
 		},
@@ -29,7 +30,7 @@ const guest = { source: `export default { collection: { rates: { bodies: {
 	queries: { check: async (input, ctx) => ctx.refuse('not today') },
 	actions: {
 		put: async (input, ctx) => {
-			await ctx.act('rates.upsert', { code: input.code, value: String(input.v) }, { onConflict: 'update' });
+			await ctx.act('rates.upsert', input.id ? { id: input.id, value: String(input.v) } : { code: input.code, value: String(input.v) }, { onConflict: 'update' });
 			return typeof input.v;
 		},
 	},
@@ -46,7 +47,8 @@ it('a query refuses with ctx.refuse', async () => {
 it('an action upserts through ctx.act with onConflict', async () => {
 	const rep = t.as(t.member(['rep']));
 	expect(ok(await rep.act('rates.put', { code: 'a', v: 1 })).output).toBe('number');
-	expect(ok(await rep.act('rates.put', { code: 'a', v: true })).output).toBe('boolean');
+	const id = String((await rep.read('rates', { all: true })).rows[0]!['id']);
+	expect(ok(await rep.act('rates.put', { code: 'a', id, v: true })).output).toBe('boolean');
 	expect((await rep.read('rates', { all: true })).rows.map((r) => [r['code'], r['value']])).toEqual([['a', 'true']]);
 });
 

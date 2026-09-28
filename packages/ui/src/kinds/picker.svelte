@@ -48,17 +48,18 @@
 	}) ?? t('none');
 	const select = $derived(Object.fromEntries([['id', true], ...labels.map((f) => [f, true])]));
 
-	let query = $state(''), hits = $state<Hit[]>([]), loading = $state(false), current = $state<Hit | null>(null);
+	let query = $state(''), hits = $state<Hit[]>([]), loading = $state(false), failed = $state(false), current = $state<Hit | null>(null);
 	async function load(q: string) {
 		if (host.read === undefined) return;
 		loading = true;
+		failed = false;
 		try {
 			const page = await host.read(of, pickerRead(target, labels, { where, orderBy, limit }, q));
 			if (q === query) hits = page.rows.map((r) => ({ id: String(r['id']), text: textOf(r) }));
 		} catch {
-			hits = [];
+			if (q === query) { hits = []; failed = true; }
 		} finally {
-			loading = false;
+			if (q === query) loading = false;
 		}
 	}
 	// the chosen row's label, read once per value
@@ -94,6 +95,7 @@
 		{disabled}
 		{invalid}
 		{loading}
+		{failed}
 		clearable
 		options={hits.map((h) => ({ value: h.id, label: h.text }))}
 		{value}

@@ -143,12 +143,12 @@ test('Table: one sliders popover; by default only the describe input, the builde
 	const header = document.querySelector('[data-view-header]');
 	assert.ok(header.querySelector('[data-describe] input[placeholder="Describe what to show…"]'));
 	// the default state: nothing but the input and the quiet reveal — no builder, no Clear all, no author scope
-	assert.equal(document.querySelector('[data-view-builder]'), null);
+	assert.equal(document.querySelector('[data-view-details]').open, false);
 	assert.equal(document.querySelector('[data-clear]'), null);
-	assert.equal(document.querySelector('[data-author-where]'), null);
-	assert.equal(document.querySelector('details'), null, 'no accordion chrome');
+	assert.ok(document.querySelector('[data-view-details]'), 'manual conditions are an accordion');
 	document.querySelector('[data-show-builder]').click();
 	flushSync();
+	assert.equal(document.querySelector('[data-view-details]').open, true);
 	assert.ok(document.querySelector('[data-view-builder] [data-add-condition]'));
 	assert.match(document.querySelector('[data-author-where]').textContent, /Hours before|Hours after|Hours/);
 	assert.equal(document.querySelector('[data-author-where] [data-remove]'), null, 'the author scope has no remove');
@@ -159,12 +159,13 @@ test('Table: one sliders popover; by default only the describe input, the builde
 	await settle();
 	assert.deepEqual(s.last().where, { and: [{ hours: { gt: 1 } }, { status: { eq: 'done' } }] });
 	assert.deepEqual(s.last().orderBy, [{ created_at: 'desc' }]);
+	assert.ok(document.querySelector('[data-view-applied]'));
 	assert.equal(document.querySelectorAll('[data-filter-rows] [data-cond="status"]').length, 1);
 	assert.ok(document.querySelector('[data-clear]'), 'conditions exist: Clear all shows');
-	// reopened with conditions, the builder is revealed at once
+	// reopened with conditions, the manual accordion is collapsed until requested
 	document.querySelector('[data-view-trigger]').click(); flushSync();
 	document.querySelector('[data-view-trigger]').click(); flushSync();
-	assert.ok(document.querySelector('[data-view-builder]'));
+	assert.equal(document.querySelector('[data-view-details]').open, false);
 	v.done();
 });
 
@@ -181,6 +182,28 @@ test('Table: a described relation filter and sort are editable rows ANDed under 
 	assert.deepEqual(s.last().where, { and: [{ status: { eq: 'done' } }, { and: [{ lines: { some: { qty: { gt: 2 } } } }, { account: { is: { name: { like: '%acme%' } } } }] }] });
 	assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
 	assert.ok(document.querySelector('[data-filter-rows] [data-many=lines]'), 'the relation group is a row the viewer edits');
+	v.done();
+});
+
+test('a local array offers its fields to System 1 and keeps manual controls collapsed', async () => {
+	let input;
+	const s = scripted({ describe: async (collection, text, fields) => {
+		input = { collection, text, fields };
+		return { where: { number: { gt: 20 } }, orderBy: { name: 'asc' } };
+	} });
+	const v = await show('table', { of: [{ id: 'a', number: 10, name: 'Amy' }, { id: 'b', number: 30, name: 'Bea' }], columns: ['number', 'name'] }, s.bolt);
+	document.querySelector('[data-view-trigger]').click(); flushSync();
+	assert.ok(document.querySelector('[data-describe]'));
+	assert.equal(document.querySelector('[data-view-details]').open, false);
+	const form = document.querySelector('[data-describe]');
+	form.querySelector('input').value = 'number above 20, sorted by name';
+	form.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+	form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	await settle();
+	assert.equal(input.collection, '$local');
+	assert.deepEqual(input.fields.map((f) => f.name), ['number', 'name']);
+	assert.ok(document.querySelector('[data-view-applied]'));
+	assert.equal(document.querySelector('[data-view-details]').open, false);
 	v.done();
 });
 
