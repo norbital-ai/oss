@@ -13,6 +13,7 @@ import type { Json } from '../../decl/values.ts';
 import type { AiPort, DeadlinesPort, EngineManifest, MeteringPort, TenantDb } from '../contracts.ts';
 import { ask, decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
 import { messageCommit, MSG, preview, rowsOf, type As } from './schema.ts';
+import { envoyName } from './context.ts';
 import type { LiveHub } from '../live/hub.ts';
 import type { Runs } from '../runs/index.ts';
 
@@ -105,10 +106,10 @@ export function triage(cfg: TriageConfig) {
 		const pending = pendingRows!.rows;
 		// a stopped conversation triages nothing; with nothing pending there is nothing to decide
 		if (conv === undefined || conv['status'] === 'stopped' || pending.length === 0) return { pending: 0 };
-		const envoyName = conv['envoy'] as string | null, envoy = envoyName !== null;
+		const envoyKey = conv['envoy'] as string | null, envoy = envoyKey !== null;
 		if (waits >= TRIAGE_MAX_WAITS) { await admit(conversation, envoy); return { action: 'respond', bound: true }; }
 
-		const spec = (envoy ? m.envoys[envoyName] : undefined) as { task?: string; groupMessages?: string; name?: string } | undefined;
+		const spec = (envoy ? m.envoys[envoyKey] : undefined) as { task?: string; groupMessages?: string; name?: string } | undefined;
 		// P41: a group (an envoy group, or an in-app conversation more than one member posted in) may be not for the agent;
 		// a direct one (an envoy DM, an in-app one-to-one) always is, so it decides only when
 		const group = envoy ? conv['kind'] === 'group' : Number(posters!.rows[0]?.['n'] ?? 0) > 1;
@@ -141,13 +142,13 @@ export function triage(cfg: TriageConfig) {
 				addressesAssistant: pending.some((r) => r['invocation'] === 'mention' || r['invocation'] === 'reply'),
 				// An envoy is named, and a message that says its name is for it whether or not the mention was mechanical:
 				// without this the decider is asked about a nameless assistant and reads `hi <name>` as not addressed.
-				assistant: envoy ? String(spec?.name ?? '') : 'the workspace agent',
+				assistant: envoy ? envoyName(spec?.name) : 'the workspace agent',
 			} as DecisionRequest['state'],
 			// ONE call, one verdict per message: the decider is asked about each pending message by name, so a burst is
 			// judged together and blind to each other rather than folded into a single action for the whole conversation.
 			questions: {
 				...Object.fromEntries(pending.map((r, i) => [`m${i}`, { type: 'choice' as const,
-					instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${String(r['sender'] ?? 'someone')}: should ${envoy ? String(spec?.name ?? 'the assistant') : 'the agent'} answer this one?`,
+					instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${String(r['sender'] ?? 'someone')}: should ${envoy ? envoyName(spec?.name) : 'the agent'} answer this one?`,
 					criteria: VERDICTS }])),
 				wait: { type: 'score', instructions: 'If any message is better answered after a pause, how many seconds until the next part is likely to arrive?', criteria: WAIT_LEVELS },
 			},

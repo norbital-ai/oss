@@ -77,7 +77,10 @@ export const CONVERSATIONS = 100;
 export const listed = (r: RowData | null, member: string): boolean => r !== null && r['owner'] === member && (r['channel'] ?? null) === null && (r['parent'] ?? null) === null;
 /** A `sys_conversation` image as the list shows it, so a live patch matches a re-read. */
 export const conversationRow = (r: RowData): { [k: string]: Json } => ({ id: r['id']!, title: r['title'] ?? null, at: r['updated_at']!, status: r['status']!,
-	model: r['model']!, plan: r['plan'] ?? null, goals: r['goals'] ?? null });
+	model: r['model']!, plan: r['plan'] ?? null, goals: r['goals'] ?? null,
+	// which conversation this is, for the panel's segmented selector: an envoy's channel thread beside the member's own
+	// in-app ones. `channel` is null exactly when the conversation is the member's own (no transport serves it).
+	envoy: r['envoy'] ?? null, channel: r['channel'] ?? null });
 /** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_output`). */
 export const clip = (v: Json | undefined): string => { const s = typeof v === 'string' ? v : JSON.stringify(v ?? null); return s.length <= 600 ? s : `${s.slice(0, 599)}…`; };
 

@@ -75,15 +75,24 @@ How to work:
 
 /** Envoy turns: a chat is read by people, not engineers. */
 /**
+ * What a channel envoy is called when its workspace declared no name. A tenant's active release is a built artifact that
+ * outlives the template it came from, so an artifact built before envoys were named is still served: the name reaching
+ * here is then empty, and the generic wording is what the prompt and the decider used before names existed. Empty is
+ * never put in a sentence — `names you ()` is worse than not naming it at all.
+ */
+export const UNNAMED_ENVOY = 'the assistant';
+/** The name an envoy answers to: the one its workspace declared, or the generic wording when there is none. */
+export const envoyName = (name: unknown): string => (typeof name === 'string' ? name.trim() : '') || UNNAMED_ENVOY;
+/**
  * Channel guidance, named: an envoy that does not know what it is called cannot tell that a message naming it is for it,
  * and one that does not know what it is cannot answer "agent?" either. The same reason the last line exists — an
  * automated check is the workspace's business, and a person told their photo is under suspicion has been told a fact
  * about a machine, not about their work.
  */
 export const envoy = (name: string): string =>
-	`You are ${name}, answering on a messaging channel. Speak plainly and briefly. Never mention tools, fields, policies or ids unless the person asks for an id. `
+	`You are ${envoyName(name)}, answering on a messaging channel. Speak plainly and briefly. Never mention tools, fields, policies or ids unless the person asks for an id. `
 	+ `The person who wrote the newest message is who you serve. The closing note of each step gives the date, time and who you act for. `
-	+ `Answer when a message names you (${name}) or addresses you as the agent, the assistant, the bot or the envoy. `
+	+ `Answer when a message names you (${envoyName(name)}) or addresses you as the agent, the assistant, the bot or the envoy. `
 	+ `Never describe the workspace's own automated checks — a photo inspection, a suspicion review, a background verification. `
 	+ `If what came through may not match the work, say only that it may not be about it.`;
 

@@ -11,7 +11,7 @@ import type { AiModel, AiPort, AiRequest, AiResponse, Authority, Bindings, Engin
 import { Authorities } from '../identity/actor.ts';
 import type { Engine } from '../index.ts';
 import { isFacilityError, MODEL_FILES, modelCall, overflow, servesModel, textOf } from './ai.ts';
-import { bounded, COMPACT_FORMAT, messages, outline, projection, state, system } from './context.ts';
+import { bounded, COMPACT_FORMAT, envoyName, messages, outline, projection, state, system } from './context.ts';
 import { mcpServers, mcpSessions, type McpHost } from './mcp.ts';
 import { ambient as isAmbient, authorOf, clip, conversationCommit, messageCommit, MSG, preview, rowsOf, type As, type ConversationRow, type Goal, type MessageRow, type Meta, type Plan, type Receipt, type ToolCall, type Usage } from './schema.ts';
 import { catalogue, JOBS, jobs, performAll, turnFacts, writesOf, type AttachmentPort, type HostTool, type SandboxPort, type ToolContext, type WorkspacePort } from './tools.ts';
@@ -424,7 +424,7 @@ export function agents(config: AgentConfig) {
 				if (note !== undefined) history.splice(history.at(-1)?.role === 'assistant' ? -1 : history.length, 0, { role: 'user', content: note });
 				const request: AiRequest = {
 					model: conv.model,
-					system: system({ envoy: envoySpec?.name, brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf() }),
+					system: system({ envoy: envoySpec === undefined ? undefined : envoyName(envoySpec.name), brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf() }),
 					messages: history,
 					tools: tools.map(({ name, description, input }) => ({ name, description, input })),
 					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),

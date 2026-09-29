@@ -171,10 +171,20 @@ export function engine(config: EngineConfig): Engine {
 			ORDER BY at DESC, id COLLATE "C" DESC LIMIT ${INBOX_LIMIT}) n ORDER BY n.at DESC, n.id COLLATE "C" DESC`, params: [(r as Extract<ReadIR, { kind: 'inbox' }>).member] }]);
 		return { rows: rows!.rows.map((x) => noticeRow(x['r'] as RowData)) };
 	};
-	/** The agent panel's conversation list: rows as `conversationRow` builds them from a capture, so a live patch matches a re-read. */
+	/**
+	 * The agent panel's conversation list: the member's own in-app conversations AND the envoy channel threads they may
+	 * read (rule 61), so the panel's selector can segment between them. `conversationList` (the `/conversations` page) is
+	 * the same set for a different surface: it marks a thread read, and a member sees a thread they posted in even when the
+	 * envoy is not public, so its own `EXISTS` clause stands and the `owner` arm covers the in-app ones.
+	 */
 	const conversations = async (r: ReadIR) => {
-		const [rows] = await db.read([{ text: `SELECT to_jsonb(c) AS r FROM sys_conversation c WHERE owner = $1 AND channel IS NULL AND parent IS NULL
-			ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`, params: [(r as Extract<ReadIR, { kind: 'conversations' }>).member] }]);
+		const member = (r as Extract<ReadIR, { kind: 'conversations' }>).member;
+		// an envoy declared `public` serves anyone, so its threads are browsable; a private one only by a member who posted in it
+		const publicEnvoys = Object.entries(m.envoys ?? {}).filter(([, e]) => (e as { audience?: unknown }).audience === 'public').map(([n]) => n);
+		const [rows] = await db.read([{ text: `SELECT to_jsonb(c) AS r FROM sys_conversation c WHERE c.parent IS NULL
+				AND (c.owner = $1 OR (c.channel IS NOT NULL AND (c.envoy IN (SELECT jsonb_array_elements_text($2::jsonb))
+					OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id AND $1 IN (p.author, p."as"->>'member', p."as"->'envoy'->>'member')))))
+			ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`, params: [member, JSON.stringify(publicEnvoys)] }]);
 		return { rows: rows!.rows.map((x) => conversationRow(x['r'] as RowData)) };
 	};
 	/** `search.semantic`'s probe (L-BOLT-123): a caller's text on the collection's model class; never from a transform. */

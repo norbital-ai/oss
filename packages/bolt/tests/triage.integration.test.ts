@@ -246,6 +246,19 @@ describe('envoy triage (G12 (10))', () => {
 		expect(metered).toHaveLength(0);
 	});
 
+	it('an envoy built before names were required is asked about generically, never as an empty name', async () => {
+		// a tenant's active release is a built artifact that outlives its template: an artifact from before `name` was
+		// required declares none, and `names you ()` is worse than not naming it. The wording is the generic one.
+		const nameless = { ...manifest, envoys: { field_ops: { channel: 'field_wa', audience: 'authenticated', policies: ['desk'],
+			groupMessages: 'mention_or_reply', delegation: 'disabled', triage: {}, task: 'Keep jobs up to date.' } } } as unknown as EngineManifest;
+		await open({ manifest: nameless });
+		await say(DM, 'hello');
+		await debounce();
+		expect(port.inputs[0]!.assistant).toBe('the assistant');
+		expect(port.inputs[0]!.assistant).not.toBe('');
+		expect((await row('hello'))['delivered_turn']).not.toBeNull();
+	});
+
 	it('with no AI facility every message behaves as without triage', async () => {
 		await open({ triage: false });
 		await say(DM, 'hello');
