@@ -3,7 +3,8 @@
 // verified handle under both audiences. A group turn holds exactly the envoy's `policies`; a DM holds the envoy's
 // `policies` ∪ the linked sender's own authority (their policies, or the admin bypass). An unlinked sender's DM runs
 // under the envoy's policies alone on a `public` envoy; on an `authenticated` one it gets the host-authored registration
-// notice (`envoys.registration`, default 1 per 15 min per sender), sent to the sender privately, never into a group,
+// notice (`envoys.registration`, default 1/s per sender — a repeat reuses the claim and sends the same link, so the
+// window only guards against a flood), sent to the sender privately, never into a group,
 // and no turn. In a group, `groupMessages` decides what is addressed; the rest is ambient history `read_messages`
 // reads. Each addressed message becomes the agent's queued input with its sender header (a steer: the running turn
 // takes it at its next step). Every limit is the envoy's own: `envoys.receive` per sender and per subject, `agent` desk-wide.

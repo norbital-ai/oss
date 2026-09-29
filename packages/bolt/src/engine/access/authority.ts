@@ -100,7 +100,11 @@ function directory(actor: EngineActor): { [c: string]: Arm } {
 const DEFAULTS: readonly LimitRule[] = [
 	{ key: 'act', rate: '600/min', per: 'actor' }, { key: 'read', rate: '3000/min', per: 'actor' },
 	{ key: 'upload', rate: '120/min', per: 'actor' }, { key: 'agent', rate: '100/h', per: 'actor' },
-	{ key: 'envoys.registration', rate: '1/15min', per: 'sender' },
+	// A sender asking again gets the claim they already hold, so a repeat is the same link and not a new one; the notice
+	// goes to the sender's own chat, so the flood it guards against is self-inflicted. A window as long as the link's own
+	// fifteen minutes is the one value that cannot work: a sender who loses the link cannot ask for it again until it has
+	// already expired.
+	{ key: 'envoys.registration', rate: '1/s', per: 'sender' },
 ];
 const VISITOR_DEFAULTS: readonly LimitRule[] = [
 	{ key: 'register', rate: '20/h', per: 'ip' }, { key: 'upload', rate: '20/h', per: 'ip' }, { key: 'read', rate: '600/min', per: 'ip' },

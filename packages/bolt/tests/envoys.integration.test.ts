@@ -104,7 +104,7 @@ describe('direct messages (rule 57)', () => {
 		expect((await rows(`close ${id}`))[0]!['as']).toEqual({ envoy: { name: 'field_ops', channel: 'field_wa', sender: '6598765432@s.whatsapp.net', member: CAL, dm: true } });
 	});
 
-	it('an unlinked sender gets one host-authored registration notice per 15 minutes and no turn; redeeming links the number and replays only when ticked', async () => {
+	it('an unlinked sender gets one host-authored registration notice at a time and no turn; a repeat moments later is answered, not swallowed; redeeming links the number and replays only when ticked', async () => {
 		await say('field_wa', '6590000003@s.whatsapp.net', 'someone else');
 		await say('field_wa', '6590000001@s.whatsapp.net', 'hello?');
 		await say('field_wa', '6590000001@s.whatsapp.net', 'anyone?');
@@ -123,7 +123,10 @@ describe('direct messages (rule 57)', () => {
 		expect((await rows('someone else'))[0]).toMatchObject({ refused: 'unregistered', role: null });
 		expect(await desk.envoys.inspect(claim)).toEqual({ state: 'registered' });
 		expect(await desk.envoys.redeem(claim, await t.signIn('cal@ws.example'))).toEqual({ state: 'used' });
-		t.clock.advance('16min');
+		// the window is a flood guard, not a lockout: a sender who lost the link may ask again at once, and the claim
+		// they already hold is what they are sent — a window as long as the link's own fifteen minutes was the one value
+		// that could never work, because the retry it refused was the retry that was needed
+		t.clock.advance('2s');
 		await say('field_wa', '6590000002@s.whatsapp.net', 'hi');
 		expect(texts(wa).filter((x) => x.startsWith('Register'))).toHaveLength(3);
 	});
