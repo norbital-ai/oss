@@ -312,6 +312,7 @@ export { applyPlan, plan, readApplied } from './schema/plan.ts'; // hook:hosting
 export { catalogOf } from './access/pred.ts';
 export { upload } from './callables/upload.ts';
 export { resendEvent, telegramUpdate, telegramVerified, whatsappMessage } from './channels/transports.ts';
+export { connection, decodeConnection, type ChannelConnection, type ConnectionState, type Pairing } from './channels/connection.ts'; // hook:channels — one contract for every provider
 export type { HttpPort } from './integrations/runner.ts';
 export * as ir from '../protocol/ir.ts';
 export { statusOf } from '../protocol/wire.ts';

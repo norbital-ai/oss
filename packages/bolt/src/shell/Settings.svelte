@@ -9,21 +9,27 @@
 <script lang="ts">
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
+	import { watch } from 'runed';
 	import { Button, Checkbox, Combobox, Dialog, Input, Table, Tabs } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
+	import type { ChannelConnection } from '../engine/channels/connection.ts';
 	import type { Settings } from './data.ts';
 	import { based, type SettingsTab, type ShellBoot } from './nav.ts';
-	import type { ShellApi, ShellBolt } from './runtime.ts';
+	import type { Answer, ShellApi, ShellBolt } from './runtime.ts';
 	import type { Act } from './Acts.svelte';
 	import Acts from './Acts.svelte';
+	import Connection from './channels/Connection.svelte';
+	import { connectionLabel, type ConnectLoader } from './channels/connect.ts';
 	import DetailSheet from './DetailSheet.svelte';
 	import Runs from './Runs.svelte';
 	import SystemPage from './SystemPage.svelte';
 	import TeamFlow from './TeamFlow.svelte';
 	import { subtree } from './teams.ts';
 
-	let { api, bolt, t, tab, workspace, run = null, onRun }: {
+	let { api, bolt, t, tab, workspace, connects, run = null, onRun }: {
 		api: ShellApi; bolt: ShellBolt; t: (key: string) => string; tab: SettingsTab; workspace: ShellBoot['workspace'];
+		/** The workspace's own `+*.connect.svelte`, by channel name; bolt's own provider for the transport is the fallback. */
+		connects?: { readonly [channel: string]: ConnectLoader } | undefined;
 		run?: string | null; onRun: (id: string | null) => void;
 	} = $props();
 
@@ -83,8 +89,42 @@
 		who: e.actor?.startsWith('member:') ? str(s?.members.find((u) => u['id'] === e.actor!.slice(7))?.['name']) || e.actor : e.actor ?? t('host'),
 		change: `${t(e.op)} · ${t(TABLES[e.collection] ?? e.collection)}`, fields: typeof e.changes === 'object' && e.changes !== null ? Object.keys(e.changes).filter((k) => k !== 'revision').join(', ') : '',
 		changes: e.changes })));
+	// ── a channel's connection: the host owns the socket, so it publishes the state and this page only draws it ──
+	// One stream per channel for as long as the tab is open, not per open sheet: the stream is what carries a rotating QR
+	// and a reconnect, and a status column that only refreshes when a sheet opens is not a status column.
+	let connections = $state<Record<string, ChannelConnection | null>>({});
+	let connectionErrors = $state<Record<string, string>>({});
+	/** The pairing this page is waiting on, so the two verbs can say they are running and refuse a second press. */
+	let pairing = $state<Record<string, boolean>>({});
+	watch(
+		// a joined key, not the array: the getter builds a new array each time it runs, and a stream per re-render is a
+		// socket per keystroke somewhere else
+		() => (tab === 'channels' ? (s?.channels ?? []).map((c) => c.name).join(',') : ''),
+		(key) => {
+			const streams = key === '' ? [] : key.split(',').map((name) => api.transport.watch(name,
+				(c) => { connections[name] = c; delete connectionErrors[name]; },
+				() => { connectionErrors[name] = t('The host stopped reporting this channel.'); }));
+			return () => { for (const stream of streams) stream.close(); };
+		}
+	);
+	/** The host's refusal, verbatim: a provider names what is wrong, and replacing that throws it away. */
+	async function transportOp(name: string, run: () => Promise<Answer<ChannelConnection>>): Promise<void> {
+		if (pairing[name] === true) return; // one unresolved pairing at a time: a second press opens a second socket
+		pairing[name] = true;
+		try {
+			const r = await run();
+			if (!r.ok) connectionErrors[name] = r.error.message;
+			else { connections[name] = r.value; delete connectionErrors[name]; }
+		} finally {
+			pairing[name] = false;
+		}
+	}
+	const pair = (name: string, input?: Json) => transportOp(name, () => api.transport.pair(name, input ?? {}));
+	const unpair = (name: string) => transportOp(name, () => api.transport.unpair(name));
+
 	const channels = $derived((s?.channels ?? []).map((c) => ({ id: c.name, name: c.name, transport: str(c.transport), address: str(c.address), sent: c.delivery.sent,
-		queued: c.delivery.pending, retrying: c.delivery.retrying, failed: c.delivery.failed, next_retry: c.delivery.nextRetry, last_error: c.delivery.lastError })));
+		queued: c.delivery.pending, retrying: c.delivery.retrying, failed: c.delivery.failed, next_retry: c.delivery.nextRetry, last_error: c.delivery.lastError,
+		connection: connectionLabel(connections[c.name] ?? null, t) })));
 	const remotes = $derived(s === null ? [] : [
 		...s.integrations.map((i) => ({ id: `integration:${i.name}`, name: i.name, kind: t('Integration'), detail: str(i.direction), status: i.paused ? t('paused') : t('active'), paused: i.paused })),
 		...s.connections.map((c) => ({ id: `connection:${c.name}`, name: c.name, kind: t('Connection'), detail: typeof c.auth === 'object' && c.auth !== null ? Object.keys(c.auth).join(', ') : t('no auth'), status: '', paused: null })),
@@ -254,8 +294,9 @@
 			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('No identity changes yet.')}</p>{/snippet}
 		</Table>
 	{:else if tab === 'channels'}
-		<Table of={channels} key="channels" onOpen={show('channel')} toolbar={{ description: t('Outbound deliveries over the last day; an automatic retry is progress, only a settled failure is terminal.'), export: true }}
-			columns={[{ field: 'name', label: t('Name') }, { field: 'transport', label: t('Transport') }, { field: 'address', label: t('Address') }, { field: 'sent', label: t('sent') },
+		<Table of={channels} key="channels" onOpen={show('channel')} toolbar={{ description: t('Open a channel to pair it with its provider and to see its outbound deliveries; an automatic retry is progress, only a settled failure is terminal.'), export: true }}
+			columns={[{ field: 'name', label: t('Name') }, { field: 'transport', label: t('Transport') }, { field: 'address', label: t('Address') },
+				{ field: 'connection', label: t('Connection') }, { field: 'sent', label: t('sent') },
 				{ field: 'queued', label: t('queued') }, { field: 'retrying', label: t('retrying') }, { field: 'failed', label: t('failed') }, { field: 'last_error', label: t('Error') }]}>
 			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('The workspace declares no channels.')}</p>{/snippet}
 		</Table>
@@ -357,7 +398,12 @@
 		{#if c !== undefined}
 			<DetailSheet title={c.name} onClose={close} fields={[{ label: t('Transport'), value: c.transport }, { label: t('Address'), value: c.address },
 				{ label: t('sent'), value: c.sent }, { label: t('queued'), value: c.queued }, { label: t('retrying'), value: c.retrying }, { label: t('failed'), value: c.failed },
-				{ label: t('next'), value: c.next_retry === null ? undefined : when(c.next_retry) }, { label: t('Error'), value: c.last_error ?? undefined }]} />
+				{ label: t('next'), value: c.next_retry === null ? undefined : when(c.next_retry) }, { label: t('Error'), value: c.last_error ?? undefined }]}>
+				<div class="border-t pt-3">
+					<Connection channel={c.name} transport={c.transport} connection={connections[c.name] ?? null} error={connectionErrors[c.name] ?? null}
+						busy={pairing[c.name] === true} pair={(input) => pair(c.name, input)} unpair={() => unpair(c.name)} {t} workspace={connects} />
+				</div>
+			</DetailSheet>
 		{/if}
 	{:else if open.kind === 'remote'}
 		{@const r = remotes.find((x) => x.id === open?.id)}

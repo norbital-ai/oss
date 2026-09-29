@@ -6,6 +6,7 @@ import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { CollectionName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
 import { createBolt, type BoltConfig } from '../client/bolt.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
+import { decodeConnection, type ChannelConnection } from '../engine/channels/connection.ts';
 import type { Claim, Redemption } from '../engine/envoys/registration.ts';
 import { BOLT, HEADERS, PATHS, uuidv7, type AgentRow, type PushBody } from '../protocol/wire.ts';
 import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
@@ -13,6 +14,9 @@ import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts'
 /** `workspace`: on a signed-out boot, what the access pages show (name, logo, environment). */
 export type ShellError = { code: string; message: string; workspace?: ShellBoot['workspace'] };
 export type Answer<T> = { ok: true; value: T } | { ok: false; error: ShellError; status: number };
+
+/** A stream frame the host did not write as JSON: nothing to show, and nothing to fail the page over. */
+const safeJson = (text: string): Json => { try { return JSON.parse(text) as Json; } catch { return null; } };
 
 /** The shell routes over one `fetch`; every call answers, none rejects on a refusal. */
 export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
@@ -56,6 +60,32 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		stopRun: (id: string) => call<import('../engine/runs/index.ts').RunView>('POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
 		settings: () => call<import('./data.ts').Settings>('GET', `${SHELL}/settings`),
 		settingsOp: (op: string, input: Json) => call<Json>('POST', `${SHELL}/settings`, { op, input }),
+		/**
+		 * A channel's connection to its provider (rule 61, `connection.ts`). The host holds the socket, so this is the only
+		 * place a channel can be paired; it names the channel, never the transport, so a host that answers a transport
+		 * resolves the channel itself. Administrators only — the host re-checks, this is not the gate.
+		 */
+		transport: {
+			path: (channel: string) => `${BOLT}/transports/${encodeURIComponent(channel)}`,
+			state: (channel: string) => call<ChannelConnection>('GET', `${BOLT}/transports/${encodeURIComponent(channel)}`),
+			/** `credential` for a token-shaped provider, `phone` for a code the provider texts. Both optional; the host refuses a malformed one. */
+			pair: (channel: string, input: Json = {}) => call<ChannelConnection>('POST', `${BOLT}/transports/${encodeURIComponent(channel)}/pair`, input),
+			unpair: (channel: string) => call<ChannelConnection>('POST', `${BOLT}/transports/${encodeURIComponent(channel)}/logout`),
+			/**
+			 * The host's state stream, so a pairing that takes a while (a rotating QR, a bot webhook registering) reports
+			 * progress instead of a spinner: every state change arrives, and a dropped stream reconnects on its own.
+			 * `EventSource` is the browser's and sends both the session cookie and the `accept` a host switches on.
+			 */
+			watch: (channel: string, onConnection: (c: ChannelConnection) => void, onFailure: (e: Event) => void): EventSource => {
+				const stream = new EventSource(based(`${BOLT}/transports/${encodeURIComponent(channel)}`));
+				stream.onmessage = (e) => {
+					const c = decodeConnection(channel, safeJson(e.data));
+					if (c !== null) onConnection(c);
+				};
+				stream.onerror = onFailure;
+				return stream;
+			}
+		},
 		/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (name: string, logo: string | null) => call<null>('POST', `${SHELL}/organization`, { name, logo }),
 		logs: (x: import('./data.ts').LogQuery) => call<import('./data.ts').LogRow[]>('GET', `${SHELL}/logs?${new URLSearchParams(

@@ -63,7 +63,7 @@ describe('bolt check', () => {
 			'src/lib/disk.ts': `import { readFileSync } from 'node:fs'; export const read = readFileSync;`,
 			'src/data/+relationship.ts': `export default { 'applications.opening': { to: 'openings', inverse: 'applications' }, 'applications.source': { to: 'sources' } };`,
 			'src/data/model/orders/+model.ts': `import { read } from '../../../lib/disk.ts'; void read;
-export default { description: 'o', label: 'title', search: { text: ['title'] }, fields: { title: { kind: 'text' },
+export default { description: 'o', label: 'title', search: { text: ['title'], semantic: { fields: ['title'], model: 'default' } }, fields: { title: { kind: 'text' },
 	v: { kind: 'vector', dim: 5000, metric: 'l2' }, n: { kind: 'seq', pattern: 'X-{abc}' },
 	s: { kind: 'state', initial: 'nope', states: { a: {} } }, at: { kind: 'time', precision: 'month' } } };`,
 			'src/data/model/openings/+model.ts': `export default { description: 'o', label: 'title', fields: { title: { kind: 'text' } } };`,
@@ -96,6 +96,8 @@ export default { description: 'o', label: 'title', search: { text: ['title'] }, 
 		expect(r.errors.filter((e) => e.code === 'model/state').map((e) => e.message)).toContainEqual(expect.stringContaining("'a' is unreachable from 'nope'"));
 		expect(r.errors.find((e) => e.code === 'guest/node-import')!.path).toBe('src/lib/disk.ts');
 		expect(r.errors.find((e) => e.code === 'model/precision')!.message).toContain('at: a time takes precision hour, minute');
+		expect(r.errors.filter((e) => e.code === 'model/range').map((e) => e.message)).toEqual([expect.stringContaining('v: vector dim is 1 to 2,000'),
+			expect.stringContaining("search.semantic: dim is 1 to 2,000 (the embedding column's width")]);
 		expect(r.errors.find((e) => e.code === 'access/visitor-ref')!.message).toContain('applications.source');
 		expect(r.errors.filter((e) => e.code === 'access/write-many').map((e) => e.message)).toEqual([expect.stringContaining("openings.update: a write grant cannot scope through the many-relation 'applications'")]);
 		expect(r.errors.filter((e) => e.code === 'access/visitor-grant').map((e) => e.path).sort()).toEqual(['src/access/+applicant.policy.ts', 'src/access/+kiosk.policy.ts']);

@@ -3,7 +3,7 @@
 // logout, logout terminal until the next pairing. Messages go through the engine's `whatsappMessage` codec. Baileys is
 // loaded only when a socket opens; tests pass a fake `open`.
 import { mkdir, readdir, rm } from 'node:fs/promises';
-import { whatsappMessage, type Json, type TransportEvent, type TransportPort } from '@norbital-ai/bolt/engine';
+import { connection, whatsappMessage, type ChannelConnection, type Json, type TransportEvent, type TransportPort } from '@norbital-ai/bolt/engine';
 
 /** The part of a Baileys socket this adapter uses, read structurally. */
 export type WaSocket = {
@@ -25,6 +25,8 @@ export type WaState =
 	| { state: 'loggedOut'; detail: string };
 export type WhatsApp = TransportPort & {
 	state(): WaState;
+	/** The same state as the shell's one `ChannelConnection` (`connection.ts`), for the connection UI. */
+	connection(channel: string): ChannelConnection;
 	/** Progress: every state change, in order; returns the unsubscribe. */
 	observe(listener: (s: WaState) => void): () => void;
 	/** Resumes a stored pairing at activation; an unpaired account waits for `pair`. */
@@ -97,6 +99,22 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 
 	return {
 		state: () => current,
+		/** This adapter's state as the shell's one contract, so the shell never learns what a WhatsApp session is. */
+		connection: (channel: string): ChannelConnection => {
+			switch (current.state) {
+				case 'connecting': return connection(channel, 'whatsapp', 'connecting', { detail: `opening the socket (attempt ${current.attempt + 1})` });
+				case 'pairing': return connection(channel, 'whatsapp', 'pairing', {
+					pairing: current.qr === null
+						? { kind: 'code', value: current.code }
+						// a phone-less pair asks for a QR; with a phone the provider answers a code, and either is drawn from here
+						: { kind: 'qr', value: current.qr }
+				});
+				case 'connected': return connection(channel, 'whatsapp', 'connected', { pairedAs: current.as, stored: true });
+				case 'reconnecting': return connection(channel, 'whatsapp', 'reconnecting', { detail: current.detail, stored: true });
+				case 'loggedOut': return connection(channel, 'whatsapp', 'error', { error: current.detail, stored: false });
+				default: return connection(channel, 'whatsapp', 'unpaired', { stored: false });
+			}
+		},
 		observe(l) { listeners.add(l); return () => { listeners.delete(l); }; },
 		async start() {
 			const stored = await readdir(authDir).then((f) => f.includes('creds.json'), () => false);

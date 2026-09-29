@@ -16,6 +16,7 @@ export { IconWrapper as Icon } from './icon/index.js';
 export { Input } from './input/index.js';
 export { Label } from './label/index.js';
 export { Progress } from './progress/index.js';
+export { Qr } from './qr/index.js';
 export { Spinner } from './spinner/index.js';
 export { Tabs, type TabItem, type TabsProps } from './tabs/index.js';
 export { Textarea } from './textarea/index.js';

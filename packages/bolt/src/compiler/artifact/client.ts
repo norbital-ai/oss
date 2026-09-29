@@ -79,6 +79,9 @@ export async function buildClient(root: string, files: readonly Discovered[], m:
 	writeFileSync(styles, `@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n`);
 	// hook:server-cli — the messages: the base (`+messages.ts`) under the reader's first matching `+<locale>.messages.ts`
 	const reps = files.filter((f) => f.role === 'representation').map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
+	// a channel's connection UI (`+*.connect.svelte`), the same lazy map: a provider bolt ships and one the workspace
+	// writes are both an entry here, and the shell cannot tell which it loaded
+	const connects = files.filter((f) => f.role === 'connect').map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
 	// custom fields: the manifest's shape, and the renderer (imported with the entry: display grids render it synchronously)
 	const renderers = files.filter((f) => f.role === 'renderer');
 	const customFields = Object.entries(m.customFields).map(([name, spec]) => {
@@ -96,7 +99,7 @@ const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`)
 const tag = navigator.languages.map((l) => l.toLowerCase()).flatMap((l) => [l, l.split('-')[0]]).find((l) => l in locales);
 mountShell(document.getElementById('bolt'), { manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
-	representations: { ${reps.join(', ')} }, customFields: { ${customFields.join(', ')} } });`;
+	representations: { ${reps.join(', ')} }, connects: { ${connects.join(', ')} }, customFields: { ${customFields.join(', ')} } });`;
 	const result = await build({
 		// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
 		configFile: false, logLevel: 'silent', root, base: './',

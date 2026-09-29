@@ -9,7 +9,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { loadPackWithAssets, readArtifact, workspaceFiles, type Artifact } from '@norbital-ai/bolt/artifact';
-import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, engine, fileAttachments, filesHandler, founderBootstrap, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, type Authority, type Bindings, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
+import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, engine, fileAttachments, filesHandler, founderBootstrap, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, type Authority, type Bindings, type ChannelConnection, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
 import type { Config } from './config.ts';
 import { devSink, mailSender, mailTransport, type Sender } from './mail.ts';
 import { aiModalityRefusals, facilities, localFiles, nominatim, openAi, publicWeb, s3Files, timekeeper } from './ports.ts';
@@ -39,7 +39,7 @@ export class ActivationError extends Error {
 
 const DRAIN_MS = 10_000;
 const JSON_BYTES = LIMITS.argsBytes + 1024 * 1024;
-const ADMIN_TRANSPORT = '/__bolt/transports/whatsapp';
+const TRANSPORTS = '/__bolt/transports/';
 
 /** `readArtifact` refuses a contract this host does not implement and a manifest that is not the recorded schema (rule 69). */
 function artifactOf(dir: string, contracts: readonly string[] | undefined): Artifact {
@@ -267,29 +267,40 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 			return err('unknownOp', `'${op}' is not a host operation of bolt start`, 404);
 		}
 
-		/** WhatsApp pairing for administrators: state (JSON, or SSE progress), `pair { phone? }`, `logout`. */
-		async function whatsappRoute(request: Request, auth: Authority | null, path: string): Promise<Response> {
-			if (auth === null || auth.actor.kind !== 'member' || !auth.admin) return err('forbidden', 'Only an administrator manages the WhatsApp link.', 403);
+		/**
+		 * A channel's connection, for an administrator: `GET` the state (or the SSE stream of it), `POST …/pair`, `POST
+		 * `…/logout`. The path names the *channel* and the answer is always the one `ChannelConnection` (`connection.ts`),
+		 * so the shell's connect component is the same for every provider — including one this host has no adapter for,
+		 * which answers Unavailable rather than a state that would read as connected.
+		 */
+		async function transportRoute(request: Request, auth: Authority | null, path: string): Promise<Response> {
+			if (auth === null || auth.actor.kind !== 'member' || !auth.admin) return err('forbidden', 'Only an administrator manages a channel link.', 403);
+			const [name = '', verb = ''] = path.slice(TRANSPORTS.length).split('/');
+			const spec = m.channels[name];
+			if (spec === undefined) return err('notFound', `this workspace declares no channel '${name}'`, 404);
 			if (wa === null) return err('unavailable', 'WhatsApp is not configured (BOLT_WHATSAPP_PROVIDER=baileys)', 503);
+			// a channel on a transport this host does not pair is not WhatsApp's to answer; say so rather than open its socket
+			if (String(spec['transport']) !== 'whatsapp') return err('unavailable', `this host does not pair a ${String(spec['transport'])} channel`, 503);
+			const live = wa.connection(name);
 			if (request.method === 'GET' && (request.headers.get('accept') ?? '').includes('text/event-stream')) {
 				let off = () => {};
 				const enc = new TextEncoder();
 				return new Response(new ReadableStream<Uint8Array>({
 					start(ctl) {
-						const send = (s: unknown) => { try { ctl.enqueue(enc.encode(`data: ${JSON.stringify(s)}\n\n`)); } catch { off(); } };
-						send(wa.state());
-						off = wa.observe(send);
+						const send = (c: ChannelConnection) => { try { ctl.enqueue(enc.encode(`data: ${JSON.stringify(c)}\n\n`)); } catch { off(); } };
+						send(live);
+						off = wa.observe(() => send(wa.connection(name)));
 					},
 					cancel() { off(); },
 				}), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' } });
 			}
-			if (request.method === 'GET') return Response.json({ value: wa.state() });
-			if (request.method === 'POST' && path === `${ADMIN_TRANSPORT}/pair`) {
+			if (request.method === 'GET') return Response.json({ value: live });
+			if (request.method === 'POST' && verb === 'pair') {
 				const b = await request.json().catch(() => ({})) as { phone?: unknown };
 				try { await wa.pair(typeof b.phone === 'string' ? b.phone : undefined); } catch (x) { return err('invalid', x instanceof Error ? x.message : String(x), 400); }
-				return Response.json({ value: wa.state() });
+				return Response.json({ value: wa.connection(name) });
 			}
-			if (request.method === 'POST' && path === `${ADMIN_TRANSPORT}/logout`) { await wa.logout(); return Response.json({ value: wa.state() }); }
+			if (request.method === 'POST' && verb === 'logout') { await wa.logout(); return Response.json({ value: wa.connection(name) }); }
 			return err('notFound', 'no such route', 404);
 		}
 
@@ -328,7 +339,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 			const path = new URL(request.url).pathname;
 			if (path.startsWith('/hooks/')) return admit(0, () => hooks(request, path));
 			if (path === '/__bolt/ops' && request.method === 'POST') return ops(request);
-			if (path === ADMIN_TRANSPORT || path.startsWith(`${ADMIN_TRANSPORT}/`)) return whatsappRoute(request, await shell.authority(request), path);
+			if (path.startsWith(TRANSPORTS)) return transportRoute(request, await shell.authority(request), path);
 			const own = await shell.handle(request);
 			if (own !== null) return own;
 			if (!path.startsWith('/__bolt/')) return (request.method === 'GET' || request.method === 'HEAD') ? page(path) : err('notFound', 'no such route', 404);

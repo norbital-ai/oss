@@ -25,6 +25,7 @@ export const ROLES = [
 	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts' },
 	{ role: 'automation', dir: 'automation', file: '+*.automation.ts' },
 	{ role: 'channel', dir: 'channel', file: '+*.channel.ts' },
+	{ role: 'connect', dir: 'channel', file: '+*.connect.svelte' },
 	{ role: 'connection', dir: 'connection', file: '+*.connection.ts' },
 	{ role: 'app', dir: 'app/**', file: '+app.ts' },
 	{ role: 'page', dir: 'app/**', file: '+*.page.svelte' },
@@ -127,6 +128,7 @@ export function discover(root: string, layer: 'workspace' | 'system' = 'workspac
 		if ((f.role === 'representation' || f.role === 'integration' || f.role === 'pipeline') && !has('collection', f.name))
 			fail('without-collection', f.path, `no src/data/collection/${f.name}/+collection.ts beside it`);
 		if (f.role === 'renderer' && !has('custom_field', f.name)) fail('custom-field-without-definition', f.path, `no +definition.ts beside it`);
+		if (f.role === 'connect' && !has('channel', f.name)) fail('connect-without-channel', f.path, `no src/channel/+<name>.channel.ts beside it`);
 		if (f.role === 'page' && !has('app', f.name.slice(0, f.name.lastIndexOf('/')))) fail('page-without-app', f.path, 'a page sits in a folder with +app.ts');
 		if ((f.role === 'app' || f.role === 'group') && has(f.role === 'app' ? 'group' : 'app', f.name))
 			fail('app-and-group', f.path, 'a folder holds +app.ts or +group.ts, never both');

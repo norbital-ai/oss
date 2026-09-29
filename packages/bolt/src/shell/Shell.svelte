@@ -279,7 +279,7 @@
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
 		<Inbox {api} {bolt} {t} push={boot.push} onCount={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
-		<Settings {api} {bolt} {t} tab={current.tab} workspace={boot.workspace} run={url.searchParams.get('run')} onRun={openRun} />
+		<Settings {api} {bolt} {t} tab={current.tab} workspace={boot.workspace} run={url.searchParams.get('run')} onRun={openRun} connects={config.connects} />
 	{:else if current.kind === 'redirect'}
 		<Center><p>{t('Loading…')}</p></Center>
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}

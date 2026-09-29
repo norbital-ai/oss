@@ -12,6 +12,8 @@ export type Telegram = TransportPort & {
 	/** `setWebhook` at activation; `getMe` names the bot for mention detection. */
 	activate(publicUrl: string): Promise<void>;
 	webhook(request: Request): Promise<Response>;
+	/** The bot's own name, once `getMe` has answered; what a connection reports it is connected as. */
+	username(): string | null;
 };
 
 export function telegram(token: string, channel: string, f: typeof fetch = fetch, api = API): Telegram {
@@ -26,6 +28,7 @@ export function telegram(token: string, channel: string, f: typeof fetch = fetch
 		return j.result as { [k: string]: unknown };
 	};
 	return {
+		username: () => bot.username ?? null,
 		async activate(publicUrl) {
 			const me = await call('getMe', {});
 			bot = { id: me['id'] as number, username: me['username'] as string };
