@@ -9,6 +9,8 @@ import { connection, whatsappMessage, type ChannelConnection, type Json, type Tr
 export type WaSocket = {
 	ev: { on(event: string, listener: (arg: never) => void): void };
 	user?: { id: string; lid?: string } | undefined;
+	/** The account's LID↔phone map. A group mention names our LID, and `user.lid` is optional and often absent. */
+	signalRepository?: { getLIDForPN(pn: string): Promise<string | null> } | undefined;
 	sendMessage(jid: string, content: { text: string }): Promise<{ key?: { id?: string | null } } | undefined>;
 	requestPairingCode(phone: string): Promise<string>;
 	logout(): Promise<void>;
@@ -48,6 +50,13 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 	let current: WaState = { state: 'unpaired' };
 	let socket: WaSocket | undefined, timer: ReturnType<typeof setTimeout> | undefined, stopped = false, attempt = 0;
 	const set = (s: WaState) => { current = s; for (const l of listeners) l(s); };
+	/** Our own LID, the identity a group mention names. `user.lid` is optional, so it is resolved through the map. */
+	let lid: string | undefined;
+	const resolveLid = async (s: WaSocket): Promise<void> => {
+		const pn = s.user?.id;
+		if (pn === undefined) return;
+		lid = s.user?.lid ?? await s.signalRepository?.getLIDForPN(pn).catch(() => null) ?? undefined;
+	};
 	const emit = async (event: TransportEvent) => {
 		for (const s of sinks) await s(event).catch((e: unknown) => console.error('[bolt] whatsapp message not stored', e));
 	};
@@ -71,7 +80,7 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 						(e: unknown) => { console.error('[bolt] whatsapp pairing code failed; showing the QR', e); set({ state: 'pairing', qr, code: null }); });
 				} else if (phone === undefined) set({ state: 'pairing', qr: u.qr, code: null });
 			}
-			if (u.connection === 'open') { attempt = 0; set({ state: 'connected', as: s.user?.id ?? null }); }
+			if (u.connection === 'open') { attempt = 0; void resolveLid(s); set({ state: 'connected', as: s.user?.id ?? null }); }
 			if (u.connection === 'close') {
 				socket = undefined;
 				const code = u.lastDisconnect?.error?.output?.statusCode, detail = `${code ?? 'no status'}: ${u.lastDisconnect?.error?.message ?? 'closed'}`;
@@ -84,7 +93,7 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 		});
 		const deliver = async (messages: readonly unknown[], history: boolean) => {
 			for (const raw of messages) {
-				const message = whatsappMessage(raw, s.user?.id, { history, ...(s.user?.lid === undefined ? {} : { lid: s.user.lid }) });
+				const message = whatsappMessage(raw, s.user?.id, { history, ...(lid === undefined ? {} : { lid }) });
 				if (message === null) continue;
 				const media = history ? null : await opened.download(raw).catch(() => null);
 				const bins = media !== null && media.bytes.byteLength <= MEDIA_MAX ? [media.bytes] : [];

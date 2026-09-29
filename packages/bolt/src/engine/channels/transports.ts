@@ -18,6 +18,8 @@ export type WireAttachment = { fileName: string; mimeType: string; byteLength: n
 export type Inbound = {
 	id: string; thread: string; sentAt: string; sender: string; senderName: string | null; text: string; replyTo: string | null;
 	group: boolean; invocation: Invocation; version: string; deleted: boolean; history: boolean; attachments: readonly WireAttachment[];
+	/** The ids a group message named as mentions, as the provider sent them. A row nobody answered is diagnosed from these. */
+	mentions: readonly string[];
 	/** Email only: the full mail (GAP-C1) and the ids it references, for reply matching. */
 	email: Obj | null; references: readonly string[];
 };
@@ -32,7 +34,7 @@ export function decodeInbound(transport: string, m: Json): Inbound | null {
 	// a revoke may name only its target (Baileys reports the id alone): `thread === ''` tombstones by `(channel, id)`
 	if (id !== null && m['deleted'] === true && (str(m['thread']) === null || sentAt === null))
 		return { id, thread: '', sentAt: sentAt ?? new Date().toISOString(), sender: '', senderName: null, text: '', replyTo: null, group: false, invocation: 'ambient',
-			version: sentAt ?? new Date().toISOString(), deleted: true, history: m['history'] === true, attachments: [], email: null, references: [] };
+			version: sentAt ?? new Date().toISOString(), deleted: true, history: m['history'] === true, attachments: [], mentions: [], email: null, references: [] };
 	if (id === null || sentAt === null) return null;
 	const attachments = (Array.isArray(m['attachments']) ? m['attachments'] : []).flatMap((a): WireAttachment[] => {
 		if (!isObj(a) || str(a['fileName']) === null || str(a['mimeType']) === null || typeof a['byteLength'] !== 'number') return [];
@@ -50,15 +52,17 @@ export function decodeInbound(transport: string, m: Json): Inbound | null {
 		const { attachments: _a, invocation: _i, version: _v, deleted: _d, history: _h, group: _g, ...mail } = m;
 		// one conversation per mail thread: its root, else the message it answers, else itself
 		return { id, thread: str(m['thread']) ?? chain[0] ?? refs[0] ?? id, sender: from.toLowerCase(), senderName: isObj(m['from']) ? str(m['from']['name']) : null,
-			text, replyTo: null, group: false, invocation: 'direct', email: mail, references: refs, ...facts };
+			text, replyTo: null, group: false, invocation: 'direct', email: mail, references: refs, mentions: [], ...facts };
 	}
 	const from = isObj(m['from']) ? str(m['from']['handle']) : null, thread = str(m['thread']);
 	if (from === null || thread === null) return null;
 	const group = m['group'] === true;
 	const inv = m['invocation'];
 	const invocation: Invocation = !group ? 'direct' : inv === 'mention' || inv === 'reply' ? inv : 'ambient';
+	const mentions = Array.isArray(m['mentionedJid']) ? m['mentionedJid'].filter((j): j is string => typeof j === 'string')
+		: Array.isArray(m['mentions']) ? m['mentions'].filter((j): j is string => typeof j === 'string') : [];
 	return { id, thread, sender: from, senderName: isObj(m['from']) ? str(m['from']['name']) : null, text, replyTo: str(m['replyTo']),
-		group, invocation, email: null, references: [], ...facts };
+		group, invocation, mentions, email: null, references: [], ...facts };
 }
 
 // ── Telegram (webhook ingress, `transports-telegram.ts` today) ──

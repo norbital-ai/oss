@@ -13,7 +13,7 @@ import type { Agents, As } from '../agent/index.ts';
 import type { Authority } from '../contracts.ts';
 import type { Channels, ChannelsConfig, Ingested } from '../channels/index.ts';
 import { channels as openChannels } from '../channels/index.ts';
-import { sql, type Obj } from '../channels/store.ts';
+import { preview, sql, type Obj } from '../channels/store.ts';
 import type { Engine } from '../index.ts';
 import { Authorities } from '../identity/actor.ts';
 import { DELIVER } from '../channels/outbound.ts';
@@ -93,7 +93,15 @@ export function envoys(cfg: EnvoysConfig) {
 		const addressed = !row.group || email || groups === 'all' || trigger;
 		// rule 60a: never email, never a mention or reply (the deterministic trigger), only under the envoy's scope
 		const triaged = !email && !trigger && cfg.triage?.envoy(spec, row.group) === true;
-		if (!addressed && !triaged) { await mark(row.row, 'addressed = false'); return 'ambient'; }
+		if (!addressed && !triaged) {
+			await mark(row.row, 'addressed = false');
+			// A group message that named ids and was still not taken is the one case nobody can explain from outside: record
+			// what the provider actually sent, so `Studio → Runtime` answers why a mention did not reach the envoy.
+			if (row.group && row.mentions.length > 0)
+				await db.write(sql(`INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES ($1::timestamptz, 'info', 'channel.unaddressed', $2, $3, $4::jsonb)`,
+					clock(), row.row, row.conversation, JSON.stringify({ channel: row.channel, sender: row.sender, mentions: row.mentions, text: preview(row.text) })));
+			return 'ambient';
+		}
 
 		const as = await subject(envoy, spec, row);
 		// an unlinked sender's unaddressed message stays ambient: the notice answers only a mention or reply, as without triage
@@ -189,7 +197,7 @@ export function envoys(cfg: EnvoysConfig) {
 		return { row: id, channel: String(r['channel']), conversation: String(r['conversation']), inserted: true, id: String(r['provider_id']),
 			thread: String(r['thread']), sentAt: String(r['sent_at']), sender: String(r['sender'] ?? ''), senderName: r['sender_name'] as string | null,
 			text: String(r['text'] ?? ''), replyTo: r['reply_to'] as string | null, group: r['kind'] === 'group', invocation: r['invocation'] as Ingested['invocation'],
-			version: '', deleted: false, history: false, attachments: [], email: r['email'] as Obj | null, references: [], files: (r['files'] ?? []) as Json[] };
+			version: '', deleted: false, history: false, attachments: [], mentions: [], email: r['email'] as Obj | null, references: [], files: (r['files'] ?? []) as Json[] };
 	}
 }
 export type Envoys = ReturnType<typeof envoys>;

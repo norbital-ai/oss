@@ -173,6 +173,18 @@ describe('groups (rule 60)', () => {
 		expect(wa.sent.every((s) => (s.message as { to: string }).to === '1203@g.us')).toBe(true);
 	});
 
+	it('a group mention nobody took records what the provider named, so an unanswered mention is diagnosable', async () => {
+		// the case that took a day to explain: the row is ambient and, without this, nothing says whether a mention was seen
+		await say('field_wa', '6591234567@s.whatsapp.net', '@us?', { ...group, invocation: 'ambient', mentions: ['113377445566:4@lid'] });
+		const [logged] = (await t.db.read([{ text: `SELECT attributes FROM sys_event WHERE event = 'channel.unaddressed' ORDER BY at DESC LIMIT 1`, params: [] }]))[0]!.rows;
+		expect(logged).toBeDefined();
+		expect(logged!['attributes']).toMatchObject({ channel: 'field_wa', mentions: ['113377445566:4@lid'] });
+		// a row that named nobody is not noise: it is an ordinary ambient message
+		await say('field_wa', '6591234567@s.whatsapp.net', 'chatter', { ...group, invocation: 'ambient', mentions: [] });
+		const [after] = (await t.db.read([{ text: `SELECT count(*)::int AS n FROM sys_event WHERE event = 'channel.unaddressed'`, params: [] }]))[0]!.rows;
+		expect(after!['n']).toBe(1);
+	});
+
 	it('every group turn holds the envoy\'s policies alone: an administrator\'s update is refused; each message keeps its sender header, and a turn sees the whole transcript (P32)', async () => {
 		const id = await job();
 		await say('field_wa', '6591234567@s.whatsapp.net', `close ${id}`, { ...group, invocation: 'mention' });
