@@ -125,9 +125,9 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 		q(`SELECT collection, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
 			WHERE collection IN ('sys_user', 'sys_team', 'sys_assignment', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
 		q(`SELECT channel, count(*) FILTER (WHERE status = 'sent')::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
-			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain'))::int AS failed,
+			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'skipped'))::int AS failed,
 			min(next_attempt_at) FILTER (WHERE status = 'queued' AND attempts > 0)::text AS next_retry,
-			(array_agg(error ORDER BY created_at DESC) FILTER (WHERE status IN ('failed', 'uncertain') AND error IS NOT NULL))[1] AS last_error
+			(array_agg(error ORDER BY created_at DESC) FILTER (WHERE status IN ('failed', 'uncertain', 'skipped') AND error IS NOT NULL))[1] AS last_error
 			FROM sys_message WHERE direction = 'outbound' AND created_at > $1::timestamptz - interval '1 day' GROUP BY channel`, h.now().toISOString()),
 	]);
 	const idle: ChannelDelivery = { sent: 0, pending: 0, retrying: 0, failed: 0, nextRetry: null, lastError: null };
