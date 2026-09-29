@@ -388,6 +388,18 @@ test('Board: each lane reads its first page by its condition; nearing the lane e
 	v.done();
 });
 
+test('Board: `columns` lays the lanes out in a grid of that many columns; unset is the scrolling reel', async () => {
+	const s = scripted();
+	const reel = await show('board', { of: 'jobs', by: 'status', card: ['title'] }, s.bolt);
+	assert.match(document.querySelector('[data-lane=\'"done"\']').parentElement.className, /overflow-x-auto/);
+	reel.done();
+	const grid = await show('board', { of: 'jobs', by: 'status', card: ['title'], columns: 2 }, s.bolt);
+	const lanes = document.querySelector('[data-view=board] [role=list]').parentElement;
+	assert.equal(lanes.style.gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
+	assert.equal(document.querySelectorAll('[data-view=board] [role=list]').length, 2, 'two lanes a row');
+	grid.done();
+});
+
 test('Table: `/` lists the search indexes and never filters; /semantic reads by meaning, a typed similarity or query swaps in its input (L-BOLT-495)', async () => {
 	const similar = [];
 	const asked = [];

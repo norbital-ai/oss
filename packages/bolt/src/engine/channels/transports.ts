@@ -112,7 +112,7 @@ function telegramInvocation(msg: Obj, text: string, bot: { id?: number; username
 
 // ── WhatsApp (a paired account over Baileys, a persistent socket the adapter owns; `transports-whatsapp.ts` today) ──
 /** One Baileys `WAMessage` (read structurally) → the wire message, or `null` (our own echo, a receipt, an empty message). */
-export function whatsappMessage(msg: unknown, self: string | undefined, options: { history?: boolean } = {}): Obj | null {
+export function whatsappMessage(msg: unknown, self: string | undefined, options: { history?: boolean; lid?: string } = {}): Obj | null {
 	if (!isObj(msg) || !isObj(msg['key']) || msg['key']['fromMe'] === true) return null;
 	const key = msg['key'], jid = str(key['remoteJid']), id = str(key['id']), content = msg['message'];
 	const ts = Number(msg['messageTimestamp']);
@@ -134,10 +134,16 @@ export function whatsappMessage(msg: unknown, self: string | undefined, options:
 	const context = [content['extendedTextMessage'], content['imageMessage'], content['documentMessage'], content['videoMessage']]
 		.find((x) => isObj(x) && isObj(x['contextInfo'])) as Obj | undefined;
 	const info = context?.['contextInfo'] as Obj | undefined;
-	const bare = self?.split(':')[0]?.split('@')[0];
-	const mentioned = Array.isArray(info?.['mentionedJid']) && bare !== undefined && info['mentionedJid'].some((j) => typeof j === 'string' && j.startsWith(bare));
+	// Both of our identities: WhatsApp addresses a linked device by LID in `mentionedJid`, so matching only the phone
+	// JID the number prints as reads every real mention as ambient. Either form, with or without a device suffix.
+	const ours = [self, options.lid].flatMap((id) => {
+		const bare = id?.split(':')[0]?.split('@')[0];
+		return bare === undefined || bare === '' ? [] : [bare];
+	});
+	const isOurs = (jid: string): boolean => ours.some((b) => jid.startsWith(b));
+	const mentioned = Array.isArray(info?.['mentionedJid']) && info['mentionedJid'].some((j) => typeof j === 'string' && isOurs(j));
 	// a reply to anybody is not a reply to us: only a quote of our own message counts, which `participant` names
-	const repliedToUs = bare !== undefined && typeof info?.['participant'] === 'string' && info['participant'].startsWith(bare);
+	const repliedToUs = typeof info?.['participant'] === 'string' && isOurs(info['participant']);
 	return { ...base, id, text, replyTo: str(info?.['stanzaId']), invocation: !group ? 'direct' : mentioned ? 'mention' : repliedToUs ? 'reply' : 'ambient' };
 }
 function whatsappText(content: Obj): string {

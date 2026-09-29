@@ -36,7 +36,7 @@ describe('codec: $bolt reads hand pages real values', () => {
 		const answer = { rows: [{ id: 'a', amount: { $dec: '1.50' }, day: { $d: '2026-01-02' }, span: { start: { $t: '2026-01-02T03:04:05.000Z' }, end: null },
 			lines: [{ price: { $dec: '2' } }] }], next: null };
 		const fetch = (async () => new Response(JSON.stringify({ answers: [answer] }))) as typeof globalThis.fetch;
-		const bolt = createBolt({ actor: null, locale: 'en', fetch, openStream: () => ({ onmessage: null, close() {} }) });
+		const bolt = createBolt({ actor: null, locale: 'en', fetch, openStream: () => ({ onmessage: null, onerror: null, close() {} }) });
 		const page = await bolt.read<{ rows: { amount: Decimal; day: string; span: { start: string }; lines: { price: Decimal }[] }[] }>('t', { limit: 1 });
 		const row = page.rows[0]!;
 		expect(row.amount).toBeInstanceOf(Decimal);

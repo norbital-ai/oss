@@ -39,9 +39,10 @@
 	const withKey = (label: string, key: string) => `${label} · ${mod}${key}`;
 	const THEME_ICON: { readonly [x in Theme]: string } = { light: 'lucide:sun', dark: 'lucide:moon', system: 'lucide:monitor' };
 	const THEME_LABEL: { readonly [x in Theme]: string } = { light: 'Light', dark: 'Dark', system: 'System' };
+	// `idle` is the stream nobody asked for (no live read is open), not a failure; `connecting` is opening or retrying a drop
 	const SYNC: { readonly [s in SyncStatus]: { dot: string; label: string } } = {
 		live: { dot: 'bg-success', label: 'Connected' }, connecting: { dot: 'animate-pulse bg-muted-foreground/60', label: 'Reconnecting' },
-		idle: { dot: 'bg-muted-foreground/40', label: 'Reconnecting' }, closed: { dot: 'bg-destructive', label: 'Connection closed' },
+		idle: { dot: 'bg-muted-foreground/40', label: 'Idle' }, closed: { dot: 'bg-destructive', label: 'Connection closed' },
 	};
 
 	const follow = (event: MouseEvent, href: string) => {

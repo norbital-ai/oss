@@ -82,7 +82,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Everyone with access to this workspace. Administrators see everything; preview a member to check what their teams grant.':
 		'所有可访问此工作区的人。管理员可查看全部；预览某位成员以检查其团队授予的权限。',
 	'Execute plan': '执行计划', 'Expand navigation': '展开导航', 'Explain': '说明权限', 'External': '外部', 'Fields': '字段', 'Find': '查找',
-	'Find an app or a record…': '查找应用或记录…', 'Goal progress': '目标进度', 'Head': '最新', 'Inbox': '收件箱', 'Input': '输入',
+	'Find an app or a record…': '查找应用或记录…', 'Goal progress': '目标进度', 'Head': '最新', 'Idle': '空闲', 'Inbox': '收件箱', 'Input': '输入',
 	'Integrations': '集成', 'Invitations': '邀请', 'Invite': '邀请',
 	'Invite people by email. External members can never be administrators.': '通过邮件邀请成员。外部成员不能成为管理员。',
 	'Issue key': '签发密钥', 'Key name': '密钥名称', 'Keys for programmatic access. A new key is shown once.': '用于程序访问的密钥。新密钥仅显示一次。',
@@ -97,7 +97,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Open': '打开', 'Open a file to edit it.': '打开文件以编辑。', 'Open navigation': '打开导航', 'Operations': '运营', 'Organization': '组织',
 	'Pause': '暂停', 'People': '人员', 'Plan': '计划', 'Plan first; you approve before it acts': '先制定计划；执行前需您批准',
 	'Policies granted to a member, a team or an API key.': '授予成员、团队或 API 密钥的策略。', 'Policy': '策略', 'Preview': '预览', 'Preview as': '预览身份',
-	'Previewing as a team. Its grants apply; you are recorded as the previewer.': '正在以团队身份预览。适用该团队的权限；系统记录您为预览者。',
+	'Output': '输出', 'Previewing as a team. Its grants apply; you are recorded as the previewer.': '正在以团队身份预览。适用该团队的权限；系统记录您为预览者。',
 	'Previewing as another member. Their grants apply; you are recorded as the previewer.': '正在以其他成员身份预览。适用其权限；系统记录您为预览者。',
 	'Progress': '进度', 'Publish': '发布', 'Queued': '排队中', 'Reason': '原因', 'Reject': '驳回', 'Reload': '重新加载', 'Remove': '移除',
 	'Rename': '重命名', 'Request changes': '要求修改', 'Resend': '重新发送',

@@ -125,7 +125,7 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 			}) as typeof globalThis.fetch;
 			/** The live stream over the handler's SSE body; an over-budget answer on it is a finding too. */
 			const openStream = (url: string) => {
-				const source = { onmessage: null as ((e: MessageEvent<string>) => void) | null, close: () => {} };
+				const source = { onmessage: null as ((e: MessageEvent<string>) => void) | null, onerror: null as ((event: Event) => void) | null, close: () => {} };
 				const abort = new AbortController();
 				source.close = () => abort.abort();
 				streams.push(source.close);

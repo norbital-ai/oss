@@ -6,7 +6,7 @@ import type { Live, LiveError, Q } from '../decl/ctx.ts';
 import type { Outcome } from '../engine/contracts.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import { HEADERS, PATHS, uuidv7, type ActBody, type ActReply, type Frame, type LiveBody, type LiveReply, type PatchOp, type QReply, type WireError, type WireRead } from '../protocol/wire.ts';
-import { liveStream, type EventSourceLike, type Visibility } from './stream.ts';
+import { liveStream, type EventSourceLike, type Signals } from './stream.ts';
 import { browserCatalog, type BrowserCatalog, type Catalog } from '../protocol/catalog.ts';
 import { decodeView } from '../protocol/ir.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
@@ -15,7 +15,7 @@ export type { Live, LiveError, Q };
 export type RunHandle = PromiseLike<Outcome> & { readonly id: string };
 export type BoltConfig = {
 	actor: Json; locale: string; messages?: { readonly [key: string]: string };
-	base?: string; fetch?: typeof fetch; openStream?: (url: string) => EventSourceLike; visibility?: Visibility;
+	base?: string; fetch?: typeof fetch; openStream?: (url: string) => EventSourceLike; signals?: Signals;
 	uuid?: () => string; now?: () => string;
 	/** The caller's collections as the shell boot states them: `decode` checks filters and sorts against it (rule 11a). */
 	catalog?: BrowserCatalog;
@@ -104,7 +104,7 @@ export function createBolt(config: BoltConfig) {
 	let closed: string | null = null;
 	/** L-BOLT-499: the link's state for the shell's banner; `closed` once a release closed the stream (rule 66). */
 	const statusReaders = new Set<(s: SyncStatus) => void>();
-	const syncStatus = (): SyncStatus => closed !== null ? 'closed' : conn !== null ? 'live' : stream.open ? 'connecting' : 'idle';
+	const syncStatus = (): SyncStatus => closed !== null ? 'closed' : conn !== null ? 'live' : stream.open || stream.retrying ? 'connecting' : 'idle';
 	const emitStatus = () => { const now = syncStatus(); for (const run of statusReaders) run(now); };
 
 	async function post<T>(path: string, body: unknown, headers: { readonly [h: string]: string } = {}): Promise<{ status: number; body: T | WireError }> {
@@ -130,12 +130,18 @@ export function createBolt(config: BoltConfig) {
 		applied = Math.max(applied, v);
 		for (const w of waiters) if (applied >= w.v) w.done();
 	};
+	// the browser's two link signals: `document.hidden` is typed, `window` is what fires `online` (neither `Window` nor
+	// `globalThis` declares both), so the client's one view of them is this pair
+	const signals: Signals | undefined = typeof document === 'undefined' ? undefined : {
+		get hidden() { return document.hidden; },
+		addEventListener: (type, run) => { window.addEventListener(type, run); },
+	};
 	const stream = liveStream(() => config.openStream?.(`${base}${PATHS.live}`) ?? new EventSource(`${base}${PATHS.live}`, { withCredentials: true }), onFrame, () => {
 		conn = null;
 		emitStatus();
 		for (const s of views.values()) s.registered = false;
 		for (const w of waiters) w.done();
-	}, config.visibility ?? (typeof document === 'undefined' ? undefined : document));
+	}, config.signals ?? signals);
 
 	async function register(add: readonly View[], drop: readonly string[] = []): Promise<void> {
 		if (conn === null || (add.length === 0 && drop.length === 0)) return;
@@ -338,10 +344,13 @@ export function createBolt(config: BoltConfig) {
 			(config.messages?.[key] ?? key).replace(/\{(\w+)\}/g, (m, name: string) => vars[name] === undefined ? m : String(vars[name])),
 		/** The release that closed the stream (rule 66): the shell shows the reload notice. */
 		get closed() { return closed; },
-		/** `live` (the stream answers), `connecting`, `idle` (no live read open) or `closed` (reload for the new release). */
+		/** `live` (the stream answers), `connecting` (opening, or retrying a drop), `idle` (no live read open) or
+		 * `closed` (reload for the new release). */
 		get syncStatus() { return syncStatus(); },
 		/** Calls `run` with the status now and on every change; returns the unsubscribe. */
 		onSyncStatus(run: (s: SyncStatus) => void): () => void { statusReaders.add(run); run(syncStatus()); return () => { statusReaders.delete(run); }; },
+		/** Retire this client (a boot that replaces it): the stream closes, no view reopens it, and it stops reporting. */
+		close: () => { statusReaders.clear(); stream.want(false); },
 	};
 }
 export type Bolt = ReturnType<typeof createBolt>;

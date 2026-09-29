@@ -1,12 +1,13 @@
 // engine/live, protocol/wire and the $bolt client without a database: one guarantee per test (rules 32, 64–67).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import type { Authority, Captured, EngineActor, ReadIR } from '../src/engine/contracts.ts';
 import { LIVE, liveHub } from '../src/engine/live/hub.ts';
 import * as ir from '../src/protocol/ir.ts';
-import { createBolt } from '../src/client/bolt.ts';
+import { createBolt, type SyncStatus } from '../src/client/bolt.ts';
+import { HIDDEN_CLOSE_MS, type EventSourceLike } from '../src/client/stream.ts';
 import { redact, statusOf, type Frame, type LiveBody } from '../src/protocol/wire.ts';
 import { manifest } from './engine-fixture.ts';
 
@@ -280,7 +281,7 @@ describe('protocol/wire (rule 32)', () => {
 
 describe('$bolt client without a server', () => {
 	it('a refused write paints while in flight and un-paints; a network failure is unknown with the key (rules 32, 67)', async () => {
-		let es: { onmessage: ((e: MessageEvent<string>) => void) | null; close(): void } | undefined;
+		let es: EventSourceLike | undefined;
 		const push = (f: Frame) => es!.onmessage!(new MessageEvent('message', { data: JSON.stringify(f) }));
 		let during = -1, offline = false;
 		const fetch = async (url: string | URL | Request) => {
@@ -290,7 +291,7 @@ describe('$bolt client without a server', () => {
 			return Response.json({ outcome: { kind: 'refused', code: 'forbidden', message: 'No.' }, v: 0 }, { status: 403 });
 		};
 		const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, uuid: () => 'k1',
-			openStream: () => (es = { onmessage: null, close() {} }) });
+			openStream: () => (es = { onmessage: null, onerror: null, close() {} }) });
 		const view = bolt.live(bolt.read('orders', { all: true }));
 		const rows = () => (view.current as { rows: Json[] }).rows;
 		const stop = view.subscribe(() => {});
@@ -306,11 +307,11 @@ describe('$bolt client without a server', () => {
 	});
 
 	it('applies patches in lane order, ignores a stale one and re-registers a view a patch does not fit (rule 65)', async () => {
-		let es: { onmessage: ((e: MessageEvent<string>) => void) | null; close(): void } | undefined;
+		let es: EventSourceLike | undefined;
 		const push = (f: Frame) => es!.onmessage!(new MessageEvent('message', { data: JSON.stringify(f) }));
 		const registered: LiveBody[] = [];
 		const fetch = async (_: string | URL | Request, init?: RequestInit) => { registered.push(JSON.parse(String(init!.body)) as LiveBody); return Response.json({ errors: [] }); };
-		const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, openStream: () => (es = { onmessage: null, close() {} }) });
+		const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, openStream: () => (es = { onmessage: null, onerror: null, close() {} }) });
 		const view = bolt.live(bolt.read('orders', { all: true }));
 		const titles = () => (view.current as unknown as { rows: { title: string }[] }).rows.map((r) => r.title);
 		const stop = view.subscribe(() => {});
@@ -327,4 +328,128 @@ describe('$bolt client without a server', () => {
 		expect(registered).toEqual([{ conn: 'c1', drop: [], add: [{ view: 'v1', read: { m: 'read', a: ['orders', { all: true }] } }] }]);
 		stop();
 	});
+
+	it('a dropped link reports down, retries on a doubling backoff, and the next hello re-answers every view; `close` retires it',
+		async () => {
+		vi.useFakeTimers();
+		const random = vi.spyOn(Math, 'random').mockReturnValue(0.5); // the jitter, mid: exact waits
+		try {
+			const sources: EventSourceLike[] = [];
+			const closed: string[] = [];
+			const registered: LiveBody[] = [];
+			const fetch = async (_: string | URL | Request, init?: RequestInit) => { registered.push(JSON.parse(String(init!.body)) as LiveBody); return Response.json({ errors: [] }); };
+			const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, openStream: () => {
+				const s: EventSourceLike = { onmessage: null, onerror: null, close: () => closed.push(`s${sources.length - 1}`) };
+				sources.push(s);
+				return s;
+			} });
+			const statuses: SyncStatus[] = [];
+			bolt.onSyncStatus((s) => statuses.push(s));
+			const push = (f: Frame) => sources[sources.length - 1]!.onmessage!(new MessageEvent('message', { data: JSON.stringify(f) }));
+			const drop = () => sources[sources.length - 1]!.onerror!(new Event('error'));
+			const view = bolt.live(bolt.read('orders', { all: true }));
+			const stop = view.subscribe(() => {});
+			expect(statuses).toEqual(['idle']); // the shell's opening state, until the first `hello`
+			push({ t: 'hello', conn: 'c1', v: 0 });
+			push({ t: 'answer', view: 'v1', v: 0, value: { rows: [order()], next: null } });
+			expect(bolt.syncStatus).toBe('live');
+			expect(statuses.at(-1)).toBe('live');
+			// a drop reads as down, not idle, and is retried off a doubling backoff rather than left dead
+			drop();
+			expect(closed).toEqual(['s0']);
+			expect(bolt.syncStatus).toBe('connecting');
+			await vi.advanceTimersByTimeAsync(499);
+			expect(sources).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(sources).toHaveLength(2);
+			drop();
+			await vi.advanceTimersByTimeAsync(999);
+			expect(sources).toHaveLength(2);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(sources).toHaveLength(3);
+			// the one connection carries every view again, and answers it without the page re-subscribing
+			push({ t: 'hello', conn: 'c2', v: 4 });
+			push({ t: 'answer', view: 'v1', v: 4, value: { rows: [order({ id: 'o2' })], next: null } });
+			expect(registered.map((b) => b.conn)).toEqual(['c1', 'c2']);
+			expect(registered[1]!.add!.map((a) => a.view)).toEqual(['v1']);
+			expect((view.current as unknown as { rows: { id: string }[] }).rows[0]!.id).toBe('o2');
+			expect(statuses.at(-1)).toBe('live');
+			// a retired client closes its stream and stops reporting
+			statuses.length = 0;
+			bolt.close();
+			expect(closed).toEqual(['s0', 's1', 's2']); // each drop closed its own source; `close` the last one
+			expect(bolt.syncStatus).toBe('idle');
+			expect(statuses).toEqual([]);
+			stop();
+		} finally { random.mockRestore(); vi.useRealTimers(); }
+	});
+
+	it('a drop backs off from 0.5 s ±50% and wakes on `online`; a hidden tab rides out a quick switch, then the link closes',
+		async () => {
+		vi.useFakeTimers();
+		const random = vi.spyOn(Math, 'random').mockReturnValue(0.5); // the jitter, mid: exact waits
+		try {
+			const sources: EventSourceLike[] = [];
+			const closed: string[] = [];
+			const registered: LiveBody[] = [];
+			const fetch = async (_: string | URL | Request, init?: RequestInit) => { registered.push(JSON.parse(String(init!.body)) as LiveBody); return Response.json({ errors: [] }); };
+			const listeners: { [type: string]: () => void } = {};
+			const signals = { hidden: false, addEventListener: (type: string, run: () => void) => { listeners[type] = run; } };
+			const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, signals, openStream: () => {
+				const s: EventSourceLike = { onmessage: null, onerror: null, close: () => closed.push(`s${sources.length - 1}`) };
+				sources.push(s);
+				return s;
+			} });
+			const push = (f: Frame) => sources[sources.length - 1]!.onmessage!(new MessageEvent('message', { data: JSON.stringify(f) }));
+			/** Drops the link and returns how many sources existed while it was down. */
+			const drop = () => { const down = sources.length; sources[down - 1]!.onerror!(new Event('error')); expect(bolt.syncStatus).toBe('connecting'); return down; };
+			/** Advances the clock and asserts the link came back, or did not. */
+			const after = async (ms: number, want: number) => { await vi.advanceTimersByTimeAsync(ms); expect(sources).toHaveLength(want); };
+			const view = bolt.live(bolt.read('orders', { all: true }));
+			const stop = view.subscribe(() => {});
+			let conns = 0;
+			const hello = () => push({ t: 'hello', conn: `c${++conns}`, v: conns });
+			hello();
+
+			// the wait is 0.5 s doubled per consecutive drop and spread ±50%: 250 ms at the low end of the first,
+			// 1.5 s at the high end of the second, and a frame at all resets it
+			random.mockReturnValue(0);
+			const low = drop();
+			await after(249, low);
+			await after(1, low + 1);
+			random.mockReturnValue(0.999);
+			const high = drop();
+			await after(1_498, high);
+			await after(1, high + 1);
+			random.mockReturnValue(0.5);
+			// a source that opens and then dies before its first frame is what grows the wait, to the 30 s cap
+			for (const wait of [2_000, 4_000, 8_000, 16_000, 30_000]) {
+				const down = drop();
+				await after(wait - 1, down);
+				await after(1, down + 1);
+			}
+			// `online` says the network is back, so a wait that was only the network's is over and the link returns at once
+			const slept = drop();
+			listeners['online']!();
+			expect(sources).toHaveLength(slept + 1);
+			// hidden with a capped wait pending: the grace and the wait re-derive the same verdict independently, so whichever
+			// runs first stands the link down and neither opens a connection the reader cannot see, nor strands it
+			const capped = drop();
+			signals.hidden = true;
+			listeners['visibilitychange']!();
+			await after(30_000, capped);
+			expect(closed).toHaveLength(capped);
+			expect(bolt.syncStatus).toBe('idle'); // deliberately down, not a drop being retried
+			// shown: the one connection is back and re-answers every view, with nothing re-subscribed
+			signals.hidden = false;
+			listeners['visibilitychange']!();
+			expect(sources).toHaveLength(capped + 1);
+			hello();
+			expect(registered.map((b) => b.conn)).toEqual(Array.from({ length: conns }, (_, i) => `c${i + 1}`));
+			expect(registered.at(-1)!.add!.map((a) => a.view)).toEqual(['v1']);
+			expect(bolt.syncStatus).toBe('live');
+			stop();
+		} finally { random.mockRestore(); vi.useRealTimers(); }
+	});
+
 });

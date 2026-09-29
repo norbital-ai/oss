@@ -40,7 +40,7 @@ const until = async (ok: () => boolean, n = 600) => { for (let i = 0; i < n && !
 /** A test EventSource over the handler's SSE body, counting its bytes. */
 function sse(fetch: (url: string) => Promise<Response>, url: string, bytes: { n: number }): EventSourceLike {
 	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-	const source: EventSourceLike = { onmessage: null, close: () => void reader?.cancel() };
+	const source: EventSourceLike = { onmessage: null, onerror: null, close: () => void reader?.cancel() };
 	void (async () => {
 		reader = (await fetch(url)).body!.getReader();
 		const text = new TextDecoder();

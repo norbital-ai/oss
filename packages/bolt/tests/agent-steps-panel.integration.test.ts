@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // The agent panel folds each run of consecutive tool steps into one quiet group ("Worked for 1s · 3 steps"), Codex-style,
-// marked when a step failed and closed once the turn settled; a reply ends the run. Each step is a row (verb, target,
-// duration) opening to its input and result. Staging's failing loop was a wall of rows.
+// marked when a step failed and closed once the turn settled; a reply ends it. Each step is a row (verb, target,
+// duration) opening to its input and result behind one tab each, the failing call's icon an alert. Staging's failing loop
+// was a wall of rows.
 import './setup-happy-dom.js';
 import { randomUUID } from 'node:crypto';
 import { flushSync, mount, unmount, type Component } from 'svelte';
@@ -50,12 +51,15 @@ it('a run of tool steps is one collapsed "Worked for" group with a failure mark;
 		const steps = [...target.querySelectorAll('[data-step]')];
 		expect(steps.map((e) => e.getAttribute('data-step-state'))).toEqual(['done', 'failed', 'failed']);
 		expect(steps.map((e) => e.querySelector('summary')!.textContent!.replace(/\s+/g, ' ').trim().replace(/ \d+(\.\d)?s$/, ''))).toEqual(['History quote', 'Read quotes', 'Read quotes']);
-		// a step opens to its input and result, rendered only once opened
-		expect(steps[1]!.querySelector('pre')).toBeNull();
+		// a step opens to its input and result, one tab each, rendered only once opened
+		expect(steps[1]!.querySelector('[role="tabpanel"]')).toBeNull();
 		steps[1]!.querySelector('details')!.open = true;
-		await until(() => steps[1]!.querySelector('pre') !== null);
-		expect(steps[1]!.querySelector('pre')!.textContent).toContain('"month"');
-		// the run sits between the question and the reply
+		await until(() => steps[1]!.querySelector('[role="tabpanel"]') !== null);
+		expect([...steps[1]!.querySelectorAll('[role="tab"]')].map((e) => [e.textContent, e.getAttribute('aria-selected')])).toEqual([['Input', 'true'], ['Output', 'false']]);
+		expect(steps[1]!.querySelector('[role="tabpanel"]')!.textContent).toContain('"month"');
+		(steps[1]!.querySelector('[data-pane="output"]') as HTMLElement).click();
+		await until(() => steps[1]!.querySelector('[aria-selected="true"]')?.textContent === 'Output');
+		expect(steps[1]!.querySelector('[role="tabpanel"]')!.textContent).toContain('error');		// the run sits between the question and the reply
 		expect([...target.querySelectorAll('ol[aria-live] > li')].map((e) => e.getAttribute('data-role'))).toEqual(['user', 'steps', 'assistant']);
 	} finally { void unmount(v); target.remove(); }
 });

@@ -19,12 +19,12 @@
 	segment's Transcript tab; the orb names the conversation's state; reasoning streams above the reply and stays on it, folded; a
 	cut reply that no turn continues is marked interrupted; a divider names the model where it changed. Consecutive
 	tool calls and reasoning fold into one "Worked for Ns" group whose rows (verb, target, duration) open to their input
-	and result; code blocks copy. The open conversation is the shell's `?agent=` (`onConversation` reports a switch). An
+	and result, one tab each; a failed row's icon is the alert, so the call that failed reads at a glance. Code blocks copy. The open conversation is the shell's `?agent=` (`onConversation` reports a switch). An
 	envoy's channel conversation is read-only here (rule 61): its transcript, and no composer or controls at all.
 -->
 <script lang="ts">
 	import { getContext, onDestroy, tick, type Snippet } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { watch } from 'runed';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
@@ -61,6 +61,8 @@
 	const before = $derived(from === null ? null : edge === null ? from : edge.more ? edge.first : null);
 	/** The tool steps the reader opened: only those render their input and result. */
 	const opened = new SvelteSet<string>();
+	/** Which of a step's two panes is up: its input, or the result that carries the failure. */
+	const pane = new SvelteMap<string, 'input' | 'output'>();
 	/** L-BOLT-436: the message this panel just posted (working while it waits in the queue), and a send this panel saw fail. */
 	let sent = $state<string | null>(null), sendFailed = $state(false);
 	// svelte-ignore state_referenced_locally
@@ -617,21 +619,28 @@
 						<ol class="mt-1 space-y-0.5 border-l border-border/70 pl-3">
 							{#each item.steps as s (s.id)}
 								{@const step = stepOf(s)}
+								{@const tool = s.tool}
+								{@const shown = pane.get(s.id) ?? 'input'}
 								<li data-step data-step-state={active(s) ? 'running' : s.tool?.failed ? 'failed' : 'done'}>
 									<details class="group/step" ontoggle={(e) => e.currentTarget.open ? opened.add(s.id) : opened.delete(s.id)}>
 										<summary class="flex cursor-pointer list-none items-center gap-2 rounded py-0.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden" class:text-destructive={s.tool?.failed}>
-											<Icon name={step.icon} class="size-3.5 shrink-0 {active(s) ? 'animate-spin' : ''}" />
+											<Icon name={s.tool?.failed === true ? 'lucide:circle-alert' : step.icon} class="size-3.5 shrink-0 {active(s) ? 'animate-spin' : ''}" />
 											<span class="shrink-0 font-medium {active(s) ? 'agent-shimmer' : ''}">{step.verb}</span>
 											{#if step.target !== ''}<span class="min-w-0 truncate font-mono text-[0.7rem] opacity-80">{step.target}</span>{/if}
 											{#if s.tool?.ms !== undefined}<span class="ml-auto shrink-0 tabular-nums opacity-70">{seconds(s.tool.ms)}</span>{/if}
 										</summary>
-										<!-- a step's input and result render only once it is opened -->
+										<!-- a step's input and result render only once it is opened, one tab each -->
 										{#if opened.has(s.id)}
 										<div class="mt-1 mb-2 grid gap-1.5 text-xs">
-											{#if s.tool === undefined}<p class="whitespace-pre-wrap text-muted-foreground italic" data-reasoning>{s.reasoning}</p>
-											{:else}
-												{#if s.tool.args !== undefined}<span class="text-muted-foreground">{t('Input')}</span><pre class="max-h-48 overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[0.7rem] whitespace-pre-wrap">{s.tool.args}</pre>{/if}
-												{#if s.tool.result !== undefined}<span class="text-muted-foreground">{t('Result')}</span><pre class="max-h-48 overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[0.7rem] whitespace-pre-wrap">{s.tool.result}</pre>{/if}
+											{#if tool === undefined}<p class="whitespace-pre-wrap text-muted-foreground italic" data-reasoning>{s.reasoning}</p>
+											{:else if tool.args !== undefined || tool.result !== undefined}
+												<div role="tablist" class="flex gap-1">
+													{#each ([['input', 'Input'], ['output', 'Output']] as const).filter(([k]) => k === 'input' ? tool.args !== undefined : tool.result !== undefined) as [k, label] (k)}
+														<button type="button" role="tab" data-pane={k} aria-selected={shown === k} onclick={() => pane.set(s.id, k)}
+															class="rounded px-1.5 py-0.5 text-[0.7rem] {shown === k ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'}">{t(label)}</button>
+													{/each}
+												</div>
+												<div role="tabpanel" class="max-h-48 overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[0.7rem] whitespace-pre-wrap">{shown === 'input' ? tool.args : tool.result}</div>
 											{/if}
 										</div>
 										{/if}

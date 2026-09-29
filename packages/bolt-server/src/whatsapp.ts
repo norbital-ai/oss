@@ -8,7 +8,7 @@ import { connection, whatsappMessage, type ChannelConnection, type Json, type Tr
 /** The part of a Baileys socket this adapter uses, read structurally. */
 export type WaSocket = {
 	ev: { on(event: string, listener: (arg: never) => void): void };
-	user?: { id: string } | undefined;
+	user?: { id: string; lid?: string } | undefined;
 	sendMessage(jid: string, content: { text: string }): Promise<{ key?: { id?: string | null } } | undefined>;
 	requestPairingCode(phone: string): Promise<string>;
 	logout(): Promise<void>;
@@ -84,7 +84,7 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 		});
 		const deliver = async (messages: readonly unknown[], history: boolean) => {
 			for (const raw of messages) {
-				const message = whatsappMessage(raw, s.user?.id, { history });
+				const message = whatsappMessage(raw, s.user?.id, { history, ...(s.user?.lid === undefined ? {} : { lid: s.user.lid }) });
 				if (message === null) continue;
 				const media = history ? null : await opened.download(raw).catch(() => null);
 				const bins = media !== null && media.bytes.byteLength <= MEDIA_MAX ? [media.bytes] : [];

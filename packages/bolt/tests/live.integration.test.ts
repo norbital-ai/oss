@@ -41,7 +41,7 @@ beforeEach(async () => {
 
 /** A test EventSource over the handler's SSE body. */
 function sse(fetch: (url: string) => Promise<Response>, url: string): EventSourceLike {
-	const source: EventSourceLike = { onmessage: null, close: () => void reader?.cancel() };
+	const source: EventSourceLike = { onmessage: null, onerror: null, close: () => void reader?.cancel() };
 	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 	void (async () => {
 		reader = (await fetch(url)).body!.getReader();

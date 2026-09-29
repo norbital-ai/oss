@@ -5,7 +5,7 @@ import type { EventSourceLike } from '../../src/client/stream.ts';
 /** A test EventSource over the handler's SSE body. */
 export function sse(fetch: (url: string) => Promise<Response>, url: string): EventSourceLike {
 	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-	const source: EventSourceLike = { onmessage: null, close: () => void reader?.cancel() };
+	const source: EventSourceLike = { onmessage: null, onerror: null, close: () => void reader?.cancel() };
 	void (async () => {
 		reader = (await fetch(url)).body!.getReader();
 		const text = new TextDecoder();

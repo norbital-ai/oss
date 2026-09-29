@@ -14,6 +14,11 @@
 		card: readonly [] | readonly [K] | readonly [K, K] | readonly [K, K, K] | readonly [K, K, K, K] | Snippet<[{ row: RowOf<C> }]>;
 		/** Required for a relation `by`; otherwise the lanes the aggregate finds, in value order. */
 		lanes?: readonly Lane[];
+		/**
+		 * Lanes per row. Unset is the horizontal reel, which scrolls sideways; a count lays the lanes
+		 * out in a grid of that many columns whose rows share the board's height.
+		 */
+		columns?: number;
 		/** The author's fixed scope (never clearable); the viewer's filter is ANDed under it. */
 		where?: WhereOf<C>;
 		/** Seed rows of the view popover the viewer may edit or clear. */
@@ -44,7 +49,7 @@
 	import ReadGate from './ReadGate.svelte';
 	import EmptyState from './EmptyState.svelte';
 
-	let { of, by, card, lanes, where, initialFilter, orderBy, pageSize = 25, toolbar = {}, key }: BoardProps = $props();
+	let { of, by, card, lanes, columns, where, initialFilter, orderBy, pageSize = 25, toolbar = {}, key }: BoardProps = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const catalog = $derived(kinds.catalog ?? {});
@@ -115,10 +120,15 @@
 				<EmptyState variant="card" title={msg(bolt, 'table.empty', 'No {what} yet', { what: label(bolt, of).toLowerCase() })} />
 			{:else}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="flex max-h-[calc(100dvh-8rem)] min-h-72 flex-1 snap-x gap-3 overflow-x-auto pb-2" ondragover={edgeScroll}>
+			<div
+				class={columns === undefined
+					? 'flex max-h-[calc(100dvh-8rem)] min-h-72 flex-1 snap-x gap-3 overflow-x-auto pb-2'
+					: 'grid max-h-[calc(100dvh-8rem)] min-h-72 flex-1 auto-rows-fr gap-3 overflow-y-auto pb-2'}
+				style={columns === undefined ? undefined : `grid-template-columns: repeat(${columns}, minmax(0, 1fr))`}
+				ondragover={edgeScroll}>
 				{#each list as lane (JSON.stringify(lane.value))}
 					{@const dot = dotOf(lane.value)}
-					<div role="list" class="bg-muted/40 flex min-h-0 w-72 shrink-0 snap-start flex-col gap-2 rounded-sm p-3" data-lane={JSON.stringify(lane.value)}
+					<div role="list" class={['bg-muted/40 flex min-h-0 flex-col gap-2 rounded-sm p-3', columns === undefined ? 'w-72 shrink-0 snap-start' : 'min-w-0']} data-lane={JSON.stringify(lane.value)}
 						ondragover={(e) => e.preventDefault()} ondrop={(e) => drop(e, lane.value)}>
 						<header class="flex items-center justify-between gap-2 text-sm font-medium">
 							<span class="flex min-w-0 items-center gap-1.5">{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"></span>{/if}<span class="truncate">{lane.label}</span></span>

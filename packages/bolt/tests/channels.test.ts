@@ -39,6 +39,8 @@ describe('Telegram updates', () => {
 
 describe('WhatsApp (Baileys) messages', () => {
 	const self = '6580000000:3@s.whatsapp.net';
+	/** Our LID, the identity WhatsApp actually names in a group mention; `self` is the phone JID it prints as. */
+	const MY_LID = '113377445566:4@lid';
 	const wa = (key: object, message: object, extra: object = {}) => ({ key: { id: 'M1', ...key }, messageTimestamp: 1_790_000_000, pushName: 'Ben', message, ...extra });
 	it('our own echo and empty messages are not messages', () => {
 		expect(whatsappMessage(wa({ remoteJid: '659@s.whatsapp.net', fromMe: true }, { conversation: 'x' }), self)).toBeNull();
@@ -52,6 +54,16 @@ describe('WhatsApp (Baileys) messages', () => {
 		expect(whatsappMessage(wa(g, { extendedTextMessage: { text: 'ok', contextInfo: { participant: '6580000000@s.whatsapp.net', stanzaId: 'X' } } }), self))
 			.toMatchObject({ invocation: 'reply', replyTo: 'X' });
 		expect(whatsappMessage(wa(g, { extendedTextMessage: { text: 'ok', contextInfo: { participant: '6599999999@s.whatsapp.net' } } }), self)!['invocation']).toBe('ambient');
+	});
+	it('a mention by our LID addresses us too, which is what WhatsApp actually sends', () => {
+		// WhatsApp addresses a linked device by LID, so `mentionedJid` carries the LID and not the phone JID the number
+		// prints as. Matching only the phone JID reads every real mention as ambient — the linked device never wakes.
+		const g = { remoteJid: '1203@g.us', participant: '6591234567:14@s.whatsapp.net' };
+		const mentioned = (jid: string) => whatsappMessage(wa(g, { extendedTextMessage: { text: '@bot done', contextInfo: { mentionedJid: [jid] } } }),
+			self, { lid: MY_LID })!['invocation'];
+		expect(mentioned('6580000000@s.whatsapp.net')).toBe('mention');
+		expect(mentioned(MY_LID)).toBe('mention');
+		expect(mentioned('999999999999@lid')).toBe('ambient');
 	});
 	it('a revoke tombstones its target; an edit converges its target text; a backfill is history', () => {
 		const dm = { remoteJid: '6591234567@s.whatsapp.net' };

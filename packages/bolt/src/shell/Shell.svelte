@@ -154,8 +154,16 @@
 		navigate(next.href);
 	}
 
+	/**
+	 * The boot follows the audience, and a public page boots its visitor, so the audience changes as the reader moves. Boots
+	 * overlap, so each carries a ticket: a boot a later change superseded must commit nothing, or its `bolt` would replace —
+	 * and close — the newer one, and its `boot` would describe a route the reader has left.
+	 */
+	let booting = 0;
 	async function load(app: string | undefined): Promise<void> {
+		const ticket = ++booting;
 		const r = await api.boot(app);
+		if (ticket !== booting) return;
 		if (!r.ok) {
 			boot = null;
 			guest = r.error.workspace ?? null;
@@ -165,6 +173,7 @@
 			return;
 		}
 		boot = r.value;
+		bolt?.close(); // the outgoing client retired here keeps its one stream open, and its views registered server-side
 		bolt = shellBolt(r.value, { ...(config.messages === undefined ? {} : { messages: config.messages }), challenge, agent,
 			...(config.fetch === undefined ? {} : { fetch: config.fetch }), ...(config.openStream === undefined ? {} : { openStream: config.openStream }) });
 		setCurrentBolt(bolt);

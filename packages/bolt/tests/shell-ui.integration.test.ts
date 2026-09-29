@@ -67,7 +67,7 @@ async function open(t: TestWorkspace, path: string, pages: ShellMountConfig['pag
 	}) as typeof globalThis.fetch;
 	history.replaceState(null, '', path);
 	const target = document.body.appendChild(document.createElement('div'));
-	const v = mountShell(target, { manifest: m as never, pages, fetch, openStream: () => ({ onmessage: null, close() {} }), ...(representations === undefined ? {} : { representations }) });
+	const v = mountShell(target, { manifest: m as never, pages, fetch, openStream: () => ({ onmessage: null, onerror: null, close() {} }), ...(representations === undefined ? {} : { representations }) });
 	views.push(() => { void unmount(v); target.remove(); });
 	return { target, puts };
 }
