@@ -186,7 +186,14 @@ export function inferFacility(ai: AiPort | undefined, options: { load?: (fileId:
 			}
 			if (typeof whole !== 'string') return decoded(whole);
 			let parsed: Json;
-			try { parsed = JSON.parse(whole) as Json; } catch { return invalid('the output is not JSON'); }
+			try { parsed = JSON.parse(whole) as Json; } catch {
+				// a model handed a schema answers with it; one that ignores it and writes prose is asked again, the same
+				// budget the other recoverable shapes get (an empty reply, a failed tool, a forgotten submit). Giving up
+				// on the first prose answer is what turned one chatty turn into a failed automation.
+				if (++failures > FAILURES) return invalid('the output is not JSON');
+				messages.push({ role: 'assistant', content: whole }, { role: 'user', content: 'That was not JSON. Answer with the JSON object described and nothing else: no prose, no code fence.' });
+				continue;
+			}
 			return decoded(parsed);
 		}
 		return { ok: false, error: { kind: 'timeout', message: `the inference did not finish within ${steps} steps` } };

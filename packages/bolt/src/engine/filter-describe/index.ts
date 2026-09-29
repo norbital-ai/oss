@@ -2,11 +2,14 @@
 // one `OrderBy` key through System 1 alone (P37 shapes). System 1 only chooses among criteria, so the engine builds them per request
 // from the collection's exposure narrowed to what the caller reads unmasked: fields, operators per kind, enum and state
 // values (with the final-state set), relation candidates from a label search as the caller (≤ 5 per word), me / my team
-// / my party, relative date presets, and literals parsed from the text. One request carries 4 condition slots and one
-// sort slot over the state `{ description, collection, fields, today, timezone }`; a slot whose operator or value names
-// another field is re-asked with only its field's options (≤ 2 round trips). Bolt caps no option set: a request too large
-// is the provider's refusal (`tooLarge`). The chosen options map 1:1 onto the result, which is decoded like any read
-// literal and AND-composed under the author's `where` and the caller's grants by the reader (so it only narrows).
+// / my party, relative date presets, and literals parsed from the text. ONE request asks a question per field — does the
+// description restrict by this field, and if so with which of ITS operators and which of ITS values — so every answer is
+// `{ field: { op, value } }` and no answer depends on another, which is what makes a single call possible. (Asking per
+// condition slot instead needs a second call: the operator and value questions must offer every field's options, so an
+// answer can name one field's operator and another's value, which then has to be re-asked.) A collection wider than
+// `FILTER_MAX_FIELDS` is asked about for the fields the description most plausibly names. Three sort questions ride along.
+// Bolt caps no option set: a request too large is the provider's refusal (`tooLarge`). The chosen options map 1:1 onto the result,
+// which is decoded like any read literal and AND-composed under the author's `where` and the caller's grants by the reader (so it only narrows).
 // A System 1 failure or an answer that maps to no condition is a typed failure: nothing applies. No fallback (owner).
 // Through the collection's exposed relations the caller reads, one hop: a one-relation's target fields (`is`), a
 // many-relation's child fields under has any / all / none, its count and numeric child aggregates. The result is decoded
@@ -22,13 +25,16 @@ import { exposedField, exposedRelation, type Catalog, type FieldInfo } from '../
 import * as ir from '../../protocol/ir.ts';
 
 export const FILTER_MAX_CONDITIONS = 4;
+/** Fields asked about in the one request; past this the most plausible are asked and the rest are not offered at all. */
+export const FILTER_MAX_FIELDS = 16;
 export const FILTER_MAX_TEXT = 500;
 const CANDIDATES = 5, WORDS = 8, NONE = '(no value)';
 
 type V = { lit: Json } | { range: readonly [Json, Json] } | { set: readonly Json[] } | { actor: 'id' | 'teams' | 'party' };
 /** An offered field: `put` places an operator object where the field is (own, through `is`, under a quantifier, an aggregate). */
 /** `sort`: the field's `OrderBy` path (`name`, `assignee.name`) where it may order the records. */
-type Field = { name: string; label: string; kind: string; ops: readonly string[]; values: Map<string, V>; put: (ops: { [op: string]: Json }) => Json; own: boolean; sort?: string };
+/** `hit`: the description names this field, one of its values, or something it holds. */
+type Field = { name: string; label: string; kind: string; ops: readonly string[]; values: Map<string, V>; put: (ops: { [op: string]: Json }) => Json; own: boolean; sort?: string; hit?: boolean };
 export type Described = { ok: true; where: Json; orderBy?: Json } | { ok: false; code: string; message: string };
 export type LocalFilterField = { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean };
 
@@ -39,7 +45,6 @@ const STOP = new Set(['the', 'and', 'that', 'this', 'with', 'for', 'from', 'are'
 	// the sort's own words are never a value (staging: "landed sites, sorted by name descending" filtered name = "descending")
 	'sort', 'sorted', 'order', 'ordered', 'ascending', 'descending', 'alphabetical', 'alphabetically', 'reverse', 'highest', 'lowest', 'latest', 'earliest']);
 const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
-const ORDINAL = ['first', 'second', 'third', 'fourth'];
 
 /** Rule 16a's relative presets: day bounds on `date` fields, calendar bounds (Monday weeks, workspace timezone) on both. */
 function presets(kind: string): [string, V][] {
@@ -198,6 +203,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		}
 		// relation candidates: one batch of label searches as the caller, ≤ 5 rows per word
 		const lookups = searches.flatMap((s) => ws.map((w) => ({ s, q: ir.read(cat, s.target, { where: { [s.label]: { like: `%${esc(w)}%` } }, select: { [s.label]: true }, limit: CANDIDATES }) })));
+		const searched = new Set<Field>();
 		if (lookups.length > 0) {
 			const answers = await cfg.read(lookups.map((r) => r.q), { as: 'caller', authority: a }, b);
 			lookups.forEach(({ s }, i) => {
@@ -207,8 +213,18 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 						let l = label, n = 2; while (s.field.values.has(l)) l = `${label} (${n++})`;
 						s.field.values.set(l, { lit: row['id']! });
 					}
+					// the word that found this row came from the description, so the field is one it plausibly means
+					searched.add(s.field);
 				}
 			});
+		}
+		// A field the description names, by its label, by a row a search on its words found, or by one of its OWN values
+		// appearing in the text. A value the words contributed is not evidence — a text field is handed the description's
+		// words as its options, so matching one would call every text field a hit and rank the collection by its schema.
+		const said = text.toLowerCase();
+		for (const f of out) {
+			const tokens = f.label.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2);
+			f.hit = searched.has(f) || tokens.some((t) => ws.includes(t)) || [...f.values.keys()].some((v) => !ws.includes(v) && said.includes(v.toLowerCase()));
 		}
 		return out;
 	}
@@ -238,59 +254,50 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			return { name: f.name, label: f.label, kind: f.kind, ...optionsFor, own: true, put: (ops) => ({ [f.name]: ops }), sort: f.name };
 		}) : await offer(o.collection, o.text, o.authority, o.bindings);
 		if (fields.length === 0) return fail('Nothing here can be filtered by a description.');
-		const byLabel = new Map(fields.map((f) => [f.label, f]));
 		const qual = (f: Field, x: string) => `${f.label} · ${x}`;
 		/** A choice's criteria: each option names itself (the provider reads option → description). */
 		const own = (keys: readonly string[]) => Object.fromEntries(keys.map((k) => [k, k]));
-		const opsOf = (fs: readonly Field[]) => own(fs.flatMap((f) => f.ops.map((x) => qual(f, x))));
-		// the provider's cap per choice question (the Decisions API: 255): a field's values past it are not offered
+		// one field's own operators and values, so an answer can only ever name that field: the request asks what to do
+		// with a field, never which field, and so carries no answer the next question depends on
+		const forField = (f: Field) => ({ op: own(f.ops.map((x) => qual(f, x))), value: own([NONE, ...[...f.values.keys()].map((x) => qual(f, x))]) });
+		// the provider's cap per choice question (the Decisions API: 255)
 		const max = cfg.ai?.sys_1.maxChoices ?? Infinity;
-		const valuesOf = (fs: readonly Field[]) => own([NONE, ...fs.flatMap((f) => [...f.values.keys()].map((x) => qual(f, x)))].slice(0, max));
-		const together = Object.keys(opsOf(fields)).length <= max && fields.reduce((n, f) => n + f.values.size, 1) <= max;
 		const sortable = fields.filter((f) => f.sort !== undefined && ORDERED.has(f.kind));
 		const DIRS = { asc: 'ascending (oldest, lowest, A→Z first)', desc: 'descending (newest, highest, Z→A first)' };
-		const state = { description: o.text, collection: human(o.collection), fields: fields.map((f) => ({ label: f.label, kind: f.kind })),
+		// the fields the description most plausibly means, asked about in that order: a wide collection keeps the ones a
+		// person actually wrote of rather than the first twelve the schema happens to declare
+		const asked = fields
+			.map((f, i) => ({ f, i }))
+			.sort((l, r) => Number(r.f.hit ?? false) - Number(l.f.hit ?? false) || l.i - r.i)
+			.slice(0, FILTER_MAX_FIELDS);
+		const state = { description: o.text, collection: human(o.collection), fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today, timezone: o.bindings.tz, weekStartsOn: 'Monday' };
-		const slot = (n: number, fs: readonly Field[]): { [id: string]: DecisionQuestion } => ({
-			[`c${n}.op`]: { type: 'choice', instructions: `Which comparison does the ${ORDINAL[n]} condition use?`, criteria: opsOf(fs) },
-			[`c${n}.value`]: { type: 'choice', instructions: `Which value does the ${ORDINAL[n]} condition compare with?`, criteria: valuesOf(fs) } });
 		const first: { [id: string]: DecisionQuestion } = {};
-		for (let n = 0; n < FILTER_MAX_CONDITIONS; n++) Object.assign(first, {
-			[`c${n}.yes`]: { type: 'noul', instructions: `Does the description restrict the records by at least ${n + 1} condition${n === 0 ? '' : 's'}? (About the ${ORDINAL[n]} condition.)`,
-				criteria: { true: `it states a ${ORDINAL[n]} condition`, false: `it states fewer than ${n + 1} condition${n === 0 ? '' : 's'}` } },
-			[`c${n}.field`]: { type: 'choice', instructions: `Which field does the ${ORDINAL[n]} condition restrict?`,
-				criteria: Object.fromEntries(fields.slice(0, max).map((f) => [f.label, `${f.label} (${f.kind})`])) },
-			// every field's operators and values in the one request, unless they pass the provider's cap: then each chosen
-			// field's are asked in a second request, from that field alone
-			...(together ? slot(n, fields) : {}) });
+		for (const [n, { f }] of asked.entries()) {
+			const q = forField(f);
+			Object.assign(first, {
+				[`f${n + 1}`]: { type: 'noul', instructions: `Does the description restrict the records by ${f.label}?`,
+					criteria: { true: `it states a condition on ${f.label}`, false: `it states no condition on ${f.label}` } },
+				[`f${n + 1}.op`]: { type: 'choice', instructions: `Which comparison does the condition on ${f.label} use?`, criteria: q.op },
+				[`f${n + 1}.value`]: { type: 'choice', instructions: `Which value does the condition on ${f.label} compare with?`, criteria: q.value } });
+		}
 		if (sortable.length > 0) Object.assign(first, {
 			'sort.yes': { type: 'noul', instructions: 'Does the description ask for an order?', criteria: { true: 'it asks for an order', false: 'it asks for no order' } },
-			'sort.field': { type: 'choice', instructions: 'Which field orders the records?', criteria: Object.fromEntries(sortable.slice(0, max).map((f) => [f.label, `${f.label} (${f.kind})`])) },
+			'sort.field': { type: 'choice', instructions: 'Which field orders the records?', criteria: own(sortable.slice(0, max).map((f) => f.label)) },
 			'sort.dir': { type: 'choice', instructions: 'Which direction?', criteria: { [DIRS.asc]: 'smallest or earliest first', [DIRS.desc]: 'largest or latest first' } } });
 		const r1 = await call(state, first);
 		if ('ok' in r1) return r1;
-
-		// a slot is settled when its operator and value both belong to its field; the rest are re-asked once
-		const pick = (f: Field, r: DecisionResult, n: number) => {
-			const op = choiceOf(r, `c${n}.op`), value = choiceOf(r, `c${n}.value`);
-			const mine = (x: string | undefined, none: boolean) => x !== undefined && (x.startsWith(`${f.label} · `) || (none && x === NONE));
-			return mine(op, false) && mine(value, true) ? { f, op: op!.slice(f.label.length + 3), value: value === NONE ? null : value!.slice(f.label.length + 3) } : f;
-		};
-		// true is the likelier side above 0.5: this reads the answer and is no confidence threshold
-		const slots = Array.from({ length: FILTER_MAX_CONDITIONS }, (_, n) => n).filter((n) => noulOf(r1, `c${n}.yes`) > 0.5)
-			.map((n) => ({ n, p: pick(byLabel.get(choiceOf(r1, `c${n}.field`)!)!, r1, n) }));
-		const again = slots.filter((s) => !('f' in s.p));
-		if (again.length > 0) {
-			const r2 = await call(state, Object.assign({}, ...again.map((s) => slot(s.n, [s.p as Field]))));
-			if ('ok' in r2) return r2;
-			for (const s of again) s.p = pick(s.p as Field, r2, s.n);
-		}
 		const conds: Json[] = [];
-		for (const { p } of slots) {
-			if (!('f' in p)) return fail('Could not build a filter from that description.');
-			const c = condition(p.f, p.op, p.value === null ? undefined : p.f.values.get(p.value));
-			if (c === undefined) return fail(`Could not build a condition on ${p.f.label}.`);
+		for (const [n, { f }] of asked.entries()) {
+			if (noulOf(r1, `f${n + 1}`) <= 0.5) continue;
+			// the engine has already refused an answer outside the offered criteria, so these are present; the fallbacks only
+			// satisfy the type, and an unbuildable pair fails the filter below rather than being dropped
+			const op = choiceOf(r1, `f${n + 1}.op`) ?? '', value = choiceOf(r1, `f${n + 1}.value`) ?? NONE;
+			const label = (x: string) => x.slice(f.label.length + 3);
+			const c = condition(f, label(op), value === NONE ? undefined : f.values.get(label(value)));
+			if (c === undefined) return fail(`Could not build a condition on ${f.label}.`);
 			conds.push(c);
+			if (conds.length === FILTER_MAX_CONDITIONS) break;
 		}
 		// the same condition asked twice is one; `is` twice on one field is `is any of` ("sent or won")
 		const merged: Json[] = [];

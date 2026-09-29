@@ -89,13 +89,14 @@ describe('decodeDescribed: the caller\'s exposed query shape, exactly', () => {
 });
 
 /** A scripted System 1: `pick` names the chosen option per question; others take their first option (or false). */
-function system1(pick: { readonly [id: string]: string | boolean }) {
+function system1(pick: (r: System1Request) => { readonly [id: string]: string | boolean }) {
 	const answer = (q: DecisionQuestion, v: string | boolean | undefined): DecisionAnswer => q.type === 'noul' ? { type: 'noul', noul: v === true ? 0.9 : 0.1 }
 		: q.type === 'choice' ? { type: 'choice', choice: typeof v === 'string' ? v : Object.keys(q.criteria)[0]!, confidence: 0.9, probabilities: {} }
 			: { type: 'score', score: 0, level: 0, confidence: 0.9, probabilities: {}, legend: {} };
 	const port: System1Port & { requests: System1Request[] } = { requests: [], async ask(r) {
 		port.requests.push(r);
-		return { costUsd: 0, provider: 'scripted', answers: Object.fromEntries(Object.entries(r.questions).map(([id, q]) => [id, answer(q, pick[id])])) };
+		const chosen = pick(r);
+		return { costUsd: 0, provider: 'scripted', answers: Object.fromEntries(Object.entries(r.questions).map(([id, q]) => [id, answer(q, chosen[id])])) };
 	} };
 	return port;
 }
@@ -104,63 +105,97 @@ const describer = (port: System1Port) => filterDescribe({ manifest, clock: () =>
 	ai: { sys_1: port, sys_2: { models: ['x'], async infer() { throw new Error('System 2 is never asked (P35)'); } } } as unknown as AiPort });
 const bindings = { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'Asia/Singapore', params: {} };
 const choices = (q: DecisionQuestion | undefined) => q?.type === 'choice' ? Object.keys(q.criteria) : [];
+/** The field a `f1`-shaped question is about, read back from that question's own operator options. */
+const labelOf = (r: System1Request, id: string) => choices(r.questions[`${id}.op`])[0]!.split(' \u00b7 ')[0]!;
+/** Every field label the one request asked about, in the order it asked. */
+const askedFields = (r: System1Request) => Object.keys(r.questions).filter((id) => /^f\d+$/.test(id)).map((id) => labelOf(r, id));
+/**
+ * A scripted answer in the request's own shape: which fields the description restricts, and for each of those the
+ * operator and the value. A field the plan omits is one the description did not restrict.
+ */
+type Plan = { readonly [label: string]: { op: string; value: string } | false };
+const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (r: System1Request) => {
+	const pick: { [id: string]: string | boolean } = { ...sort };
+	for (const [id, q] of Object.entries(r.questions)) {
+		if (q.type !== 'noul' || !/^f\d+$/.test(id)) continue;
+		const label = labelOf(r, id);
+		const a = plan[label];
+		if (a === undefined || a === false) { pick[id] = false; continue; }
+		pick[id] = true;
+		pick[`${id}.op`] = `${label} \u00b7 ${a.op}`;
+		pick[`${id}.value`] = `${label} \u00b7 ${a.value}`;
+	}
+	return pick;
+};
 
 describe('filter.describe offers System 1 the exposure and maps its choices onto the grammar', () => {
 	it('describes a local roster from its supplied fields without a collection read', async () => {
-		const port = system1({ 'c0.yes': true, 'c0.field': 'Number', 'c0.op': 'Number · more than', 'c0.value': 'Number · 20',
-			'sort.yes': true, 'sort.field': 'Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' });
+		const port = system1(byField({ Number: { op: 'more than', value: '20' } },
+			{ 'sort.yes': true, 'sort.field': 'Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' }));
 		const fields = [{ name: 'number', label: 'Number', kind: 'number' as const }, { name: 'name', label: 'Name', kind: 'text' as const }];
 		const r = await describer(port).describe({ collection: '$local', text: 'people numbered above 20, by name', localFields: fields, authority: caller({}), bindings });
 		expect(r).toEqual({ ok: true, where: { number: { gt: 20 } }, orderBy: { name: 'asc' } });
-		expect(choices(port.requests[0]!.questions['c0.field'])).toEqual(['Number', 'Name']);
+		expect(askedFields(port.requests[0]!)).toEqual(['Number', 'Name']);
 	});
-	it('the field options are the caller\'s exposure: relations one hop, nothing masked or unexposed', async () => {
-		const port = system1({});
-		await describer(port).describe({ collection: 'jobs', text: 'jobs with more than 2 pumps', authority: caller(), bindings });
-		const fields = choices(port.requests[0]!.questions['c0.field']);
-		expect(fields).toEqual(expect.arrayContaining(['Title', 'Status', 'Assignee', 'Assignee › Name', 'Lines (any) › Qty', 'Lines (all) › Amount',
-			'Lines (none) › Item', 'Lines › count', 'Lines › total amount']));
+	it('the field options are the caller\'s exposure: own fields, one hop through an exposed relation, nothing else', async () => {
+		// no job_lines grant, so nothing many-relation is offered and every readable field fits the bound
+		const port = system1(byField({}));
+		await describer(port).describe({ collection: 'jobs', text: 'jobs with more than 2 pumps', authority: caller({ jobs: grant({ notes: { t: 'const', value: false } }), members: grant({ rate: { t: 'const', value: false } }) }), bindings });
+		const fields = askedFields(port.requests[0]!);
+		expect(fields).toEqual(expect.arrayContaining(['Title', 'Status', 'Assignee', 'Assignee › Name', 'Hours', 'Scheduled on', 'Window']));
 		for (const hidden of ['Notes', 'Internal code', 'Assignee › Rate']) expect(fields).not.toContain(hidden);
 		expect(fields.some((f) => f.startsWith('Audit'))).toBe(false);
+		expect(fields.some((f) => f.startsWith('Lines'))).toBe(false);
 		// sorting: own fields and, one hop through a one-relation, readable unmasked target fields; never a many-relation
 		const sorts = choices(port.requests[0]!.questions['sort.field']);
 		expect(sorts).toEqual(expect.arrayContaining(['Title', 'Scheduled on', 'Assignee › Name']));
 		for (const no of ['Notes', 'Assignee › Rate', 'Lines (any) › Qty', 'Lines › count']) expect(sorts).not.toContain(no);
 	});
 
+	it('a wide collection is bounded, and what the caller cannot read is never offered', async () => {
+		const port = system1(byField({}));
+		await describer(port).describe({ collection: 'jobs', text: 'jobs with more than 2 pumps', authority: caller(), bindings });
+		const asked = port.requests[0]!;
+		// job_lines granted opens a many-relation: three quantifiers over its fields, its count and eight aggregates
+		expect(askedFields(asked).length).toBe(16);
+		for (const hidden of ['Notes', 'Internal code', 'Assignee › Rate', 'Audit']) {
+			expect(Object.values(asked.questions).flatMap((q) => choices(q)).some((o) => o.startsWith(`${hidden} \u00b7 `))).toBe(false);
+		}
+	});
+
 	it('a related condition and an own sort decode to a relation Where and an OrderBy', async () => {
-		const port = system1({ 'c0.yes': true, 'c0.field': 'Lines (any) › Qty', 'c0.op': 'Lines (any) › Qty · more than', 'c0.value': 'Lines (any) › Qty · 2',
-			'sort.yes': true, 'sort.field': 'Scheduled on', 'sort.dir': 'descending (newest, highest, Z→A first)' });
+		const port = system1(byField({ 'Lines (any) › Qty': { op: 'more than', value: '2' } },
+			{ 'sort.yes': true, 'sort.field': 'Scheduled on', 'sort.dir': 'descending (newest, highest, Z→A first)' }));
 		const r = await describer(port).describe({ collection: 'jobs', text: 'jobs with more than 2 of any line, latest first', authority: caller(), bindings });
 		expect(r).toEqual({ ok: true, where: { lines: { some: { qty: { gt: 2 } } } }, orderBy: { scheduled_on: 'desc' } });
 	});
 
 	it('a related sort decodes to a nested OrderBy key', async () => {
-		const port = system1({ 'sort.yes': true, 'sort.field': 'Assignee › Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)',
-			'c0.yes': true, 'c0.field': 'Title', 'c0.op': 'Title · contains', 'c0.value': 'Title · pump' });
+		const port = system1(byField({ Title: { op: 'contains', value: 'pump' } },
+			{ 'sort.yes': true, 'sort.field': 'Assignee › Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' }));
 		const r = await describer(port).describe({ collection: 'jobs', text: 'pump jobs by assignee name', authority: caller(), bindings });
 		expect(r).toEqual({ ok: true, where: { title: { like: '%pump%' } }, orderBy: { assignee: { name: 'asc' } } });
 	});
 
 	it('the sort\'s own words are never offered as a text value', async () => {
-		const port = system1({});
+		const port = system1(byField({}));
 		await describer(port).describe({ collection: 'jobs', text: 'pump jobs, sorted by title descending', authority: caller(), bindings });
-		const values = choices(port.requests[0]!.questions['c0.value']);
+		const values = Object.values(port.requests[0]!.questions).flatMap((q) => choices(q));
 		expect(values.some((v) => v.endsWith('· pump'))).toBe(true);
 		for (const w of ['sorted', 'descending']) expect(values.some((v) => v.endsWith(`· ${w}`))).toBe(false);
 	});
 
 	it('a date period is offered: in force today, or overlapping a span (staging: "started in 2024" fell to created_at)', async () => {
-		const today = system1({ 'c0.yes': true, 'c0.field': 'Window', 'c0.op': 'Window · in force on', 'c0.value': 'Window · today' });
+		const today = system1(byField({ Window: { op: 'in force on', value: 'today' } }));
 		expect(await describer(today).describe({ collection: 'jobs', text: 'jobs in force today', authority: caller(), bindings }))
 			.toEqual({ ok: true, where: { window: { contains: { today: '' } } } });
-		const year = system1({ 'c0.yes': true, 'c0.field': 'Window', 'c0.op': 'Window · overlaps', 'c0.value': 'Window · this year' });
+		const year = system1(byField({ Window: { op: 'overlaps', value: 'this year' } }));
 		expect(await describer(year).describe({ collection: 'jobs', text: 'jobs running at any time this year', authority: caller(), bindings }))
 			.toEqual({ ok: true, where: { window: { overlaps: { from: { startOf: 'year' }, to: { startOf: 'year', shift: 1 } } } } });
 	});
 
 	it('a child aggregate condition decodes to the aggregate grammar', async () => {
-		const port = system1({ 'c0.yes': true, 'c0.field': 'Lines › total amount', 'c0.op': 'Lines › total amount · at least', 'c0.value': 'Lines › total amount · 500' });
+		const port = system1(byField({ 'Lines › total amount': { op: 'at least', value: '500' } }));
 		const r = await describer(port).describe({ collection: 'jobs', text: 'jobs whose lines total at least 500', authority: caller(), bindings });
 		expect(r).toEqual({ ok: true, where: { lines: { sum: { of: 'amount', gte: 500 } } } });
 	});

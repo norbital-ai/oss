@@ -122,6 +122,15 @@ describe('the AI port under the 60 s wall (rule 63)', () => {
 		expect(await inferFacility(port([done('{"n":2}')]).p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 2 } });
 	});
 
+	it('sys_2.infer: a prose answer to a structured request is asked again, at most 3 times running', async () => {
+		// one chatty turn used to fail the whole inference, which failed the automation that owned it
+		const { p, requests } = port([done('Sure! Here is the verdict: suspicious.'), done('{"n":3}')]);
+		expect(await inferFacility(p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 3 } });
+		expect(requests[1]!.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('not JSON') });
+		expect(await inferFacility(port([done('prose'), done('more prose'), done('still prose'), done('never json')]).p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000)))
+			.toMatchObject({ ok: false, error: { kind: 'invalid', message: 'the output is not JSON' } });
+	});
+
 	it('sys_2.infer: a reasoning-only reply is continued, at most 3 times running (L-BOLT-371)', async () => {
 		const { p, requests } = port([done(''), done('hi')]);
 		expect(await inferFacility(p)(at({ prompt: 'q' }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: 'hi' });

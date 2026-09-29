@@ -43,10 +43,29 @@ function system1(pick: (r: System1Request, call: number) => { readonly [id: stri
 }
 const options = (q: DecisionQuestion | undefined) => q?.type === 'choice' ? Object.keys(q.criteria) : [];
 const ai = (s: System1Port): AiPort => ({ sys_1: s, sys_2: { models: ['fast'], async infer() { throw new Error('System 2 is never asked') } } });
-const BOB: { readonly [id: string]: string | boolean } = {
-	'c0.yes': true, 'c0.field': 'Assignee', 'c0.op': 'Assignee · is', 'c0.value': 'Assignee · Bob Tan',
-	'c1.yes': true, 'c1.field': 'Scheduled on', 'c1.op': 'Scheduled on · within', 'c1.value': 'Scheduled on · this week',
-	'c2.yes': true, 'c2.field': 'Status', 'c2.op': 'Status · is not', 'c2.value': 'Status · a final state',
+/**
+ * A scripted answer in the request's own shape: which fields the description restricts, and for each of those the
+ * operator and the value. The engine numbers the fields it asked about, so the script names them by label; the
+ * operator question's own options are how this reads back which number belongs to which field.
+ */
+type Plan = { readonly [label: string]: { op: string; value: string } | false };
+const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (r: System1Request): { readonly [id: string]: string | boolean } => {
+	const answers: { [id: string]: string | boolean } = { ...sort };
+	for (const [id, q] of Object.entries(r.questions)) {
+		if (q.type !== 'noul' || !id.startsWith('f')) continue;
+		const label = options(r.questions[`${id}.op`])[0]!.split(' \u00b7 ')[0]!;
+		const a = plan[label];
+		if (a === undefined || a === false) { answers[id] = false; continue; }
+		answers[id] = true;
+		answers[`${id}.op`] = `${label} \u00b7 ${a.op}`;
+		answers[`${id}.value`] = `${label} \u00b7 ${a.value}`;
+	}
+	return answers;
+};
+const BOB: Plan = {
+	Assignee: { op: 'is', value: 'Bob Tan' },
+	'Scheduled on': { op: 'within', value: 'this week' },
+	Status: { op: 'is not', value: 'a final state' }
 };
 
 let t: TestWorkspace, caller: Authority, bob = '';
@@ -68,47 +87,67 @@ const events = async () => (await t.db.read([{ text: `SELECT attributes FROM sys
 
 describe('filter.describe (rule 16a)', () => {
 	let port: ReturnType<typeof system1>;
-	beforeEach(async () => { port = system1(() => BOB); await open(port); });
+	beforeEach(async () => { port = system1(byField(BOB)); await open(port); });
 
-	it("Bob's jobs this week that aren't done: three conditions through System 1 alone, every answer an offered option", async () => {
+	it("Bob's jobs this week that aren't done: three conditions from ONE System 1 call, every answer an offered option", async () => {
 		const r = await describeAs("Bob's jobs this week that aren't done");
+		// the conditions follow the order the fields were asked about: the ones the description names, in schema order
 		expect(r).toEqual({ ok: true, where: { and: [
-			{ assignee: { eq: bob } },
 			{ scheduled_on: { gte: { startOf: 'week' }, lt: { startOf: 'week', shift: 1 } } },
 			{ status: { nin: ['done'] } },
+			{ assignee: { eq: bob } },
 		] } });
 		expect(port.requests).toHaveLength(1);
-		const q = Object.fromEntries(Object.entries(port.requests[0]!.questions).map(([id, x]) => [id, options(x)]));
-		expect(q['c0.value']).toContain('Assignee · Bob Tan');
-		expect(q['c0.value']).toContain('Scheduled on · this week');
-		expect(q['c0.field']).not.toContain('Notes'); // masked to the caller: never offered
+		const q = port.requests[0]!.questions;
+		// each field is asked about on its own, so a value can only ever name its own field
+		const values = Object.values(q).flatMap((x) => options(x));
+		expect(values).toContain('Assignee \u00b7 Bob Tan');
+		expect(values).toContain('Scheduled on \u00b7 this week');
+		expect(values).not.toContain('Notes'); // masked to the caller: never offered
 		expect(await events()).toMatchObject([{ use: 'filter', system: 1 }]);
 		expect(metered).toEqual(['ai:decision']);
 	});
 
-	it('newest first sets one sort key; the sort slot answers only when asked', async () => {
-		await open(port = system1(() => ({ ...BOB, 'c1.yes': false, 'c2.yes': false, 'sort.yes': true, 'sort.field': 'Created',
-			'sort.dir': 'descending (newest, highest, Z→A first)' })));
+	it('newest first sets one sort key; the sort questions ride the same call', async () => {
+		// only the assignee is named: a field the plan omits is one the description did not restrict
+		await open(port = system1(byField({ Assignee: BOB.Assignee! }, { 'sort.yes': true, 'sort.field': 'Created',
+			'sort.dir': 'descending (newest, highest, Z\u2192A first)' })));
 		expect(await describeAs("Bob's open jobs, newest first")).toEqual({ ok: true, where: { assignee: { eq: bob } }, orderBy: { created_at: 'desc' } });
+		expect(port.requests).toHaveLength(1);
 	});
 
-	it('an operator of another field is re-asked with only its field\'s options; never a third request', async () => {
-		await open(port = system1((_r, call) => call === 1 ? { ...BOB, 'c0.op': 'Status · is not' } : { 'c0.op': 'Assignee · is', 'c0.value': 'Assignee · Bob Tan' }));
+	it('one call answers every field: no operator can name another field, so nothing is ever re-asked', async () => {
+		// the old shape offered every field's operators in one question, so an answer could pair one field's operator with
+		// another's value, and a second call had to re-ask it. A field's own options make that impossible by construction.
 		const r = await describeAs("Bob's jobs this week that aren't done");
-		expect(r.ok && r.where).toMatchObject({ and: [{ assignee: { eq: bob } }, {}, {}] });
-		expect(port.requests).toHaveLength(2);
-		expect(Object.keys(port.requests[1]!.questions)).toEqual(['c0.op', 'c0.value']);
-		expect(options(port.requests[1]!.questions['c0.op']).every((o) => o.startsWith('Assignee · '))).toBe(true);
+		expect(r.ok).toBe(true);
+		expect(port.requests).toHaveLength(1);
+		for (const [id, q] of Object.entries(port.requests[0]!.questions)) {
+			if (q.type !== 'choice' || !id.endsWith('.op')) continue;
+			const label = options(q)[0]!.split(' \u00b7 ')[0]!;
+			// every option of this question belongs to the one field it asks about
+			expect(options(q).every((o) => o.startsWith(`${label} \u00b7 `))).toBe(true);
+		}
 	});
 
-	it('options past the provider\'s cap: fields first, then each chosen field\'s own operators and values', async () => {
-		await open(port = Object.assign(system1(() => BOB), { maxChoices: 12 }));
-		const r = await describeAs("Bob's jobs this week that aren't done");
-		expect(r.ok && r.where).toMatchObject({ and: [{ assignee: { eq: bob } }, {}, {}] });
-		expect(port.requests).toHaveLength(2);
-		expect(Object.keys(port.requests[0]!.questions).some((id) => id.endsWith('.op') || id.endsWith('.value'))).toBe(false);
-		for (const q of [...Object.values(port.requests[0]!.questions), ...Object.values(port.requests[1]!.questions)])
-			expect(q.type !== 'choice' || options(q).length <= 12).toBe(true);
+	it('a wide collection is asked about the fields the description names, still in one call', async () => {
+		const jobs = (manifest.models as unknown as { jobs: { fields: object } }).jobs;
+		const wide = { ...manifest, models: { ...manifest.models, jobs: { ...jobs, fields: { ...jobs.fields,
+			...Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`filler_${i}`, { kind: 'text' as const }])) } } } } as unknown as EngineManifest;
+		const seen: System1Request[] = [];
+		const t2 = await testWorkspace({ manifest: wide, metering, ai: ai({ async ask(r) {
+			seen.push(r);
+			return { costUsd: 0, provider: 'scripted', answers: Object.fromEntries(Object.entries(r.questions).map(([id, q]) => [id,
+				q.type === 'noul' ? { type: 'noul', noul: 0.1 } : { type: 'choice', choice: Object.keys(q.criteria)[0]!, confidence: 1, probabilities: {} }])) };
+		} }) });
+		await t2.engine.filters!.describe({ collection: 'jobs', text: "Bob's jobs this week", authority: t2.as(t2.admin).authority,
+			bindings: { now: t2.clock.now(), today: t2.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
+		expect(seen).toHaveLength(1);
+		const asked = Object.keys(seen[0]!.questions).filter((id) => id.startsWith('f') && !id.includes('.'));
+		expect(asked.length).toBe(16);
+		// the field the description names is asked first, and the fillers that name nothing come after everything real
+		const labels = (seen[0]!.state.fields as { label: string }[]).map((f) => f.label);
+		expect(labels.indexOf('Assignee')).toBeLessThan(labels.findIndex((l: string) => l.startsWith('Filler')));
 	});
 
 	it('a failed System 1 call applies nothing and is recorded', async () => {
@@ -128,7 +167,8 @@ describe('filter.describe (rule 16a)', () => {
 		const r = await t.engine.filters!.describe({ collection: 'jobs', text: 'code c7', authority: t.as(t.admin).authority,
 			bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
 		expect(r).toMatchObject({ ok: false, code: 'tooLarge' });
-		expect(options(seen[0]!.questions['c0.value']).filter((o) => o.startsWith('Code · '))).toHaveLength(200);
+		const codeValue = Object.keys(seen[0]!.questions).find((id) => id.endsWith('.value') && options(seen[0]!.questions[id]).some((o) => o.startsWith('Code \u00b7 ')));
+		expect(options(seen[0]!.questions[codeValue!]).filter((o) => o.startsWith('Code \u00b7 '))).toHaveLength(200);
 		// every question is in P37's shape over a structured state
 		expect(Object.values(seen[0]!.questions).every((q) => typeof q.instructions === 'string' && q.criteria !== undefined)).toBe(true);
 		expect(seen[0]!.state).toMatchObject({ description: 'code c7', collection: 'Jobs', timezone: 'Asia/Singapore' });
