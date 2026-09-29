@@ -12,6 +12,8 @@ type EnvoyBase = {
 	audience: 'public' | 'authenticated';
 	/** The authority of every turn (a linked sender's own joins it in a DM). */
 	policies: NonEmpty<string>;
+	/** What the envoy is called on its channel: the name a person says when they mean it (`Norbital`). */
+	name: string;
 	/** Which group messages it answers; default `disabled`. */
 	groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
 	/** Whether it may delegate to sub-agents. */
@@ -27,6 +29,8 @@ type EnvoyFor<S> = {
 	audience: 'public' | 'authenticated';
 	/** Required: every group turn's whole authority, joined in a DM by a linked sender's own (P32); the source of every envoy limit. */
 	policies: NonEmpty<PolicyName>;
+	/** What people call it on the channel; a message that says this name is addressed to it, mention or not. */
+	name: string;
 	/** Default 'disabled'. Email is always addressed, so an email channel's envoy takes none. */
 	groupMessages?: TransportOf<S extends { channel: infer C } ? C : never> extends 'email'
 		? 'error: email is always addressed; groupMessages does not apply' : 'disabled' | 'mention_or_reply' | 'all';
@@ -45,6 +49,7 @@ type EnvoyFor<S> = {
  * export default envoy({
  * 	channel: 'sales_desk',
  * 	audience: 'public',
+ * 	name: 'Norbital',
  * 	policies: ['products_read'],
  * 	groupMessages: 'disabled',
  * 	delegation: 'disabled',

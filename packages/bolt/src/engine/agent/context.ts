@@ -74,7 +74,18 @@ How to work:
 9. Use an exact filter for a known key, a declared query for its specialized search, and small selections and limits. Batch independent reads in one read call. For an optional reference absent after one exact and one focused fallback lookup, use the supplied text without a link if the write permits it; do not scan the whole collection. A committed write already returns its stored rows; read again only for details absent from that result or when the person asks for verification.`;
 
 /** Envoy turns: a chat is read by people, not engineers. */
-export const ENVOY = 'You are answering on a messaging channel. Speak plainly and briefly. Never mention tools, fields, policies or ids unless the person asks for an id. The person who wrote the newest message is who you serve. The closing note of each step gives the date, time and who you act for.';
+/**
+ * Channel guidance, named: an envoy that does not know what it is called cannot tell that a message naming it is for it,
+ * and one that does not know what it is cannot answer "agent?" either. The same reason the last line exists — an
+ * automated check is the workspace's business, and a person told their photo is under suspicion has been told a fact
+ * about a machine, not about their work.
+ */
+export const envoy = (name: string): string =>
+	`You are ${name}, answering on a messaging channel. Speak plainly and briefly. Never mention tools, fields, policies or ids unless the person asks for an id. `
+	+ `The person who wrote the newest message is who you serve. The closing note of each step gives the date, time and who you act for. `
+	+ `Answer when a message names you (${name}) or addresses you as the agent, the assistant, the bot or the envoy. `
+	+ `Never describe the workspace's own automated checks — a photo inspection, a suspicion review, a background verification. `
+	+ `If what came through may not match the work, say only that it may not be about it.`;
 
 export const PLAN_MODE = 'Plan mode: discuss the approach and use update_plan to write the draft plan. You may only read and update the plan. Only the person can start execution; on execution the plan replaces this discussion, so put everything the executor needs in it, with its steps as an ordered list and its acceptance checks.';
 export const COMPACT_FORMAT = `Summarize the conversation so far so the work can continue from the summary alone. Return a Markdown table with the rows Goal, Progress, What we learned, What's left. Keep decisions, constraints, exact ids and the next action. At most 800 words.`;
@@ -219,9 +230,9 @@ export function localTime(now: string, tz: string): string {
  * The system prompt, static per agent in one release (rule 62, P32): kernel, channel guidance, brief, envoy task, the
  * workspace's skills list and its outline. Byte-identical across turns, actors and days, so providers cache it.
  */
-export function system(parts: { channel: boolean; brief?: string | undefined; task?: string | undefined; skills: { readonly [name: string]: string }; outline?: string | undefined }): string {
+export function system(parts: { envoy?: string | undefined; brief?: string | undefined; task?: string | undefined; skills: { readonly [name: string]: string }; outline?: string | undefined }): string {
 	const skills = Object.entries(parts.skills).map(([n, t]) => `- ${n}: ${/^---\n[\s\S]*?^description:\s*(.*)$/m.exec(t)?.[1]?.trim() ?? ''}`);
-	return [KERNEL, parts.channel ? ENVOY : undefined, parts.brief, parts.task, skills.length === 0 ? undefined : `Skills (read one with the skill tool):\n${skills.join('\n')}`, parts.outline]
+	return [KERNEL, parts.envoy === undefined ? undefined : envoy(parts.envoy), parts.brief, parts.task, skills.length === 0 ? undefined : `Skills (read one with the skill tool):\n${skills.join('\n')}`, parts.outline]
 		.filter((p): p is string => p !== undefined && p.trim() !== '').join('\n\n');
 }
 

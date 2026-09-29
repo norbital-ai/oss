@@ -53,9 +53,13 @@ describe('the context projection (rule 60)', () => {
 			{ role: 'user', content: '[+66 · not linked] t2' }, { role: 'user', content: '[note]\nok' }]);
 	});
 	it('the system prompt is the kernel, brief, task and skills list only: no date, actor or conversation state (rule 62)', () => {
-		const s = system({ channel: true, brief: 'Brief.', task: 'Task.', skills: { pricing: '---\ndescription: How we price\n---\nbody' } });
+		const s = system({ envoy: 'Norbius', brief: 'Brief.', task: 'Task.', skills: { pricing: '---\ndescription: How we price\n---\nbody' } });
 		expect(s).toContain('Brief.\n\nTask.\n\nSkills (read one with the skill tool):\n- pricing: How we price');
 		expect(s).not.toMatch(/20\d\d|clock|timezone/i);
+		// the channel guidance names the envoy, so a message that says the name is readable as addressed to it
+		expect(s).toContain('You are Norbius, answering on a messaging channel.');
+		// and it may not narrate the workspace's own checks
+		expect(s).toContain('Never describe the workspace\'s own automated checks');
 	});
 });
 

@@ -27,9 +27,9 @@ const manifest = {
 	channels: { field_wa: { transport: 'whatsapp' }, sales_tg: { transport: 'telegram' }, ops_mail: { transport: 'email', address: 'ops' } },
 	connections: {},
 	envoys: {
-		field_ops: { channel: 'field_wa', audience: 'authenticated', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
-		sales_desk: { channel: 'sales_tg', audience: 'public', policies: ['desk'], triage: false, groupMessages: 'disabled', delegation: 'enabled', task: 'Answer about jobs.' },
-		ops_desk: { channel: 'ops_mail', audience: 'authenticated', policies: ['desk'], triage: false, delegation: 'disabled', task: 'Answer mail.' },
+		field_ops: { channel: 'field_wa', audience: 'authenticated', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
+		sales_desk: { channel: 'sales_tg', audience: 'public', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'disabled', delegation: 'enabled', task: 'Answer about jobs.' },
+		ops_desk: { channel: 'ops_mail', audience: 'authenticated', name: 'Norbius', policies: ['desk'], triage: false, delegation: 'disabled', task: 'Answer mail.' },
 	},
 	mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
 } as unknown as EngineManifest;
@@ -92,7 +92,10 @@ describe('direct messages (rule 57)', () => {
 		await say('field_wa', '6591234567:14@s.whatsapp.net', `close ${id}`);
 		expect(await status(id)).toBe('done');
 		expect((await rows(`close ${id}`))[0]).toMatchObject({ as: { envoy: { name: 'field_ops', member: ADA, dm: true } }, role: 'user', state: 'consumed' });
-		expect(texts(wa).at(-1)).toMatch(/^Done\.\nSaved: jobs /);
+		// the chat gets the model's words alone: a receipt names record ids, and the envoy prompt forbids handing those to
+		// a person on a phone. The ids live in the row's `meta`, which is the transcript's, not the message's.
+		expect(texts(wa).at(-1)).toBe('Done.');
+		expect(texts(wa).at(-1)).not.toContain('jobs ');
 		expect(wa.sent.at(-1)!.message).toMatchObject({ to: '6591234567:14@s.whatsapp.net' });
 		expect(ai.sentBeforeEnd[0]).toEqual(['On it.']); // streamed while the turn worked, not at its end (parity 2.12)
 	});

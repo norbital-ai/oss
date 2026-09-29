@@ -25,8 +25,8 @@ const manifest = {
 		reader: { description: 'Reads quotes', grants: { quotes: { read: true } } },
 	},
 	envoys: {
-		sales_desk: { channel: 'desk', audience: 'public', policies: ['reader'], triage: false, groupMessages: 'disabled', delegation: 'enabled', task: 'Answer questions about quotes.' },
-		field: { channel: 'field', audience: 'authenticated', policies: ['reader'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep quotes up to date.' },
+		sales_desk: { channel: 'desk', audience: 'public', name: 'Norbius', policies: ['reader'], triage: false, groupMessages: 'disabled', delegation: 'enabled', task: 'Answer questions about quotes.' },
+		field: { channel: 'field', audience: 'authenticated', name: 'Norbius', policies: ['reader'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep quotes up to date.' },
 	},
 	mcp: { hq: { description: 'HQ tools', url: 'HQ_URL', auth: { bearer: 'HQ_TOKEN' } }, down: { description: 'Gone', url: 'DOWN_URL' } },
 	agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: { pricing: '---\ndescription: How we price\n---\n## Discounts\nTen percent.\n## Rounding\nUp.' } },

@@ -28,7 +28,7 @@ const manifest = {
 	},
 	policies: { rep: { description: 'Rep', grants: { quotes: { read: true, create: true, actions: ['mark'] }, logs: { read: true, create: true } } } },
 	automations: { log: { description: 'Log each new quote', on: { created: 'quotes' }, runAs: ['rep'] } },
-	envoys: { field: { channel: 'field', audience: 'authenticated', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
+	envoys: { field: { channel: 'field', audience: 'authenticated', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
 	channels: { field: { transport: 'whatsapp' } },
 	agent: { internal: 'Staff brief.', skills: {} },
 	integrations: {}, pipelines: {}, teams: {}, connections: {}, mcp: {}, apps: {}, customFields: {},

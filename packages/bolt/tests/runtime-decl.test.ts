@@ -17,7 +17,7 @@ describe('next runtime declarations', () => {
 		expect(connection(conn)).toBe(conn);
 		const ch = { transport: 'whatsapp' } as const;
 		expect(channel(ch)).toBe(ch);
-		const en = { channel: 'whatsapp', audience: 'public', policies: ['sales_rep'], delegation: 'disabled', task: 't' } as const;
+		const en = { channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'disabled', task: 't' } as const;
 		expect(envoy(en)).toBe(en);
 		const m = { description: 'docs', url: 'MCP_URL' } as const;
 		expect(mcp(m)).toBe(m);

@@ -19,8 +19,8 @@ const manifest = {
 	automations: {},
 	channels: { field_wa: { transport: 'whatsapp' } },
 	connections: {},
-	envoys: { field_ops: { channel: 'field_wa', audience: 'authenticated', policies: ['desk'], groupMessages: 'mention_or_reply', delegation: 'disabled',
-		triage: {}, task: 'Keep jobs up to date.' } },
+	envoys: { field_ops: { channel: 'field_wa', audience: 'authenticated', name: 'Norbius', policies: ['desk'], groupMessages: 'mention_or_reply',
+		delegation: 'disabled', triage: {}, task: 'Keep jobs up to date.' } },
 	mcp: {}, apps: {}, customFields: {}, agent: { internal: 'Staff brief.', skills: {} },
 } as unknown as EngineManifest;
 
@@ -39,14 +39,20 @@ const ai: AiPort['sys_2'] & { requests: string[][]; raw: string[][] } = { models
 	} };
 
 type Action = 'respond' | 'wait' | 'ignore';
-/** What the decider was shown, read back from System 1's context and questions. */
-type Seen = { kind: string; directive: string; allowed: readonly string[]; pending: readonly string[] };
+/** The verdict a scripted conversation-level action means for every message it covers. */
+const VERDICT: { readonly [a in Action]: string } = { respond: 'yes', wait: 'delay', ignore: 'no' };
+/** What the decider was shown, read back from System 1's state and the questions it was asked. */
+type Seen = { kind: string; directive: string; assistant: string; pending: readonly string[]; asked: readonly string[] };
 const seen = (r: System1Request): Seen => {
-	const st = r.state as { directive: string; conversation: string; pending: readonly { text: string }[] };
-	const action = r.questions['action']!;
-	return { kind: st.conversation, directive: st.directive, allowed: action.type === 'choice' ? Object.keys(action.criteria) : [], pending: st.pending.map((p) => p.text) };
+	const st = r.state as { directive: string; conversation: string; assistant: string; pending: readonly { text: string }[] };
+	return { kind: st.conversation, directive: st.directive, assistant: st.assistant, pending: st.pending.map((p) => p.text),
+		asked: Object.keys(r.questions).filter((id) => id !== 'wait') };
 };
-/** A scripted System 1: answers from `script` in order (the last answer repeats); `throws` makes it fail. */
+/**
+ * A scripted System 1: answers from `script` in order (the last answer repeats); `throws` makes it fail. One question is
+ * asked per pending message, all in the one call, and the script's conversation-level action is what each gets — so a
+ * scenario reads as it always did while the request shape is the per-message one.
+ */
 function decider() {
 	const port: System1Port & { inputs: Seen[]; answers: string[]; script: (Action | { action: Action; wait: number; p?: number })[]; throws: boolean } = {
 		inputs: [], answers: [], script: ['respond'], throws: false,
@@ -57,8 +63,13 @@ function decider() {
 			const d = typeof s === 'string' ? { action: s, wait: 9 } : s;
 			port.answers.push(d.action);
 			const p = 'p' in d && d.p !== undefined ? d.p : 0.9;
-			return { answers: { action: { type: 'choice', choice: d.action, confidence: 0.9, probabilities: { respond: 1 - p, [d.action]: p } },
-				wait: { type: 'score', score: d.wait, level: Math.round(d.wait), confidence: 0.9, probabilities: {}, legend: {} } }, costUsd: 0.0002, provider: 'scripted' };
+			const answers: Record<string, unknown> = {};
+			for (const id of Object.keys(r.questions)) {
+				if (id === 'wait') continue;
+				answers[id] = { type: 'choice', choice: VERDICT[d.action], confidence: 0.9, probabilities: { [VERDICT[d.action]]: p } };
+			}
+			answers['wait'] = { type: 'score', score: d.wait, level: Math.round(d.wait), confidence: p, probabilities: {}, legend: {} };
+			return { answers: answers as never, costUsd: 0.0002, provider: 'scripted' };
 		} };
 	return port;
 }
@@ -141,7 +152,7 @@ describe('envoy triage (G12 (10))', () => {
 		await say(DM, 'mark it done please');
 		await debounce();
 		expect(port.inputs.map((i) => i.pending.length)).toEqual([1, 1, 2, 3]);
-		expect(port.inputs[0]).toMatchObject({ kind: 'envoy DM', allowed: ['respond', 'wait'], directive: 'Keep jobs up to date.' });
+		expect(port.inputs[0]).toMatchObject({ kind: 'envoy DM', assistant: 'Norbius', asked: ['m0'], directive: 'Keep jobs up to date.' });
 		expect(ai.requests).toHaveLength(1);
 		const turns = new Set(await Promise.all(['the Kismis job', 'is finished', 'mark it done please'].map(async (b) => (await row(b))['delivered_turn'])));
 		expect(turns.size).toBe(1);
@@ -254,7 +265,8 @@ describe('in-app triage', () => {
 		await debounce();
 		await t.engine.triage.post({ conversation: c, as: { member: ADA }, text: 'for the Kismis job', author: ADA, mode: 'agent' });
 		await debounce();
-		expect(port.inputs.map((i) => [i.kind, i.allowed, i.pending.length])).toEqual([['in-app, one-to-one', ['respond', 'wait'], 1], ['in-app, one-to-one', ['respond', 'wait'], 2]]);
+		// one question per pending message, both parts of the second decision in the same call; the agent is unnamed in-app
+		expect(port.inputs.map((i) => [i.kind, i.assistant, i.asked.length, i.pending.length])).toEqual([['in-app, one-to-one', 'the workspace agent', 1, 1], ['in-app, one-to-one', 'the workspace agent', 2, 2]]);
 		expect(ai.requests).toHaveLength(1);
 		expect(ai.requests[0]).toEqual(['draft a note', 'for the Kismis job']);
 		await neverTwice();
@@ -283,7 +295,7 @@ describe('in-app triage', () => {
 		await t.engine.triage.post({ conversation: c, as: { member: ADA }, text: 'one', author: ADA, mode: 'agent' });
 		await t.engine.triage.post({ conversation: c, as: { member: CAL }, text: 'two', author: CAL, mode: 'agent' });
 		await debounce();
-		expect(port.inputs[0]).toMatchObject({ kind: 'in-app, shared', allowed: ['respond', 'wait', 'ignore'] });
+		expect(port.inputs[0]).toMatchObject({ kind: 'in-app, shared', assistant: 'the workspace agent', asked: ['m0', 'm1'] });
 		expect(await row('two')).toMatchObject({ ambient: true, delivered_turn: null });
 		expect(ai.requests).toHaveLength(0);
 	});

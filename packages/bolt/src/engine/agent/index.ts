@@ -286,9 +286,6 @@ export function agents(config: AgentConfig) {
 			};
 		};
 		let streaming: Streamer | null = null;
-		const finalText = (conv: ConversationRow, text: string) => inApp(conv) || receipts.length === 0 ? text
-			: [text, ...receipts.map((rc) => rc.outcome === 'committed' ? `Saved: ${rc.records.map((r) => `${r.collection} ${r.id}`).join(', ')}.`
-				: `Awaiting approval: ${rc.records.map((r) => `${r.collection} ${r.id}`).join(', ')} (request ${rc.requestId}).`)].join('\n');
 		const fail = async (conv: ConversationRow, text: string, code: string, detail?: string) => {
 			reply = await write({ conversation: id, role: 'assistant', content: { text, toolCalls: [] }, text,
 				meta: { tag: 'failed', code, ...(detail !== undefined && inApp(conv) ? { detail } : {}), ...(usage.calls === 0 ? {} : { usage: { ...usage } }) } });
@@ -366,7 +363,7 @@ export function agents(config: AgentConfig) {
 					continue;
 				}
 				if (mcpTools === null || mcpFor !== authority.key) { mcpTools = await mcp.tools(authority); mcpFor = authority.key; }
-				const envoySpec = conv.envoy === null ? undefined : m.envoys[conv.envoy] as { task?: string; delegation?: string } | undefined;
+				const envoySpec = conv.envoy === null ? undefined : m.envoys[conv.envoy] as { task?: string; delegation?: string; name?: string } | undefined;
 				const staff = authority.actor.kind === 'member' && !authority.actor.external;
 				const hostSide = inApp(conv) && staff;
 				const hostTools = !hostSide || config.hostTools === undefined ? [] : typeof config.hostTools === 'function' ? await config.hostTools(authority, id) : config.hostTools;
@@ -427,7 +424,7 @@ export function agents(config: AgentConfig) {
 				if (note !== undefined) history.splice(history.at(-1)?.role === 'assistant' ? -1 : history.length, 0, { role: 'user', content: note });
 				const request: AiRequest = {
 					model: conv.model,
-					system: system({ channel: conv.channel !== null, brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf() }),
+					system: system({ envoy: envoySpec?.name, brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf() }),
 					messages: history,
 					tools: tools.map(({ name, description, input }) => ({ name, description, input })),
 					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),
@@ -472,7 +469,10 @@ export function agents(config: AgentConfig) {
 					await write({ conversation: id, role: 'system', content: { text: NUDGE.empty }, text: NUDGE.empty, meta: { tag: 'note' } });
 					continue;
 				}
-				const content = { text: done ? finalText(conv, text) : text, toolCalls: calls as unknown as Json, ...(reasoning === '' ? {} : { reasoning }) };
+				// The reply is the model's own words: a receipt's record ids live in the row's `meta`, where the transcript
+				// shows them as tool cards, and never in the text — a channel turn is read on a phone by a person the
+				// envoy prompt has told it not to hand ids to.
+				const content = { text, toolCalls: calls as unknown as Json, ...(reasoning === '' ? {} : { reasoning }) };
 				const meta: Meta | null = r.finish === 'cut' ? { tag: 'cut', ...(r.continuation === undefined ? {} : { continuation: r.continuation }) }
 					: done ? { tag: 'reply', receipts: [...receipts], usage: { ...usage, context: lastInput, window, model: conv.model } } : null;
 				const row: MessageRow = partial !== null ? await wrote(await rewrite(partial, content, content.text, meta)) : await write({ conversation: id, role: 'assistant', content, text: content.text, meta });

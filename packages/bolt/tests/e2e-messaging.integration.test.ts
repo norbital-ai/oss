@@ -43,8 +43,8 @@ const manifest = {
 	},
 	connections: {},
 	envoys: {
-		field_ops: { channel: 'field_wa', audience: 'authenticated', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
-		sales_desk: { channel: 'sales_tg', audience: 'public', policies: ['desk'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Answer about jobs.' },
+		field_ops: { channel: 'field_wa', audience: 'authenticated', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
+		sales_desk: { channel: 'sales_tg', audience: 'public', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Answer about jobs.' },
 	},
 	mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
 } as unknown as EngineManifest;

@@ -47,7 +47,7 @@ const manifest = {
 	collections: { jobs: { read: { fields: 'all' } } }, integrations: {}, pipelines: {},
 	policies: { desk: { description: 'Desk', grants: { jobs: { read: true } } } }, teams: {}, automations: {},
 	channels: { field_wa: { transport: 'whatsapp' } }, connections: {},
-	envoys: { field_ops: { channel: 'field_wa', audience: 'public', policies: ['desk'], groupMessages: 'mention_or_reply', delegation: 'disabled', triage: {}, task: 'Keep jobs up to date.' } },
+	envoys: { field_ops: { channel: 'field_wa', audience: 'public', name: 'Norbius', policies: ['desk'], groupMessages: 'mention_or_reply', delegation: 'disabled', triage: {}, task: 'Keep jobs up to date.' } },
 	mcp: { hq: { description: 'HQ tools', url: 'HQ_URL', auth: { bearer: 'HQ_TOKEN' } } }, apps: {}, customFields: {}, agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 } as unknown as EngineManifest;
 
@@ -139,14 +139,20 @@ describe('MCP through the tenant env (acceptance 2)', () => {
 
 describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', () => {
 	it('group chatter not for Norbius is ignored (no reply, never input); a mention is answered at once; a DM waits, then is answered', async () => {
-		const decided: { kind: string; allowed: string[]; pending: string[] }[] = [];
-		const script = ['ignore', 'wait', 'respond'];
+		const decided: { kind: string; assistant: string; pending: string[]; asked: string[] }[] = [];
+		// one verdict per pending message, in one call: the script is read per message, not per conversation
+		const script = ['no', 'delay', 'yes'];
 		const sys_1: System1Port = { async ask(r) {
-			const st = r.state as { conversation: string; pending: { text: string }[] }, q = r.questions['action']!;
-			decided.push({ kind: st.conversation, allowed: q.type === 'choice' ? Object.keys(q.criteria) : [], pending: st.pending.map((p) => p.text) });
-			const action = script.shift()!;
-			return { answers: { action: { type: 'choice', choice: action, confidence: 0.9, probabilities: { [action]: 0.9 } },
-				wait: { type: 'score', score: 3, level: 3, confidence: 0.9, probabilities: {}, legend: {} } }, costUsd: 0.0001, provider: 'scripted' };
+			const st = r.state as { conversation: string; assistant: string; pending: { text: string }[] };
+			const asked = Object.keys(r.questions).filter((id) => id !== 'wait');
+			decided.push({ kind: st.conversation, assistant: st.assistant, pending: st.pending.map((p) => p.text), asked });
+			const answers: Record<string, unknown> = {};
+			for (const id of asked) {
+				const v = script.shift()!;
+				answers[id] = { type: 'choice', choice: v, confidence: 0.9, probabilities: { [v]: 0.9 } };
+			}
+			answers['wait'] = { type: 'score', score: 3, level: 3, confidence: 0.9, probabilities: {}, legend: {} };
+			return { answers: answers as never, costUsd: 0.0001, provider: 'scripted' };
 		} };
 		const ai = cassette([say('Noted.'), say('On it.')], sys_1);
 		const t = await testWorkspace({ manifest, ai: ai.port });
@@ -162,7 +168,7 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 
 		await inbound('6591110000@s.whatsapp.net', 'lunch at 12?', GROUP);
 		await debounce();
-		expect(decided[0]).toEqual({ kind: 'envoy group', allowed: ['respond', 'wait', 'ignore'], pending: ['lunch at 12?'] });
+		expect(decided[0]).toEqual({ kind: 'envoy group', assistant: 'Norbius', pending: ['lunch at 12?'], asked: ['m0'] });
 		expect(texts()).toEqual([]);
 		expect(ai.requests).toHaveLength(0);
 
@@ -173,11 +179,45 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 
 		await inbound('6592220000@s.whatsapp.net', 'can you check job 7');
 		await debounce();
-		expect(decided[1]).toEqual({ kind: 'envoy DM', allowed: ['respond', 'wait'], pending: ['can you check job 7'] });
+		expect(decided[1]).toEqual({ kind: 'envoy DM', assistant: 'Norbius', pending: ['can you check job 7'], asked: ['m0'] });
 		expect(texts()).toEqual(['Noted.']); // waiting for more
 		await debounce(3);
 		expect(decided[2]!.kind).toBe('envoy DM');
 		expect(texts()).toEqual(['Noted.', 'On it.']);
 		expect(wa.sent.at(-1)!.message).toMatchObject({ to: expect.stringContaining('6592220000') });
+	});
+
+	it('one call judges every pending message, and only the one it answers is admitted', async () => {
+		// the shape the decider is asked in: `m0`, `m1`, … each its own yes/no/delay, all in one request. Without this a
+		// burst is one verdict for the conversation, so a message that says the name cannot be answered while chatter is
+		// ignored — which is exactly the bug that made `hi Norbius` disappear.
+		const calls: string[][] = [];
+		const sys_1: System1Port = { async ask(r) {
+			const ids = Object.keys(r.questions).filter((id) => id !== 'wait');
+			calls.push(ids);
+			const answers: Record<string, unknown> = Object.fromEntries(ids.map((id, i) => [id, { type: 'choice', choice: i === 0 ? 'no' : 'yes',
+				confidence: 0.9, probabilities: {} }]));
+			answers['wait'] = { type: 'score', score: 0, level: 0, confidence: 0.9, probabilities: {}, legend: {} };
+			return { answers: answers as never, costUsd: 0, provider: 'scripted' };
+		} };
+		const ai = cassette([say('On the van.')], sys_1);
+		const t = await testWorkspace({ manifest, ai: ai.port });
+		const wa = t.fakes.transports.whatsapp;
+		let n = 0;
+		const inbound = async (text: string) => {
+			await wa.emit({ kind: 'inbound', channel: 'field_wa', message: { id: `n${++n}`, thread: '1203@g.us', sentAt: t.clock.now(),
+				from: { handle: '6591110000@s.whatsapp.net', name: null }, text, attachments: [], group: true } });
+			await t.settled();
+		};
+		const texts = () => wa.sent.map((s) => (s.message as { text: string }).text);
+
+		await inbound('lunch at 12?');
+		await inbound('Norbius, the van is late');
+		t.clock.advance(`${TRIAGE_DEBOUNCE / 1000}s`);
+		await t.runDue();
+
+		expect(calls).toEqual([['m0', 'm1']]); // one call, both messages
+		expect(texts()).toEqual(['On the van.']);
+		expect(JSON.stringify(ai.requests.map((r) => r.messages))).not.toContain('lunch at 12?'); // the `no` never reached the model
 	});
 });

@@ -19,7 +19,7 @@ const manifest = {
 	relationships: {},
 	collections: { quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
 	policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
-	envoys: { field: { channel: 'field', audience: 'public', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
+	envoys: { field: { channel: 'field', audience: 'public', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
 	channels: { field: { transport: 'whatsapp' } },
 	agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 	integrations: {}, pipelines: {}, teams: {}, automations: {}, connections: {}, mcp: {}, apps: {}, customFields: {},

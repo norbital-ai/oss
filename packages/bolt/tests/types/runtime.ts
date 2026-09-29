@@ -179,23 +179,23 @@ connection({ baseUrl: 'ERP_URL', auth: { oauth2: { grant: 'client_credentials', 
 connection({ baseUrl: 'ERP_URL', auth: { apiKey: 'ERP_TOKEN' } });
 
 // ── envoy(), mcp(), skills ──
-envoy({ channel: 'support', audience: 'public', policies: ['sales_rep'], delegation: 'enabled', task: 'Answer order questions.' });
+envoy({ channel: 'support', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'enabled', task: 'Answer order questions.' });
 // @ts-expect-error EN1 an undeclared channel
-envoy({ channel: 'telegram', audience: 'public', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
+envoy({ channel: 'telegram', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
 // @ts-expect-error EN2 the inbox is not an envoy channel
-envoy({ channel: 'inbox', audience: 'public', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
+envoy({ channel: 'inbox', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
 // @ts-expect-error EN3 groupMessages on an email channel (§5.9: email is always addressed)
-envoy({ channel: 'support', audience: 'public', policies: ['sales_rep'], groupMessages: 'all', delegation: 'disabled', task: 'x' });
+envoy({ channel: 'support', audience: 'public', name: 'Norbius', policies: ['sales_rep'], groupMessages: 'all', delegation: 'disabled', task: 'x' });
 // @ts-expect-error EN3a triage on an email channel (rule 60a: email is always addressed) — hook:triage
-envoy({ channel: 'support', audience: 'public', policies: ['sales_rep'], triage: { scope: 'dm' }, delegation: 'disabled', task: 'x' });
-envoy({ channel: 'whatsapp', audience: 'public', policies: ['sales_rep'], triage: { scope: 'group' }, delegation: 'disabled', task: 'x' });
-envoy({ channel: 'whatsapp', audience: 'public', policies: ['sales_rep'], triage: false, delegation: 'disabled', task: 'x' });
+envoy({ channel: 'support', audience: 'public', name: 'Norbius', policies: ['sales_rep'], triage: { scope: 'dm' }, delegation: 'disabled', task: 'x' });
+envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], triage: { scope: 'group' }, delegation: 'disabled', task: 'x' });
+envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], triage: false, delegation: 'disabled', task: 'x' });
 // @ts-expect-error EN4 no policies
-envoy({ channel: 'whatsapp', audience: 'public', policies: [], delegation: 'disabled', task: 'x' });
+envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: [], delegation: 'disabled', task: 'x' });
 // @ts-expect-error EN5 an audience envoys do not have
 envoy({ channel: 'whatsapp', audience: 'members', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
 // @ts-expect-error EN6 delegation is required
-envoy({ channel: 'whatsapp', audience: 'public', policies: ['sales_rep'], task: 'x' });
+envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], task: 'x' });
 // @ts-expect-error MC1 a literal URL where an env name belongs
 mcp({ description: 'x', url: 'https://mcp.example.com' });
 // @ts-expect-error MC2 oauth credentials must be env names

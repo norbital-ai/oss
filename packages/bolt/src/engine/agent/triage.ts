@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
 import type { AiPort, DeadlinesPort, EngineManifest, MeteringPort, TenantDb } from '../contracts.ts';
-import { ask, choiceOf, decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
+import { ask, decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
 import { messageCommit, MSG, preview, rowsOf, type As } from './schema.ts';
 import type { LiveHub } from '../live/hub.ts';
 import type { Runs } from '../runs/index.ts';
@@ -27,10 +27,12 @@ const WAIT_MS = 10_000;
 const WAIT_MIN_PROBABILITY = 0.7;
 
 export type TriageAction = 'respond' | 'wait' | 'ignore';
-const ACTIONS: { readonly [a in TriageAction]: string } = {
-	respond: 'the sender is done and expects an answer now',
-	wait: 'more parts of the message are likely coming',
-	ignore: 'not meant for the assistant',
+/** One message's verdict: `delay` keeps the whole burst waiting, `no` leaves that message ambient for good. */
+type Verdict = 'yes' | 'no' | 'delay';
+const VERDICTS: { readonly [v in Verdict]: string } = {
+	yes: 'this one is for the assistant and it is done; answer it now',
+	no: 'this one is not for the assistant; leave it',
+	delay: 'this one is for the assistant but more is likely coming',
 };
 /** The score's levels: one per second of wait, so its continuous `score` is the wait in seconds. */
 /** 0 s … 9 s: the decision service accepts at most 10 score levels; the score is the wait in seconds. */
@@ -106,7 +108,7 @@ export function triage(cfg: TriageConfig) {
 		const envoyName = conv['envoy'] as string | null, envoy = envoyName !== null;
 		if (waits >= TRIAGE_MAX_WAITS) { await admit(conversation, envoy); return { action: 'respond', bound: true }; }
 
-		const spec = (envoy ? m.envoys[envoyName] : undefined) as { task?: string; groupMessages?: string } | undefined;
+		const spec = (envoy ? m.envoys[envoyName] : undefined) as { task?: string; groupMessages?: string; name?: string } | undefined;
 		// P41: a group (an envoy group, or an in-app conversation more than one member posted in) may be not for the agent;
 		// a direct one (an envoy DM, an in-app one-to-one) always is, so it decides only when
 		const group = envoy ? conv['kind'] === 'group' : Number(posters!.rows[0]?.['n'] ?? 0) > 1;
@@ -137,25 +139,40 @@ export function triage(cfg: TriageConfig) {
 					return { id: String(r['id']), from: (r['sender'] as string | null) ?? 'someone', text: preview(String(r['text'])), at: at(r), ...(files.length === 0 ? {} : { attachments: files }) }; }),
 				secondsSinceFirstPending: Math.round(Math.max(0, Date.parse(now) - Number(pending[0]!['at'])) / 1000),
 				addressesAssistant: pending.some((r) => r['invocation'] === 'mention' || r['invocation'] === 'reply'),
+				// An envoy is named, and a message that says its name is for it whether or not the mention was mechanical:
+				// without this the decider is asked about a nameless assistant and reads `hi <name>` as not addressed.
+				assistant: envoy ? String(spec?.name ?? '') : 'the workspace agent',
 			} as DecisionRequest['state'],
+			// ONE call, one verdict per message: the decider is asked about each pending message by name, so a burst is
+			// judged together and blind to each other rather than folded into a single action for the whole conversation.
 			questions: {
-				action: { type: 'choice', instructions: 'You decide when an assistant answers this conversation. What should it do now?',
-					criteria: Object.fromEntries(allowed.map((a) => [a, ACTIONS[a]])) },
-				wait: { type: 'score', instructions: 'If the assistant waits, how many seconds until the next part is likely to arrive?', criteria: WAIT_LEVELS },
+				...Object.fromEntries(pending.map((r, i) => [`m${i}`, { type: 'choice' as const,
+					instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${String(r['sender'] ?? 'someone')}: should ${envoy ? String(spec?.name ?? 'the assistant') : 'the agent'} answer this one?`,
+					criteria: VERDICTS }])),
+				wait: { type: 'score', instructions: 'If any message is better answered after a pause, how many seconds until the next part is likely to arrive?', criteria: WAIT_LEVELS },
 			},
 		};
 		const d = await ask(cfg.ai, req);
 		const call = randomUUID(), bad = failed(d);
-		// a direct conversation offers no `ignore`; any answer outside `allowed` is read as `respond`
+		// a direct conversation offers no `ignore`; an answer outside the three verdicts is read as it
 		// a failed decision answers a DM (never leave a person unanswered) but stays quiet in a group, where an outage must
-		// not turn the envoy into a bot that answers every message; ignored rows stay ambient context for the next address
-		const fallback: TriageAction = (allowed as readonly string[]).includes('ignore') ? 'ignore' : 'respond';
-		const chosen = bad ? fallback : (allowed as readonly string[]).includes(choiceOf(d, 'action') ?? '') ? choiceOf(d, 'action') as TriageAction : fallback;
-		// a wait costs the person seconds of silence: only a probable one holds; else the likelier of the other actions
-		const p = (a: string) => { const x = bad ? undefined : d.answers['action']; return x?.type === 'choice' ? x.probabilities[a] ?? 0 : 0; };
-		const action: TriageAction = chosen !== 'wait' || p('wait') >= WAIT_MIN_PROBABILITY ? chosen
-			: allowed.filter((a) => a !== 'wait').reduce((best, a) => p(a) > p(best) ? a : best, 'respond' as TriageAction);
-		const event = { ...decisionEvent('triage', req, d) as { readonly [k: string]: Json }, action, pending: pending.length, waits };
+		// not turn the envoy into a bot that answers every message; a `no` row stays ambient context for the next address
+		const fallback: Verdict = (allowed as readonly string[]).includes('ignore') ? 'no' : 'yes';
+		const verdictOf = (i: number): Verdict => {
+			const a = bad ? undefined : d.answers[`m${i}`];
+			const c = a?.type === 'choice' ? a.choice : undefined;
+			return c === 'yes' || c === 'no' || c === 'delay' ? c : fallback;
+		};
+		// A direct conversation is never left unanswered: it offers no `ignore`, so a `no` read there is a misread of the
+		// decider — a DM from one person is always theirs to have answered — and is taken as `yes`.
+		const verdicts = pending.map((_, i) => { const v = verdictOf(i); return !group && v === 'no' ? 'yes' : v; });
+		// a wait costs the person seconds of silence: only a probable one holds. A `delay` whose pause is a guess is still a
+		// message for the assistant, so it is answered now rather than left — doubt about the timing is no reason to drop it.
+		const waitAnswer = bad ? undefined : d.answers['wait'];
+		const holds = verdicts.includes('delay') && waitAnswer?.type === 'score' && waitAnswer.confidence >= WAIT_MIN_PROBABILITY;
+		const answerNow = verdicts.includes('yes') || (!holds && verdicts.includes('delay'));
+		const action: TriageAction = holds ? 'wait' : answerNow ? 'respond' : 'ignore';
+		const event = { ...decisionEvent('triage', req, d) as { readonly [k: string]: Json }, action, verdicts, pending: pending.length, waits };
 		const log = `logged AS (INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES ($2::timestamptz, $3, 'decision.made', $4, $1, $5::jsonb) RETURNING 1)`;
 		const base: Json[] = [conversation, now, bad ? 'warn' : 'info', call, JSON.stringify(event)];
 		if (action === 'wait') {
@@ -165,13 +182,14 @@ export function triage(cfg: TriageConfig) {
 			const at = new Date(Date.parse(now) + Math.round(seconds * 1000)).toISOString();
 			await db.write({ text: `WITH ${log}, ${recheck('$1', '$6', '$7')} SELECT 1`, params: [...base, at, waits + 1] });
 			announce(at);
-		} else if (action === 'ignore') {
-			// only the rows the decider saw; a row that arrived meanwhile has its own queued decision
-			published((await db.write({ text: `WITH ${log}, gone AS (UPDATE sys_message m SET state = NULL, ambient = true
-				WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($6::jsonb)) RETURNING ${MSG}) SELECT r FROM gone`,
-			params: [...base, JSON.stringify(pendingIds)] })).rows);
 		} else {
-			await db.write({ text: `WITH ${log} SELECT 1`, params: base });
+			// only the rows the decider saw; a row that arrived meanwhile has its own queued decision. A `no` verdict is
+			// left exactly as an ignored conversation is — the message stays as ambient context for the next address.
+			const left = pending.filter((_, i) => action === 'ignore' || verdicts[i] === 'no').map((r) => String(r['id']));
+			if (left.length > 0) published((await db.write({ text: `WITH ${log}, gone AS (UPDATE sys_message m SET state = NULL, ambient = true
+				WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($6::jsonb)) RETURNING ${MSG}) SELECT r FROM gone`,
+			params: [...base, JSON.stringify(left)] })).rows);
+			else await db.write({ text: `WITH ${log} SELECT 1`, params: base });
 		}
 		await meter(cfg.metering, d, call);
 		if (action === 'respond') await admit(conversation, envoy);

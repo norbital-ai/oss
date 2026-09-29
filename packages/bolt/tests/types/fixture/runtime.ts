@@ -29,7 +29,7 @@ export const whatsapp = channel({ transport: 'whatsapp', policies: ['sales_rep']
 export const erp = connection({ baseUrl: 'ERP_URL', auth: { bearer: 'ERP_TOKEN' } });
 export const erp_mcp = mcp({ description: 'Product documentation', url: 'MCP_URL', tools: ['search_docs'] });
 
-export const desk = envoy({ channel: 'whatsapp', audience: 'authenticated', policies: ['sales_rep'],
+export const desk = envoy({ channel: 'whatsapp', audience: 'authenticated', name: 'Norbius', policies: ['sales_rep'],
 	groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep orders up to date from what people report.' });
 
 export const nightly = automation({ description: 'Nightly order digest', runAs: ['sales_rep'], on: { cron: '0 2 * * *' },
