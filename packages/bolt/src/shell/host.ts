@@ -16,7 +16,7 @@ import type { Runs } from '../engine/runs/index.ts';
 import { basePath, BOLT, HEADERS, PATHS, SW, under } from '../protocol/wire.ts';
 import { sse } from '../protocol/http.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
-import { conversationList, events, inbox, runList, settings, settingsOp, type LogLevel, type SecretsPort } from './data.ts';
+import { channelMessages, events, inbox, runList, settings, settingsOp, type LogLevel, type SecretsPort } from './data.ts';
 import { studioOp, studioView, type StudioPort } from './studio.ts';
 import { CALLBACK, type OAuth } from '../engine/connections.ts';
 import { audienceOf, challengeOf, COOKIES, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type ShellBoot, type ShellNotice } from './nav.ts';
@@ -275,8 +275,10 @@ export function shellHost(c: ShellHostConfig) {
 				const run = typeof id === 'string' ? await c.runs?.stop(auth, id) ?? null : null;
 				return run === null ? refused('notFound', 'Not found or no access.', 404) : json({ value: run });
 			}
-			case 'GET /conversations': // hook:agent-ui
-				return s.conversations ? json({ value: await conversationList(h.db, auth, Object.entries(m.envoys).filter(([, e]) => (e as { audience?: unknown }).audience === 'public').map(([n]) => n)) }) : refused('forbidden', 'No conversations for this member.', 403);
+			case 'GET /channel-messages': {
+				const p = url.searchParams;
+				return answer(await channelMessages(h.db, auth, m, p.get('channel') ?? '', p.get('before') ?? undefined));
+			}
 			case 'GET /settings': return answer(await settings(h, m, auth, c.secrets));
 			case 'POST /settings': {
 				const b = await body(request);

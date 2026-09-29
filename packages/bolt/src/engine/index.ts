@@ -173,9 +173,8 @@ export function engine(config: EngineConfig): Engine {
 	};
 	/**
 	 * The agent panel's conversation list: the member's own in-app conversations AND the envoy channel threads they may
-	 * read (rule 61), so the panel's selector can segment between them. `conversationList` (the `/conversations` page) is
-	 * the same set for a different surface: it marks a thread read, and a member sees a thread they posted in even when the
-	 * envoy is not public, so its own `EXISTS` clause stands and the `owner` arm covers the in-app ones.
+	 * read (rule 61), so the panel's picker groups them by where they happen. A member sees a thread they posted in even
+	 * when the envoy is not public (the `EXISTS` clause); the `owner` arm covers the in-app ones.
 	 */
 	const conversations = async (r: ReadIR) => {
 		const member = (r as Extract<ReadIR, { kind: 'conversations' }>).member;

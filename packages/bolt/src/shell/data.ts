@@ -72,24 +72,23 @@ export async function runList(db: TenantDb, auth: Authority, limit = 100, automa
 	return rows!.rows.flatMap((r) => runView(auth, r) ?? []);
 }
 
-export type ConversationRow = { id: string; envoy: string | null; channel: string; title: string | null; status: string;
-	at: string | null; preview: string | null; author: string | null; unread: boolean };
+/** One raw channel message as the channel's Messages tab lists it: either direction, as stored. */
+export type ChannelMessage = { id: string; seq: string; direction: 'inbound' | 'outbound'; at: string; thread: string | null; kind: string | null;
+	title: string | null; sender: string | null; sender_name: string | null; text: string | null; files: number; status: string | null; error: string | null };
 /**
- * `/conversations` (§5.9 built-in reads, hook:agent-ui): staff browse every envoy (channel) conversation, newest message
- * first, each with its last message and whether it has any since the viewer's `markRead`.
+ * A channel's raw messages (§5.9 built-in reads): every inbound and outbound `sys_message` on it, newest first, a page of
+ * 100 before `seq`; an administrator's, like the rest of Settings.
  */
-/** Envoy threads a member may see: one they posted in (group participant, DM sender) or a `public` envoy's (owner 2026-09-26). */
-export async function conversationList(db: TenantDb, auth: Authority, publicEnvoys: readonly string[], limit = 200): Promise<ConversationRow[]> {
-	const a = auth.actor;
-	if (a.kind !== 'member' || a.external) return [];
-	const [rows] = await db.read([q(`SELECT c.id, c.envoy, c.channel, c.title, c.status, l.at, l.preview, l.author,
-			coalesce(l.seq > coalesce((c.read->>$1)::bigint, 0), false) AS unread
-		FROM sys_conversation c LEFT JOIN LATERAL (SELECT m.seq, m.created_at::text AS at, m.preview, coalesce(m.author, m.sender_name, m.sender) AS author
-			FROM sys_message m WHERE m.conversation = c.id AND m.deleted_at IS NULL ORDER BY m.seq DESC LIMIT 1) l ON true
-		WHERE c.channel IS NOT NULL AND c.parent IS NULL AND (c.envoy IN (SELECT jsonb_array_elements_text($2::jsonb))
-			OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id AND $1 IN (p.author, p."as"->>'member', p."as"->'envoy'->>'member')))
-		ORDER BY l.seq DESC NULLS LAST LIMIT ${Math.min(Math.max(1, limit), 500)}`, a.id, JSON.stringify(publicEnvoys))]);
-	return rows!.rows as unknown as ConversationRow[];
+export async function channelMessages(db: TenantDb, auth: Authority, m: EngineManifest, channel: string, before?: string): Promise<Result<ChannelMessage[]>> {
+	const denied = requireAdmin(auth);
+	if (denied) return denied;
+	if (m.channels[channel] === undefined) return refuse('notFound', `No channel '${channel}'.`);
+	const [rows] = await db.read([q(`SELECT m.id, m.seq::text AS seq, m.direction, coalesce(m.sent_at, m.created_at)::text AS at, c.thread, c.kind, c.title,
+			m.sender, m.sender_name, m.text, jsonb_array_length(coalesce(m.files, '[]'::jsonb)) AS files, m.status, m.error
+		FROM sys_message m LEFT JOIN sys_conversation c ON c.id = m.conversation
+		WHERE m.channel = $1 AND m.direction IN ('inbound', 'outbound') AND ($2::bigint IS NULL OR m.seq < $2::bigint)
+		ORDER BY m.seq DESC LIMIT 100`, channel, before !== undefined && /^\d{1,18}$/.test(before) ? before : null)]);
+	return { ok: true, value: rows!.rows as unknown as ChannelMessage[] };
 }
 
 export type Settings = {

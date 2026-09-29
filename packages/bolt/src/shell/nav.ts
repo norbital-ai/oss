@@ -225,13 +225,11 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
  * non-administrator may do) on a host that serves it (`studio`).
  */
-/** `conversations`: staff browse the envoys' channel conversations (§5.9 built-in reads) when the workspace declares an envoy. */
-export type Surfaces = { inbox: boolean; runs: boolean; settings: boolean; agent: boolean; studio: boolean; conversations: boolean };
+export type Surfaces = { inbox: boolean; runs: boolean; settings: boolean; agent: boolean; studio: boolean };
 export function surfaces(m: ShellManifest, actor: EngineActor, admin: boolean, studio = false): Surfaces {
-	if (actor.kind !== 'member') return { inbox: false, runs: false, settings: false, agent: false, studio: false, conversations: false };
+	if (actor.kind !== 'member') return { inbox: false, runs: false, settings: false, agent: false, studio: false };
 	const staff = !actor.external;
-	return { inbox: staff, runs: staff, settings: staff && admin, agent: (staff ? m.agent.internal : m.agent.external) !== undefined, studio: staff && studio,
-		conversations: staff && Object.keys(m.envoys ?? {}).length > 0 }; // hook:agent-ui
+	return { inbox: staff, runs: staff, settings: staff && admin, agent: (staff ? m.agent.internal : m.agent.external) !== undefined, studio: staff && studio };
 }
 
 export type Route =
@@ -239,7 +237,6 @@ export type Route =
 	| { kind: 'home' } | { kind: 'inbox' } | { kind: 'settings'; tab: SettingsTab } | { kind: 'studio'; tab?: StudioTab }
 	/** A moved page (`/runs` is Settings' Automations, `/logs` Studio's runtime log): the shell replaces the URL. */
 	| { kind: 'redirect'; to: string }
-	| { kind: 'conversations'; id?: string }
 	| { kind: 'signIn'; next?: string } | { kind: 'invite'; id: string } | { kind: 'register'; claim: string }
 	| { kind: 'notFound' };
 /** Settings proper (people, organization, audit, automation runs), then the System pages (channels, integrations, environment secrets). */
@@ -261,7 +258,6 @@ export function route(m: ShellManifest, url: URL): Route {
 		case 'logs': return seg.length === 1 ? { kind: 'redirect', to: '/studio/runtime' } : { kind: 'notFound' };
 		case 'studio': return seg.length === 1 ? { kind: 'studio' }
 			: seg.length === 2 && STUDIO_TABS.includes(seg[1] as never) ? { kind: 'studio', tab: seg[1] as StudioTab } : { kind: 'notFound' };
-		case 'conversations': return seg.length <= 2 ? { kind: 'conversations', ...(seg[1] === undefined ? {} : { id: seg[1] }) } : { kind: 'notFound' };
 		case 'sign-in': { const next = url.searchParams.get('next'); return { kind: 'signIn', ...(next?.startsWith('/') && !next.startsWith('//') ? { next } : {}) }; }
 		case 'invite': return seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'notFound' };
 		case 'register': return seg[1] ? { kind: 'register', claim: seg[1] } : { kind: 'notFound' };

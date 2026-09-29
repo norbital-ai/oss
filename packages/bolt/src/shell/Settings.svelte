@@ -13,7 +13,7 @@
 	import { Button, Checkbox, Combobox, Dialog, Input, Table, Tabs } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
 	import type { ChannelConnection } from '../engine/channels/connection.ts';
-	import type { Settings } from './data.ts';
+	import type { ChannelMessage, Settings } from './data.ts';
 	import { based, type SettingsTab, type ShellBoot } from './nav.ts';
 	import type { Answer, ShellApi, ShellBolt } from './runtime.ts';
 	import type { Act } from './Acts.svelte';
@@ -152,6 +152,22 @@
 	// ── the open row (one sheet at a time) and the create dialog ──
 	type Open = { kind: 'member' | 'team' | 'invitation' | 'assignment' | 'key' | 'audit' | 'channel' | 'remote' | 'secret'; id: string };
 	let open = $state<Open | null>(null);
+	/**
+	 * The open channel's raw messages, both directions, newest first (its Messages tab): read when the sheet opens and on
+	 * Refresh; Older reads the page before the last one shown.
+	 */
+	let channelLog = $state<{ channel: string; rows: ChannelMessage[]; more: boolean; error: string | null } | null>(null);
+	async function readChannel(channel: string, older = false): Promise<void> {
+		const before = older ? channelLog?.rows.at(-1)?.seq : undefined;
+		const r = await api.channelMessages(channel, before);
+		if (open?.kind !== 'channel') return;
+		channelLog = !r.ok ? { channel, rows: channelLog?.rows ?? [], more: false, error: r.error.message }
+			: { channel, rows: older ? [...(channelLog?.rows ?? []), ...r.value] : r.value, more: r.value.length === 100, error: null };
+	}
+	watch(() => (open?.kind === 'channel' ? channels.find((x) => x.id === open?.id)?.name : undefined), (name) => {
+		channelLog = null;
+		if (name !== undefined) void readChannel(name);
+	});
 	const show = (kind: Open['kind']) => (row: { id: string }) => (open = { kind, id: row.id });
 	let peopleTab = $state('members');
 	type Creating = 'invite' | 'assign' | 'team' | 'key';
@@ -400,8 +416,45 @@
 				{ label: t('sent'), value: c.sent }, { label: t('queued'), value: c.queued }, { label: t('retrying'), value: c.retrying }, { label: t('failed'), value: c.failed },
 				{ label: t('next'), value: c.next_retry === null ? undefined : when(c.next_retry) }, { label: t('Error'), value: c.last_error ?? undefined }]}>
 				<div class="border-t pt-3">
+				{#snippet connectionTab()}
 					<Connection channel={c.name} transport={c.transport} connection={connections[c.name] ?? null} error={connectionErrors[c.name] ?? null}
 						busy={pairing[c.name] === true} pair={(input) => pair(c.name, input)} unpair={() => unpair(c.name)} {t} workspace={connects} />
+				{/snippet}
+				{#snippet messagesTab()}
+					<!-- the channel's raw traffic as stored: what came in and what went out, newest first -->
+					<div class="flex flex-col gap-2 text-sm" data-channel-messages>
+						<div class="flex items-center justify-between">
+							<p class="text-xs text-muted-foreground">{t('Every message in and out of this channel, newest first.')}</p>
+							<Button size="sm" variant="ghost" onclick={() => void readChannel(c.name)}>{t('Refresh')}</Button>
+						</div>
+						{#if channelLog?.error}<p role="alert" class="text-xs text-destructive">{channelLog.error}</p>{/if}
+						{#if channelLog === null}
+							<p class="text-xs text-muted-foreground">{t('Loading…')}</p>
+						{:else if channelLog.rows.length === 0}
+							<p class="text-xs text-muted-foreground">{t('No messages on this channel yet.')}</p>
+						{:else}
+							<ol class="flex flex-col gap-1.5">
+								{#each channelLog.rows as x (x.id)}
+									<li class="rounded-md border border-border/70 px-2.5 py-1.5" data-direction={x.direction} data-channel-message={x.id}>
+										<p class="flex items-center gap-2 text-xs text-muted-foreground">
+											<span class="font-medium text-foreground">{x.direction === 'inbound' ? '←' : '→'} {x.direction === 'inbound' ? (x.sender_name ?? x.sender ?? '') : t('sent')}</span>
+											<span class="min-w-0 truncate">{x.kind === 'group' ? (x.title ?? x.thread) : x.thread}</span>
+											<span class="flex-1"></span>
+											{#if x.direction === 'outbound' && x.status !== null}<span class:text-destructive={x.status === 'failed'}>{x.status}</span>{/if}
+											<time class="tabular-nums">{when(x.at)}</time>
+										</p>
+										<p class="whitespace-pre-wrap">{x.text ?? ''}{#if x.files > 0} <span class="text-xs text-muted-foreground">· {x.files} {t(x.files === 1 ? 'file' : 'files')}</span>{/if}</p>
+										{#if x.error}<p class="text-xs text-destructive">{x.error}</p>{/if}
+									</li>
+								{/each}
+							</ol>
+							{#if channelLog.more}<Button size="sm" variant="ghost" onclick={() => void readChannel(c.name, true)}>{t('Older')}</Button>{/if}
+						{/if}
+					</div>
+				{/snippet}
+					<Tabs orientation="horizontal" value="connection" tabs={[
+						{ name: 'connection', title: t('Connection'), icon: 'lucide:plug', body: connectionTab, keepAlive: true },
+						{ name: 'messages', title: t('Messages'), icon: 'lucide:messages-square', body: messagesTab, keepAlive: true }]} />
 				</div>
 			</DetailSheet>
 		{/if}

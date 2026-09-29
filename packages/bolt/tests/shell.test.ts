@@ -48,12 +48,12 @@ describe('app visibility (§3.9, capabilities.apps)', () => {
 		expect(Object.keys(m.apps).filter((a) => canOpen(m, visitor, a))).toEqual(['careers']);
 	});
 	it('externals and visitors get no settings, runs or staff inbox; the agent follows the briefs', () => {
-		expect(surfaces(m, member([]).actor, true)).toEqual({ inbox: true, runs: true, settings: true, agent: true, studio: false, conversations: false });
+		expect(surfaces(m, member([]).actor, true)).toEqual({ inbox: true, runs: true, settings: true, agent: true, studio: false });
 		expect(surfaces(m, member([]).actor, true, true).studio).toBe(true);
 		// every staff member authors their own draft; the host decides what a non-administrator may do
 		expect(surfaces(m, member([]).actor, false, true)).toMatchObject({ studio: true, settings: false });
 		expect(surfaces(m, member([], { external: true }).actor, false, true).studio).toBe(false);
-		expect(surfaces(m, member([], { external: true }).actor, false)).toEqual({ inbox: false, runs: false, settings: false, agent: false, studio: false, conversations: false });
+		expect(surfaces(m, member([], { external: true }).actor, false)).toEqual({ inbox: false, runs: false, settings: false, agent: false, studio: false });
 		expect(surfaces(m, { kind: 'visitor', app: 'careers', visitor: 'v' }, false).agent).toBe(false);
 	});
 });

@@ -9,7 +9,7 @@ import { conversationId } from '../src/engine/channels/store.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { boltHandler } from '../src/protocol/http.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
-import { conversationList } from '../src/shell/data.ts';
+import { channelMessages } from '../src/shell/data.ts';
 import { xlsxCells, xlsxSheets } from '../src/engine/agent/xlsx.ts';
 import { respondSystem1, testWorkspace } from '../src/test/index.ts';
 
@@ -73,7 +73,7 @@ describe('the agent UI actions', () => {
 		expect((await authorities.team(t.db, ann.actor as Extract<typeof ann.actor, { kind: 'member' }>, 't-ops'))!.admin).toBe(false);
 	});
 
-	it('setAgent, file and markRead; staff list a public envoy conversation with an unread mark', async () => {
+	it('setAgent, file and markRead; an administrator reads a channel\'s raw messages', async () => {
 		const { t, act, authorities } = await setup();
 		const c = await t.engine.agents.start({ owner: 'ann' });
 		expect(await act('ann', 'sys_conversation.setAgent', { conversation: c, agent: 'nope' })).toMatchObject({ kind: 'refused' });
@@ -87,11 +87,14 @@ describe('the agent UI actions', () => {
 			from: { handle: '6590000001@s.whatsapp.net', name: 'Kim' }, text: 'hello?', attachments: [] } });
 		const thread = conversationId('field', '6590000001@s.whatsapp.net');
 		const ann = (await authorities.member(t.db, 'ann'))!;
-		expect((await conversationList(t.db, ann, ['field'])).map((r) => [r.id, r.envoy, r.unread])).toEqual([[thread, 'field', true]]);
-		expect(await conversationList(t.db, ann, [])).toEqual([]); // not a participant: only a public envoy's thread shows
-		expect(await conversationList(t.db, (await authorities.member(t.db, 'cus'))!, ['field'])).toEqual([]);
+		// the channel's Messages tab: its raw traffic as stored, an administrator's
+		await t.db.write({ text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`, params: [] });
+		const admin = (await authorities.member(t.db, 'ann'))!;
+		const raw = await channelMessages(t.db, admin, t.manifest, 'field');
+		expect(raw.ok && raw.value.map((x) => [x.direction, x.thread, x.sender_name, x.text])).toEqual([['inbound', '6590000001@s.whatsapp.net', 'Kim', 'hello?']]);
+		expect(await channelMessages(t.db, (await authorities.member(t.db, 'cus'))!, t.manifest, 'field')).toMatchObject({ ok: false });
+		expect(await channelMessages(t.db, admin, t.manifest, 'nope')).toMatchObject({ ok: false, code: 'notFound' });
 		expect(await act('ann', 'sys_message.markRead', { conversation: thread })).toMatchObject({ kind: 'committed' });
-		expect((await conversationList(t.db, ann, ['field']))[0]!.unread).toBe(false);
 
 		const [msg] = (await t.db.read([{ text: `SELECT id FROM sys_message WHERE conversation = $1`, params: [thread] }]))[0]!.rows;
 		const message = String(msg!['id']);

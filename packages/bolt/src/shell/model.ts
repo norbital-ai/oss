@@ -69,7 +69,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 	const leaf = (key: string, label: string, icon: string, href: string): NavItem => ({ key, label: t(label), icon, href, active: under(path, href) });
 	const ops = [...(s.agent ? [{ key: 'norbius', label: t('Norbius'), icon: 'lucide:sparkles', href: NORBIUS, active: false, badge: '⌘K' }] : []),
 		...(s.inbox ? [{ ...leaf('approvals', 'Approvals', 'lucide:shield-check', '/inbox'), ...(boot.inbox > 0 ? { badge: String(boot.inbox) } : {}) }] : []),
-		...(s.conversations ? [leaf('conversations', 'Conversations', 'lucide:messages-square', '/conversations')] : [])]; // hook:agent-ui
+]; // hook:agent-ui
 	const group = (key: string, label: string, children: NavItem[]): NavItem[] =>
 		children.length === 0 ? [] : [{ key, label: t(label), icon: null, href: children[0]!.href, active: children.some((c) => c.active), children }];
 	const utilities = [

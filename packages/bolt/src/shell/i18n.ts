@@ -182,6 +182,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'About this context': '关于此上下文', 'Summary': '摘要', 'Transcript': '记录', 'Draft plan': '计划草稿', 'Revision': '修订',
 	'Web UI': '网页端', 'Group': '群组', 'reply pending': '待回复', 'Answer': '回答', 'Verdict': '判定', 'Wait': '等待', 'Context': '上下文',
 	'respond': '回复', 'wait': '等待', 'ignore': '忽略', 'decided': '已决定',
+	'Every message in and out of this channel, newest first.': '此渠道收发的每条消息，最新的在前。', 'No messages on this channel yet.': '此渠道暂无消息。',
+	'Refresh': '刷新', 'Older': '更早', 'Messages': '消息', 'file': '个文件', 'files': '个文件',
 	'Delete plan and return to Agent mode': '删除计划并返回智能体模式', 'Starting…': '正在启动…', 'Execute': '执行',
 	'Discuss the approach here. Expand the draft Plan above the prompt to review it.': '在此讨论思路。展开输入框上方的计划草稿即可查看。',
 	'The agent continues from this plan and the messages below. Earlier messages are saved in Transcript.': '智能体将基于此计划及下方消息继续。较早的消息保存在“记录”中。',

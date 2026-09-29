@@ -55,7 +55,6 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		markNoticesRead: (ids: readonly string[]) => act('sys_notification.markRead', { ids: [...ids] }), // L-BOLT-354
 		runs: (o: { automation?: string; limit?: number } = {}) => call<import('./data.ts').RunRow[]>('GET', `${SHELL}/runs${o.automation === undefined && o.limit === undefined ? ''
 			: `?${new URLSearchParams(Object.entries(o).filter((e) => e[1] !== undefined).map(([k, v]) => [k, String(v)]))}`}`),
-		conversations: () => call<import('./data.ts').ConversationRow[]>('GET', `${SHELL}/conversations`), // hook:agent-ui
 		run: (id: string) => call<import('../engine/runs/index.ts').RunView>('GET', `${SHELL}/runs${q('id', id)}`),
 		stopRun: (id: string) => call<import('../engine/runs/index.ts').RunView>('POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
 		settings: () => call<import('./data.ts').Settings>('GET', `${SHELL}/settings`),
@@ -88,6 +87,9 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		},
 		/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (name: string, logo: string | null) => call<null>('POST', `${SHELL}/organization`, { name, logo }),
+		/** A channel's raw messages, both directions, newest first (an administrator's; the channel's Messages tab). */
+		channelMessages: (channel: string, before?: string) => call<import('./data.ts').ChannelMessage[]>('GET', `${SHELL}/channel-messages?${new URLSearchParams(
+			before === undefined ? { channel } : { channel, before })}`),
 		logs: (x: import('./data.ts').LogQuery) => call<import('./data.ts').LogRow[]>('GET', `${SHELL}/logs?${new URLSearchParams(
 			Object.entries({ before: x.before, after: x.after, level: x.level, q: x.text, conversation: x.conversation }).filter((e): e is [string, string] => e[1] !== undefined && e[1] !== ''))}`),
 		studio: () => call<import('./studio.ts').StudioView>('GET', `${SHELL}/studio`),
@@ -122,7 +124,6 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 			// hook:agent-ui — §5.9's remaining generated actions
 			setAgent: (conversation: string, agent: string) => act('sys_conversation.setAgent', { conversation, agent }),
 			file: (message: string, about: { collection: string; id: string } | null) => act('sys_message.file', { message, about }),
-			markRead: (conversation: string) => act('sys_message.markRead', { conversation }),
 			linkHandle: (claim: string, replay: boolean) => act('sys_user.linkHandle', { claim, replay }),
 			stop: (conversation: string) => act('sys_conversation.stop', { conversation }),
 			setModel: (conversation: string, model: string) => act('sys_conversation.setModel', { conversation, model }),

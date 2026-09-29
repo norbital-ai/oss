@@ -26,7 +26,6 @@
 	import Inbox from './Inbox.svelte';
 	import Settings from './Settings.svelte';
 	import Studio from './Studio.svelte';
-	import Conversations from './Conversations.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import Turnstile from './Turnstile.svelte';
 	import Nav from './Nav.svelte';
@@ -293,8 +292,6 @@
 		<Center><p>{t('Loading…')}</p></Center>
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
 		<Studio {api} {t} admin={boot.admin} tab={current.tab ?? 'workbench'} onTab={(x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`)} />
-	{:else if current.kind === 'conversations' && boot?.surfaces.conversations && bolt}
-		<Conversations {api} {bolt} {t} id={current.id} />
 	{:else}
 		<Center><p>{t('Not found or no access')}</p></Center>
 	{/if}
