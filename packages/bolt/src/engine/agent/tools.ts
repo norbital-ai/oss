@@ -205,8 +205,8 @@ function visible(a: Authority, c: string, fields: readonly string[]): readonly s
 /** The step's facts, in the closing note (never the prompt, which is static): the time and whom the turn acts for. */
 export function turnFacts(e: Engine, a: Authority, b: Bindings, tz?: string): string {
 	const x = a.actor, person = x.kind === 'member' ? x : x.kind === 'envoy' ? x.linked : undefined, wtz = e.manifest.workspace.tz;
-	const who = x.kind === 'envoy' ? `envoy ${x.envoy} on ${x.channel} for ${x.sender}${person === undefined ? '' : `, linked to ${person.email ?? person.id}`}`
-		: person === undefined ? x.kind : `${person.email ?? person.id}${person.teamPath.length > 0 ? ` (${person.teamPath.join(' › ')})` : ''}${person.external ? ', external' : ''}`;
+	const who = x.kind === 'envoy' ? `envoy ${x.envoy} on ${x.channel} for ${x.sender}${person === undefined ? '' : `, linked to ${person.email ?? person.id} (member id ${person.id})`}`
+		: person === undefined ? x.kind : `${person.email ?? person.id} (member id ${person.id})${person.teamPath.length > 0 ? ` (${person.teamPath.join(' › ')})` : ''}${person.external ? ', external' : ''}`;
 	return `Now: ${localTime(b.now, wtz)} (${wtz}, ${b.now})${tz === undefined || tz === wtz ? '' : `; theirs ${localTime(b.now, tz)} (${tz})`}. `
 		+ `You act for ${who}${a.admin ? ', an administrator' : ''}; policies ${a.policies.join(', ') || 'none'}.`;
 }
@@ -302,7 +302,9 @@ export function catalogue(x: ToolContext): Tool[] {
 		tools.push({ name, description, input, run: (i, id) => guard(() => run(unItem(i ?? {}) as { [k: string]: Json }, id)) });
 
 	const runQuery = async (i: { [k: string]: Json }, id: string): Promise<ToolAnswer> => {
-		const name = String(i['query']), spec = can.queries.get(name);
+		const requested = String(i['query']);
+		const name = requested.includes('.') || typeof i['collection'] !== 'string' ? requested : `${i['collection']}.${requested}`;
+		const spec = can.queries.get(name);
 		if (!agent || spec === undefined) return err(`You may not run '${name}'.${can.queries.size > 0 ? ` Queries: ${[...can.queries.keys()].join(', ')}.` : ''}`);
 		if (spec.agent === 'confirm' && x.inApp) return { confirm: true };
 		const dot = name.lastIndexOf('.');
@@ -337,26 +339,29 @@ export function catalogue(x: ToolContext): Tool[] {
 			if (!(x instanceof BoltError) || x.code !== 'invalid') throw x;
 			// what the model may name instead, so its next call differs (staging: a dozen failing reads, then silence)
 			return { result: { error: x.message, fields: [...visible(a, c, Object.keys(e.manifest.models[c]?.fields ?? {}))],
-				relations: Object.keys(e.manifest.relationships).filter((k) => k.startsWith(`${c}.`)).map((k) => k.slice(c.length + 1)),
+				relations: [...new Set(Object.entries(e.manifest.relationships).flatMap(([k, r]) =>
+					k.startsWith(`${c}.`) ? [k.slice(c.length + 1)] : (r as { to: string; inverse?: string }).to === c && can.reads.includes(k.split('.')[0]!)
+						? [(r as { inverse?: string }).inverse].filter((name): name is string => name !== undefined) : []))],
 				hint: `A filter is { field: { eq, ne, lt, lte, gt, gte, in, nin, isNull or like: value } }, combined with and, or, not; a date is YYYY-MM-DD. ${PERIODS} `
 					+ 'An aggregate is { count: true, sum: [field], by: field or { month: dateField } }. '
 					+ 'Name only these fields (workspace_type collections.' + c + '.row gives their types). If the data cannot answer the question, say so.' } };
 		}
 	};
-	if (can.reads.length > 0 || (agent && can.queries.size > 0)) add('read', `Read records you may see. Collections: ${can.reads.join(', ')}. Give an id to read one record, where { id: { in: [...] } } for several, or where/orderBy/limit (default 50, at most 200) to read a list. `
+	if (can.reads.length > 0 || (agent && can.queries.size > 0)) add('read', `Read records you may see. Collections: ${can.reads.join(', ')}. Give an id to read one record, where { id: { in: [...] } } for several, or where/orderBy/limit (default 50, at most 200) to read a list. Use an exact where filter for a known key. Batch up to 8 independent reads with { reads: [{ collection, where, select, limit }, ...] }; results follow input order. `
 		+ 'To count, total, average or compare over time, use aggregate: ONE read answers it, grouped in the database; never page through rows to count them. '
 		+ 'Example, leavers per month in 2026: { collection, where: { ended_on: { gte: "2026-01-01", lt: "2027-01-01" } }, aggregate: { count: true, by: { month: "ended_on" } } }. '
 		+ `Text matches with like: "%Nihon%". ${PERIODS} `
-		+ 'similar takes { name, input } for a collection\'s declared similarity search. Long values are clipped unless you name the field in select.'
+		+ 'similar takes { name, input } for a collection\'s declared similarity search. Long values are clipped unless you name the field in select. '
+		+ 'A select names fields with true. A forward relation takes { select: { field: true } }; an inverse many-relation also needs limit, for example { children: { select: { field: true }, limit: 5 } }. Relation keys are the exact names in the outline (often project_id, not project), not aliases or nested write names by assumption; reading children from their own collection by parent id is often simpler.'
 		+ (agent && can.queries.size > 0 ? ` A collection query runs as { query, input }: ${[...can.queries].map(([k, q]) => `${k}${q.description ? ` (${q.description})` : ''}`).join('; ')}.` : ''),
-		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: { type: 'object', additionalProperties: { type: ['boolean', 'object'] }, description: 'fields and relations: { field: true, relation: { field: true } }' }, orderBy: { type: ['string', 'object', 'array'], description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
+		obj({ collection: str('collection'), id: str('one record'), where: anyObj('filter'), select: { type: 'object', additionalProperties: { type: ['boolean', 'object'] }, description: 'fields: { field: true }; relation: { relation: { select: { field: true } } }; inverse many-relation: { children: { select: { field: true }, limit: 5 } }' }, orderBy: { type: ['string', 'object', 'array'], description: 'order: a field, { field: "asc" | "desc" }, a related field through one-relations (at most two hops) as { relation: { field: "asc" } }, or a list of up to 4 of these' },
 			search: str('text search'), limit: { type: 'integer' }, after: str('cursor'),
 			aggregate: obj({ count: { type: 'boolean', description: 'count the rows' }, sum: { type: 'array', items: { type: 'string' }, description: 'numeric fields to total' },
 				avg: { type: 'array', items: { type: 'string' }, description: 'numeric fields to average' }, min: { type: 'array', items: { type: 'string' }, description: 'fields' },
 				max: { type: 'array', items: { type: 'string' }, description: 'fields' },
 				by: { type: ['string', 'object', 'array'], description: 'group by: a field name, { day | week | month | quarter | year: dateField } for time buckets, or a list of these' } }),
 			similar: obj({ name: str('similarity'), input: { type: ANY, description: 'what to match' } }, ['name']), asOf: str('an instant: the record as it was (with id)'),
-			query: str('collection.query to run instead of a read'), input: anyObj('the query input'),
+			query: str('collection.query to run instead of a read; with collection, the short query name also works'), input: anyObj('the query input'),
 			reads: { type: 'array', maxItems: 8, items: { type: 'object' }, description: 'several reads in one call, each with these same keys (collection, id, where, aggregate, …); answers their results in order' } }),
 		async (i, id) => {
 			if (Array.isArray(i['reads'])) {

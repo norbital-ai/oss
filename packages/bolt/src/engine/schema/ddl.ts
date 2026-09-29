@@ -304,8 +304,6 @@ function text(a: { sql: string; kind: Kind }): string {
 // ── the objects ──
 const SEARCH = 'bolt_search';
 const EMBEDDING = 'bolt_embedding';
-// ponytail: an embedding model's width is not in the manifest yet; `search.semantic.dim` overrides the common 1536.
-export const DEFAULT_EMBEDDING_DIM = 1536;
 
 export function schemaObjects(declared: SchemaSlice): SchemaObject[] {
 	// Render from sorted keys: the applied slice comes back from `bolt_schema.slice` (jsonb) with its keys reordered, and
@@ -408,7 +406,7 @@ export function schemaObjects(declared: SchemaSlice): SchemaObject[] {
 			if (sem !== undefined) {
 				// platform-managed: backfilled by the `bolt.embed` run after commit (rule 16)
 				push({ id: `column:${t.model}.${EMBEDDING}`, rank: 'column', table: t.model, deps: [EMBEDDING], derived: true,
-					create: [`alter table ${T} add column ${EMBEDDING} vector(${sem.dim ?? DEFAULT_EMBEDDING_DIM})`], drop: `alter table ${T} drop column if exists ${EMBEDDING} cascade` });
+					create: [`alter table ${T} add column ${EMBEDDING} vector(${sem.dim})`], drop: `alter table ${T} drop column if exists ${EMBEDDING} cascade` });
 				index('hnsw', `using hnsw (${EMBEDDING} vector_cosine_ops)`, [EMBEDDING]);
 			}
 		}

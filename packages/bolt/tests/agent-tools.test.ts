@@ -105,6 +105,8 @@ describe('read runs queries and act starts automations', () => {
 		expect(tool(x, 'read')!.description).toContain('tasks.open (Open tasks)');
 		expect(await result(x, 'read', { query: 'tasks.open', input: {} })).toEqual({ result: { count: 2 } });
 		expect(queried[0]).toMatchObject({ collection: 'tasks', query: 'open' });
+		expect(await result(x, 'read', { collection: 'tasks', query: 'open', input: {} })).toEqual({ result: { count: 2 } });
+		expect(queried[1]).toMatchObject({ collection: 'tasks', query: 'open' });
 		expect(tool(x, 'act')!.description).toContain('tidy(day?: date)');
 		expect(await result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })).toMatchObject({ result: { outcome: { kind: 'queued' } } });
 		expect(started[0]).toMatchObject({ automation: 'tidy', input: { day: '2026-09-01' } });

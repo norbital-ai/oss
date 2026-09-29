@@ -75,6 +75,32 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 		expect(hybrid.rows).toHaveLength(3);
 		expect(() => lowerRead(t.manifest, 'similar', ['docs', { to: '', limit: 1 }])).toThrow(/to: text/);
 	});
+	it('the run and the probe both ask for the declared width, and a host that ignores it fails here, not in pgvector', async () => {
+		const asked: number[] = [];
+		// a host that honours `dimensions` (the OpenAI-compatible contract every host must meet)
+		const embed: EmbeddingsPort['embed'] = async (inputs, _model, _signal, dimensions) => {
+			asked.push(dimensions as number);
+			return (inputs as string[]).map(() => Array.from({ length: dimensions as number }, (_, i) => (i === 0 ? 1 : 0)));
+		};
+		// a host that answers its model's native width whatever it was asked for
+		const native: EmbeddingsPort = { embed: async (inputs) => (inputs as string[]).map(() => [1, 0, 0, 1]) };
+		const b = { now: '2026-01-01T00:00:00.000Z', today: '2026-01-01', tz: 'UTC', params: {} };
+		const workspace = async (port: EmbeddingsPort['embed']) => {
+			const t = await testWorkspace({ manifest, ai: { sys_1: respondSystem1, sys_2: { models: ['default'], infer: async () => { throw new Error('unused'); } }, embed: port } });
+			await t.as(t.admin).act('docs.create', { title: 'desk' });
+			return t;
+		};
+		const probe = (t: Awaited<ReturnType<typeof workspace>>) => t.engine.read([lowerRead(t.manifest, 'similar', ['docs', { to: 'table', limit: 2 }] as never)], { as: 'workspace' }, b);
+
+		// the run stores, the probe reads, and a host that ignores `dimensions` is named at both
+		const off = await workspace(native.embed);
+		await expect(embedRun(off.manifest, off.db, native)({})).rejects.toThrow(/'small' answered a 4-wide vector, not the 3 it was asked for/);
+		await expect(probe(off)).rejects.toThrow(/'small' answered a 4-wide vector, not the 3 it was asked for/);
+
+		const t = await workspace(embed);		await embedRun(t.manifest, t.db, { embed })({});
+		expect(((await probe(t))[0] as { title: string }[])[0]!.title).toBe('desk');
+		expect(asked).toEqual([3, 3]);
+	});
 });
 
 describe('erase and the live lane (rules 38e, 50, 66)', () => {

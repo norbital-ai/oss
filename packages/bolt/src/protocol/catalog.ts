@@ -25,8 +25,8 @@ export type ManyRel = { name: string; child: string; column: string };
 export type ModelInfo = {
 	name: string; fields: ReadonlyMap<string, FieldInfo>; one: ReadonlyMap<string, OneRel>; many: ReadonlyMap<string, ManyRel>;
 	search: readonly string[];
-	/** `search.semantic` (rule 16): the platform embedding `bolt_embedding` and the model class that fills it. */
-	semantic?: { model: string };
+	/** `search.semantic` (rule 16): the platform embedding `bolt_embedding`, the model class that fills it, and the width both must agree on. */
+	semantic?: { model: string; dim: number };
 };
 export type CollectionInfo = { name: string; model: ModelInfo; fields: 'all' | ReadonlySet<string>; relations: 'all' | ReadonlySet<string>;
 	similarity: { readonly [name: string]: { candidates?: number } } };
@@ -92,7 +92,7 @@ export function catalog(m: EngineManifest): Catalog {
 	}
 	const models = new Map<string, ModelInfo>([...fields].map(([name, f]) => [name, {
 		name, fields: f, one: one.get(name)!, many: many.get(name)!, search: specs[name]?.search?.text ?? [],
-		...(specs[name]?.search?.semantic === undefined ? {} : { semantic: { model: specs[name]!.search!.semantic!.model } }),
+		...(specs[name]?.search?.semantic === undefined ? {} : { semantic: { model: specs[name]!.search!.semantic!.model, dim: specs[name]!.search!.semantic!.dim } }),
 	}]));
 	const collections = new Map<string, CollectionInfo>();
 	const expose = (name: string, spec: EngineManifest['collections'][string]) => {

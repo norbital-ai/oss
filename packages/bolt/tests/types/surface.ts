@@ -30,9 +30,11 @@ is<Eq<LocaleErrors<{ ms: { helo: string } }, { hello: string }>, "i18n: +ms.mess
 
 // ── model search: the semantic model is one +workspace.ts declares ──
 model({ description: 'x', label: 'body', fields: { body: { kind: 'text' } },
-	search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small' } } });
+	search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small', dim: 1536 } } });
 // @ts-expect-error S1 an embedding model +workspace.ts does not declare
-model({ description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_big' } } });
+model({ description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } });
+// @ts-expect-error S2 the embedding column's width is the workspace's to state; bolt does not guess one
+model({ description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small' } } });
 
 // ── signature helpers ──
 is<Eq<State<'orders'>, 'draft' | 'submitted' | 'ordered'>>();

@@ -111,7 +111,7 @@ type ModelSpecFor<M, F = FieldsIn<M>, C = ComputedIn<M>, All = F & { [P in keyof
 	noOverlap?: readonly { key: readonly string[]; period: OfKind<F, { kind: 'period' }>; where?: OwnWhere<All>; name?: string }[];
 	computed?: ComputedSpec<F, C>;
 	search?: { text: readonly OfKind<All, { kind: 'text' | 'enum' } | { kind: 'seq'; pattern: string }>[]; // hook:reads — a patterned seq is text
-		semantic?: { fields: readonly OfKind<F, { kind: 'text' | 'file' }>[]; model: EmbeddingModelName; dim?: number } };
+		semantic?: { fields: readonly OfKind<F, { kind: 'text' | 'file' }>[]; model: EmbeddingModelName; dim: number } };
 	table?: { primary: 'text' | 'uuid' | 'identity' | { field: keyof F & string }; identity?: OfKind<F, { kind: 'int' }>;
 		indexes?: readonly { on: readonly ((keyof All & string) | { lower: OfKind<F, { kind: 'text' }> })[]; unique?: true; where?: OwnWhere<All> }[] };
 };
@@ -155,7 +155,10 @@ export type ModelSpec = {
 	/** Computed fields: an expression over the row's own fields, stored and kept current. */
 	computed?: { readonly [name: string]: { kind: ComputedKind; scale?: number; expr: Expr } };
 	/** Text search over `text` fields, and semantic (embedding) search over `semantic.fields`. */
-	search?: { text: readonly string[]; semantic?: { fields: readonly string[]; model: EmbeddingModelName; dim?: number } };
+	search?: { text: readonly string[]; semantic?: { fields: readonly string[]; model: EmbeddingModelName;
+		/** The embedding column's width: the model class is asked for exactly this many numbers, stored or probed. Required — a
+		 * workspace states it, so the host's binding is a conformance question, not a guess bolt makes for it. */
+		dim: number } };
 	/** A system table's physical row (the built-in layer only). */
 	table?: TableSpec;
 };

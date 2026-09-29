@@ -376,8 +376,8 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 		expect(ai.requests[0]!.system).toContain('# Workspace outline');
 		expect(ai.requests[0]!.system).toMatch(/^- quotes: .*\| title, region/m);
 		const note = (n: number) => JSON.stringify(ai.requests[n]!.messages.at(-1)!.content);
-		expect(note(0)).toMatch(/Now: .*\(UTC, .*theirs .*\(Asia\/Singapore\).*You act for ann@x.test; policies rep/);
-		expect(note(1)).toContain('You act for root@x.test, an administrator');
+		expect(note(0)).toMatch(/Now: .*\(UTC, .*theirs .*\(Asia\/Singapore\).*You act for ann@x.test \(member id ann\); policies rep/);
+		expect(note(1)).toContain('You act for root@x.test (member id root), an administrator');
 	});
 
 	it('read keeps named fields whole and pages on from the last row it shows, and honours field masks (parity 1.1, 1.3)', async () => {

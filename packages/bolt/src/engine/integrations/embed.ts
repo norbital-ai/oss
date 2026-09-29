@@ -1,7 +1,6 @@
 // `search.semantic` embeddings (rule 16): a write that creates a row, or sets one of its semantic source fields, nulls
 // the row's platform embedding and queues the platform run `bolt.embed` in its own statement; the run embeds every row
 // whose vector is missing through the host's `embeddings` port, after commit, never inside a write.
-import { DEFAULT_EMBEDDING_DIM } from '../schema/ddl.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError, callPort, LIMITS, type EmbedInput, type EmbeddingsPort, type EngineManifest, type FilesPort, type QueuedRun, type TenantDb } from '../contracts.ts';
 import { q } from '../../protocol/catalog.ts';
@@ -32,6 +31,16 @@ export function embedWrites(m: EngineManifest, writes: readonly Write[]): { writ
 	return { writes: out, stale };
 }
 export const embedQueued = (id: string, now: string): QueuedRun & { id: string } => ({ id, automation: EMBED, input: {}, dueAt: now, cause: 'updated', depth: 0 });
+
+/**
+ * The widths the host answered. The model class is asked for `search.semantic.dim`; a host that ignores `dimensions` would
+ * otherwise fail much later as a raw pgvector dimension error, on every stored row and every probe, so it fails here where
+ * the cause is nameable.
+ */
+export function assertWidth(vectors: readonly (readonly number[])[], sem: { readonly model: string; readonly dim: number }): void {
+	const wrong = vectors.find((v) => v.length !== sem.dim);
+	if (wrong !== undefined) throw new BoltError('invalid', 'facility', `the host's '${sem.model}' answered a ${wrong.length}-wide vector, not the ${sem.dim} it was asked for`);
+}
 
 /**
  * The platform run: every semantic collection's rows with no vector, a page at a time, one `embed` call per page. A
@@ -74,9 +83,10 @@ export function embedRun(m: EngineManifest, db: TenantDb, port: EmbeddingsPort |
 				const todo = picked.flatMap((r) => { const input: EmbedInput | undefined = (r.file === undefined ? undefined : stored.get(r.file)) ?? (r.text === '' ? undefined : r.text);
 					return input === undefined ? [] : [{ ...r, input }]; });
 				if (todo.length === 0) continue;
-				const vectors = await callPort('embeddings', port, LIMITS.callMs.ai, (p, signal) => p.embed(todo.map((r) => r.input), sem.model, signal, sem.dim ?? DEFAULT_EMBEDDING_DIM),
+				const vectors = await callPort('embeddings', port, LIMITS.callMs.ai, (p, signal) => p.embed(todo.map((r) => r.input), sem.model, signal, sem.dim),
 					(v): v is readonly (readonly number[])[] => Array.isArray(v) && v.length === todo.length);
 				if ('kind' in vectors) throw new BoltError(vectors.kind, 'facility', 'message' in vectors ? vectors.message : vectors.reason);
+				assertWidth(vectors, sem);
 				const set = todo.map((r, i) => ({ id: r.id, revision: r.revision, e: JSON.stringify(vectors[i]) }));
 				const res = await db.write({ text: `UPDATE ${q(c)} t SET ${q(COLUMN)} = v.e::vector FROM jsonb_to_recordset($1::jsonb) AS v(id text, revision int, e text)
 					WHERE t.id::text = v.id AND t.revision = v.revision AND t.${q(COLUMN)} IS NULL RETURNING t.id`, params: [set as unknown as Json] });

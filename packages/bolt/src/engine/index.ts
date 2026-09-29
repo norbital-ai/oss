@@ -18,7 +18,7 @@ import { announceTriggered } from './runs/queue.ts'; // hook:automations
 import { callables, type Callables } from './callables/index.ts';
 import { integrations, type HttpPort } from './integrations/runner.ts';
 import { bindConnections, type ConnectionsHost, type OAuth } from './connections.ts';
-import { EMBED, embedRun } from './integrations/embed.ts'; // hook:integrations
+import { EMBED, assertWidth, embedRun } from './integrations/embed.ts'; // hook:integrations
 import { INBOX_LIMIT, liveHub, noticeRow, type LiveHub } from './live/hub.ts';
 import { pipelines } from './pipelines/pipeline.ts';
 import { runs, type Runs, type RunsConfig } from './runs/index.ts';
@@ -179,9 +179,12 @@ export function engine(config: EngineConfig): Engine {
 	};
 	/** `search.semantic`'s probe (L-BOLT-123): a caller's text on the collection's model class; never from a transform. */
 	const embed = config.ai?.embed === undefined ? undefined : async (c: string, text: string): Promise<readonly number[]> => {
-		const v = await callPort('embeddings', config.ai, LIMITS.callMs.ai, (p, signal) => p.embed!([text], m.models[c]!.search!.semantic!.model, signal),
+		const sem = m.models[c]!.search!.semantic!;
+		// the probe is read against the run's stored vectors, so it asks the model for the column's own width
+		const v = await callPort('embeddings', config.ai, LIMITS.callMs.ai, (p, signal) => p.embed!([text], sem.model, signal, sem.dim),
 			(r): r is readonly (readonly number[])[] => Array.isArray(r) && r.length === 1);
 		if ('kind' in v) throw new BoltError(v.kind, 'facility', 'message' in v ? v.message : v.reason);
+		assertWidth(v, sem);
 		return v[0]!;
 	};
 	const reads = readEngine({ db, manifest: m, delegate: { ...delegate, query, transcript, inbox, conversations }, ...(similarity === undefined ? {} : { similarity }), ...(embed === undefined ? {} : { embed }) });

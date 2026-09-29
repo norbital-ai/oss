@@ -62,7 +62,7 @@ describe('the context projection (rule 60)', () => {
 describe('the workspace outline', () => {
 	it("names each collection's write contract and nested relation writes, so a write needs no type lookup", () => {
 		const m = {
-			models: { sites: { fields: { name: {}, code: { optional: true } } }, jobs: { fields: { title: {}, done: {} }, unique: [{ fields: ['title'] }] } },
+			models: { sites: { fields: { name: {}, code: { optional: true } } }, jobs: { fields: { title: {}, done: { kind: 'enum', values: ['2', '10'] } }, unique: [{ fields: ['title'] }] } },
 			collections: {
 				sites: { create: { input: { columns: ['name', 'code'], with: { tasks: { create: { columns: ['title', 'site_id'] }, link: {} } } } },
 					update: { input: { columns: ['name', 'code'], with: { tasks: { create: { columns: ['title', 'site_id'] }, link: {} } } } }, delete: {} },
@@ -73,6 +73,7 @@ describe('the workspace outline', () => {
 		const lines = outline(m, null).split('\n');
 		expect(lines.find((l) => l.startsWith('- sites'))).toContain('create(name, code?, tasks{create(title, site_id?), link}), update(as create), upsert, delete');
 		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('create(title), update(title, done), upsert, pipeline(import|export)');
+		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('done("2"|"10")');
 	});
 });
 

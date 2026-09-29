@@ -79,6 +79,10 @@ export function buildChecks(m: EngineManifest, bodies: { automations: readonly s
 				for (const s of Object.keys(states)) if (!seen.has(s)) at('model/state', 'model', model, `${f}: '${s}' is unreachable from '${String(k.initial)}'`);
 			}
 		}
+		// the embedding column's width, stated: a guess would have to match the host's model class, which it cannot know
+		const sem = (spec.search as { semantic?: { dim?: unknown } } | undefined)?.semantic;
+		if (sem !== undefined && !(Number.isInteger(sem.dim) && Number(sem.dim) >= 1 && Number(sem.dim) <= 2000))
+			at('model/range', 'model', model, `search.semantic: dim is 1 to 2,000 (the embedding column's width, and the width every probe asks the model for)`);
 	}
 
 	for (const [name, a] of Object.entries(m.automations)) {
