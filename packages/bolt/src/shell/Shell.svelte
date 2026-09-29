@@ -409,7 +409,7 @@
 						{@const Agent = config.agent}
 						<Agent {bolt} request={agentRequest} onClose={() => agent.close()} />
 					{:else if agentRequest !== null}
-						<AgentPanel {api} {bolt} {t} request={agentRequest} unconfigured={boot.aiUnconfigured === true} onClose={() => agent.close()} onConversation={agentConversation} />
+						<AgentPanel {api} {bolt} {t} request={agentRequest} unconfigured={boot.aiUnconfigured === true} admin={boot.admin} onClose={() => agent.close()} onConversation={agentConversation} />
 					{/if}
 			</Sheet>
 		{/if}

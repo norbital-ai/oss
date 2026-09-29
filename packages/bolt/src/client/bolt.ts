@@ -308,6 +308,12 @@ export function createBolt(config: BoltConfig) {
 			if (o.kind !== 'committed') throw new Error(o.kind === 'refused' ? o.message : 'Could not build a filter from that description.');
 			return o.output as { where: Json; orderBy?: Json };
 		} } : {}),
+		/** Rule 16b `filter.options` as the caller: the same condition catalogue the builder renders; rejects on refusal. */
+		async options(collection: string, fields?: readonly { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean }[]): Promise<{ fields: Json }> {
+			const o = await send('filter.options', { collection, ...(fields === undefined ? {} : { fields }) }, uuid());
+			if (o.kind !== 'committed') throw new Error(o.kind === 'refused' ? o.message : 'Could not load filter options.');
+			return o.output as { fields: Json };
+		},
 		/** The client-minted run id is the key (rule 31). */
 		start(automation: string, input: Json): RunHandle {
 			const id = uuid();

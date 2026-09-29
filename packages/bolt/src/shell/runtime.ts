@@ -89,7 +89,7 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (name: string, logo: string | null) => call<null>('POST', `${SHELL}/organization`, { name, logo }),
 		logs: (x: import('./data.ts').LogQuery) => call<import('./data.ts').LogRow[]>('GET', `${SHELL}/logs?${new URLSearchParams(
-			Object.entries({ before: x.before, after: x.after, level: x.level, q: x.text }).filter((e): e is [string, string] => e[1] !== undefined && e[1] !== ''))}`),
+			Object.entries({ before: x.before, after: x.after, level: x.level, q: x.text, conversation: x.conversation }).filter((e): e is [string, string] => e[1] !== undefined && e[1] !== ''))}`),
 		studio: () => call<import('./studio.ts').StudioView>('GET', `${SHELL}/studio`),
 		studioRun: (op: import('./studio.ts').StudioOp) => call<import('./studio.ts').StudioView>('POST', `${SHELL}/studio`, { op } as unknown as Json),
 		/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */

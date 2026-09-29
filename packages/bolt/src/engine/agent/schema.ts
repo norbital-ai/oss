@@ -74,7 +74,16 @@ export const conversationCommit = (rows: readonly RowData[]): Captured[] =>
 	rows.map((r) => ({ collection: 'sys_conversation', id: String(r['id']), op: 'update', revision: 0, old: null, new: r, cause: 'direct' }));
 /** The panel's conversation list: a member's own in-app conversations, most recently active first. */
 export const CONVERSATIONS = 100;
-export const listed = (r: RowData | null, member: string): boolean => r !== null && r['owner'] === member && (r['channel'] ?? null) === null && (r['parent'] ?? null) === null;
+/**
+ * Whether a `sys_conversation` image belongs to the member's own list (§5.9) — the same set the `conversations` read
+ * returns, so a live patch never carries a row a re-read would not. A channel thread has no owner (`channels/index.ts`
+ * inserts it without one), so it is admitted by the envoy being `public`: that arm is the one a row can answer alone.
+ * A thread of a private envoy the member posted in is in the read but not here, so its conversations row is not patched;
+ * its messages still are, through the transcript's own view.
+ */
+export const listed = (r: RowData | null, member: string, publicEnvoys: readonly string[] = []): boolean => r !== null
+	&& (r['parent'] ?? null) === null
+	&& ((r['channel'] ?? null) === null ? r['owner'] === member : publicEnvoys.includes(String(r['envoy'] ?? '')));
 /** A `sys_conversation` image as the list shows it, so a live patch matches a re-read. */
 export const conversationRow = (r: RowData): { [k: string]: Json } => ({ id: r['id']!, title: r['title'] ?? null, at: r['updated_at']!, status: r['status']!,
 	model: r['model']!, plan: r['plan'] ?? null, goals: r['goals'] ?? null,

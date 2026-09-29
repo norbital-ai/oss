@@ -10,7 +10,7 @@
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from './bolt.js';
 	import { useBolt } from './bolt.js';
-	import { fromWhere, nodeText, ORDER_MAX_KEYS, pathLabel, type Node as FilterRow, type SortKey } from './filter.js';
+	import { fromWhere, nodeText, ORDER_MAX_KEYS, pathLabel, pathOf, type Node as FilterRow, type SortKey } from './filter.js';
 	import FilterNode from './FilterNode.svelte';
 	import Glyph from './Glyph.svelte';
 	import { recordLabels } from './live.svelte.js';
@@ -34,10 +34,12 @@
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
 	const count = $derived(view.rows.length + view.order.length);
 	const describes = $derived(bolt.describe !== undefined);
+	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
+	const opWords = (op: string, path: string) => view.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;
 	const authorText = $derived.by(() => {
 		if (author === undefined || author === null) return null;
 		const rows = fromWhere(catalog, collection, author);
-		return rows === null ? JSON.stringify(author) : rows.map((n) => nodeText(catalog, collection, n, humanize, named)).join(' and ');
+		return rows === null ? JSON.stringify(author) : rows.map((n) => nodeText(catalog, collection, n, humanize, named, opWords)).join(' and ');
 	});
 	const setRow = (i: number, n: FilterRow) => view.setRows(view.rows.map((x, j) => j === i ? n : x));
 	const setKey = (i: number, k: SortKey) => view.setOrder(view.order.map((x, j) => j === i ? k : x));
@@ -97,7 +99,7 @@
 			{/if}
 			<section class="flex flex-col gap-1.5" data-filter-rows>
 				{#each view.rows as n, i (i)}
-					<FilterNode node={n} {catalog} {collection} top onChange={(x) => setRow(i, x)} onRemove={() => view.setRows(view.rows.filter((_, j) => j !== i))} />
+					<FilterNode node={n} {catalog} {collection} offers={view.offers} top onChange={(x) => setRow(i, x)} onRemove={() => view.setRows(view.rows.filter((_, j) => j !== i))} />
 				{/each}
 				<div class="flex gap-3 text-xs">
 					<button type="button" class="text-muted-foreground hover:text-foreground" data-add-condition onclick={() => view.setRows([...view.rows, blank])}>+ {msg(bolt, 'view.addCondition', 'Add condition')}</button>

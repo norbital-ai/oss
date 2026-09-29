@@ -1,7 +1,7 @@
 // The views' side of `$bolt` (§3.5): the members a view calls, structurally, so ui needs no bolt dependency. The shell
 // hands the page's `bolt` to every view once with `provideBolt` (hook:ui-shell); a view never takes a client prop.
 import { getContext, setContext, type Component } from 'svelte';
-import type { OrderBy } from './filter.js';
+import type { Offer, OrderBy } from './filter.js';
 
 export type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
 export type Row = { readonly [field: string]: Json };
@@ -51,6 +51,8 @@ export type ViewBolt = {
 	decode?(collection: string, q: { where?: Json; orderBy?: Json }): { where: Json; orderBy?: Json; dropped: readonly { path: string; message: string }[] };
 	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai` (P19); rejects when no filter could be built. */
 	describe?(collection: string, text: string, fields?: readonly { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean }[]): PromiseLike<{ where: Json; orderBy?: Json }>;
+	/** Rule 16b `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
+	options?(collection: string, fields?: readonly { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean }[]): PromiseLike<{ fields: readonly Offer[] }>;
 	approvals: {
 		process(requestId: string, decision: { status: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED'; reason?: string }): Promise<Outcome>;
 		withdraw(requestId: string): Promise<Outcome>;

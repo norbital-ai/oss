@@ -64,8 +64,8 @@ const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (
 };
 const BOB: Plan = {
 	Assignee: { op: 'is', value: 'Bob Tan' },
-	'Scheduled on': { op: 'within', value: 'this week' },
-	Status: { op: 'is not', value: 'a final state' }
+	'Scheduled on': { op: 'is within', value: 'this week' },
+	Status: { op: 'is none of', value: 'a final state' }
 };
 
 let t: TestWorkspace, caller: Authority, bob = '';
@@ -174,9 +174,13 @@ describe('filter.describe (rule 16a)', () => {
 		expect(seen[0]!.state).toMatchObject({ description: 'code c7', collection: 'Jobs', timezone: 'Asia/Singapore' });
 	});
 
-	it('without an AI facility the feature is absent', async () => {
+	it('without an AI facility options still serve the builder and describing refuses', async () => {
 		await open();
-		expect(t.engine.filters).toBeUndefined();
+		expect(t.engine.filters).toBeDefined();
+		const opts = await t.engine.filters!.options({ collection: 'jobs', authority: caller, bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
+		expect(opts.ok).toBe(true);
+		const r = await describeAs('jobs over 3 hours');
+		expect(r).toMatchObject({ ok: false, code: 'notFound' });
 	});
 });
 

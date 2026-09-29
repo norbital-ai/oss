@@ -1,18 +1,22 @@
 <script lang="ts">
 	// The view popover's field tree with search (rule 16b): own fields, one-relations (a record condition, or expanded to
-	// the target's fields, two hops) and, at the top, many-relations. Tight rows: no leading icon column, no top gap.
+	// the target's fields, two hops) and, at the top, many-relations — exactly the paths the engine's catalogue offers.
 	import { SvelteSet } from 'svelte/reactivity';
 	import type { CollectionExposure } from '../kinds/context.js';
 	import { cn } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import { useBolt } from './bolt.js';
-	import { filterable, opsFor, pathLabel, resolve } from './filter.js';
+	import { filterable, offeredPaths, pathLabel, resolve, type FilterStep, type Offer } from './filter.js';
 	import { humanize, msg } from './model.js';
 
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
-	let { catalog, collection, value, many = true, onPick }: {
+	let { catalog, collection, offers, prefix = [], value, many = true, onPick }: {
 		catalog: { readonly [c: string]: CollectionExposure };
 		collection: string;
+		/** The engine's catalogue for the view. */
+		offers: readonly Offer[];
+		/** The many-relation steps this picker sits under, so catalogue paths match. */
+		prefix?: readonly FilterStep[];
 		/** The chosen path (or many-relation); '' when none. */
 		value: string;
 		/** Offer many-relations (only at a view's top level). */
@@ -22,6 +26,7 @@
 	const bolt = useBolt();
 	let open = $state(false), query = $state('');
 	const expanded = new SvelteSet<string>();
+	const offered = $derived(offeredPaths(offers, prefix));
 
 	function level(c: string, prefix: string, depth: number, all: boolean): Entry[] {
 		const x = catalog[c];
@@ -29,20 +34,20 @@
 		const out: Entry[] = [];
 		for (const f of [...Object.keys(x.fields), 'created_at', 'updated_at']) {
 			if (x.relations?.[f] !== undefined || (!filterable(x, f) && f !== 'created_at' && f !== 'updated_at')) continue;
-			const r = resolve(catalog, collection, prefix + f);
-			if (r !== null && opsFor(r).length > 0 && !out.some((e) => e.path === prefix + f)) out.push({ path: prefix + f, label: pathLabel(catalog, c, f, humanize), depth });
+			const path = prefix + f;
+			if (resolve(catalog, collection, path) !== null && offered.conditions.has(path) && !out.some((e) => e.path === path)) out.push({ path, label: pathLabel(catalog, c, f, humanize), depth });
 		}
 		for (const [fk, rel] of Object.entries(x.relations ?? {})) {
 			for (const step of rel.targets.length > 1 ? rel.targets.map((t) => `${fk}:${t}`) : [fk]) {
 				const path = prefix + step;
-				if (resolve(catalog, collection, path) === null) continue;
+				if (!offered.conditions.has(path)) continue;
 				const canOpen = depth < 2 && catalog[step.includes(':') ? step.split(':')[1]! : rel.targets[0]!] !== undefined;
 				const isOpen = all || expanded.has(path);
 				out.push({ path, label: pathLabel(catalog, c, step, humanize), depth, ...(canOpen ? { open: isOpen } : {}) });
 				if (canOpen && isOpen) out.push(...level(step.includes(':') ? step.split(':')[1]! : rel.targets[0]!, `${path}.`, depth + 1, all));
 			}
 		}
-		if (depth === 0 && many) for (const rel of x.many ?? []) out.push({ path: rel, label: pathLabel(catalog, c, rel, humanize), depth, many: true });
+		if (depth === 0 && many) for (const rel of x.many ?? []) if (offered.many.has(rel)) out.push({ path: rel, label: pathLabel(catalog, c, rel, humanize), depth, many: true });
 		return out;
 	}
 	const entries = $derived.by(() => {

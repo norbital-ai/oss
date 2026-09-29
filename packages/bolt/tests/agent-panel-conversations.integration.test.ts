@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
-// The agent panel's restored pieces (§5.9, §5.10) over the real handler: the live `conversations` read lists only the
-// member's own root in-app conversations, most recently active first, titled by the engine or the first message; while a turn runs the
+// The agent panel's restored pieces (§5.9, §5.10) over the real handler: the live `conversations` read lists the
+// member's own root in-app conversations and the envoy channel threads they may read, most recently active first,
+// titled by the engine or the first message; the selector segments them by source and opens a thread read-only; the
+// raw-context tab shows an administrator the state a triage decision was made from. While a turn runs the
 // panel offers Stop, a message sent meanwhile waits in the queue (removable), a stopped conversation offers Resume, and a
 // settled reply feeds the context meter (the last call's context against the model's window).
 import './setup-happy-dom.js';
@@ -8,12 +10,14 @@ import { randomUUID } from 'node:crypto';
 import { flushSync, mount, unmount, type Component } from 'svelte';
 import { describe, expect, it } from 'vitest';
 import type { AiPort, AiResponse, EngineManifest } from '../src/engine/contracts.ts';
+import { conversationId } from '../src/engine/channels/store.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { boltHandler } from '../src/protocol/http.ts';
 import type { AgentConversation } from '../src/protocol/wire.ts';
 import Agent from '../src/shell/Agent.svelte';
 import { liveBolt } from './support/live-bolt.ts';
-import { shellApi } from '../src/shell/runtime.ts';
+import { events, type LogQuery } from '../src/shell/data.ts';
+import { shellApi, type ShellApi } from '../src/shell/runtime.ts';
 import { respondSystem1, testWorkspace } from '../src/test/index.ts';
 
 const manifest = {
@@ -22,21 +26,41 @@ const manifest = {
 	agent: { internal: 'Staff brief.', skills: {} },
 	integrations: {}, pipelines: {}, teams: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {}, customFields: {},
 } as unknown as EngineManifest;
+/** The same workspace with a public whatsapp envoy and triage on, so an inbound message becomes a channel thread with a decision. */
+const envoyManifest = {
+	...manifest,
+	workspace: { tz: 'UTC', locale: 'en', agent: {} },
+	policies: { rep: { description: 'Rep', grants: {} } },
+	channels: { whatsapp: { transport: 'whatsapp' } },
+	envoys: { field_ops: { channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['rep'], triage: {}, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
+} as unknown as EngineManifest;
 const tick = async () => { await new Promise((r) => setTimeout(r, 5)); flushSync(); };
 const until = async (ok: () => boolean, n = 600) => { for (let i = 0; i < n && !ok(); i++) await tick(); expect(ok()).toBe(true); };
+const press = async (b: HTMLElement) => {
+	b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+	b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+	b.click();
+	await tick();
+};
 const reply = (content: string): AiResponse => ({ content, toolCalls: [], finish: 'stop', usage: { input: 1_500, output: 20 } });
 
-async function setup(infer: () => Promise<AiResponse>) {
+async function setup(infer: () => Promise<AiResponse>, m: EngineManifest = manifest) {
 	const ai: AiPort = { sys_1: respondSystem1, sys_2: { models: ['default'], infer } };
-	const t = await testWorkspace({ manifest, ai });
+	const t = await testWorkspace({ manifest: m, ai });
 	for (const id of ['ann', 'bob']) await t.db.write({ text: `INSERT INTO sys_user (id, email, name) VALUES ($1, $2, $1)`, params: [id, `${id}@x.test`] });
-	const authorities = new Authorities(manifest, 'test');
+	const authorities = new Authorities(m, 'test');
 	let as = 'ann';
 	const handle = boltHandler({ engine: t.engine, session: async (r) => authorities.member(t.db, r.headers.get('x-user') ?? as), uuid: randomUUID,
 		bindings: () => ({ now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }) });
 	const fetch = (async (url: string | URL | Request, init?: RequestInit) =>
 		await handle(new Request(new URL(String(url), 'http://cell'), init)) ?? new Response(null, { status: 404 })) as typeof globalThis.fetch;
-	const api = shellApi(fetch);
+	// the handler alone serves no shell routes; the panel's raw-context read runs the real `events` on the same db and authority
+	const api = { ...shellApi(fetch), logs: async (x: LogQuery) => {
+		const a = await authorities.member(t.db, as);
+		if (a === null) return { ok: false as const, error: { code: 'unauthenticated', message: 'Sign in first.' }, status: 401 };
+		const r = await events(t.db, a, x);
+		return r.ok ? { ok: true as const, value: r.value } : { ok: false as const, error: { code: r.code, message: r.message }, status: 403 };
+	} } as ShellApi;
 	return { t, handle, fetch, api, as: (who: string) => { as = who; } };
 }
 /** The member's conversation list as the panel reads it: the live `conversations` read's current answer. */
@@ -168,6 +192,80 @@ describe('the agent panel restored', () => {
 			release(reply('Done.'));
 			await until(() => target.querySelector('[data-accretion-disc]') === null);
 			expect(target.querySelector('[data-thinking]')).toBeNull();
+		} finally { void unmount(v); target.remove(); }
+	});
+
+	it('segments the selector by source and opens an envoy channel thread read-only', async () => {
+		const s = await setup(async () => reply('Done.'), envoyManifest);
+		const handle = '6590000001@s.whatsapp.net';
+		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
+			from: { handle, name: 'Kim' }, text: 'hello?', attachments: [] } });
+		await s.t.settled();
+		const thread = conversationId('whatsapp', handle);
+		try { sessionStorage.clear(); } catch { /* none */ }
+		const target = document.createElement('div');
+		document.body.append(target);
+		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: {}, onClose: () => {}, admin: true } });
+		try {
+			await until(() => target.querySelector('[data-agent-groups]') !== null);
+			expect([...target.querySelectorAll('[data-agent-groups] [role="tab"]')].map((x) => x.textContent?.trim())).toEqual(['Norbius', 'Whatsapp · Field ops']);
+			// the envoy segment narrows the picker to that source; choosing opens the thread, with no composer
+			await press(target.querySelectorAll<HTMLElement>('[data-agent-groups] [role="tab"]')[1]!);
+			await press(target.querySelector<HTMLElement>('[data-agent-head] [role="combobox"]')!);
+			await until(() => document.querySelector(`[role="option"][data-value="${thread}"]`) !== null);
+			await press(document.querySelector<HTMLElement>(`[role="option"][data-value="${thread}"] button`)!);
+			await until(() => target.querySelector('[data-agent-read-only]') !== null);
+			expect(target.querySelector('textarea')).toBeNull();
+			expect(target.querySelector('[data-role="user"] [data-text]')?.textContent).toBe('hello?');
+		} finally { void unmount(v); target.remove(); }
+	});
+
+	it('the raw-context tab shows an administrator what the triage decider received and answered', async () => {
+		const s = await setup(async () => reply('Done.'), envoyManifest);
+		const handle = '6590000001@s.whatsapp.net';
+		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
+			from: { handle, name: 'Kim' }, text: 'hello?', attachments: [] } });
+		await s.t.settled();
+		s.t.clock.advance('2s'); // the triage debounce elapses: the decision is made and its event written
+		await s.t.runDue();
+		await s.t.settled();
+		const thread = conversationId('whatsapp', handle);
+		await s.t.db.write({ text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`, params: [] });
+		try { sessionStorage.clear(); } catch { /* none */ }
+		const target = document.createElement('div');
+		document.body.append(target);
+		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: { conversation: thread }, onClose: () => {}, admin: true } });
+		try {
+			await until(() => target.querySelector('[data-agent-read-only]') !== null);
+			await press([...target.querySelectorAll<HTMLElement>('[role="tab"]')].find((x) => x.textContent?.trim() === 'Decisions')!);
+			await until(() => target.querySelector('[data-decision]') !== null);
+			const d = target.querySelector('[data-decision]')!;
+			expect(d.getAttribute('data-use')).toBe('triage');
+			expect(d.textContent).toContain('Help.'); // the directive the decider was given
+			expect(d.textContent).toContain('Norbius'); // the assistant it was asked about
+			expect(d.querySelector('[data-pending-message]')?.textContent).toBe('Kim: hello?');
+			expect(d.querySelector('[data-decision-question="m0"]')?.textContent?.trim()).toBe('m0: yes');
+			expect(d.querySelector('[data-decision-question="wait"]')?.textContent?.trim()).toBe('wait: 0 (1)');
+		} finally { void unmount(v); target.remove(); }
+	});
+
+	it('a member who is not an administrator gets an explanation, not the log\'s refusal', async () => {
+		const s = await setup(async () => reply('Done.'), envoyManifest);
+		const handle = '6590000001@s.whatsapp.net';
+		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
+			from: { handle, name: 'Kim' }, text: 'hello?', attachments: [] } });
+		await s.t.settled();
+		const thread = conversationId('whatsapp', handle);
+		try { sessionStorage.clear(); } catch { /* none */ }
+		const target = document.createElement('div');
+		document.body.append(target);
+		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: { conversation: thread }, onClose: () => {} } });
+		try {
+			await until(() => target.querySelector('[data-agent-read-only]') !== null);
+			await press([...target.querySelectorAll<HTMLElement>('[role="tab"]')].find((x) => x.textContent?.trim() === 'Decisions')!);
+			await until(() => target.querySelector('[data-agent-decisions]') !== null);
+			expect(target.querySelector('[data-decision]')).toBeNull();
+			expect(target.querySelector('[data-agent-decisions]')?.textContent).toContain('Triage decisions are an administrator’s.');
 		} finally { void unmount(v); target.remove(); }
 	});
 });

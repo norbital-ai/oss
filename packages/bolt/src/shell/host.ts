@@ -287,9 +287,10 @@ export function shellHost(c: ShellHostConfig) {
 				return json({ value: null });
 			}
 			case 'GET /logs': {
-				const p = url.searchParams, level = p.get('level');
+				const p = url.searchParams, level = p.get('level'), conversation = p.get('conversation');
 				return answer(await events(h.db, auth, { ...(p.get('before') === null ? {} : { before: p.get('before')! }), ...(p.get('after') === null ? {} : { after: p.get('after')! }),
-					...(level === 'info' || level === 'warn' || level === 'error' ? { level: level as LogLevel } : {}), ...(p.get('q') === null ? {} : { text: p.get('q')! }) }));
+					...(level === 'info' || level === 'warn' || level === 'error' ? { level: level as LogLevel } : {}), ...(p.get('q') === null ? {} : { text: p.get('q')! }),
+					...(conversation === null ? {} : { conversation }) }));
 			}
 			case 'GET /studio': case 'POST /studio': {
 				if (!s.studio || c.studio === undefined) return refused('forbidden', 'Studio is for staff members on a host that serves it.', 403);

@@ -2,6 +2,8 @@
 	// One filter row of the view popover (rule 16b): a condition (field ▸ operator ▸ operand ▸ value), an AND/OR/NOT
 	// group, or a related-records row (relation ▸ quantifier ▸ value) with its nested conditions indented under it.
 	// Every control is one height (the kit's CONTROL); a row carries no label beside a control that already names itself.
+	// The field, operator, label, value and quantifier choices all come from the engine's catalogue (`filter.options`),
+	// so the builder can author exactly what a description may be asked for.
 	import type { CollectionExposure } from '../kinds/context.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import Editor from '../kinds/editor.svelte';
@@ -12,32 +14,37 @@
 	import { useBolt } from './bolt.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import {
-		aggregable, argKind, childOf, opText, operandsFor, opsFor, PRESET_LABEL, presetsFor, QUANT_LABEL, resolve, valueKind,
-		type Arg, type Cmp, type Node, type Op, type Quant, type Resolved, type Unit,
+		argKind, childOf, manyOffers, offersFor, operandsFor, QUANT_LABEL, resolve, valueKind,
+		type Arg, type Cmp, type FilterStep, type Node, type Offer, type Op, type Quant, type Resolved, type Unit,
 	} from './filter.js';
 	import FilterNode from './FilterNode.svelte';
 	import { humanize, msg } from './model.js';
 
-	let { node, catalog, collection, top = false, onChange, onRemove }: {
+	let { node, catalog, collection, offers, prefix = [], top = false, onChange, onRemove }: {
 		node: Node;
 		catalog: { readonly [c: string]: CollectionExposure };
 		collection: string;
+		/** The engine's catalogue for the view. */
+		offers: readonly Offer[];
+		/** The many-relation steps this row sits under, so catalogue paths match. */
+		prefix?: readonly FilterStep[];
 		/** The view's own collection outside any related group: many-relations are offered. */
 		top?: boolean;
 		onChange(next: Node): void;
 		onRemove(): void;
 	} = $props();
 	const bolt = useBolt();
-	const CMP: readonly [Cmp, string][] = [['eq', '='], ['ne', '≠'], ['gt', '>'], ['gte', '≥'], ['lt', '<'], ['lte', '≤']];
 	const NO_VALUE: readonly Op[] = ['isNull', 'notNull', 'isEmpty', 'notEmpty'];
 	const OPERAND_LABEL = { lit: 'a value', today: 'days from today', now: 'days from now', startOf: 'start of', me: 'me', party: 'my party', team: 'my teams' } as const;
-	const opLabel = (op: Op, r: Resolved) => { const o = opText(op, r); return msg(bolt, `view.op.${o.key}`, o.text); };
+	const QUANTS: readonly Quant[] = ['some', 'none', 'every', 'count', 'sum', 'min', 'max', 'avg'];
+	const endStep = (o: Offer): FilterStep | undefined => o.path.at(-1);
+	const aggFn = (o: Offer): Quant | null => { const s = endStep(o); return s?.k === 'agg' ? s.fn : null; };
+	const aggOf = (o: Offer): string | null => { const s = endStep(o); return s?.k === 'agg' ? s.of : null; };
 
 	const blank: Node = { t: 'cond', path: '', op: 'eq', arg: null };
 	function picked(path: string, many: boolean) {
 		if (many) return onChange({ t: 'many', rel: path, q: 'some', of: [] });
-		const r = resolve(catalog, collection, path);
-		onChange({ t: 'cond', path, op: r === null ? 'eq' : opsFor(r)[0] ?? 'eq', arg: null });
+		onChange({ t: 'cond', path, op: (offersFor(offers, prefix, path)[0]?.op ?? 'eq') as Op, arg: null });
 	}
 	function operand(kind: string): Arg | null {
 		switch (kind) {
@@ -58,6 +65,11 @@
 	const list = $derived(node.t === 'cond' && node.arg !== null && 'list' in node.arg ? node.arg.list : []);
 	const setList = (next: readonly Json[]) => setArg(next.length === 0 ? null : { list: next });
 	const children = (n: Extract<Node, { t: 'group' | 'many' }>, of: readonly Node[]) => onChange({ ...n, of } as Node);
+	const setQuant = (m: Extract<Node, { t: 'many' }>, q: Quant) => {
+		if (q === 'some' || q === 'none' || q === 'every') return onChange({ t: 'many', rel: m.rel, q, of: m.of });
+		const at = q === 'count' ? manyOffers(offers, prefix, m.rel).count : manyOffers(offers, prefix, m.rel).aggs.filter((o) => aggFn(o) === q);
+		onChange({ t: 'many', rel: m.rel, q, of: [], op: (at[0]?.op ?? 'gte') as Cmp, n: m.n ?? null, ...(q === 'count' ? {} : { field: aggOf(at[0]!) ?? undefined }) });
+	};
 </script>
 
 {#snippet remove()}
@@ -67,10 +79,10 @@
 	</button>
 {/snippet}
 
-{#snippet nested(n: Extract<Node, { t: 'group' | 'many' }>, at: string, isTop: boolean)}
+{#snippet nested(n: Extract<Node, { t: 'group' | 'many' }>, at: string, isTop: boolean, atPrefix: readonly FilterStep[])}
 	<div class="border-border ml-2 flex flex-col gap-1.5 border-l pl-3" data-nested>
 		{#each n.of as child, i (i)}
-			<FilterNode node={child} {catalog} collection={at} top={isTop}
+			<FilterNode node={child} {catalog} collection={at} {offers} prefix={atPrefix} top={isTop}
 				onChange={(c) => children(n, n.of.map((x, j) => j === i ? c : x))} onRemove={() => children(n, n.of.filter((_, j) => j !== i))} />
 		{/each}
 		<button type="button" class="text-muted-foreground hover:text-foreground self-start text-xs" data-add-nested onclick={() => children(n, [...n.of, blank])}>
@@ -103,41 +115,45 @@
 				onChange={(v) => { if (v !== null) onChange({ t: 'group', join: v.endsWith('or') ? 'or' : 'and', ...(v.startsWith('not') ? { not: true } : {}), of: g.of }); }} />
 			{@render remove()}
 		</div>
-		{@render nested(g, collection, top)}
+		{@render nested(g, collection, top, prefix)}
 	</div>
 {:else if node.t === 'many'}
 	{@const m = node}
 	{@const child = childOf(catalog, collection, m.rel) ?? ''}
 	{@const agg = m.q !== 'some' && m.q !== 'none' && m.q !== 'every'}
+	{@const mo = manyOffers(offers, prefix, m.rel)}
+	{@const quantOptions = QUANTS.filter((q) => q === 'some' || q === 'none' || q === 'every' ? mo.all : q === 'count' ? mo.count.length > 0 : mo.aggs.some((o) => aggFn(o) === q))}
+	{@const aggAt = agg ? (m.q === 'count' ? mo.count : mo.aggs.filter((o) => aggFn(o) === m.q && aggOf(o) === m.field)) : []}
 	<div class="flex flex-col gap-1.5" data-many={m.rel}>
 		<div class="flex flex-wrap items-center gap-1.5">
-			<FieldPicker {catalog} {collection} value={m.rel} many={top} onPick={picked} />
+			<FieldPicker {catalog} {collection} {offers} {prefix} value={m.rel} many={top} onPick={picked} />
 			<Combobox class="w-auto" aria-label={msg(bolt, 'view.quantifier', 'Quantifier')} value={m.q}
-				options={(Object.entries(QUANT_LABEL) as [Quant, string][]).filter(([q]) => q === 'some' || q === 'none' || q === 'every' || q === 'count' || aggregable(catalog, child, q).length > 0).map(([q, text]) => ({ value: q, label: msg(bolt, `view.q.${q}`, text) }))}
-				onChange={(q) => { if (q !== null) onChange(q === 'some' || q === 'none' || q === 'every' ? { t: 'many', rel: m.rel, q, of: m.of } : { t: 'many', rel: m.rel, q, of: [], op: m.op ?? 'gte', n: m.n ?? null, ...(q === 'count' ? {} : { field: aggregable(catalog, child, q)[0] }) }); }} />
+				options={quantOptions.map((q) => ({ value: q, label: msg(bolt, `view.q.${q}`, QUANT_LABEL[q]) }))}
+				onChange={(q) => { if (q !== null) setQuant(m, q); }} />
 			{#if agg && m.q !== 'count'}
 				<Combobox class="w-auto" aria-label={msg(bolt, 'view.of', 'Of')} value={m.field ?? null} onChange={(f) => { if (f !== null) onChange({ ...m, field: f }); }}
-					options={aggregable(catalog, child, m.q).map((f) => ({ value: f, label: catalog[child]?.fields[f]?.label ?? humanize(f) }))} />
+					options={[...new Set(mo.aggs.filter((o) => aggFn(o) === m.q).map((o) => aggOf(o)!))].map((f) => ({ value: f, label: catalog[child]?.fields[f]?.label ?? humanize(f) }))} />
 			{/if}
 			{#if agg}
-				<Combobox class="w-auto" aria-label={msg(bolt, 'view.compare', 'Compare')} value={m.op ?? null} onChange={(op) => { if (op !== null) onChange({ ...m, op }); }}
-					options={CMP.map(([op, sym]) => ({ value: op, label: sym }))} />
+				<Combobox class="w-auto" aria-label={msg(bolt, 'view.compare', 'Compare')} value={m.op ?? null} onChange={(op) => { if (op !== null) onChange({ ...m, op: op as Cmp }); }}
+					options={aggAt.map((o) => ({ value: o.op, label: o.opLabel }))} />
 				<input class={cn(CONTROL, 'w-24')} type="number" min={m.q === 'count' ? 0 : undefined} step={m.q === 'count' ? 1 : 'any'} value={m.n ?? ''}
 					aria-label={msg(bolt, 'view.number', 'Number')} oninput={(e) => onChange({ ...m, n: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) })} />
 			{/if}
 			{@render remove()}
 		</div>
-		{#if !agg}{@render nested(m, child, false)}{/if}
+		{#if !agg}{@render nested(m, child, false, [...prefix, { k: m.q as 'some' | 'every' | 'none', rel: m.rel }])}{/if}
 	</div>
 {:else}
 	{@const r = node.path === '' ? null : resolve(catalog, collection, node.path)}
+	{@const at = offersFor(offers, prefix, node.path)}
 	<div class="flex flex-wrap items-center gap-1.5" data-cond={node.path}>
-		<FieldPicker {catalog} {collection} value={node.path} many={top} onPick={picked} />
+		<FieldPicker {catalog} {collection} {offers} {prefix} value={node.path} many={top} onPick={picked} />
 		{#if r !== null}
 			{@const c = node}
 			{@const operands = operandsFor(r, c.op)}
-			<Combobox class="w-auto" aria-label={msg(bolt, 'view.operator', 'Operator')} value={c.op} onChange={(op) => { if (op !== null) onChange({ ...c, op, arg: null }); }}
-				options={opsFor(r).map((op) => ({ value: op, label: opLabel(op, r) }))} />
+			<Combobox class="w-auto" aria-label={msg(bolt, 'view.operator', 'Operator')} value={c.op} onChange={(op) => { if (op !== null) onChange({ ...c, op: op as Op, arg: null }); }}
+				options={at.map((o) => ({ value: o.op, label: o.opLabel }))} />
 			{#if !NO_VALUE.includes(c.op)}
 				{#if c.op !== 'during' && c.op !== 'like' && operands.length > 1}
 					{@const lit = r.leaf === 'rel' ? 'record' : r.kind.kind === 'date' || r.kind.kind === 'instant' || r.kind.kind === 'period' ? 'date' : 'lit'}
@@ -145,9 +161,10 @@
 						options={operands.map((o) => ({ value: o, label: o === 'lit' ? msg(bolt, `view.operand.${lit}`, lit === 'record' ? 'a record' : lit === 'date' ? 'a date' : 'a value') : msg(bolt, `view.operand.${o}`, OPERAND_LABEL[o]) }))} />
 				{/if}
 				{#if c.op === 'during'}
-					{@const kind = r.leaf === 'field' && r.kind.kind === 'instant' ? 'instant' : 'date'}
-					<Combobox class="w-auto" aria-label={msg(bolt, 'view.period', 'Period')} value={c.arg !== null && 'preset' in c.arg ? c.arg.preset : null}
-						onChange={(p) => setArg(p === null ? null : { preset: p })} options={presetsFor(kind).map((p) => ({ value: p, label: msg(bolt, `view.preset.${p}`, PRESET_LABEL(p)) }))} />
+					{@const values = at.find((o) => o.op === 'during')?.values ?? []}
+					<Combobox class="w-auto" aria-label={msg(bolt, 'view.period', 'Period')} value={c.arg !== null && 'range' in c.arg ? JSON.stringify(c.arg.range) : null}
+						onChange={(v) => { const pick = values.find((x) => JSON.stringify(x.arg) === v); setArg(pick === undefined ? null : { ...pick.arg, ...('range' in pick.arg ? { label: pick.label } : {}) } as Arg); }}
+						options={values.map((v) => ({ value: JSON.stringify(v.arg), label: v.label }))} />
 				{:else if c.arg !== null && ('today' in c.arg || 'now' in c.arg)}
 					{@const key = 'today' in c.arg ? 'today' : 'now'}
 					<input class={cn(CONTROL, 'w-20')} type="number" step="1" aria-label={msg(bolt, 'view.days', 'Days')}
@@ -158,7 +175,7 @@
 					<Combobox class="w-auto" aria-label={msg(bolt, 'view.shift', 'Which')} value={String(s.shift ?? 0)}
 						onChange={(v) => { const n = Number(v ?? 0); setArg(n === 0 ? { startOf: s.startOf } : { startOf: s.startOf, shift: n }); }}
 						options={[...new Set([-1, 0, 1, s.shift ?? 0])].map((n) => ({ value: String(n), label: ({ [-1]: 'last', 0: 'this', 1: 'next' } as { readonly [k: number]: string })[n] ?? String(n) }))} />
-					<Combobox class="w-auto" aria-label={msg(bolt, 'view.unit', 'Unit')} value={s.startOf} onChange={(u) => { if (u !== null) setArg({ ...s, startOf: u }); }}
+					<Combobox class="w-auto" aria-label={msg(bolt, 'view.unit', 'Unit')} value={s.startOf} onChange={(u) => { if (u !== null) setArg({ ...s, startOf: u as Unit }); }}
 						options={(['week', 'month', 'quarter', 'year'] as const).map((u) => ({ value: u, label: msg(bolt, `view.unit.${u}`, u) }))} />
 				{:else if c.arg !== null && 'actor' in c.arg}
 					<!-- me / my party / my teams: the operand is the value -->

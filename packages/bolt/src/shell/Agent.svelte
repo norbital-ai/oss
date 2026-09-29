@@ -8,7 +8,8 @@
 	more…" while pending (with respond-now), "responding" once admitted and its turn runs, and, in a shared conversation
 	only, "not for Norbius" for an ambient row. Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_message.files` when the message is sent.
-	The selector switches between the member's own conversations (newest first); a delegated sub-agent's steps and answer
+	The selector switches between the member's own conversations and the envoy channel threads they may read, segmented by
+	source (newest first); a delegated sub-agent's steps and answer
 	open in place; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
 	stops (asked first) and a stopped one resumes; a draft plan is a collapsed card above the prompt (execute, delete), an
@@ -20,6 +21,8 @@
 	cut reply that no turn continues is marked interrupted; a divider names the model where it changed. Consecutive
 	tool calls and reasoning fold into one "Worked for Ns" group whose rows (verb, target, duration) open to their input
 	and result, one tab each; a failed row's icon is the alert, so the call that failed reads at a glance. Code blocks copy. The open conversation is the shell's `?agent=` (`onConversation` reports a switch). An
+	administrator's raw-context tab lists the open conversation's `decision.made` events: the directive, the assistant, the
+	pending and earlier messages, and every question answered as the triage decider received them. An
 	envoy's channel conversation is read-only here (rule 61): its transcript, and no composer or controls at all.
 -->
 <script lang="ts">
@@ -37,8 +40,9 @@
 	import AgentChild from './AgentChild.svelte';
 	import { checkpointSections, contextView, modelDividers, ORB, orbState, revisable } from './agent-view.ts';
 
-	let { api, bolt, t, request, unconfigured = false, onConversation }: { api: ShellApi; bolt: Pick<ShellBolt, 'live' | 'fileUrl'>; t: (key: string) => string; request: AgentRequest; onClose: () => void;
+	let { api, bolt, t, request, unconfigured = false, admin = false, onConversation }: { api: ShellApi; bolt: Pick<ShellBolt, 'live' | 'fileUrl'>; t: (key: string) => string; request: AgentRequest; onClose: () => void;
 		/** The host binds no AI provider: say so plainly (a send still fails with the fixed reply and an `agent.failed` event). */ unconfigured?: boolean;
+		/** The viewer is an administrator: the raw-context tab reads `decision.made` events (the log refuses anyone else). */ admin?: boolean;
 		/** The open conversation changed (`null`: a new one), for the shell's `?agent=`. */ onConversation?: (id: string | null) => void } = $props();
 
 	const KEY = 'bolt.agent.conversation';
@@ -51,6 +55,8 @@
 	let live = $state<AgentRow[]>([]), older = $state<AgentRow[]>([]);
 	/** The open conversation is an envoy's channel thread: read-only (rule 61). */
 	let thread = $state(false);
+	/** Which of the open conversation's two tabs is up: its transcript, or the raw context its triage decisions were made from. */
+	let tab = $state<'conversation' | 'decisions'>('conversation');
 	let from = $state<number | null>(null), edge = $state<{ first: number; more: boolean } | null>(null), loadingOlder = $state(false);
 	/**
 	 * Messages this panel sent that the live transcript does not carry yet: shown at once (a bubble, or in the queue while a
@@ -98,7 +104,7 @@
 		attach([...event.dataTransfer?.files ?? []]);
 	}
 
-	/** The member's own conversations (the selector, and the open one's status, plan, goals and model): a live read. */
+	/** The member's own conversations and the envoy channel threads they may read (the selector, and the open one's status, plan, goals and model): a live read. */
 	let list = $state<AgentConversation[]>([]);
 	let models = $state<AiModel[]>([]);
 	/** The model a new conversation runs when none is picked (the host's default). */
@@ -107,10 +113,41 @@
 	let picked = $state<string | null>(null);
 	const current = $derived(list.find((c) => c.id === conversation));
 	const status = $derived(current?.status ?? 'idle');
+	/**
+	 * The selector's segments: the member's own in-app conversations (`channel` null, the assistant) and one per
+	 * (envoy, channel) pair they hold threads on. `group` is the segment the picker lists; opening a conversation moves it
+	 * to that conversation's own segment, and a segment click pins it until the next conversation opens (`manual`).
+	 */
+	const groupOf = (c: AgentConversation) => c.channel === null ? 'web' : `${c.envoy ?? ''}/${c.channel}`;
+	/** A channel or envoy name in words: `field_ops` → `Field ops`. */
+	const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
+	let group = $state('web'), manual = $state(false);
+	const groups = $derived.by(() => {
+		const out = [{ key: 'web', label: t('Norbius') }];
+		const seen = new Set(['web']);
+		for (const c of list) {
+			if (c.channel === null) continue;
+			const key = groupOf(c);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push({ key, label: `${human(c.channel)} · ${human(c.envoy ?? '')}` });
+		}
+		return out;
+	});
+	const pickable = $derived(list.filter((c) => groupOf(c) === group));
 	// svelte-ignore state_referenced_locally
 	const conversations = bolt.live<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] },
 		then: (ok, bad) => Promise.reject<{ rows: AgentConversation[] }>(new Error('the conversations are read live')).then(ok, bad) });
-	onDestroy(conversations.subscribe((value) => { if (value !== undefined) list = value.rows; }));
+	onDestroy(conversations.subscribe((value) => { if (value !== undefined) { list = value.rows;
+		// the open conversation's segment, once its row is here (never against a manual segment pick)
+		const open = conversation === null ? undefined : list.find((c) => c.id === conversation);
+		if (!manual && open !== undefined) group = groupOf(open); } }));
+	/** The open conversation's segment follows it; `manual` forgets a segment click the moment another conversation opens. */
+	watch(() => conversation, (id) => {
+		manual = false;
+		const c = id === null ? undefined : list.find((x) => x.id === id);
+		if (c !== undefined) group = groupOf(c);
+	}, { lazy: true });
 	// svelte-ignore state_referenced_locally
 	void api.agent.models().then((r) => {
 		if (!r.ok) return void (error = r.error.message);
@@ -233,6 +270,9 @@
 		revising = null;
 		mode = null;
 		pinned = true;
+		tab = 'conversation';
+		group = 'web';
+		manual = false;
 		try { sessionStorage.removeItem(KEY); } catch { /* private window */ }
 	}
 	function select(id: string): void {
@@ -242,7 +282,17 @@
 		try { sessionStorage.setItem(KEY, id); } catch { /* private window */ }
 	}
 	const when = (at: string) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-	const options = $derived(list.map((c) => ({ value: c.id, label: c.title ?? t('Conversation'), description: when(c.at) })));
+	/** The selector lists the active segment's conversations alone. */
+	const options = $derived(pickable.map((c) => ({ value: c.id, label: c.title ?? t('Conversation'), description: when(c.at) })));
+	/** The open conversation's `decision.made` events (the log is an administrator's; read when the raw-context tab is up). */
+	const decisions = $derived(!admin || tab !== 'decisions' || conversation === null ? null : api.logs({ conversation, text: 'decision.made' }));
+	/** One `decision.made` event's attributes as the raw-context tab reads them (`decisionEvent`); a missing answer is a dash. */
+	type DecisionAnswer = { type?: string; choice?: string; score?: number; noul?: number; confidence?: number };
+	type DecisionAttributes = { use?: string; action?: string; error?: string; questions?: readonly string[]; answers?: { readonly [id: string]: DecisionAnswer };
+		state?: { directive?: string; assistant?: string; pending?: readonly { from?: string; text?: string }[]; earlier?: readonly { from?: string; text?: string }[] } };
+	const decisionOf = (a: Json): DecisionAttributes => (a !== null && typeof a === 'object' && !Array.isArray(a) ? a : {}) as DecisionAttributes;
+	const answerOf = (a: DecisionAnswer | undefined) => a === undefined ? '—' : a.type === 'choice' ? String(a.choice ?? '—')
+		: a.type === 'score' ? `${a.score ?? 0} (${a.confidence ?? 0})` : a.type === 'noul' ? String(a.noul ?? 0) : '—';
 	// the host's models by human label, grouped by provider; a conversation on a class (`default`) shows the host's default
 	const modelOptions = $derived([...models].sort((a, b) => (a.provider ?? '').localeCompare(b.provider ?? '') || a.label.localeCompare(b.label))
 		.map((m) => ({ value: m.id, label: m.label, keywords: m.id, ...(m.provider === undefined ? {} : { group: m.provider }) })));
@@ -508,6 +558,8 @@
 	</ol>
 {/snippet}
 
+{#snippet emptyBody()}{/snippet}
+
 {#snippet head()}
 	<!-- staging's header: the mark, the name, the conversation picker as plain text, then new (the sheet adds full screen and close) -->
 	<Inline gap="sm" class="w-full min-w-0" data-agent-head>
@@ -515,7 +567,7 @@
 		{#if orb === 'working'}<AccretionDisc size={20} label={t(ORB.working.label)} class="text-muted-foreground" />
 		{:else}<span class="shrink-0" title={t(ORB[orb].label)} data-orb={orb}><NorbiusStrip state={orb === 'failed' ? 'error' : orb} size={18} label={t(ORB[orb].label)} /></span>{/if}
 		<span class="shrink-0 text-sm font-semibold">{t('Norbius')}</span>
-		<Combobox variant="ghost" searchable class="min-w-0 flex-1" {options} value={conversation} {...conversation === null ? {} : { display: t('Conversation') }}
+		<Combobox variant="ghost" searchable class="min-w-0 flex-1" {options} value={conversation} {...conversation === null ? {} : { display: current?.title ?? t('Conversation') }}
 			placeholder={list.length === 0 ? t('No conversations yet') : t('New conversation')} aria-label={t('Conversations')} onChange={(id) => (id === null ? fresh() : select(id))} />
 		<Button size="icon" variant="ghost" class="size-8 shrink-0" aria-label={t('New conversation')} title={t('New conversation')} onclick={fresh}><Icon name="lucide:plus" class="size-4" /></Button>
 	</Inline>
@@ -525,7 +577,16 @@
 	keep staging's centred 48rem column -->
 <div class="-m-4 flex h-[calc(100%+2rem)] min-h-0 flex-col bg-card" data-agent-panel>
 	{#if toSheet === undefined}<div class="shrink-0 border-b px-4 py-2">{@render head()}</div>{/if}
+	{#if groups.length > 1}
+		<!-- the selector's segments: the member's own conversations (the assistant), then one per envoy channel they hold threads on -->
+		<div class="shrink-0 border-b px-3 py-1.5" data-agent-groups>
+			<Tabs level={1} orientation="horizontal" class="h-auto grid-rows-[auto]" value={group} onValueChange={(v) => { group = v; manual = true; }}
+				tabs={groups.map((g) => ({ name: g.key, title: g.label, body: emptyBody }))} />
+		</div>
+	{/if}
 	<div class="relative flex min-h-0 w-full flex-1 flex-col">
+	{#snippet transcriptTab()}
+	<div class="flex h-full min-h-0 w-full flex-col">
 	{#if settled !== null || current?.goals?.length}
 		<!-- staging's now strip: what the agent works from, kept in view while the transcript scrolls: the executed plan and
 			its checklist, one line each; each opens over the transcript, not into it -->
@@ -706,6 +767,81 @@
 	{#if !pinned}
 		<Button size="sm" variant="secondary" class="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border shadow-md" aria-label={t('Jump to latest')} onclick={() => latest()} data-latest>
 			<Icon name="lucide:arrow-down" class="size-4" />{t('Latest')}</Button>
+	{/if}
+	</div>
+	{/snippet}
+
+	{#snippet decisionsTab()}
+		<!-- the raw context: what the triage decider (System 1) received and answered for this conversation, newest first -->
+		<div class="h-full overflow-auto px-3 pb-3" data-agent-decisions>
+			{#if !admin}
+				<p class="p-3 text-xs text-muted-foreground">{t('Triage decisions are an administrator’s.')}</p>
+			{:else if decisions !== null}
+				{#await decisions}
+					<p class="p-3 text-xs text-muted-foreground">{t('Loading…')}</p>
+				{:then r}
+					{#if !r.ok}
+						<p class="p-3 text-xs text-muted-foreground">{t('Triage decisions are an administrator’s.')}</p>
+					{:else if r.value.length === 0}
+						<p class="p-3 text-xs text-muted-foreground">{t('No decisions for this conversation yet.')}</p>
+					{:else}
+						<ol class="space-y-3 pt-3">
+							{#each r.value as e (e.id)}
+								{@const d = decisionOf(e.attributes)}
+								<li class="rounded-md border border-border/70 bg-muted/20 p-3 text-xs" data-decision data-use={d.use}>
+									<p class="flex items-center gap-2 text-muted-foreground">
+										<span class="font-medium text-foreground">{d.use}</span>
+										{#if d.action !== undefined}<span>· {d.action}</span>{/if}
+										<span class="flex-1"></span><span>{when(e.at)}</span>
+									</p>
+									{#if d.state !== undefined}
+										{@const pending = d.state.pending ?? []}
+										{@const earlier = d.state.earlier ?? []}
+										<p class="mt-2"><span class="font-medium">{t('Directive')}</span>: {d.state.directive ?? ''}</p>
+										<p><span class="font-medium">{t('Assistant')}</span>: {d.state.assistant ?? ''}</p>
+										{#if pending.length > 0}
+											<p class="mt-2 font-medium">{t('Pending')} · {pending.length}</p>
+											<ul class="mt-0.5 grid gap-0.5">
+												{#each pending as p, i (i)}
+													<li class="whitespace-pre-wrap" data-pending-message><span class="text-muted-foreground">{p.from ?? ''}:</span> {p.text ?? ''}</li>
+												{/each}
+											</ul>
+										{/if}
+										{#if earlier.length > 0}
+											<details class="mt-2" data-earlier>
+												<summary class="cursor-pointer text-muted-foreground">{t('Earlier')} · {earlier.length}</summary>
+												<ul class="mt-1 grid gap-0.5 opacity-80">
+													{#each earlier as p, i (i)}
+														<li class="whitespace-pre-wrap"><span class="text-muted-foreground">{p.from ?? ''}:</span> {p.text ?? ''}</li>
+													{/each}
+												</ul>
+											</details>
+										{/if}
+									{/if}
+									<p class="mt-2 font-medium">{t('Questions')}</p>
+									<ul class="mt-0.5 grid gap-0.5">
+										{#each d.questions ?? [] as q (q)}
+											<li data-decision-question={q}><span class="text-muted-foreground">{q}:</span> {answerOf(d.answers?.[q])}</li>
+										{/each}
+									</ul>
+									{#if d.error !== undefined}<p class="mt-2 text-destructive">{t('failed')}: {d.error}</p>{/if}
+								</li>
+							{/each}
+						</ol>
+					{/if}
+				{/await}
+			{/if}
+		</div>
+	{/snippet}
+
+	{#if conversation === null}
+		{@render transcriptTab()}
+	{:else}
+		<!-- the open conversation: its transcript, and the raw context its triage decisions were made from -->
+		<Tabs orientation="horizontal" class="min-h-0 flex-1" value={tab} onValueChange={(v) => (tab = v === 'decisions' ? 'decisions' : 'conversation')}
+			tabs={[
+				{ name: 'conversation', title: t('Conversation'), icon: 'lucide:messages-square', body: transcriptTab, keepAlive: true },
+				{ name: 'decisions', title: t('Decisions'), icon: 'lucide:scale', body: decisionsTab, keepAlive: true }]} />
 	{/if}
 	</div>
 	{#if thread}

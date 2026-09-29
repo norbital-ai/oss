@@ -6,7 +6,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { AiPort, AiRequest, AiResponse, CrossCall, EngineManifest } from '../src/engine/contracts.ts';
 import { inferFacility, modelCall } from '../src/engine/agent/ai.ts';
 import { bound, BOUNDS, messages, outline, projection, system } from '../src/engine/agent/context.ts';
-import { preview, type MessageRow } from '../src/engine/agent/schema.ts';
+import { listed, preview, type MessageRow } from '../src/engine/agent/schema.ts';
 
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const row = (seq: number, o: Partial<MessageRow> = {}): MessageRow => ({ id: `m${seq}`, conversation: 'c', seq, role: 'user', content: { text: `t${seq}` }, text: `t${seq}`,
@@ -157,5 +157,22 @@ describe('the AI port under the 60 s wall (rule 63)', () => {
 		expect(requests[1]!.tools!.map((t) => t.name)).toEqual(['browse', 'return_result']);
 		expect(requests[2]!.tools!.map((t) => t.name)).toEqual(['return_result']);
 		expect(requests[2]!.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('budget is spent') });
+	});
+});
+
+describe('the panel conversation list', () => {
+	it('admits a public envoy thread, and only what the read would return', () => {
+		// a channel thread carries no owner, so admitting it by owner alone would keep every thread out of the live list
+		const own = { owner: 'ann', channel: null, parent: null, envoy: null };
+		const child = { owner: 'ann', channel: null, parent: 'p', envoy: null };
+		const other = { owner: 'bob', channel: null, parent: null, envoy: null };
+		const publicThread = { owner: null, channel: 'whatsapp', parent: null, envoy: 'field_ops' };
+		const privateThread = { owner: null, channel: 'whatsapp', parent: null, envoy: 'secret' };
+		expect(listed(own, 'ann')).toBe(true);
+		expect(listed(child, 'ann')).toBe(false); // a sub-agent is never a root
+		expect(listed(other, 'ann')).toBe(false);
+		expect(listed(publicThread, 'ann', ['field_ops'])).toBe(true);
+		expect(listed(privateThread, 'ann', ['field_ops'])).toBe(false); // never a row the read would not return
+		expect(listed(null, 'ann', ['field_ops'])).toBe(false);
 	});
 });

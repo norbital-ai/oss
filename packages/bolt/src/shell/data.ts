@@ -151,12 +151,12 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 export type LogLevel = 'info' | 'warn' | 'error';
 export type LogRow = { id: string; at: string; severity: LogLevel; event: string; invocation: string; run: string | null; conversation: string | null;
 	turn: string | null; attributes: Json };
-export type LogQuery = { before?: string; after?: string; level?: LogLevel; text?: string };
+export type LogQuery = { before?: string; after?: string; level?: LogLevel; text?: string; conversation?: string };
 const LOG_PAGE = 200;
 
 /**
  * The workspace log (§5.12, admins only): one page of `sys_event`, newest first, keyed by its identity column. `before`
- * pages to older rows, `after` follows the tail; `level` and `text` (event name or attributes) narrow it.
+ * pages to older rows, `after` follows the tail; `level`, `text` (event name or attributes) and `conversation` narrow it.
  */
 export async function events(db: TenantDb, auth: Authority, x: LogQuery): Promise<Result<LogRow[]>> {
 	const denied = requireAdmin(auth);
@@ -166,7 +166,9 @@ export async function events(db: TenantDb, auth: Authority, x: LogQuery): Promis
 	const [rows] = await db.read([q(`SELECT id::text AS id, at::text AS at, severity, event, invocation, run, conversation, turn, attributes FROM sys_event
 		WHERE ($1::bigint IS NULL OR id < $1::bigint) AND ($2::bigint IS NULL OR id > $2::bigint) AND ($3::text IS NULL OR severity = $3)
 			AND ($4::text IS NULL OR strpos(lower(event), lower($4)) > 0 OR strpos(lower(attributes::text), lower($4)) > 0)
-		ORDER BY sys_event.id ${tail === null ? 'DESC' : 'ASC'} LIMIT ${LOG_PAGE}`, id(x.before), tail, x.level ?? null, x.text === undefined || x.text === '' ? null : x.text)]);
+			AND ($5::text IS NULL OR conversation = $5)
+		ORDER BY sys_event.id ${tail === null ? 'DESC' : 'ASC'} LIMIT ${LOG_PAGE}`, id(x.before), tail, x.level ?? null,
+		x.text === undefined || x.text === '' ? null : x.text, x.conversation === undefined || x.conversation === '' ? null : x.conversation)]);
 	// the tail reads forward from `after` so a burst larger than a page leaves no gap; the answer is newest first either way
 	const out = rows!.rows as unknown as LogRow[];
 	return { ok: true, value: tail === null ? out : [...out].reverse() };

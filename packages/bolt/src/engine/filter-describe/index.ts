@@ -1,21 +1,24 @@
 // AI filtering (rule 16a, P33, P34): the view popover's "Describe what to show…" text becomes a typed `Where` and at most
-// one `OrderBy` key through System 1 alone (P37 shapes). System 1 only chooses among criteria, so the engine builds them per request
-// from the collection's exposure narrowed to what the caller reads unmasked: fields, operators per kind, enum and state
-// values (with the final-state set), relation candidates from a label search as the caller (≤ 5 per word), me / my team
-// / my party, relative date presets, and literals parsed from the text. ONE request asks a question per field — does the
-// description restrict by this field, and if so with which of ITS operators and which of ITS values — so every answer is
-// `{ field: { op, value } }` and no answer depends on another, which is what makes a single call possible. (Asking per
-// condition slot instead needs a second call: the operator and value questions must offer every field's options, so an
-// answer can name one field's operator and another's value, which then has to be re-asked.) A collection wider than
-// `FILTER_MAX_FIELDS` is asked about for the fields the description most plausibly names. Three sort questions ride along.
-// Bolt caps no option set: a request too large is the provider's refusal (`tooLarge`). The chosen options map 1:1 onto the result,
-// which is decoded like any read literal and AND-composed under the author's `where` and the caller's grants by the reader (so it only narrows).
-// A System 1 failure or an answer that maps to no condition is a typed failure: nothing applies. No fallback (owner).
-// Through the collection's exposed relations the caller reads, one hop: a one-relation's target fields (`is`), a
-// many-relation's child fields under has any / all / none, its count and numeric child aggregates. The result is decoded
-// strictly against the caller's exposure (`decodeDescribed`): a field, relation or sort key outside it is refused.
-// Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field the caller reads unmasked
-// (`{ assignee: { name: 'asc' } }`, offered as "Assignee › Name"); `decodeDescribed` holds a related key to the same exposure.
+// one `OrderBy` key through System 1 alone (P37 shapes). System 1 only chooses among criteria, so the engine builds ONE
+// catalogue of condition options per request from the collection's exposure narrowed to what the caller reads unmasked:
+// fields of every filterable kind (many-valued fields included: has, has any, has all, is empty), operators per kind in
+// the machine vocabulary the UI builder authors, values (enum and state names, the final-state set, relative date spans,
+// me / my team / my party, relation candidates from a label search ≤ 5 per word), one and two relation hops, many-relation
+// quantifiers with count and numeric child aggregates, and null tests where the field is optional. The catalogue is plain
+// data (`FilterStep` paths + machine ops), shared with the browser: `filter.options` returns it so the builder renders the
+// same list, and `instantiate` folds a path with the chosen operator the one way. A description asks a question per
+// offered field — does it restrict by this field, with which of ITS operators and which of ITS values — plus one
+// composition question (all / any / not all / none of the stated conditions) and the sort questions, so every answer is
+// independent and ONE `sys_1` call suffices. (Asking per condition slot instead needs a second call: the operator and
+// value questions must offer every field's options, so an answer can name one field's operator and another's value, which
+// then has to be re-asked.) A collection wider than `FILTER_MAX_FIELDS` is asked about for the fields the description most
+// plausibly names. Bounded: at most `FILTER_MAX_CONDITIONS` conditions, `FILTER_MAX_HOPS` relation hops, one top-level
+// group. Bolt caps no option set: a request too large is the provider's refusal (`tooLarge`). The chosen options map 1:1
+// onto the result, which is decoded like any read literal and AND-composed under the author's `where` and the caller's
+// grants by the reader (so it only narrows). A System 1 failure or an answer that maps to no condition is a typed failure:
+// nothing applies. No fallback (owner). Sorting is by an own sortable field or, one hop through an exposed one-relation, a
+// target field the caller reads unmasked (`{ assignee: { name: 'asc' } }`, offered as "Assignee › Name");
+// `decodeDescribed` holds a related key and every condition to the same exposure.
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
 import { BoltError, type AiPort, type Authority, type Bindings, type EngineManifest, type MeteringPort, type Pred, type ReadEngine, type TenantDb } from '../contracts.ts';
@@ -24,37 +27,82 @@ import { catalogOf } from '../access/pred.ts';
 import { exposedField, exposedRelation, type Catalog, type FieldInfo } from '../../protocol/catalog.ts';
 import * as ir from '../../protocol/ir.ts';
 
+/** The stated conditions a description may produce. */
 export const FILTER_MAX_CONDITIONS = 4;
 /** Fields asked about in the one request; past this the most plausible are asked and the rest are not offered at all. */
 export const FILTER_MAX_FIELDS = 16;
 export const FILTER_MAX_TEXT = 500;
+/** Relation hops a condition path may take: the builder's own two-hop limit. */
+export const FILTER_MAX_HOPS = 2;
+
 const CANDIDATES = 5, WORDS = 8, NONE = '(no value)';
 
-type V = { lit: Json } | { range: readonly [Json, Json] } | { set: readonly Json[] } | { actor: 'id' | 'teams' | 'party' };
-/** An offered field: `put` places an operator object where the field is (own, through `is`, under a quantifier, an aggregate). */
-/** `sort`: the field's `OrderBy` path (`name`, `assignee.name`) where it may order the records. */
-/** `hit`: the description names this field, one of its values, or something it holds. */
-type Field = { name: string; label: string; kind: string; ops: readonly string[]; values: Map<string, V>; put: (ops: { [op: string]: Json }) => Json; own: boolean; sort?: string; hit?: boolean };
+/** The child aggregates a many-relation offers. */
+export type FilterAgg = 'sum' | 'avg' | 'min' | 'max';
+/**
+ * One step of a condition's nesting from the collection root. `instantiate` folds the steps over the operator object
+ * from the innermost out: a field, a one-relation's record (`is`), an exclusive arc's arm, a many-relation's quantifier,
+ * its count, or a child aggregate.
+ */
+export type FilterStep =
+	| { k: 'field'; name: string }
+	| { k: 'is'; rel: string }
+	| { k: 'arm'; rel: string; arm: string }
+	| { k: 'some' | 'every' | 'none'; rel: string }
+	| { k: 'count'; rel: string }
+	| { k: 'agg'; rel: string; fn: FilterAgg; of: string };
+/** A value offered for an operator: a literal, a list, a relative span (`during` → gte/lt) or an actor reference. */
+export type FilterArg = { lit: Json } | { list: readonly Json[] } | { range: readonly [Json, Json] } | { actor: 'id' | 'party' | 'teams' };
+export type FilterValue = { label: string; arg: FilterArg };
+/** One offered (field, operator) pair: a row the builder renders and an option System 1 may choose. Plain data. */
+export type FilterOffer = {
+	/** The question's own name for the field ("Assignee › Name", "Lines (any) › Qty", "Lines › count"). */
+	label: string;
+	/** How the condition nests from the root. */
+	path: readonly FilterStep[];
+	/** The machine operator. */
+	op: string;
+	/** The operator's words for this field ("is", "is within", "before", "has any of"). */
+	opLabel: string;
+	/** The literal's kind for the editor (`state` as `enum`, a list's element kind). */
+	kind: string;
+	values?: readonly FilterValue[];
+	/** The field's `OrderBy` key where it may order the records. */
+	sort?: string;
+};
+export type FilterCatalogue = readonly FilterOffer[];
 export type Described = { ok: true; where: Json; orderBy?: Json } | { ok: false; code: string; message: string };
 export type LocalFilterField = { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean };
 
-const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum']);
-const ORDERED = new Set([...NUMERIC, 'date', 'instant', 'time', 'text']);
+type Op = { op: string; label: string };
+/** One offered field: its operators and values. `path` is the serialisable replacement for the old `put` closure. */
+type Field = { label: string; path: readonly FilterStep[]; kind: string; ops: readonly Op[]; values: FilterValue[]; sort?: string; hit?: boolean };
+
+const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum', 'duration']);
+/** Kinds `OrderBy` refuses: no sort key is offered on them (the builder's own `UNSORTABLE`). */
+const UNSORTABLE = new Set(['json', 'file', 'custom', 'vector', 'point', 'period', 'ref']);
 const STOP = new Set(['the', 'and', 'that', 'this', 'with', 'for', 'from', 'are', 'aren', 'not', 'isn', 'all', 'any', 'show', 'only',
 	'first', 'last', 'next', 'newest', 'oldest', 'week', 'month', 'year', 'quarter', 'today', 'yesterday', 'days', 'done', 'open', 'what', 'which', 'who', 'whose',
 	// the sort's own words are never a value (staging: "landed sites, sorted by name descending" filtered name = "descending")
 	'sort', 'sorted', 'order', 'ordered', 'ascending', 'descending', 'alphabetical', 'alphabetically', 'reverse', 'highest', 'lowest', 'latest', 'earliest']);
 const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
 
-/** Rule 16a's relative presets: day bounds on `date` fields, calendar bounds (Monday weeks, workspace timezone) on both. */
-function presets(kind: string): [string, V][] {
-	const day: [string, V][] = [['today', { range: [{ today: '' }, { today: '+1d' }] }], ['yesterday', { range: [{ today: '-1d' }, { today: '' }] }],
-		['last 7 days', { range: [{ today: '-7d' }, { today: '+1d' }] }], ['next 7 days', { range: [{ today: '' }, { today: '+8d' }] }],
-		['last 30 days', { range: [{ today: '-30d' }, { today: '+1d' }] }]];
+/** Rule 16a's relative spans: day bounds on `date` fields, calendar bounds (Monday weeks, workspace timezone) on both. */
+function spans(kind: 'date' | 'instant'): FilterValue[] {
+	const range = (lo: Json, hi: Json): FilterArg => ({ range: [lo, hi] });
 	const at = (unit: string, shift: number): Json => shift === 0 ? { startOf: unit } : { startOf: unit, shift };
-	const cal = ['week', 'month', 'quarter', 'year'].flatMap((u): [string, V][] => [[`this ${u}`, { range: [at(u, 0), at(u, 1)] }],
-		[`last ${u}`, { range: [at(u, -1), at(u, 0)] }], ...(u === 'week' ? [[`next ${u}`, { range: [at(u, 1), at(u, 2)] }] as [string, V]] : [])]);
-	return kind === 'date' ? [...day, ...cal] : cal;
+	const out: FilterValue[] = [];
+	if (kind === 'date') {
+		const off = (n: number): Json => n === 0 ? '' : `${n > 0 ? '+' : '-'}${Math.abs(n)}d`;
+		for (const [label, [a, b]] of [['today', [0, 1]], ['yesterday', [-1, 0]], ['last 7 days', [-7, 1]], ['next 7 days', [0, 8]], ['last 30 days', [-30, 1]]] as const)
+			out.push({ label, arg: range({ today: off(a) }, { today: off(b) }) });
+	}
+	for (const unit of ['week', 'month', 'quarter', 'year']) {
+		out.push({ label: `this ${unit}`, arg: range(at(unit, 0), at(unit, 1)) });
+		out.push({ label: `last ${unit}`, arg: range(at(unit, -1), at(unit, 0)) });
+		if (unit === 'week') out.push({ label: `next ${unit}`, arg: range(at(unit, 1), at(unit, 2)) });
+	}
+	return out;
 }
 /** Quoted strings, numbers and dates (ISO, or day-first `d/m/yyyy`; month-first in `en-US`) from the text. */
 export function literals(text: string, locale: string): { strings: string[]; numbers: number[]; dates: string[] } {
@@ -70,135 +118,193 @@ export function literals(text: string, locale: string): { strings: string[]; num
 const words = (text: string) => [...new Set((text.toLowerCase().replace(/'s\b/g, '').match(/\p{L}{3,}/gu) ?? []).filter((w) => !STOP.has(w)))].slice(0, WORDS);
 const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-/** One condition from a field, an operator and a value option; `undefined` when the pair means nothing. */
-function condition(f: Field, op: string, v: V | undefined): Json | undefined {
-	if (op === 'is empty' || op === 'is not empty') return f.put({ isNull: op === 'is empty' });
-	if (v === undefined) return undefined;
-	const one = (o: string, x: Json): Json => f.put({ [o]: x });
-	if (f.kind === 'period') {
-		// ponytail: a preset's upper bound is exclusive and a period's `to` a day, so a span ends one day late at its edge
-		if (op === 'in force on') return 'lit' in v ? one('contains', v.lit) : undefined;
-		if ((op === 'overlaps' || op === 'within') && 'range' in v) return one(op, { from: v.range[0], to: v.range[1] });
+/** The operators and values a field is offered with, or `undefined` when no option can express it. */
+function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[]): { ops: Op[]; values: FilterValue[] } | undefined {
+	const values: FilterValue[] = [];
+	const add = (label: string, arg: FilterArg) => { let l = label, n = 2; while (values.some((v) => v.label === l)) l = `${label} (${n++})`; values.push({ label: l, arg }); };
+	const op = (name: string, label: string): Op => ({ op: name, label });
+	const k = f.kind;
+	let ops: Op[];
+	if (f.many) {
+		// any list field: has one / any / all of the element kind, or is empty (a list is never null-tested)
+		if (k === 'enum') for (const v of s?.values ?? []) add(v, { lit: v });
+		else if (k === 'text') for (const x of [...lit.strings, ...ws]) add(x, { lit: x });
+		else if (NUMERIC.has(k)) for (const x of lit.numbers) add(String(x), { lit: x });
+		else if (k === 'date') for (const d of lit.dates) add(d, { lit: d });
+		else if (k === 'bool') { add('yes', { lit: true }); add('no', { lit: false }); }
+		return { ops: [op('has', 'has'), op('hasAny', 'has any of'), op('hasAll', 'has all of'), op('isEmpty', 'is empty'), op('notEmpty', 'is not empty')], values };
+	}
+	if (k === 'enum' || k === 'state') {
+		ops = [op('eq', 'is'), op('ne', 'is not'), op('in', 'is any of'), op('nin', 'is none of')];
+		const states = s?.states ?? {};
+		for (const v of k === 'enum' ? s?.values ?? [] : Object.keys(states)) add(v, { lit: v });
+		if (k === 'state') add('a final state', { list: Object.keys(states).filter((x) => (states[x]!.to ?? []).length === 0) });
+	} else if (k === 'bool') {
+		ops = [op('eq', 'is')]; add('yes', { lit: true }); add('no', { lit: false });
+	} else if (k === 'text') {
+		ops = [op('like', 'contains'), op('eq', 'is'), op('ne', 'is not'), op('in', 'is any of'), op('nin', 'is none of')];
+		for (const x of [...lit.strings, ...ws]) add(x, { lit: x });
+	} else if (NUMERIC.has(k)) {
+		ops = [op('eq', 'is'), op('ne', 'is not'), op('gt', 'more than'), op('gte', 'at least'), op('lt', 'less than'), op('lte', 'at most'),
+			op('in', 'is any of'), op('nin', 'is none of')];
+		for (const x of lit.numbers) add(String(x), { lit: x });
+	} else if (k === 'date' || k === 'instant' || k === 'time') {
+		const when = k !== 'time';
+		ops = [...(when ? [op('during', 'is within')] : []), op('eq', 'is'), op('ne', 'is not'), op('gt', when ? 'after' : 'more than'), op('gte', when ? 'on or after' : 'at least'),
+			op('lt', when ? 'before' : 'less than'), op('lte', when ? 'on or before' : 'at most')];
+		if (when) for (const v of spans(k)) add(v.label, v.arg);
+		if (k === 'date') for (const d of lit.dates) add(d, { lit: d });
+	} else if (k === 'period' && f.periodOf === 'date') {
+		// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
+		ops = [op('contains', 'in force on'), op('overlaps', 'overlaps'), op('within', 'is within')];
+		add('today', { lit: { today: '' } });
+		for (const v of spans('date')) add(v.label, v.arg);
+		for (const d of lit.dates) add(d, { lit: d });
+	} else if (k === 'json') {
+		ops = [op('contains', 'contains')];
+	} else if (k === 'id' || k === 'currency') {
+		ops = [op('eq', 'is'), op('ne', 'is not'), op('in', 'is any of'), op('nin', 'is none of')];
+	} else if (k === 'point' || k === 'file' || k === 'vector' || k === 'custom' || k === 'ref') {
+		ops = [];
+	} else return undefined;
+	if (s?.optional === true) ops.push(op('isNull', 'is empty'), op('notNull', 'is not empty'));
+	return ops.length === 0 ? undefined : { ops, values };
+}
+
+/** The operator object an op and its argument make; `undefined` when the pair means nothing. */
+function operator(op: string, arg: FilterArg | undefined): Json | undefined {
+	if (op === 'isNull') return { isNull: true };
+	if (op === 'notNull') return { isNull: false };
+	if (op === 'isEmpty') return { isEmpty: true };
+	if (op === 'notEmpty') return { isEmpty: false };
+	if (arg === undefined) return undefined;
+	if ('actor' in arg) {
+		if (op === 'eq' || op === 'ne') return { [op]: { actor: arg.actor } };
+		// a list operand from an actor is `my teams` alone (ir's list `{ actor }`)
+		if ((op === 'in' || op === 'nin') && arg.actor === 'teams') return { [op]: { actor: arg.actor } };
 		return undefined;
 	}
-	if ('range' in v) {
-		const [lo, hi] = v.range;
-		return op === 'within' || op === 'is' ? f.put({ gte: lo, lt: hi }) : op === 'before' ? one('lt', lo) : op === 'on or after' ? one('gte', lo) : undefined;
+	if ('range' in arg) {
+		const [lo, hi] = arg.range;
+		if (op === 'during') return { gte: lo, lt: hi };
+		if (op === 'overlaps' || op === 'within') return { [op]: { from: lo, to: hi } };
+		if (op === 'lt') return { lt: lo };
+		if (op === 'lte') return { lte: hi };
+		if (op === 'gt') return { gt: lo };
+		if (op === 'gte') return { gte: lo };
+		return undefined;
 	}
-	if ('set' in v) return op === 'is' ? one('in', v.set as Json) : op === 'is not' ? one('nin', v.set as Json) : undefined;
-	if ('actor' in v) {
-		const many = v.actor === 'teams';
-		return op === 'is' ? one(many ? 'in' : 'eq', v) : op === 'is not' ? one(many ? 'nin' : 'ne', v) : undefined;
+	if ('list' in arg) {
+		if (op === 'in' || op === 'nin' || op === 'hasAny' || op === 'hasAll') return { [op]: arg.list };
+		return undefined;
 	}
-	const CMP: { readonly [op: string]: string } = { is: 'eq', within: 'eq', 'is not': 'ne', 'more than': 'gt', 'at least': 'gte', 'on or after': 'gte',
-		'less than': 'lt', before: 'lt', 'at most': 'lte' };
-	if (op === 'contains') return typeof v.lit === 'string' ? one('like', `%${esc(v.lit)}%`) : undefined;
-	return CMP[op] === undefined ? undefined : one(CMP[op]!, v.lit);
+	if (op === 'like') return typeof arg.lit === 'string' ? { like: `%${esc(arg.lit)}%` } : undefined;
+	if (op === 'contains') return { contains: arg.lit };
+	if (op === 'during') return { eq: arg.lit };
+	if (op === 'in' || op === 'nin' || op === 'hasAny' || op === 'hasAll') return { [op]: [arg.lit] };
+	if (op === 'has') return { has: arg.lit };
+	if (op === 'eq' || op === 'ne' || op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') return { [op]: arg.lit };
+	return undefined;
+}
+/** The nested JSON a path and an operator object make: the declarative replacement for the old `put` closures. */
+export function instantiate(path: readonly FilterStep[], ops: Json): Json {
+	return path.reduceRight<Json>((inner, s) => {
+		switch (s.k) {
+			case 'field': return { [s.name]: inner };
+			case 'is': return { [s.rel]: { is: inner } };
+			case 'arm': return { [s.rel]: { [s.arm]: inner } };
+			case 'some': case 'every': case 'none': return { [s.rel]: { [s.k]: inner } };
+			case 'count': return { [s.rel]: { count: inner } };
+			case 'agg': return { [s.rel]: { [s.fn]: { of: s.of, ...(inner as { readonly [k: string]: Json }) } } };
+		}
+	}, ops);
+}
+/** One condition from a field path, a machine operator and an operand; `undefined` when the pair means nothing. */
+function condition(path: readonly FilterStep[], op: string, arg: FilterArg | undefined): Json | undefined {
+	const ops = operator(op, arg);
+	return ops === undefined ? undefined : instantiate(path, ops);
 }
 
 export type FilterDescribeConfig = { manifest: EngineManifest; db: TenantDb; read: ReadEngine['run']; clock: () => string; ai?: AiPort; metering?: MeteringPort };
 
 export function filterDescribe(cfg: FilterDescribeConfig) {
 	const m = cfg.manifest, cat = catalogOf(m);
-
-	/** The operators and values a field of kind `k` is offered with, or `undefined` when no option can express it. */
-	function options(f: Pick<FieldInfo, 'kind' | 'periodOf'>, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[]): { ops: string[]; values: Map<string, V> } | undefined {
-		const values = new Map<string, V>();
-		const add = (label: string, v: V) => { let l = label, n = 2; while (values.has(l)) l = `${label} (${n++})`; values.set(l, v); };
-		let ops: string[];
-		if (f.kind === 'enum' || f.kind === 'state') {
-			ops = ['is', 'is not'];
-			const states = s?.states ?? {};
-			for (const v of f.kind === 'enum' ? s?.values ?? [] : Object.keys(states)) add(v, { lit: v });
-			if (f.kind === 'state') add('a final state', { set: Object.keys(states).filter((k) => (states[k]!.to ?? []).length === 0) });
-		} else if (f.kind === 'bool') {
-			ops = ['is']; add('yes', { lit: true }); add('no', { lit: false });
-		} else if (f.kind === 'text') {
-			ops = ['is', 'is not', 'contains'];
-			for (const x of [...lit.strings, ...ws]) add(x, { lit: x });
-		} else if (NUMERIC.has(f.kind)) {
-			ops = ['is', 'more than', 'at least', 'less than', 'at most'];
-			for (const x of lit.numbers) add(String(x), { lit: x });
-		} else if (f.kind === 'date' || f.kind === 'instant') {
-			ops = ['within', 'before', 'on or after'];
-			for (const [l, v] of presets(f.kind)) add(l, v);
-			if (f.kind === 'date') for (const d of lit.dates) add(d, { lit: d });
-		} else if (f.kind === 'period' && f.periodOf === 'date') {
-			// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
-			ops = ['in force on', 'overlaps', 'within'];
-			add('today', { lit: { today: '' } });
-			for (const [l, v] of presets('date')) add(l, v);
-			for (const d of lit.dates) add(d, { lit: d });
-		} else return undefined;
-		if (s?.optional === true) ops.push('is empty', 'is not empty');
-		return { ops, values };
-	}
 	/** Whether the caller reads collection `c` and its field `f` unmasked (rule 14): the narrowing of every option. */
 	const reads = (a: Authority, c: string) => a.admin || (a.collections[c]?.read.length ?? 0) > 0;
 	const unmasked = (a: Authority, c: string, f: string) => a.admin || a.collections[c]?.masks[f] === undefined;
 
-	/** The offered fields: exposed, read unmasked by the caller, of a kind the options can express; then one hop through each exposed relation. */
+	/** The catalogue: the caller's exposed, readable, unmasked fields of a filterable kind as (field, operator) offers. */
 	async function offer(collection: string, text: string, a: Authority, b: Bindings): Promise<Field[]> {
 		const c = cat.collections.get(collection)!;
-		const spec = m.models[collection]?.fields ?? {};
 		const lit = literals(text, m.workspace.locale);
 		const ws = words(text);
 		const out: Field[] = [];
 		const searches: { field: Field; target: string; label: string }[] = [];
-		for (const f of c.model.fields.values()) {
-			const system = ['created_at', 'updated_at'].includes(f.name);
-			const s = spec[f.name] as Spec | undefined;
-			if (f.name.includes('.') || f.many || (!system && s === undefined && !c.model.one.has(f.name)) || s?.hidden || !exposedField(c, f.name)) continue;
-			if (!unmasked(a, collection, f.name)) continue;
-			const put = (ops: { [op: string]: Json }): Json => ({ [f.name]: ops });
-			const label = system ? (f.name === 'created_at' ? 'Created' : 'Updated') : s?.label ?? human(f.name);
-			const rel = c.model.one.get(f.name);
-			if (rel !== undefined) {
-				if (rel.targets.length > 1) continue;
-				const target = rel.targets[0]!;
-				const field: Field = { name: f.name, label, kind: 'record', ops: ['is', 'is not', 'is empty', 'is not empty'], values: new Map(), put, own: true };
-				if (target === 'sys_user') field.values.set('me', { actor: 'id' });
-				if (target === 'sys_team') field.values.set('my team', { actor: 'teams' });
-				if (a.actor.kind === 'member' && a.actor.party?.collection === target) field.values.set('my party', { actor: 'party' });
-				const tl = [m.models[target]?.label ?? 'name'].flat()[0]!;
-				if (cat.collections.get(target)?.model.fields.get(tl)?.kind === 'text' && reads(a, target) && unmasked(a, target, tl)) searches.push({ field, target, label: tl });
-				out.push(field);
-				continue;
-			}
-			const o = options(f, s, lit, ws);
-			if (o !== undefined) out.push({ name: f.name, label, kind: f.kind, ...o, put, own: true, sort: f.name });
-		}
-		// one hop through the exposed relations into collections the caller reads: the target's own declared, unmasked fields
-		const through = (target: string, prefix: string, wrap: (inner: Json) => Json, sort?: string) => {
+		/** One model's own fields nested under `steps`. `prefix` labels them; `sortFrom` is the dot path they sort by
+		 * (`undefined` past the builder's one relation hop); `hops` counts relation steps still offered. */
+		const leaves = (target: string, steps: readonly FilterStep[], prefix: string, sortFrom: string | undefined, hops: number) => {
 			const tc = cat.collections.get(target), tspec = m.models[target]?.fields ?? {};
-			if (tc === undefined || !reads(a, target)) return;
+			if (tc === undefined) return;
 			for (const f of tc.model.fields.values()) {
 				const s = tspec[f.name] as Spec | undefined;
-				if (s === undefined || s.hidden || f.name.includes('.') || f.many || tc.model.one.has(f.name) || !exposedField(tc, f.name) || !unmasked(a, target, f.name)) continue;
-				const o = options(f, s, lit, ws);
-				if (o !== undefined) out.push({ name: f.name, label: `${prefix} › ${s.label ?? human(f.name)}`, kind: f.kind, ...o, own: false, put: (ops) => wrap({ [f.name]: ops }),
-					...(sort === undefined ? {} : { sort: `${sort}.${f.name}` }) });
+				const system = target === collection && (f.name === 'created_at' || f.name === 'updated_at');
+				if (f.name.includes('.') || (!system && s === undefined && !tc.model.one.has(f.name)) || s?.hidden || !exposedField(tc, f.name)) continue;
+				if (!unmasked(a, target, f.name)) continue;
+				const label = prefix + (system ? (f.name === 'created_at' ? 'Created' : 'Updated') : s?.label ?? human(f.name));
+				const rel = tc.model.one.get(f.name);
+				if (rel === undefined) {
+					const o = options(f, s, lit, ws);
+					if (o === undefined) continue;
+					const sort = sortFrom === undefined || f.many || UNSORTABLE.has(f.kind) ? undefined : sortFrom === '' ? f.name : `${sortFrom}.${f.name}`;
+					out.push({ label, path: [...steps, { k: 'field', name: f.name }], kind: f.kind, ...o, ...(sort === undefined ? {} : { sort }) });
+					continue;
+				}
+				// a relation is offered as a record condition only while a hop remains: past `FILTER_MAX_HOPS` it is not reached
+				if (hops === 0 || !exposedRelation(tc, f.name)) continue;
+				// the relation's record as a condition by its key, and (one arm per target of an exclusive arc)
+				for (const arm of rel.targets.length > 1 ? rel.targets : [undefined]) {
+					const at = arm ?? rel.targets[0]!;
+					const optional = (m.relationships[`${target}.${f.name}`] as { optional?: true } | undefined)?.optional === true;
+					const field: Field = { label: arm === undefined ? label : `${label} (${human(arm)})`, kind: 'record',
+						path: [...steps, arm === undefined ? { k: 'field', name: f.name } : { k: 'arm', rel: f.name, arm }], ops: [], values: [] };
+					const nul: Op[] = optional ? [{ op: 'isNull', label: 'is empty' }, { op: 'notNull', label: 'is not empty' }] : [];
+					field.ops = [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'in', label: 'is any of' }, { op: 'nin', label: 'is none of' }, ...nul];
+					if (at === 'sys_user') field.values.push({ label: 'me', arg: { actor: 'id' } });
+					if (at === 'sys_team') field.values.push({ label: 'my team', arg: { actor: 'teams' } });
+					if (a.actor.kind === 'member' && a.actor.party?.collection === at) field.values.push({ label: 'my party', arg: { actor: 'party' } });
+					const tl = [m.models[at]?.label ?? 'name'].flat()[0]!;
+					if (arm === undefined && steps.length === 0 && cat.collections.get(at)?.model.fields.get(tl)?.kind === 'text' && reads(a, at) && unmasked(a, at, tl))
+						searches.push({ field, target: at, label: tl });
+					out.push(field);
+					if (reads(a, at)) leaves(at, [...steps, arm === undefined ? { k: 'is', rel: f.name } : { k: 'arm', rel: f.name, arm }],
+						`${field.label} › `, arm === undefined && steps.length === 0 ? f.name : undefined, hops - 1);
+				}
 			}
 		};
-		for (const [r, rel] of c.model.one) {
-			if (rel.targets.length > 1 || !exposedRelation(c, r) || !unmasked(a, collection, r)) continue;
-			through(rel.targets[0]!, human(r), (inner) => ({ [r]: { is: inner } }), r);
-		}
+		leaves(collection, [], '', '', FILTER_MAX_HOPS);
 		for (const [r, rel] of c.model.many) {
 			if (!exposedRelation(c, r) || !reads(a, rel.child) || rel.column.includes('__')) continue;
 			const tc = cat.collections.get(rel.child), rl = human(r);
 			if (tc === undefined) continue;
-			for (const [q, word] of [['some', 'any'], ['every', 'all'], ['none', 'none']] as const) through(rel.child, `${rl} (${word})`, (inner) => ({ [r]: { [q]: inner } }));
+			for (const [q, word] of [['some', 'any'], ['every', 'all'], ['none', 'none']] as const)
+				leaves(rel.child, [{ k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
 			// its count, and numeric child aggregates: compared with the numbers in the text
-			const numbers = new Map<string, V>(lit.numbers.map((x) => [String(x), { lit: x }]));
-			const cmp = ['is', 'more than', 'at least', 'less than', 'at most'];
-			out.push({ name: r, label: `${rl} › count`, kind: 'count', ops: cmp, values: new Map(numbers), own: false, put: (ops) => ({ [r]: { count: ops } }) });
+			const values: FilterValue[] = lit.numbers.map((x) => ({ label: String(x), arg: { lit: x } }));
+			const cmp: Op[] = [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'gt', label: 'more than' }, { op: 'gte', label: 'at least' },
+				{ op: 'lt', label: 'less than' }, { op: 'lte', label: 'at most' }];
+			out.push({ label: `${rl} › count`, path: [{ k: 'count', rel: r }], kind: 'count', ops: cmp, values: [...values] });
 			for (const f of tc.model.fields.values()) {
 				const s = m.models[rel.child]?.fields[f.name] as Spec | undefined;
-				if (s === undefined || s.hidden || f.many || !['int', 'decimal', 'money'].includes(f.kind) || !exposedField(tc, f.name) || !unmasked(a, rel.child, f.name)) continue;
-				for (const [fn, word] of [['sum', 'total'], ['avg', 'average'], ['min', 'lowest'], ['max', 'highest']] as const)
-					out.push({ name: f.name, label: `${rl} › ${word} ${(s.label ?? human(f.name)).toLowerCase()}`, kind: 'decimal', ops: cmp, values: new Map(numbers), own: false,
-						put: (ops) => ({ [r]: { [fn]: { of: f.name, ...ops } } }) });
+				if (s === undefined || s.hidden || f.many || !exposedField(tc, f.name) || !unmasked(a, rel.child, f.name)) continue;
+				const words4 = [['total', 'sum'], ['average', 'avg'], ['lowest', 'min'], ['highest', 'max']] as const;
+				for (const [word, fn] of words4) {
+					const ok = fn === 'min' || fn === 'max'
+						? ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration', 'date', 'instant'].includes(f.kind)
+						: ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration'].includes(f.kind);
+					if (!ok) continue;
+					out.push({ label: `${rl} › ${word} ${(s.label ?? human(f.name)).toLowerCase()}`, path: [{ k: 'agg', rel: r, fn, of: f.name }], kind: f.kind,
+						ops: [...cmp], values: [...values] });
+				}
 			}
 		}
 		// relation candidates: one batch of label searches as the caller, ≤ 5 rows per word
@@ -209,9 +315,9 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			lookups.forEach(({ s }, i) => {
 				for (const row of (answers[i] as { rows: readonly { readonly [k: string]: Json }[] }).rows) {
 					const label = String(row[s.label]);
-					if (![...s.field.values.values()].some((v) => 'lit' in v && v.lit === row['id'])) {
-						let l = label, n = 2; while (s.field.values.has(l)) l = `${label} (${n++})`;
-						s.field.values.set(l, { lit: row['id']! });
+					if (!s.field.values.some((v) => 'lit' in v.arg && v.arg.lit === row['id'])) {
+						let l = label, n = 2; while (s.field.values.some((v) => v.label === l)) l = `${label} (${n++})`;
+						s.field.values.push({ label: l, arg: { lit: row['id']! } });
 					}
 					// the word that found this row came from the description, so the field is one it plausibly means
 					searched.add(s.field);
@@ -224,12 +330,28 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const said = text.toLowerCase();
 		for (const f of out) {
 			const tokens = f.label.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2);
-			f.hit = searched.has(f) || tokens.some((t) => ws.includes(t)) || [...f.values.keys()].some((v) => !ws.includes(v) && said.includes(v.toLowerCase()));
+			f.hit = searched.has(f) || tokens.some((x) => ws.includes(x)) || f.values.some((v) => !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
 		}
 		return out;
 	}
+	/** The catalogue as plain data for the browser, without the description's text-derived values. */
+	const catalogue = (fields: readonly Field[]): FilterCatalogue => fields.flatMap((f) => f.ops.map((o) => ({ label: f.label, path: f.path, op: o.op, opLabel: o.label, kind: f.kind,
+		...(f.values.length === 0 ? {} : { values: f.values }), ...(f.sort === undefined ? {} : { sort: f.sort }) })));
+	/** The local view's own fields (`$local`): text, number and bool only, and no relation. */
+	const localFields = (fs: readonly LocalFilterField[], text: string): Field[] => fs.map((f) => ({ label: f.label, path: [{ k: 'field' as const, name: f.name }], kind: f.kind,
+		...options({ kind: f.kind }, f.optional ? { optional: true } : undefined, literals(text, m.workspace.locale), words(text))!, sort: f.name }));
+	/** The collection a caller may describe or see options on; a `$local` view carries its own fields. */
+	const subject = (o: { collection: string; authority: Authority; localFields?: readonly LocalFilterField[] }, text: string): { fields?: Field[]; fail?: { ok: false; code: string; message: string } } => {
+		const local = o.collection === '$local';
+		if (!local && (!cat.collections.has(o.collection) || (!o.authority.admin && (o.authority.collections[o.collection]?.read.length ?? 0) === 0)))
+			return { fail: { ok: false, code: 'notFound', message: 'Not found or no access.' } };
+		if (local && (o.localFields === undefined || o.localFields.length === 0 || o.localFields.length > 50 ||
+			o.localFields.some((f) => !/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(f.name) || f.label.length > 100 || !['text', 'number', 'bool'].includes(f.kind))))
+			return { fail: { ok: false, code: 'invalid', message: 'Invalid local filter fields.' } };
+		return local ? { fields: localFields(o.localFields!, text) } : {};
+	};
 
-	async function call(state: DecisionRequest['state'], questions: { [id: string]: DecisionQuestion }): Promise<DecisionResult | Described> {
+	async function call(state: DecisionRequest['state'], questions: { [id: string]: DecisionQuestion }): Promise<DecisionResult | { ok: false; code: string; message: string }> {
 		const req = { state, questions };
 		const d = await ask(cfg.ai, req);
 		const id = randomUUID();
@@ -238,31 +360,34 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		await meter(cfg.metering, d, id);
 		return failed(d) ? { ok: false, code: d.kind, message: 'Could not build a filter from that description.' } : d;
 	}
+	/** How the stated conditions combine: the one composition question, bounded to one top-level group. */
+	const COMBINE: { readonly [c: string]: { join: 'and' | 'or'; not: boolean; because: string } } = {
+		'all of them hold': { join: 'and', not: false, because: 'every stated condition holds' },
+		'any of them hold': { join: 'or', not: false, because: 'at least one stated condition holds' },
+		'not all of them hold': { join: 'and', not: true, because: 'not every stated condition holds' },
+		'none of them hold': { join: 'or', not: true, because: 'no stated condition holds' },
+	};
+	const ALL = COMBINE['all of them hold']!;
 
 	/** `filter.describe` as the caller: `{ collection, text }` → a decoded `Where` and optional `OrderBy`, or a typed failure. */
 	async function describe(o: { collection: string; text: string; authority: Authority; bindings: Bindings; localFields?: readonly LocalFilterField[] }): Promise<Described> {
 		const fail = (message: string): Described => ({ ok: false, code: 'invalid', message });
 		if (o.text.trim() === '' || o.text.length > FILTER_MAX_TEXT) return fail(`A description is 1–${FILTER_MAX_TEXT} characters.`);
+		if (cfg.ai === undefined) return { ok: false, code: 'notFound', message: 'Describing a filter is not available here.' };
+		const subjectOf = subject(o, o.text);
+		if (subjectOf.fail !== undefined) return subjectOf.fail;
 		const local = o.collection === '$local';
-		if (!local && (!cat.collections.has(o.collection) || (!o.authority.admin && (o.authority.collections[o.collection]?.read.length ?? 0) === 0)))
-			return { ok: false, code: 'notFound', message: 'Not found or no access.' };
-		if (local && (o.localFields === undefined || o.localFields.length === 0 || o.localFields.length > 50 ||
-			o.localFields.some((f) => !/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(f.name) || f.label.length > 100 || !['text', 'number', 'bool'].includes(f.kind))))
-			return fail('Invalid local filter fields.');
-		const fields = local ? o.localFields!.map((f): Field => {
-			const optionsFor = options(f, f.optional ? { optional: true } : undefined, literals(o.text, m.workspace.locale), words(o.text))!;
-			return { name: f.name, label: f.label, kind: f.kind, ...optionsFor, own: true, put: (ops) => ({ [f.name]: ops }), sort: f.name };
-		}) : await offer(o.collection, o.text, o.authority, o.bindings);
+		const fields = subjectOf.fields ?? await offer(o.collection, o.text, o.authority, o.bindings);
 		if (fields.length === 0) return fail('Nothing here can be filtered by a description.');
 		const qual = (f: Field, x: string) => `${f.label} · ${x}`;
 		/** A choice's criteria: each option names itself (the provider reads option → description). */
 		const own = (keys: readonly string[]) => Object.fromEntries(keys.map((k) => [k, k]));
 		// one field's own operators and values, so an answer can only ever name that field: the request asks what to do
 		// with a field, never which field, and so carries no answer the next question depends on
-		const forField = (f: Field) => ({ op: own(f.ops.map((x) => qual(f, x))), value: own([NONE, ...[...f.values.keys()].map((x) => qual(f, x))]) });
+		const forField = (f: Field) => ({ ops: new Map(f.ops.map((x) => [qual(f, x.label), x])), vals: new Map(f.values.map((v) => [qual(f, v.label), v.arg])) });
 		// the provider's cap per choice question (the Decisions API: 255)
 		const max = cfg.ai?.sys_1.maxChoices ?? Infinity;
-		const sortable = fields.filter((f) => f.sort !== undefined && ORDERED.has(f.kind));
+		const sortable = fields.filter((f) => f.sort !== undefined);
 		const DIRS = { asc: 'ascending (oldest, lowest, A→Z first)', desc: 'descending (newest, highest, Z→A first)' };
 		// the fields the description most plausibly means, asked about in that order: a wide collection keeps the ones a
 		// person actually wrote of rather than the first twelve the schema happens to declare
@@ -273,14 +398,19 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const state = { description: o.text, collection: human(o.collection), fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today, timezone: o.bindings.tz, weekStartsOn: 'Monday' };
 		const first: { [id: string]: DecisionQuestion } = {};
+		const choices2 = new Map<Field, ReturnType<typeof forField>>();
 		for (const [n, { f }] of asked.entries()) {
 			const q = forField(f);
+			choices2.set(f, q);
 			Object.assign(first, {
 				[`f${n + 1}`]: { type: 'noul', instructions: `Does the description restrict the records by ${f.label}?`,
 					criteria: { true: `it states a condition on ${f.label}`, false: `it states no condition on ${f.label}` } },
-				[`f${n + 1}.op`]: { type: 'choice', instructions: `Which comparison does the condition on ${f.label} use?`, criteria: q.op },
-				[`f${n + 1}.value`]: { type: 'choice', instructions: `Which value does the condition on ${f.label} compare with?`, criteria: q.value } });
+				[`f${n + 1}.op`]: { type: 'choice', instructions: `Which comparison does the condition on ${f.label} use?`, criteria: own([...q.ops.keys()]) },
+				[`f${n + 1}.value`]: { type: 'choice', instructions: `Which value does the condition on ${f.label} compare with?`, criteria: own([NONE, ...q.vals.keys()]) } });
 		}
+		// the composition of every stated condition: bounded to one top-level AND, OR or their negations
+		Object.assign(first, { combine: { type: 'choice', instructions: 'How do the stated conditions combine?',
+			criteria: Object.fromEntries(Object.entries(COMBINE).map(([k, v]) => [k, v.because])) } });
 		if (sortable.length > 0) Object.assign(first, {
 			'sort.yes': { type: 'noul', instructions: 'Does the description ask for an order?', criteria: { true: 'it asks for an order', false: 'it asks for no order' } },
 			'sort.field': { type: 'choice', instructions: 'Which field orders the records?', criteria: own(sortable.slice(0, max).map((f) => f.label)) },
@@ -292,24 +422,16 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			if (noulOf(r1, `f${n + 1}`) <= 0.5) continue;
 			// the engine has already refused an answer outside the offered criteria, so these are present; the fallbacks only
 			// satisfy the type, and an unbuildable pair fails the filter below rather than being dropped
-			const op = choiceOf(r1, `f${n + 1}.op`) ?? '', value = choiceOf(r1, `f${n + 1}.value`) ?? NONE;
-			const label = (x: string) => x.slice(f.label.length + 3);
-			const c = condition(f, label(op), value === NONE ? undefined : f.values.get(label(value)));
+			const q = choices2.get(f)!;
+			const op = q.ops.get(choiceOf(r1, `f${n + 1}.op`) ?? ''), arg = q.vals.get(choiceOf(r1, `f${n + 1}.value`) ?? '');
+			const c = condition(f.path, op?.op ?? '', arg);
 			if (c === undefined) return fail(`Could not build a condition on ${f.label}.`);
 			conds.push(c);
 			if (conds.length === FILTER_MAX_CONDITIONS) break;
 		}
-		// the same condition asked twice is one; `is` twice on one field is `is any of` ("sent or won")
-		const merged: Json[] = [];
-		for (const c of conds) {
-			const [field, cmp] = Object.entries(c as { [f: string]: Json })[0]!;
-			const eq = (x: Json) => x !== null && typeof x === 'object' && !Array.isArray(x) && 'eq' in x ? (x as { eq: Json }).eq : undefined;
-			const prior = merged.findIndex((m) => field in (m as object) && eq((m as { [f: string]: Json })[field]!) !== undefined);
-			if (merged.some((m) => JSON.stringify(m) === JSON.stringify(c))) continue;
-			if (eq(cmp!) !== undefined && prior >= 0) merged[prior] = { [field]: { in: [eq((merged[prior] as { [f: string]: Json })[field]!)!, eq(cmp!)!] } };
-			else merged.push(c);
-		}
-		const where: Json = merged.length === 1 ? merged[0]! : { and: merged };
+		const combine = COMBINE[choiceOf(r1, 'combine') ?? ''] ?? ALL;
+		const group = conds.length === 1 ? conds[0]! : { [combine.join]: conds };
+		const where: Json = conds.length === 0 ? { and: [] } : combine.not ? { not: group } : group;
 		const sortField = sortable.length > 0 && noulOf(r1, 'sort.yes') > 0.5 ? sortable.find((f) => f.label === choiceOf(r1, 'sort.field')) : undefined;
 		const dir: Json = choiceOf(r1, 'sort.dir') === DIRS.asc ? 'asc' : 'desc';
 		const orderBy: Json | undefined = sortField === undefined ? undefined : sortField.sort!.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), dir);
@@ -320,7 +442,14 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		}
 		return { ok: true, where, ...(orderBy === undefined ? {} : { orderBy }) };
 	}
-	return { describe };
+	/** `filter.options` as the caller: the same catalogue the description is asked about, as plain data for the builder. */
+	async function opts(o: { collection: string; authority: Authority; bindings: Bindings; localFields?: readonly LocalFilterField[] }): Promise<{ ok: true; fields: FilterCatalogue } | { ok: false; code: string; message: string }> {
+		const subjectOf = subject(o, '');
+		if (subjectOf.fail !== undefined) return subjectOf.fail;
+		const fields = subjectOf.fields ?? await offer(o.collection, '', o.authority, o.bindings);
+		return { ok: true, fields: catalogue(fields) };
+	}
+	return { describe, options: opts };
 }
 export type FilterDescribe = ReturnType<typeof filterDescribe>;
 

@@ -273,7 +273,8 @@ export function engine(config: EngineConfig): Engine {
 	e.agents = agents({ engine: e, ...(config.ai === undefined ? {} : { ai: config.ai }), bindings, announce: (at) => wakeAt(at),
 		mcp: { env: tenantEnv }, ...config.agent }); // hook:agent — turn takeover (rule 48)
 	const decided = { ...(config.ai === undefined ? {} : { ai: config.ai }), ...(config.metering === undefined ? {} : { metering: config.metering }) }; // hook:decisions
-	if (config.ai !== undefined) e.filters = filterDescribe({ manifest: m, db, read: e.read, clock, ...decided }); // hook:decisions
+	// always present: `filter.options` is pure exposure, and `filter.describe` refuses without a bound `ai`
+	e.filters = filterDescribe({ manifest: m, db, read: e.read, clock, ...decided }); // hook:decisions
 	e.triage = triage({ engine: e, clock, scope: config.scope ?? '', ...decided, // hook:triage — attachments as metadata only (P37 (3))
 		...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }),
 		drain: (c, envoy) => envoy ? e.envoys.drain(c) : e.agents.drain(c) });

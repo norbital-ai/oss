@@ -77,9 +77,11 @@ export type AgentRow = { id: string; seq: number; role: 'user' | 'assistant' | '
 	tool?: { name: string; failed: boolean; child?: string; running?: true; args?: string; result?: string; ms?: number };
 	/** An assistant row's reasoning, verbatim (L-BOLT-548). */ reasoning?: string;
 	/** A context checkpoint: the last seq it summarizes, the rows kept beside it, who asked for it (L-BOLT-546). */ compact?: { cutoff: number; keep: string[]; origin: 'manual' | 'requested' | 'automatic' } };
-/** The live `conversations` read's row: one of the member's own in-app conversations, most recently active first (`at`). */
+/** The live `conversations` read's row: one of the member's own in-app conversations or an envoy's channel thread (rule 61), most recently active first (`at`). */
 export type AgentConversation = { id: string; title: string | null; at: string; status: 'idle' | 'running' | 'stopped'; model: string;
-	plan: { revision: number; body: string; status: 'draft' | 'active' | 'verified'; /** the seq execution started after */ checkpoint?: number } | null; goals: { id: string; text: string; status: 'pending' | 'doing' | 'done' }[] | null };
+	plan: { revision: number; body: string; status: 'draft' | 'active' | 'verified'; /** the seq execution started after */ checkpoint?: number } | null; goals: { id: string; text: string; status: 'pending' | 'doing' | 'done' }[] | null;
+	/** The envoy serving a channel thread, and the channel it is on; both null exactly when this is the member's own in-app conversation. */
+	envoy: string | null; channel: string | null };
 /** `POST /__bolt/push`: a browser `PushSubscription.toJSON()`, or `{ endpoint, remove: true }`. */
 export type PushBody = { endpoint: string; keys?: { p256dh: string; auth: string }; remove?: true };
 

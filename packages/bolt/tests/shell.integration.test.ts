@@ -215,7 +215,7 @@ describe('shell host (§5.10)', () => {
 		await t.db.write({ text: 'DELETE FROM sys_event', params: [] });
 		await t.db.write({ text: `INSERT INTO sys_event (at, severity, event, invocation, attributes) SELECT e.at, e.severity, e.event, e.invocation, e.attributes
 			FROM jsonb_to_recordset($1::jsonb) AS e(at timestamptz, severity text, event text, invocation text, attributes jsonb) ORDER BY e.at`, params: [JSON.stringify(rows)] });
-		type Log = { id: string; event: string; severity: string; attributes: { n: number } }[];
+		type Log = { id: string; event: string; severity: string; conversation?: string | null; attributes: { n?: number; state?: { directive: string } } }[];
 		const logs = async (q: string) => (await call(admin, 'GET', `/__bolt/shell/logs${q}`)).body!.value as Log;
 		const newest = await logs('');
 		expect(newest).toHaveLength(200);
@@ -227,6 +227,13 @@ describe('shell host (§5.10)', () => {
 		expect(await logs(`?after=${newest[0]!.id}`)).toEqual([]);
 		await t.db.write({ text: `INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES (now(), 'warn', 'act.refused', 'late', '{"n":250}')`, params: [] });
 		expect((await logs(`?after=${newest[0]!.id}`)).map((r) => r.event)).toEqual(['act.refused']);
+		// one conversation's events alone (the panel's raw-context tab)
+		await t.db.write({ text: `INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES
+			(now(), 'info', 'decision.made', 'd1', 'c1', '{"state":{"directive":"go"}}'::jsonb),
+			(now(), 'info', 'decision.made', 'd2', 'c2', '{"state":{"directive":"stop"}}'::jsonb)`, params: [] });
+		const scoped = await logs('?conversation=c1');
+		expect(scoped.map((r) => r.conversation)).toEqual(['c1']);
+		expect(scoped[0]!.attributes).toMatchObject({ state: { directive: 'go' } });
 		expect((await call(rep, 'GET', '/__bolt/shell/logs')).status).toBe(403);
 	});
 

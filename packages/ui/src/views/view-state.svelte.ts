@@ -1,10 +1,12 @@
 // The view popover's state for a `Table` or `Board` (rule 16b): filter rows and sort keys, read strictly from the URL
-// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`orderBy` a read sends.
+// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`orderBy` a read sends. The condition catalogue
+// (`filter.options`) is the same one a description is offered; the builder renders it, never an operator table of its own.
 import { untrack } from 'svelte';
 import type { CollectionExposure } from '../kinds/context.js';
 import type { Json, ViewBolt } from './bolt.js';
 import {
-	clauses, fromWhere, orderKeys, orderOf, orderText, parseOrder, readViewUrl, rowsWhere, sortable, toWhere, writeViewUrl, type Node, type SortKey, type Where,
+	clauses, fromWhere, localFilterFields, orderKeys, orderOf, orderText, parseOrder, readViewUrl, rowsWhere, sortable, toWhere, writeViewUrl,
+	type Node, type Offer, type SortKey, type Where,
 } from './filter.js';
 import { msg } from './model.js';
 
@@ -45,6 +47,20 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 	let touched = $state(first.touched);
 	let notice = $state<string | null>(first.notice);
 
+	// the engine's catalogue, once per collection: the builder's fields, operators and values
+	let offers = $state<readonly Offer[]>([]);
+	let loaded: string | null = null;
+	async function loadOffers() {
+		const c = o.collection();
+		if (bolt.options === undefined || loaded === c) return;
+		loaded = c;
+		try { offers = (await bolt.options(c, localFilterFields(c, o.catalog()[c]))).fields; } catch { offers = []; }
+	}
+	$effect(() => {
+		o.collection();
+		void loadOffers();
+	});
+
 	// what the read sends: the viewer's rows, each re-checked by `bolt.decode` when the client has it (rule 11a)
 	const lowered = $derived.by(() => {
 		const c = o.collection(), parts: Where[] = [];
@@ -65,6 +81,7 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 	return {
 		get rows() { return rows; },
 		get order() { return order; },
+		get offers() { return offers; },
 		get where(): Where | undefined { return lowered.where; },
 		get notice() { return notice ?? (lowered.dropped > 0 ? DROPPED() : null); },
 		setRows(next: readonly Node[]) { rows = next; touched = true; notice = null; },
@@ -76,10 +93,7 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 			if (bolt.describe === undefined || text.trim() === '') return false;
 			try {
 				const c = o.collection();
-				const fields = c.startsWith('$') ? Object.entries(o.catalog()[c]?.fields ?? {}).flatMap(([name, field]) =>
-					field.kind === 'text' || field.kind === 'number' || field.kind === 'bool'
-						? [{ name, label: field.label ?? name, kind: field.kind, optional: field.optional === true }] : []) : undefined;
-				const r = await bolt.describe(c, text.trim(), fields);
+				const r = await bolt.describe(c, text.trim(), localFilterFields(c, o.catalog()[c]));
 				const parts = clauses(r.where).map((cl) => fromWhere(o.catalog(), o.collection(), cl));
 				const keys = r.orderBy === undefined ? null : parseOrder(orderText(orderKeys(r.orderBy)), sortable(o.catalog()[o.collection()], !o.collection().startsWith('$'), o.catalog()));
 				if (parts.some((p) => p === null) || (keys !== null && keys.dropped > 0)) return fail();

@@ -199,6 +199,21 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 			return r.ok ? committed({ where: r.where, ...(r.orderBy === undefined ? {} : { orderBy: r.orderBy }) })
 				: refusal(r.code === 'notFound' ? 'notFound' : 'invalidInput', r.message);
 		},
+		// hook:decisions — rule 16b: the same catalogue the description is offered, as plain data for the builder; pure
+		// exposure, so no AI facility and no rate window
+		async 'filter.options'(authority, input, b) {
+			const x = obj(input), filters = h.engine.filters;
+			if (filters === undefined) return refusal('notFound', 'Filter options are not available here.');
+			if (typeof x['collection'] !== 'string') throw new BoltError('invalid', 'decode', 'filter.options takes { collection }');
+			const raw = x['fields'];
+			if (raw !== undefined && (!Array.isArray(raw) || raw.some((v) => typeof v !== 'object' || v === null || Array.isArray(v) ||
+				typeof v['name'] !== 'string' || typeof v['label'] !== 'string' || !['text', 'number', 'bool'].includes(String(v['kind'])) ||
+				(v['optional'] !== undefined && typeof v['optional'] !== 'boolean'))))
+				throw new BoltError('invalid', 'decode', 'filter.options fields are invalid');
+			const r = await filters.options({ collection: x['collection'], authority, bindings: b,
+				...(raw === undefined ? {} : { localFields: raw as LocalFilterField[] }) });
+			return r.ok ? committed({ fields: r.fields }) : refusal(r.code === 'notFound' ? 'notFound' : 'invalidInput', r.message);
+		},
 		// ── the in-app agent (§5.9): the panel's three callables ──
 		async 'sys_conversation.start'(authority, input) {
 			const who = agentMember(authority), x = obj(input);

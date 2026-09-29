@@ -16,11 +16,67 @@ export type Cmp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
 export type Op = Cmp | 'in' | 'nin' | 'like' | 'isNull' | 'notNull' | 'has' | 'hasAny' | 'hasAll' | 'isEmpty' | 'notEmpty'
 	| 'during' | 'contains' | 'overlaps' | 'within';
 export type Unit = 'week' | 'month' | 'quarter' | 'year';
-export type Preset = 'today' | 'yesterday' | 'last7' | 'next7' | 'last30' | `${'this' | 'last' | 'next'}_${Unit}`;
-/** A condition's value: a literal, a list, a relative date, an actor, or a date preset (`during`). */
-export type Arg = { lit: Json } | { list: readonly Json[] } | { today: string } | { now: string } | { startOf: Unit; shift?: number }
-	| { actor: 'id' | 'party' | 'teams' } | { preset: Preset };
+/** A condition's value: a literal, a list, a relative date span (with the catalogue's label, when it came from one), an
+ * actor, or a `today`/`now`/`startOf` operand. */
+export type Arg = { lit: Json } | { list: readonly Json[] } | { range: readonly [Json, Json]; label?: string } | { today: string } | { now: string }
+	| { startOf: Unit; shift?: number } | { actor: 'id' | 'party' | 'teams' };
 export type Quant = 'some' | 'none' | 'every' | 'count' | 'sum' | 'min' | 'max' | 'avg';
+
+// ── the engine's condition catalogue (rule 16b): the builder renders exactly these, never a second operator table ──
+/** One step of an offered condition's nesting from the collection root (bolt's `FilterStep`, structurally). */
+export type FilterStep =
+	| { k: 'field'; name: string }
+	| { k: 'is'; rel: string }
+	| { k: 'arm'; rel: string; arm: string }
+	| { k: 'some' | 'every' | 'none'; rel: string }
+	| { k: 'count'; rel: string }
+	| { k: 'agg'; rel: string; fn: 'sum' | 'avg' | 'min' | 'max'; of: string };
+/** One offered (field, operator) pair as the host's `filter.options` returns it. */
+export type Offer = { label: string; path: readonly FilterStep[]; op: string; opLabel: string; kind: string;
+	values?: readonly { label: string; arg: Arg }[]; sort?: string };
+const stepName = (s: FilterStep): string => s.k === 'field' ? s.name : s.k === 'arm' ? `${s.rel}:${s.arm}` : s.rel;
+/** Whether two steps are the same: a field's name, an arc's relation and arm, a relation's kind and name. */
+const sameStep = (a: FilterStep, b: FilterStep): boolean =>
+	a.k === 'field' || b.k === 'field' ? a.k === 'field' && b.k === 'field' && a.name === b.name
+		: a.k === 'arm' || b.k === 'arm' ? a.k === 'arm' && b.k === 'arm' && a.rel === b.rel && a.arm === b.arm
+			: a.k === b.k && a.rel === b.rel;
+export const pathOf = (steps: readonly FilterStep[]): string => steps.map(stepName).join('.');
+/** An offer's steps within a context (`prefix` steps from the root), or `null` when it belongs to another context. */
+export function within(offer: Offer, prefix: readonly FilterStep[]): readonly FilterStep[] | null {
+	if (offer.path.length < prefix.length) return null;
+	return prefix.every((s, i) => sameStep(s, offer.path[i]!)) ? offer.path.slice(prefix.length) : null;
+}
+/** The catalogue paths a picker offers in a context: offered condition paths, and the many-relations to expand. */
+export function offeredPaths(offers: readonly Offer[], prefix: readonly FilterStep[]): { conditions: Set<string>; many: Set<string> } {
+	const conditions = new Set<string>(), many = new Set<string>();
+	for (const o of offers) {
+		const rest = within(o, prefix);
+		const first = rest?.[0];
+		if (first === undefined) continue;
+		if (first.k === 'some' || first.k === 'every' || first.k === 'none') many.add(first.rel);
+		else if (first.k === 'count' || first.k === 'agg') many.add(first.rel);
+		else conditions.add(pathOf(rest!));
+	}
+	return { conditions, many };
+}
+/** The offers for one condition path in a context: its operators, labels, values and literal kind. */
+export function offersFor(offers: readonly Offer[], prefix: readonly FilterStep[], path: string): readonly Offer[] {
+	return offers.filter((o) => { const rest = within(o, prefix); return rest !== null && (rest.at(-1)?.k === 'field' || rest.at(-1)?.k === 'is' || rest.at(-1)?.k === 'arm') && pathOf(rest) === path; });
+}
+/** What a many-relation offers in a context: its count and aggregate comparisons, and the aggregate child fields. */
+export function manyOffers(offers: readonly Offer[], prefix: readonly FilterStep[], rel: string): { all: boolean; count: readonly Offer[]; aggs: readonly Offer[] } {
+	const count: Offer[] = [], aggs: Offer[] = [];
+	let all = false;
+	for (const o of offers) {
+		const rest = within(o, prefix);
+		const [first, second] = [rest?.[0], rest?.[1]];
+		if (first === undefined) continue;
+		if ((first.k === 'some' || first.k === 'every' || first.k === 'none') && first.rel === rel) all = true;
+		else if (first.k === 'count' && first.rel === rel) count.push(o);
+		else if (first.k === 'agg' && first.rel === rel && second === undefined) aggs.push(o);
+	}
+	return { all, count, aggs };
+}
 export type Node =
 	/** `path`: own field, or one-relation steps then a field (`account.owner.name`, two hops; an arm is `ref:arm`); a path
 	 * that ends on a relation is a condition on the related record. */
@@ -69,23 +125,6 @@ export function resolve(cat: Catalog, collection: string, path: string): Resolve
 	return null;
 }
 
-const NUM = new Set(['int', 'number', 'decimal', 'money', 'sum', 'count', 'duration']);
-/** Operators per kind (a runtime port of `Ops`, §3.3.9); `isNull` only on a nullable field. */
-export function opsFor(r: Resolved): Op[] {
-	const nul: Op[] = r.nullable ? ['isNull', 'notNull'] : [];
-	if (r.leaf === 'rel') return ['eq', 'ne', 'in', 'nin', ...nul];
-	const k = r.kind;
-	if ((k.kind === 'text' || k.kind === 'enum') && k.many) return ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty'];
-	if (k.kind === 'period') return ['contains', 'overlaps', 'within', ...nul];
-	if (k.kind === 'json') return ['contains', ...nul];
-	if (['point', 'file', 'vector', 'custom'].includes(k.kind)) return nul.length ? nul : [];
-	if (k.kind === 'text' || (k.kind === 'seq' && k.pattern !== undefined)) return ['like', 'eq', 'ne', 'in', 'nin', ...nul];
-	if (NUM.has(k.kind) || k.kind === 'seq') return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin', ...nul];
-	if (k.kind === 'date' || k.kind === 'instant') return ['during', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', ...nul];
-	if (k.kind === 'time') return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', ...nul];
-	if (k.kind === 'bool') return ['eq', ...nul];
-	return ['eq', 'ne', 'in', 'nin', ...nul]; // enum, state, currency, id
-}
 /** The kind a condition's literal is edited and checked as: state → its states, derived numbers → numbers. */
 export function valueKind(k: Kind): Kind {
 	if (k.kind === 'state') return { kind: 'enum', values: Object.keys(k.states) };
@@ -107,27 +146,6 @@ export function operandsFor(r: Resolved, op: Op): ('lit' | 'today' | 'now' | 'st
 	return k === 'date' ? ['lit', 'today', 'startOf'] : k === 'instant' ? ['lit', 'now', 'startOf'] : ['lit'];
 }
 export const argKind = (a: Arg | null): string => a === null ? 'lit' : 'actor' in a ? ({ id: 'me', party: 'party', teams: 'team' } as const)[a.actor] : keysOf(a)[0]!;
-
-// ── presets (rule 16a; workspace timezone, Monday weeks, evaluated by the host) ──
-const U: readonly Unit[] = ['week', 'month', 'quarter', 'year'];
-export const PRESETS: readonly Preset[] = ['today', 'yesterday', 'last7', 'next7', 'last30', ...U.flatMap((u) => (['this', 'last', 'next'] as const).map((w) => `${w}_${u}` as Preset))];
-/** A preset as `{ gte, lt }` bounds for a date or instant field; `null` when the kind cannot state it. */
-export function presetBounds(p: Preset, kind: 'date' | 'instant'): { gte: Json; lt: Json } | null {
-	const cal = /^(this|last|next)_(\w+)$/.exec(p);
-	if (cal !== null) {
-		const s = cal[1] === 'this' ? 0 : cal[1] === 'last' ? -1 : 1, unit = cal[2] as Unit;
-		const at = (n: number): Json => n === 0 ? { startOf: unit } : { startOf: unit, shift: n };
-		return { gte: at(s), lt: at(s + 1) };
-	}
-	const days: { readonly [p: string]: [number, number] } = { today: [0, 1], yesterday: [-1, 0], last7: [-6, 1], next7: [0, 7], last30: [-29, 1] };
-	const [a, b] = days[p]!;
-	const off = (n: number) => n === 0 ? '' : `${n > 0 ? '+' : '-'}${Math.abs(n)}d`;
-	if (kind === 'date') return { gte: { today: off(a) }, lt: { today: off(b) } };
-	// an instant has no "today" operand: the rolling presets only
-	const rolling: { readonly [p: string]: [string, string] } = { last7: ['-7d', ''], last30: ['-30d', ''], next7: ['', '+7d'] };
-	return rolling[p] === undefined ? null : { gte: { now: rolling[p]![0] }, lt: { now: rolling[p]![1] } };
-}
-export const presetsFor = (kind: 'date' | 'instant') => PRESETS.filter((p) => presetBounds(p, kind) !== null);
 
 // ── literals ──
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -158,7 +176,6 @@ function operand(a: Arg): Json {
 	if ('lit' in a) return a.lit;
 	if ('list' in a) return a.list as Json;
 	if ('actor' in a) return { actor: a.actor };
-	if ('preset' in a) return null;
 	return a as Json;
 }
 /** Whether a condition is complete (an incomplete row is shown but not sent). */
@@ -173,7 +190,7 @@ export function complete(n: Node): boolean {
 	if ('list' in a) return a.list.length > 0;
 	return true;
 }
-function leafOps(n: Extract<Node, { t: 'cond' }>, r: Resolved): Json {
+function leafOps(n: Extract<Node, { t: 'cond' }>): Json {
 	const a = n.arg;
 	switch (n.op) {
 		case 'isNull': return { isNull: true };
@@ -182,8 +199,8 @@ function leafOps(n: Extract<Node, { t: 'cond' }>, r: Resolved): Json {
 		case 'notEmpty': return { isEmpty: false };
 		case 'like': return { like: likeOf(String(a !== null && 'lit' in a ? a.lit : '')) };
 		case 'during': {
-			const kind = r.leaf === 'field' && r.kind.kind === 'instant' ? 'instant' : 'date';
-			return a !== null && 'preset' in a ? presetBounds(a.preset, kind) : null;
+			if (a === null || !('range' in a)) return null;
+			return { gte: a.range[0], lt: a.range[1] };
 		}
 		default: return { [n.op]: a === null ? null : operand(a) };
 	}
@@ -210,7 +227,7 @@ export function toWhere(cat: Catalog, collection: string, n: Node): Where | null
 	if (r === null) return null;
 	const steps = n.path.split('.');
 	const [name, arm] = steps.pop()!.split(':') as [string, string | undefined];
-	let body = leafOps(n, r);
+	let body = leafOps(n);
 	if (body === null) return null;
 	// a record picked by label is sent in the `is` form (it needs the relation exposed, never its FK column); actor
 	// operands and `isNull` stay on the FK
@@ -230,6 +247,7 @@ export function rowsWhere(cat: Catalog, collection: string, rows: readonly Node[
 }
 
 // ── parsing: Where → Node (the popover shows `initialFilter`, a URL and an AI answer as rows) ──
+const U: readonly Unit[] = ['week', 'month', 'quarter', 'year'];
 const OPERAND = new Set(['today', 'now', 'startOf', 'actor']);
 function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 	if (op === 'in' || op === 'nin' || op === 'hasAny' || op === 'hasAll') {
@@ -257,13 +275,13 @@ function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 function fieldNodes(cat: Catalog, collection: string, path: string, ops: Json): Node[] | null {
 	const r = resolve(cat, collection, path);
 	if (r === null || !isObj(ops) || keysOf(ops).length === 0) return null;
-	const allowed = opsFor(r);
 	const out: Node[] = [];
 	let rest: { [k: string]: Json } = { ...ops };
+	// a `{ gte, lt }` pair on a date or instant is one relative span (`during`); anything else is its own row
 	if (r.leaf === 'field' && (r.kind.kind === 'date' || r.kind.kind === 'instant') && 'gte' in rest && 'lt' in rest) {
-		const kind = r.kind.kind;
-		const p = presetsFor(kind).find((x) => JSON.stringify(presetBounds(x, kind)) === JSON.stringify({ gte: rest['gte'], lt: rest['lt'] }));
-		if (p !== undefined) { out.push({ t: 'cond', path, op: 'during', arg: { preset: p } }); const { gte: _g, lt: _l, ...o } = rest; rest = o; }
+		out.push({ t: 'cond', path, op: 'during', arg: { range: [rest['gte']!, rest['lt']!] } });
+		const { gte: _g, lt: _l, ...o } = rest;
+		rest = o;
 	}
 	for (const [k, v] of Object.entries(rest)) {
 		let op = k as Op, arg: Arg | null = null;
@@ -278,7 +296,6 @@ function fieldNodes(cat: Catalog, collection: string, path: string, ops: Json): 
 			arg = argOf(r, op, v);
 			if (arg === null) return null;
 		}
-		if (!allowed.includes(op)) return null;
 		out.push({ t: 'cond', path, op, arg });
 	}
 	return out;
@@ -460,22 +477,18 @@ export function localExposure(rows: readonly { readonly [f: string]: Json }[], f
 	};
 	return { label: [], fields: Object.fromEntries(fields.filter((f) => !f.includes('.')).map((f) => [f, kindOf(f)])) };
 }
+/** The field list `filter.describe` and `filter.options` take for a `$local` view: its text, number and bool columns. */
+export type LocalFilterField = { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean };
+export function localFilterFields(collection: string, x: CollectionExposure | undefined): readonly LocalFilterField[] | undefined {
+	if (!collection.startsWith('$') || x === undefined) return undefined;
+	return Object.entries(x.fields).flatMap(([name, field]) => field.kind === 'text' || field.kind === 'number' || field.kind === 'bool'
+		? [{ name, label: field.label ?? name, kind: field.kind, optional: field.optional === true }] : []);
+}
 
 // ── labels (English fallbacks; the view passes them through `msg`) ──
-export const OP_LABEL: { readonly [op in Op]: string } = {
-	eq: 'is', ne: 'is not', lt: 'less than', lte: 'at most', gt: 'more than', gte: 'at least',
-	in: 'is any of', nin: 'is none of', like: 'contains', isNull: 'is empty', notNull: 'is not empty', has: 'has', hasAny: 'has any of',
-	hasAll: 'has all of', isEmpty: 'is empty', notEmpty: 'is not empty', during: 'is within', contains: 'contains', overlaps: 'overlaps', within: 'is within',
-};
-const WHEN: { readonly [op: string]: string } = { lt: 'before', lte: 'on or before', gt: 'after', gte: 'on or after' };
-/** An operator's words for the field it applies to: dates compare as before/after, numbers as less/more. */
-export const opText = (op: Op, r: Resolved | null): { key: string; text: string } =>
-	r?.leaf === 'field' && ['date', 'instant', 'time'].includes(r.kind.kind) && WHEN[op] !== undefined ? { key: `when.${op}`, text: WHEN[op]! } : { key: op, text: OP_LABEL[op] };
 export const QUANT_LABEL: { readonly [q in Quant]: string } = {
 	some: 'has any', none: 'has none', every: 'all match', count: 'count', sum: 'sum of', min: 'min of', max: 'max of', avg: 'average of',
 };
-export const PRESET_LABEL = (p: Preset): string => ({ today: 'today', yesterday: 'yesterday', last7: 'last 7 days', next7: 'next 7 days', last30: 'last 30 days' } as { readonly [k: string]: string })[p]
-	?? p.replace('_', ' ');
 /** "Account › Owner › Name": each step's declared label, else its humanized name. */
 export function pathLabel(cat: Catalog, collection: string, path: string, human: (s: string) => string): string {
 	const out: string[] = [];
@@ -489,25 +502,28 @@ export function pathLabel(cat: Catalog, collection: string, path: string, human:
 	return out.join(' › ');
 }
 const argText = (a: Arg | null): string => a === null ? '' : 'lit' in a ? String(a.lit) : 'list' in a ? a.list.map(String).join(', ')
-	: 'preset' in a ? PRESET_LABEL(a.preset) : 'actor' in a ? ({ id: 'me', party: 'my party', teams: 'my teams' } as const)[a.actor]
+	: 'range' in a ? a.label ?? `${boundText(a.range[0])} – ${boundText(a.range[1])}`
+	: 'actor' in a ? ({ id: 'me', party: 'my party', teams: 'my teams' } as const)[a.actor]
 	: 'startOf' in a ? `start of ${({ 0: 'this', [-1]: 'last', 1: 'next' } as { readonly [n: number]: string })[a.shift ?? 0] ?? `${a.shift}`} ${a.startOf}`
 	: 'today' in a ? `today ${a.today}`.trim() : `now ${a.now}`.trim();
+const boundText = (b: Json): string => isObj(b) && ('today' in b || 'now' in b || 'startOf' in b) ? argText(b as Arg) : String(b);
 /** One line for a node: the author's read-only scope and a row's summary. `ref` names a relation's record (its label, never
- * its id). */
-export function nodeText(cat: Catalog, collection: string, n: Node, human: (s: string) => string, ref?: (target: string, id: string) => string): string {
+ * its id); `opLabel` names the operator (the catalogue's words, when the caller has them, else the machine operator). */
+export function nodeText(cat: Catalog, collection: string, n: Node, human: (s: string) => string, ref?: (target: string, id: string) => string,
+	opLabel: (op: string, path: string) => string = (op) => op): string {
 	if (n.t === 'group') {
-		const inner = n.of.map((x) => nodeText(cat, collection, x, human, ref)).join(n.join === 'and' ? ' and ' : ' or ');
+		const inner = n.of.map((x) => nodeText(cat, collection, x, human, ref, opLabel)).join(n.join === 'and' ? ' and ' : ' or ');
 		return n.not ? `not (${inner})` : n.of.length > 1 ? `(${inner})` : inner;
 	}
 	const head = pathLabel(cat, collection, n.t === 'many' ? n.rel : n.path, human);
 	if (n.t === 'many') {
 		const child = childOf(cat, collection, n.rel) ?? '';
 		return ['some', 'none', 'every'].includes(n.q)
-			? `${head} ${QUANT_LABEL[n.q]}${n.of.length ? `: ${n.of.map((x) => nodeText(cat, child, x, human, ref)).join(' and ')}` : ''}`
-			: `${head} ${QUANT_LABEL[n.q]}${n.field ? ` ${pathLabel(cat, child, n.field, human)}` : ''} ${n.op} ${n.n}`;
+			? `${head} ${QUANT_LABEL[n.q]}${n.of.length ? `: ${n.of.map((x) => nodeText(cat, child, x, human, ref, opLabel)).join(' and ')}` : ''}`
+			: `${head} ${QUANT_LABEL[n.q]}${n.field ? ` ${pathLabel(cat, child, n.field, human)}` : ''} ${opLabel(n.op!, n.rel)} ${n.n}`;
 	}
 	const r = resolve(cat, collection, n.path), a = n.arg;
 	const named = (v: Json) => r?.leaf === 'rel' && ref !== undefined && typeof v === 'string' ? ref(r.targets[0]!, v) : String(v);
 	const arg = a !== null && 'lit' in a ? named(a.lit) : a !== null && 'list' in a ? a.list.map(named).join(', ') : argText(a);
-	return `${head} ${opText(n.op, r).text} ${arg}`.trim();
+	return `${head} ${opLabel(n.op, n.path)} ${arg}`.trim();
 }

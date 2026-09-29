@@ -37,8 +37,8 @@ test('every grammar element is a row that lowers to a Where and parses back to t
 		cond('assignee', 'isNull'),
 		cond('account.owner.name', 'like', { lit: 'bo' }),
 		cond('subject:accounts', 'in', { list: ['a1', 'a2'] }),
-		cond('scheduled_on', 'during', { preset: 'this_week' }),
-		cond('scheduled_on', 'during', { preset: 'last7' }),
+		cond('scheduled_on', 'during', { range: [{ startOf: 'week' }, { startOf: 'week', shift: 1 }] }),
+		cond('scheduled_on', 'during', { range: [{ today: '-7d' }, { today: '+1d' }] }),
 		cond('scheduled_on', 'gte', { startOf: 'month', shift: -1 }),
 		cond('scheduled_on', 'lt', { today: '-7d' }),
 		cond('tags', 'hasAll', { list: ['a', 'b'] }),
@@ -94,6 +94,28 @@ test('sort: related keys — one hop through unmasked one-relations into read co
 });
 
 // ── mounted views over a scripted bolt ──
+/** The condition catalogue the scripted host serves (`filter.options`), for the fixture catalog above. */
+const offers = (c) => c !== 'jobs' ? [] : [
+	{ label: 'Title', path: [{ k: 'field', name: 'title' }], op: 'like', opLabel: 'contains', kind: 'text' },
+	{ label: 'Title', path: [{ k: 'field', name: 'title' }], op: 'eq', opLabel: 'is', kind: 'text' },
+	{ label: 'Hours', path: [{ k: 'field', name: 'hours' }], op: 'eq', opLabel: 'is', kind: 'number' },
+	{ label: 'Hours', path: [{ k: 'field', name: 'hours' }], op: 'gt', opLabel: 'more than', kind: 'number' },
+	{ label: 'Scheduled on', path: [{ k: 'field', name: 'scheduled_on' }], op: 'during', opLabel: 'is within', kind: 'date',
+		values: [{ label: 'this week', arg: { range: [{ startOf: 'week' }, { startOf: 'week', shift: 1 }] } }] },
+	{ label: 'Status', path: [{ k: 'field', name: 'status' }], op: 'eq', opLabel: 'is', kind: 'state' },
+	{ label: 'Status', path: [{ k: 'field', name: 'status' }], op: 'in', opLabel: 'is any of', kind: 'state' },
+	{ label: 'Tags', path: [{ k: 'field', name: 'tags' }], op: 'hasAll', opLabel: 'has all of', kind: 'text' },
+	{ label: 'Tags', path: [{ k: 'field', name: 'tags' }], op: 'isEmpty', opLabel: 'is empty', kind: 'text' },
+	{ label: 'Assignee', path: [{ k: 'field', name: 'assignee' }], op: 'eq', opLabel: 'is', kind: 'record' },
+	{ label: 'Assignee › Name', path: [{ k: 'is', rel: 'assignee' }, { k: 'field', name: 'name' }], op: 'like', opLabel: 'contains', kind: 'text' },
+	{ label: 'Lines (any) › Qty', path: [{ k: 'some', rel: 'lines' }, { k: 'field', name: 'qty' }], op: 'eq', opLabel: 'is', kind: 'int' },
+	{ label: 'Lines (any) › Qty', path: [{ k: 'some', rel: 'lines' }, { k: 'field', name: 'qty' }], op: 'gt', opLabel: 'more than', kind: 'int' },
+	{ label: 'Lines (all) › Qty', path: [{ k: 'every', rel: 'lines' }, { k: 'field', name: 'qty' }], op: 'gt', opLabel: 'more than', kind: 'int' },
+	{ label: 'Lines (none) › Qty', path: [{ k: 'none', rel: 'lines' }, { k: 'field', name: 'qty' }], op: 'gt', opLabel: 'more than', kind: 'int' },
+	{ label: 'Lines › count', path: [{ k: 'count', rel: 'lines' }], op: 'eq', opLabel: 'is', kind: 'count' },
+	{ label: 'Lines › count', path: [{ k: 'count', rel: 'lines' }], op: 'gte', opLabel: 'at least', kind: 'count' },
+	{ label: 'Lines › total amount', path: [{ k: 'agg', rel: 'lines', fn: 'sum', of: 'amount' }], op: 'gt', opLabel: 'more than', kind: 'money' },
+];
 function scripted(extra = {}) {
 	const reads = [];
 	const q = (m, a, value) => ({ read: { m, a }, then: (ok, bad) => Promise.resolve(value).then(ok, bad) });
@@ -105,6 +127,7 @@ function scripted(extra = {}) {
 		live: (qq) => ({ current: undefined, error: undefined, subscribe(run) { Promise.resolve(qq).then(run); return () => {}; } }),
 		history: (c, id) => q('history', [c, id], { rows: [], next: null }),
 		act: async () => ({ kind: 'committed', output: null, records: [] }),
+		options: async (c) => ({ fields: offers(c) }),
 		fileUrl: () => '', actor: null, locale: 'en', t: (k) => k, approvals: {},
 		...extra,
 	};

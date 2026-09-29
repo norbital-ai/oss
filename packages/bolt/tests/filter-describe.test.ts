@@ -14,20 +14,21 @@ const manifest = {
 		audits: { description: 'a', label: 'note', fields: { note: { kind: 'text' } } },
 		jobs: { description: 'j', label: 'title', fields: {
 			title: { kind: 'text' }, hours: { kind: 'decimal', scale: 1 }, notes: { kind: 'text', optional: true }, internal_code: { kind: 'text' },
-			scheduled_on: { kind: 'date' }, window: { kind: 'period', of: 'date', optional: true },
+			scheduled_on: { kind: 'date' }, window: { kind: 'period', of: 'date', optional: true }, tags: { kind: 'text', many: true },
 			status: { kind: 'state', initial: 'open', states: { open: { to: ['done'] }, done: {} } } } },
 		job_lines: { description: 'l', label: 'item', fields: { item: { kind: 'text' }, qty: { kind: 'int' }, amount: { kind: 'money' } } },
 	},
 	relationships: {
 		'jobs.assignee': { to: 'members', inverse: 'assigned_jobs' },
 		'jobs.audit': { to: 'audits', optional: true },
+		'members.manager': { to: 'members', optional: true },
 		'job_lines.job': { to: 'jobs', inverse: 'lines' },
 	},
 	collections: {
 		members: { read: { fields: 'all' } },
 		job_lines: { read: { fields: 'all' } },
 		// `internal_code` and the `audit` relation are not exposed; `audits` is no collection at all
-		jobs: { read: { fields: ['title', 'hours', 'notes', 'scheduled_on', 'window', 'status', 'assignee'], relations: ['assignee', 'lines'] } },
+		jobs: { read: { fields: ['title', 'hours', 'notes', 'scheduled_on', 'window', 'status', 'tags', 'assignee'], relations: ['assignee', 'lines'] } },
 	},
 	integrations: {}, pipelines: {}, policies: {}, teams: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {},
 	customFields: {}, agent: { skills: {} },
@@ -198,5 +199,35 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		const port = system1(byField({ 'Lines › total amount': { op: 'at least', value: '500' } }));
 		const r = await describer(port).describe({ collection: 'jobs', text: 'jobs whose lines total at least 500', authority: caller(), bindings });
 		expect(r).toEqual({ ok: true, where: { lines: { sum: { of: 'amount', gte: 500 } } } });
+	});
+
+	it('the builder\'s grammar is the catalogue: many-valued fields, in/nin, null tests, two hops', async () => {
+		const r = await describer(system1(byField({}))).options({ collection: 'jobs', authority: caller(), bindings });
+		if (!r.ok) throw new Error(r.message);
+		const ops = (label: string) => r.fields.filter((f) => f.label === label).map((f) => f.op);
+		const path = (label: string) => r.fields.find((f) => f.label === label)?.path;
+		// a many-valued field offers the builder's list operators (ir's grammar), never a comparison on the list itself
+		expect(ops('Tags')).toEqual(['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
+		expect(path('Tags')).toEqual([{ k: 'field', name: 'tags' }]);
+		// `in`/`nin` and the null tests are offered; a masked field never is
+		expect(ops('Hours')).toEqual(expect.arrayContaining(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin']));
+		expect(ops('Window')).toEqual(['contains', 'overlaps', 'within', 'isNull', 'notNull']);
+		expect(ops('Notes')).toEqual([]); // masked to this caller
+		expect(r.fields.some((f) => f.label === 'Internal code')).toBe(false);
+		// two relation hops: `jobs.assignee.manager.name`, with its own sort key
+		expect(path('Assignee › Manager › Name')).toEqual([{ k: 'is', rel: 'assignee' }, { k: 'is', rel: 'manager' }, { k: 'field', name: 'name' }]);
+		expect(r.fields.find((f) => f.label === 'Assignee › Name')?.sort).toBe('assignee.name');
+		// a many-relation's quantifiers, count and child aggregates, and a date period's own operators
+		expect(ops('Lines (any) › Qty')).toEqual(expect.arrayContaining(['eq', 'gt']));
+		expect(ops('Lines › count')).toEqual(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']);
+		expect(path('Lines › total amount')).toEqual([{ k: 'agg', rel: 'lines', fn: 'sum', of: 'amount' }]);
+		expect(ops('Window')).toEqual(['contains', 'overlaps', 'within', 'isNull', 'notNull']);
+	});
+
+	it('a two-hop relation choice folds to the nested `is` grammar in one call', async () => {
+		const port = system1(byField({ 'Assignee › Manager › Name': { op: 'contains', value: 'pump' } }));
+		const r = await describer(port).describe({ collection: 'jobs', text: 'manager name contains pump', authority: caller(), bindings });
+		expect(r).toEqual({ ok: true, where: { assignee: { is: { manager: { is: { name: { like: '%pump%' } } } } } } });
+		expect(port.requests).toHaveLength(1);
 	});
 });

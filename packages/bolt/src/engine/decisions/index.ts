@@ -9,9 +9,10 @@
 // by the engine and handed to the host as `$file`, which the host only encodes (`encodeFiles`).
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
-import type { DecisionQuestion, DecisionState, FacilityError } from '../../decl/runtime/facilities.ts';
+import type { DecisionQuestion, DecisionState, DecisionValue, FacilityError } from '../../decl/runtime/facilities.ts';
 import { callPort, LIMITS, type AiPort, type AiRequest, type Authority, type Bindings, type CrossAnswer, type EmbedInput, type EngineManifest, type FilesPort, type MeteringPort, type ReadEngine, type TenantDb } from '../contracts.ts';
 import { catalogOf } from '../access/pred.ts';
+import { clip } from '../agent/schema.ts';
 import * as ir from '../../protocol/ir.ts';
 
 export type { DecisionQuestion, DecisionState };
@@ -144,9 +145,13 @@ export const failed = (r: DecisionResult | FacilityError): r is FacilityError =>
 export const choiceOf = (r: DecisionResult, id: string): string | undefined => { const a = r.answers[id]; return a?.type === 'choice' ? a.choice : undefined; };
 export const noulOf = (r: DecisionResult, id: string): number => { const a = r.answers[id]; return a?.type === 'noul' ? a.noul : 0; };
 
+/** Every text leaf of a decision state bounded (`clip`): the event carries what the decider received, never an unbounded transcript. */
+const clipState = (v: DecisionValue): Json => typeof v === 'string' ? clip(v)
+	: Array.isArray(v) ? v.map((x) => clipState(x))
+		: v !== null && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clipState(x)])) : v as Json;
 /** The `decision.made` attributes (§5.12) of one call, answered or failed. */
 export const decisionEvent = (use: DecisionUse, request: DecisionRequest, r: DecisionResult | FacilityError): Json => ({
-	use, system: 1, questions: Object.keys(request.questions),
+	use, system: 1, state: clipState(request.state), questions: Object.keys(request.questions),
 	...(failed(r) ? { error: r.kind } : { answers: r.answers, costUsd: r.costUsd, provider: r.provider, ...(r.tokens === undefined ? {} : { tokens: r.tokens }) }),
 }) as Json;
 /** Reports an answered call's cost on the AI meter, keyed by the call id. */

@@ -70,7 +70,7 @@
 	import { initial, problems } from '../kinds/kind.js';
 	import { uiText } from '../primitives/utils.js';
 	import { offerContexts, openRecord, useBolt, type Outcome } from './bolt.js';
-	import { nodeText, pathLabel } from './filter.js';
+	import { nodeText, pathLabel, pathOf } from './filter.js';
 	import { filesOf, humanize, label, msg, refOf, rowsOf, searchIndexes, SEMANTIC_SEARCH, show, SLASH, unref, valueAt, type SearchIndex } from './model.js';
 	import type { ViewState } from './view-state.svelte.js';
 	import Glyph, { type GlyphName } from './Glyph.svelte';
@@ -281,7 +281,9 @@
 		}
 	}
 	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
-	const chips = $derived(view === undefined ? [] : view.rows.map((n, i) => ({ i, text: nodeText(catalog, source, n, humanize, named) })));
+	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
+	const opWords = (op: string, path: string) => view?.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;
+	const chips = $derived(view === undefined ? [] : view.rows.map((n, i) => ({ i, text: nodeText(catalog, source, n, humanize, named, opWords) })));
 </script>
 
 {#snippet menuRow(e: Entry)}
