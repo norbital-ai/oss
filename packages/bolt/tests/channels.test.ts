@@ -111,6 +111,11 @@ describe('the inbound decode and the outbound check', () => {
 	it('OutboundFor at runtime: email needs to/subject/body; chat needs to/text; inbox sends no messages', () => {
 		expect(checkOutbound('email', { to: ['a@b.c'], subject: 's', text: 't' })).toHaveProperty('message');
 		expect(checkOutbound('email', { to: [], subject: 's', text: 't' })).toHaveProperty('error');
+		// a message row is stored as it is: a stored file's reference passes, inline bytes never do
+		const ref = { id: 'f1', name: 'r.pdf', mime: 'application/pdf', bytes: 3, sha256: 'x' };
+		expect(checkOutbound('email', { to: ['a@b.c'], subject: 's', text: 't', attachments: [ref] })).toHaveProperty('message');
+		expect(checkOutbound('email', { to: ['a@b.c'], subject: 's', text: 't', attachments: [{ name: 'r.pdf', mime: 'application/pdf', base64: 'AAA=' }] }))
+			.toEqual({ error: expect.stringContaining('never inline bytes') });
 		expect(checkOutbound('whatsapp', { to: '659', text: 'hi' })).toHaveProperty('message');
 		expect(checkOutbound('telegram', { to: '5' })).toHaveProperty('error');
 		expect(checkOutbound('inbox', { to: 'x', text: 'y' })).toHaveProperty('error');

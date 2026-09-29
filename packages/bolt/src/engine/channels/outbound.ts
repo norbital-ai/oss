@@ -80,6 +80,9 @@ export async function prepareSend(m: EngineManifest, db: TenantDb, channel: stri
 export function checkOutbound(transport: string, x: Json): { message: Obj } | { error: string } {
 	if (!isObj(x)) return { error: 'the message is not an object' };
 	const strings = (v: unknown) => Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === 'string' && s !== '');
+	// a message row is persisted as it is: an attachment is a stored file's reference, never its bytes
+	const inline = Array.isArray(x['attachments']) && x['attachments'].some((a) => !isObj(a) || typeof a['id'] !== 'string' || 'base64' in a);
+	if (inline) return { error: 'an attachment is a stored file (a FileRef from ctx.files.put or bolt.upload), never inline bytes' };
 	if (transport === 'email') {
 		if (!strings(x['to'])) return { error: 'an email needs `to`, a non-empty list of addresses' };
 		if (typeof x['subject'] !== 'string') return { error: 'an email needs a `subject`' };

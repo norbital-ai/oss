@@ -79,7 +79,7 @@ export type ShellHostConfig = {
 	apex?: string;
 	uuid?: () => string;
 };
-type Caller = { authority: Authority | null; real: Authority | null; token: string | null; preview: ShellBoot['preview'] };
+type Caller = { authority: Authority | null; real: Authority | null; token: string | null; preview: ShellBoot['preview']; expiresAt?: number };
 /** The preview cookie names a member id, or `team:<id>` (rule 39). */
 const TEAM = 'team:';
 
@@ -93,11 +93,12 @@ const STATUS: { readonly [code: string]: number } = { forbidden: 403, notFound: 
 const answer = <T>(r: Result<T>, ok: (value: T) => Response = (value) => json({ value: value ?? null })) =>
 	r.ok ? ok(r.value) : refused(r.code, r.message, STATUS[r.code] ?? 400, r.retryAfter);
 
+/** A name sent twice (a workspace's `Path=/<handle>` cookie and a stray one at `/`) keeps the first: the most specific path. */
 function cookies(request: Request): Map<string, string> {
 	const out = new Map<string, string>();
 	for (const part of (request.headers.get('cookie') ?? '').split(';')) {
-		const at = part.indexOf('=');
-		if (at > 0) out.set(part.slice(0, at).trim(), decodeURIComponent(part.slice(at + 1).trim()));
+		const at = part.indexOf('='), name = part.slice(0, at).trim();
+		if (at > 0 && !out.has(name)) out.set(name, decodeURIComponent(part.slice(at + 1).trim()));
 	}
 	return out;
 }
@@ -136,16 +137,17 @@ export function shellHost(c: ShellHostConfig) {
 		}
 		const token = jar.get(COOKIES.session) ?? null;
 		const s = token === null ? null : await authenticate(h, token);
+		const expiresAt = s === null ? {} : { expiresAt: s.expiresAt };
 		const real = s === null ? null : await c.authorities.member(h.db, s.user);
 		const target = jar.get(COOKIES.preview);
 		if (real !== null && target !== undefined && real.admin) {
 			try {
 				const team = target.startsWith(TEAM) ? target.slice(TEAM.length) : null;
 				const p = await previewAs(real, c.authorities, h.db, team === null ? target : { team });
-				return { authority: p.authority, real, token, preview: team === null ? { user: target, by: p.impersonatedBy } : { team, by: p.impersonatedBy } };
+				return { authority: p.authority, real, token, preview: team === null ? { user: target, by: p.impersonatedBy } : { team, by: p.impersonatedBy }, ...expiresAt };
 			} catch { /* a stale preview target falls back to the administrator */ }
 		}
-		return { authority: real, real, token, preview: null };
+		return { authority: real, real, token, preview: null, ...expiresAt };
 	}
 
 	/** Rule 38d (a, b): per-IP limits, then the Turnstile token, both before decode; only `read`/`get` and generated `create`. */
@@ -209,7 +211,10 @@ export function shellHost(c: ShellHostConfig) {
 		const b: ShellBoot = { workspace: ws, actor: auth.actor, name: (users!.rows[0]?.['name'] ?? null) as string | null, admin: auth.admin,
 			preview: x.preview, nav: nav(m, auth), surfaces: s, inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length + box.notices.filter((n) => !n.read).length,
 			push: s.inbox ? c.push?.publicKey ?? null : null, visitor: null, catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)), ...(c.ai === false ? { aiUnconfigured: true as const } : {}), ...(notice === null ? {} : { notice }) }; // hook:decisions — also hides the Describe input (rule 16a)
-		return json({ value: b });
+		// the session slides in the database (a day at most between refreshes); every boot carries it to the cookie too, so a
+		// member who keeps coming back is never signed out by a cookie that kept its first seven days
+		const left = x.token === null || x.expiresAt === undefined ? 0 : Math.floor((x.expiresAt - h.now().getTime()) / 1000);
+		return json({ value: b }, 200, left > 0 ? { 'set-cookie': cookie(COOKIES.session, x.token!, left) } : {});
 	}
 
 	async function session(request: Request, path: string, x: () => Promise<Caller>): Promise<Response | null> {

@@ -26,7 +26,8 @@ type Common = { replyTo?: string; about?: RecordRef };
 export type OutboundFor<T> = T extends 'email'
 	? Common & { to: readonly string[]; cc?: readonly string[]; subject: string; html?: string; text?: string;
 		/** The correlation id replies are matched back to. */ thread?: string;
-		attachments?: readonly (FileRef | { name: string; mime: string; base64: string })[] }
+		/** Stored files only: a message row keeps references, never bytes (store them first with `ctx.files.put` or `bolt.upload`). */
+		attachments?: readonly FileRef[] }
 	: T extends 'whatsapp' | 'telegram' ? Common & { to: Handle | Id<'sys_conversation'>; text: string; attachments?: readonly FileRef[] }
 	: never;
 

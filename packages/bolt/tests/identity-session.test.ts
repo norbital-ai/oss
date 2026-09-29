@@ -20,7 +20,7 @@ describe('session memo (L-COL-034)', () => {
 	it('reads once per token for 30 s, single-flight, and re-reads after', async () => {
 		const t = host(async () => [row]);
 		const [a, b] = await Promise.all([authenticate(t.h, 'tok'), authenticate(t.h, 'tok')]);
-		expect(a).toEqual({ user: 'u1', session: 's1', impersonatedBy: null });
+		expect(a).toEqual({ user: 'u1', session: 's1', impersonatedBy: null, expiresAt: expect.any(Number) });
 		expect(b).toEqual(a);
 		expect(await authenticate(t.h, 'tok')).toEqual(a);
 		expect(t.reads()).toBe(1);

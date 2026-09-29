@@ -238,7 +238,7 @@ SELECT (SELECT expires_at FROM sess) AS expires_at` }, lock(born));
 }
 const lock = (born: boolean): Lock | undefined => born ? { advisory: ['sys_user.email'] } : undefined;
 
-type Authenticated = { user: string; session: string; impersonatedBy: string | null };
+type Authenticated = { user: string; session: string; impersonatedBy: string | null; expiresAt: number };
 /**
  * L-COL-034: the sessions this identity host (one per engine generation, so a flip, reset or restore starts empty) has
  * authenticated, for 30 s at most and never past their expiry, one read in flight per token. A miss or a failure is
@@ -256,8 +256,8 @@ export function authenticate(h: IdentityHost, token: string): Promise<Authentica
 	const key = sha256(token), now = h.now().getTime(), held = memo.get(key);
 	if (held !== undefined && held.until > now) return held.at;
 	const found = lookup(h, key);
-	// every caller, first or memoised, gets the same session shape; the expiry only bounds the memo
-	const entry = { until: now + MEMO_MS, at: found.then((r) => r === null ? null : { user: r.user, session: r.session, impersonatedBy: r.impersonatedBy }) };
+	// every caller, first or memoised, gets the same session: its expiry bounds the memo and the cookie the shell re-sends
+	const entry = { until: now + MEMO_MS, at: found };
 	memo.set(key, entry);
 	if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value!);
 	found.then((r) => {
@@ -266,7 +266,7 @@ export function authenticate(h: IdentityHost, token: string): Promise<Authentica
 	}, () => { if (memo.get(key) === entry) memo.delete(key); });
 	return entry.at;
 }
-async function lookup(h: IdentityHost, hash: string): Promise<(Authenticated & { expiresAt: number }) | null> {
+async function lookup(h: IdentityHost, hash: string): Promise<Authenticated | null> {
 	const now = h.now();
 	const [rows] = await h.db.read([{ text: `SELECT s.id, s."user", s.impersonated_by, s.refreshed_at, s.expires_at FROM sys_session s JOIN sys_user u ON u.id = s."user"
 		WHERE s.token_hash = $1 AND s.expires_at > $2::timestamptz AND u.active`, params: [hash, now.toISOString()] }]);
