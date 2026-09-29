@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.137",
+	"version": "0.0.138",
 	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
 	"type": "module",
 	"sideEffects": [

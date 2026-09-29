@@ -89,7 +89,9 @@ export const conversationRow = (r: RowData): { [k: string]: Json } => ({ id: r['
 	model: r['model']!, plan: r['plan'] ?? null, goals: r['goals'] ?? null,
 	// which conversation this is, for the panel's segmented selector: an envoy's channel thread beside the member's own
 	// in-app ones. `channel` is null exactly when the conversation is the member's own (no transport serves it).
-	envoy: r['envoy'] ?? null, channel: r['channel'] ?? null });
+	envoy: r['envoy'] ?? null, channel: r['channel'] ?? null,
+	// a channel thread's own facts: a direct message or a group chat, and the provider's thread (the peer or the group)
+	kind: r['channel'] == null ? null : r['kind'] ?? null, thread: r['thread'] ?? null });
 /** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_output`). */
 export const clip = (v: Json | undefined): string => { const s = typeof v === 'string' ? v : JSON.stringify(v ?? null); return s.length <= 600 ? s : `${s.slice(0, 599)}…`; };
 

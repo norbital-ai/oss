@@ -81,7 +81,9 @@ export type AgentRow = { id: string; seq: number; role: 'user' | 'assistant' | '
 export type AgentConversation = { id: string; title: string | null; at: string; status: 'idle' | 'running' | 'stopped'; model: string;
 	plan: { revision: number; body: string; status: 'draft' | 'active' | 'verified'; /** the seq execution started after */ checkpoint?: number } | null; goals: { id: string; text: string; status: 'pending' | 'doing' | 'done' }[] | null;
 	/** The envoy serving a channel thread, and the channel it is on; both null exactly when this is the member's own in-app conversation. */
-	envoy: string | null; channel: string | null };
+	envoy: string | null; channel: string | null;
+	/** A channel thread's kind (a direct message or a group chat) and its provider thread; null on an in-app conversation. */
+	kind: 'dm' | 'group' | null; thread: string | null };
 /** `POST /__bolt/push`: a browser `PushSubscription.toJSON()`, or `{ endpoint, remove: true }`. */
 export type PushBody = { endpoint: string; keys?: { p256dh: string; auth: string }; remove?: true };
 

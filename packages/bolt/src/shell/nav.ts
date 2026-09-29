@@ -48,6 +48,8 @@ export type ShellBoot = {
 	/** The host's banner for this member (`ShellHost.notice`: a billing notice). */
 	notice?: ShellNotice;
 	nav: NavNode[]; surfaces: Surfaces; inbox: number;
+	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
+	envoys?: { readonly [envoy: string]: string };
 	/** The VAPID public key to subscribe this device to notices with (§5.7), or `null` when the host sends no push. */
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */

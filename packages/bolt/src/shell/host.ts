@@ -210,7 +210,8 @@ export function shellHost(c: ShellHostConfig) {
 		const notice = await c.notice?.(auth) ?? null;
 		const b: ShellBoot = { workspace: ws, actor: auth.actor, name: (users!.rows[0]?.['name'] ?? null) as string | null, admin: auth.admin,
 			preview: x.preview, nav: nav(m, auth), surfaces: s, inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length + box.notices.filter((n) => !n.read).length,
-			push: s.inbox ? c.push?.publicKey ?? null : null, visitor: null, catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)), ...(c.ai === false ? { aiUnconfigured: true as const } : {}), ...(notice === null ? {} : { notice }) }; // hook:decisions — also hides the Describe input (rule 16a)
+			push: s.inbox ? c.push?.publicKey ?? null : null, visitor: null, catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)), ...(c.ai === false ? { aiUnconfigured: true as const } : {}), ...(notice === null ? {} : { notice }), // hook:decisions — also hides the Describe input (rule 16a)
+			envoys: Object.fromEntries(Object.entries(m.envoys ?? {}).flatMap(([k, e]) => typeof (e as { name?: unknown }).name === 'string' ? [[k, (e as { name: string }).name]] : [])) };
 		// the session slides in the database (a day at most between refreshes); every boot carries it to the cookie too, so a
 		// member who keeps coming back is never signed out by a cookie that kept its first seven days
 		const left = x.token === null || x.expiresAt === undefined ? 0 : Math.floor((x.expiresAt - h.now().getTime()) / 1000);

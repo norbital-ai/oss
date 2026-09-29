@@ -15,6 +15,12 @@ describe('Telegram updates', () => {
 		const got = telegramUpdate(tg({ chat: { id: 5, type: 'private' }, text: 'hello' }), bot)!;
 		expect(got.message).toMatchObject({ id: '5:7', thread: '5', group: false, invocation: 'direct', text: 'hello', from: { handle: '5', name: 'Ana' } });
 	});
+	it('a group names itself by its chat title, and the name reaches the decoded message', () => {
+		const got = telegramUpdate(tg({ chat: { id: -9, type: 'supergroup', title: 'Site crew' }, text: 'hi' }), bot)!;
+		expect(got.message).toMatchObject({ group: true, title: 'Site crew' });
+		expect(decodeInbound('telegram', got.message)).toMatchObject({ group: true, title: 'Site crew' });
+		expect(decodeInbound('telegram', telegramUpdate(tg({ chat: { id: 5, type: 'private' }, text: 'hi' }), bot)!.message)).toMatchObject({ title: null });
+	});
 	it('in a group: an @mention, a bot command for us, a reply to our message address the bot; anything else is ambient', () => {
 		const group = { chat: { id: -9, type: 'supergroup' } };
 		expect(telegramUpdate(tg({ ...group, text: 'hey @deskbot status?', entities: [{ type: 'mention', offset: 4, length: 8 }] }), bot)!.message['invocation']).toBe('mention');

@@ -192,12 +192,12 @@ export function envoys(cfg: EnvoysConfig) {
 	/** An inbound row read back as the ingest reported it (registration replay). */
 	async function ingested(id: string): Promise<Ingested | null> {
 		const [res] = await db.read([sql(`SELECT m.id, m.channel, m.conversation, m.provider_id, m.sender, m.sender_name, m.text, m.files, m.email, m.invocation,
-			m.reply_to, m.sent_at::text AS sent_at, c.thread, c.kind FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation WHERE m.id = $1`, id)]);
+			m.reply_to, m.sent_at::text AS sent_at, c.thread, c.kind, c.title FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation WHERE m.id = $1`, id)]);
 		const r = res!.rows[0];
 		if (r === undefined) return null;
 		return { row: id, channel: String(r['channel']), conversation: String(r['conversation']), inserted: true, id: String(r['provider_id']),
 			thread: String(r['thread']), sentAt: String(r['sent_at']), sender: String(r['sender'] ?? ''), senderName: r['sender_name'] as string | null,
-			text: String(r['text'] ?? ''), replyTo: r['reply_to'] as string | null, group: r['kind'] === 'group', invocation: r['invocation'] as Ingested['invocation'],
+			text: String(r['text'] ?? ''), replyTo: r['reply_to'] as string | null, group: r['kind'] === 'group', title: r['title'] as string | null, invocation: r['invocation'] as Ingested['invocation'],
 			version: '', deleted: false, history: false, attachments: [], mentions: [], email: r['email'] as Obj | null, references: [], files: (r['files'] ?? []) as Json[] };
 	}
 }

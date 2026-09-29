@@ -22,7 +22,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 /** A Baileys socket double: tests drive `connection.update` and `messages.upsert` as the library would. */
 function fakeBaileys() {
-	const sockets: (WaSocket & { emit(e: string, x: unknown): void; ended: boolean; loggedOut: boolean; sent: { jid: string; text: string }[] })[] = [];
+	const sockets: (WaSocket & { emit(e: string, x: unknown): void; ended: boolean; loggedOut: boolean; sent: { jid: string; text: string }[]; groupReads: string[] })[] = [];
 	const open: WaOpen = async (dir) => {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, 'creds.json'), '{}');
@@ -33,6 +33,8 @@ function fakeBaileys() {
 			emit: (e: string, x: unknown) => { ev.emit(e, x); },
 			async sendMessage(jid: string, c: { text: string }) { s.sent.push({ jid, text: c.text }); return { key: { id: `wa-${s.sent.length}` } }; },
 			async requestPairingCode() { return 'ABCD-EFGH'; },
+			async groupMetadata(jid: string) { s.groupReads.push(jid); return { subject: 'Site crew' }; },
+			groupReads: [] as string[],
 			async logout() { s.loggedOut = true; },
 			end() { s.ended = true; },
 		};
@@ -65,6 +67,14 @@ describe('WhatsApp over a persistent socket (G12 (9))', () => {
 			messageTimestamp: 1_790_000_000, pushName: 'Ann', message: { conversation: 'job done' } }] });
 		await tick();
 		expect(got).toMatchObject([{ kind: 'inbound', channel: 'field_ops', message: { id: 'M1', text: 'job done', invocation: 'direct', from: { handle: '6591111111@s.whatsapp.net' } } }]);
+		expect(got[0]!.kind === 'inbound' && 'title' in (got[0]!.message as object)).toBe(false); // a DM names no group
+		// a group message carries the group's subject, read once per group
+		for (const id of ['G1', 'G2']) sockets[0]!.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '120363000000000001@g.us', id, fromMe: false,
+			participant: '6591111111@s.whatsapp.net' }, messageTimestamp: 1_790_000_000, pushName: 'Ann', message: { conversation: 'crew update' } }] });
+		await tick();
+		expect(got.slice(1)).toMatchObject([{ message: { id: 'G1', group: true, title: 'Site crew' } }, { message: { id: 'G2', title: 'Site crew' } }]);
+		expect(sockets[0]!.groupReads).toEqual(['120363000000000001@g.us']);
+		got.length = 1;
 		expect(await wa.send('field_ops', { to: '6591111111@s.whatsapp.net', text: 'thanks' }, AbortSignal.timeout(1000))).toEqual({ providerId: 'wa-1' });
 
 		// a drop that is not a logout reconnects, and says so

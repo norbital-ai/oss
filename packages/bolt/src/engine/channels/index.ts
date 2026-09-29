@@ -92,8 +92,10 @@ export function channels(cfg: ChannelsConfig) {
 		}
 		const stored = inbound.deleted ? [] : await files(inbound, bins, c, now);
 		const envoy = Object.entries(m.envoys).find(([, e]) => e['channel'] === channel)?.[0] ?? null;
-		c.cte('conv', `INSERT INTO sys_conversation (id, channel, thread, kind, envoy) VALUES (${c.p(conv)}, ${c.p(channel)}, ${c.p(inbound.thread)},
-			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(envoy)}) ON CONFLICT (id) DO NOTHING RETURNING id`);
+		// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it
+		c.cte('conv', `INSERT INTO sys_conversation (id, channel, thread, kind, envoy, title) VALUES (${c.p(conv)}, ${c.p(channel)}, ${c.p(inbound.thread)},
+			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(envoy)}, ${c.p(inbound.title)}) ON CONFLICT (id) DO UPDATE SET title = excluded.title
+			WHERE excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title RETURNING id`);
 		const text = inbound.deleted ? '' : inbound.text;
 		c.cte('msg', `INSERT INTO sys_message (id, conversation, channel, direction, origin, provider_id, version, sender, sender_name, sent_at, invocation,
 			preview, text, email, files, reply_to, deleted_at, created_at)

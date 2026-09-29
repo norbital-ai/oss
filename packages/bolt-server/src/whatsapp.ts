@@ -13,6 +13,8 @@ export type WaSocket = {
 	signalRepository?: { getLIDForPN(pn: string): Promise<string | null> } | undefined;
 	sendMessage(jid: string, content: { text: string }): Promise<{ key?: { id?: string | null } } | undefined>;
 	requestPairingCode(phone: string): Promise<string>;
+	/** A group's metadata; its `subject` is the group chat's name. */
+	groupMetadata?(jid: string): Promise<{ subject?: string }>;
 	logout(): Promise<void>;
 	end(error: Error | undefined): void;
 };
@@ -91,10 +93,19 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 				timer = setTimeout(() => void connect().catch((e: unknown) => console.error('[bolt] whatsapp reconnect failed', e)), wait);
 			}
 		});
+		// a group's name, read once per group per socket (the provider's `subject`); a failed read names nothing
+		const subjects = new Map<string, Promise<string | null>>();
+		const subjectOf = (jid: string) => {
+			let got = subjects.get(jid);
+			if (got === undefined) subjects.set(jid, got = (s.groupMetadata?.(jid) ?? Promise.resolve<{ subject?: string }>({})).then((g) => g.subject?.trim() || null, () => null));
+			return got;
+		};
 		const deliver = async (messages: readonly unknown[], history: boolean) => {
 			for (const raw of messages) {
-				const message = whatsappMessage(raw, s.user?.id, { history, ...(lid === undefined ? {} : { lid }) });
-				if (message === null) continue;
+				const found = whatsappMessage(raw, s.user?.id, { history, ...(lid === undefined ? {} : { lid }) });
+				if (found === null) continue;
+				const title = found['group'] === true ? await subjectOf(String(found['thread'])) : null;
+				const message = title === null ? found : { ...found, title };
 				const media = history ? null : await opened.download(raw).catch(() => null);
 				const bins = media !== null && media.bytes.byteLength <= MEDIA_MAX ? [media.bytes] : [];
 				await emit({ kind: 'inbound', channel, message: (bins.length === 0 ? message

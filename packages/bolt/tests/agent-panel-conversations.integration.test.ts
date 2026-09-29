@@ -195,24 +195,29 @@ describe('the agent panel restored', () => {
 		} finally { void unmount(v); target.remove(); }
 	});
 
-	it('segments the selector by source and opens an envoy channel thread read-only', async () => {
+	it('groups the picker by where each conversation happens and opens an envoy channel thread read-only', async () => {
 		const s = await setup(async () => reply('Done.'), envoyManifest);
 		const handle = '6590000001@s.whatsapp.net';
 		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
 			from: { handle, name: 'Kim' }, text: 'hello?', attachments: [] } });
+		// a group chat carries its name (WhatsApp's group subject), and the picker heads its conversation with it
+		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'g1', thread: '120363000000000001@g.us', sentAt: s.t.clock.now(),
+			from: { handle, name: 'Kim' }, text: 'crew update', group: true, title: 'Site crew', attachments: [] } });
 		await s.t.settled();
 		const thread = conversationId('whatsapp', handle);
 		try { sessionStorage.clear(); } catch { /* none */ }
 		const target = document.createElement('div');
 		document.body.append(target);
-		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: {}, onClose: () => {}, admin: true } });
+		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: {}, onClose: () => {}, admin: true, envoys: { field_ops: 'Norbius' } } });
 		try {
-			await until(() => target.querySelector('[data-agent-groups]') !== null);
-			expect([...target.querySelectorAll('[data-agent-groups] [role="tab"]')].map((x) => x.textContent?.trim())).toEqual(['Norbius', 'Whatsapp · Field ops']);
-			// the envoy segment narrows the picker to that source; choosing opens the thread, with no composer
-			await press(target.querySelectorAll<HTMLElement>('[data-agent-groups] [role="tab"]')[1]!);
+			// the live list is here once the picker stops saying there are none
+			await until(() => !(target.querySelector('[data-agent-head] [role="combobox"]')?.textContent ?? '').includes('No conversations yet'));
 			await press(target.querySelector<HTMLElement>('[data-agent-head] [role="combobox"]')!);
 			await until(() => document.querySelector(`[role="option"][data-value="${thread}"]`) !== null);
+			// no segment tabs: the picker's own headings say where each conversation happens, DMs before groups
+			expect(target.querySelector('[data-agent-groups]')).toBeNull();
+			expect([...document.querySelectorAll('li[role="presentation"].text-overline')].map((x) => x.textContent?.trim())).toEqual(['Norbius (DM)', 'Norbius (Group: Site crew)']);
+			// choosing opens the thread, with no composer
 			await press(document.querySelector<HTMLElement>(`[role="option"][data-value="${thread}"] button`)!);
 			await until(() => target.querySelector('[data-agent-read-only]') !== null);
 			expect(target.querySelector('textarea')).toBeNull();
@@ -220,7 +225,7 @@ describe('the agent panel restored', () => {
 		} finally { void unmount(v); target.remove(); }
 	});
 
-	it('the raw-context tab shows an administrator what the triage decider received and answered', async () => {
+	it('a scale mark closes each triaged batch and opens, for an administrator, to what the decider received and answered', async () => {
 		const s = await setup(async () => reply('Done.'), envoyManifest);
 		const handle = '6590000001@s.whatsapp.net';
 		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
@@ -237,19 +242,45 @@ describe('the agent panel restored', () => {
 		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: { conversation: thread }, onClose: () => {}, admin: true } });
 		try {
 			await until(() => target.querySelector('[data-agent-read-only]') !== null);
-			await press([...target.querySelectorAll<HTMLElement>('[role="tab"]')].find((x) => x.textContent?.trim() === 'Decisions')!);
-			await until(() => target.querySelector('[data-decision]') !== null);
-			const d = target.querySelector('[data-decision]')!;
-			expect(d.getAttribute('data-use')).toBe('triage');
-			expect(d.textContent).toContain('Help.'); // the directive the decider was given
-			expect(d.textContent).toContain('Norbius'); // the assistant it was asked about
-			expect(d.querySelector('[data-pending-message]')?.textContent).toBe('Kim: hello?');
-			expect(d.querySelector('[data-decision-question="m0"]')?.textContent?.trim()).toBe('m0: yes');
-			expect(d.querySelector('[data-decision-question="wait"]')?.textContent?.trim()).toBe('wait: 0 (1)');
+			// the mark follows the message it decided, inline in the transcript (no tab)
+			await until(() => target.querySelector('[data-decision-toggle]') !== null);
+			const mark = target.querySelector('[data-role="decision"]')!;
+			expect(mark.previousElementSibling?.getAttribute('data-role')).toBe('user');
+			expect(mark.getAttribute('data-action')).toBe('respond');
+			await press(target.querySelector<HTMLElement>('[data-decision-toggle]')!);
+			await until(() => target.querySelector('[data-decision-matrix]') !== null);
+			const d = target.querySelector('[data-decision-matrix]')!;
+			const m0 = [...d.querySelectorAll('[data-decision-row="m0"] td')].map((x) => x.textContent?.trim());
+			expect(m0).toEqual(['Kim: hello?', 'yes', 'yes']);
+			expect(d.querySelector('[data-decision-row="wait"] td:nth-child(2)')?.textContent?.trim()).toBe('0 (1)');
+			expect(d.querySelector('[data-decision-context]')?.textContent).toContain('Help.'); // the directive the decider was given
+			expect(d.querySelector('[data-decision-context]')?.textContent).toContain('Norbius'); // the assistant it was asked about
 		} finally { void unmount(v); target.remove(); }
 	});
 
-	it('a member who is not an administrator gets an explanation, not the log\'s refusal', async () => {
+	it('a decided reply not written yet says so beside its mark, live, until the reply lands', async () => {
+		let release: (r: AiResponse) => void = () => {};
+		const s = await setup(() => new Promise<AiResponse>((ok) => { release = ok; }), envoyManifest);
+		const handle = '6590000001@s.whatsapp.net';
+		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
+			from: { handle, name: 'Kim' }, text: 'hello?', attachments: [] } });
+		await s.t.settled();
+		s.t.clock.advance('2s');
+		void s.t.runDue(); // the turn starts and holds on the model
+		const thread = conversationId('whatsapp', handle);
+		await s.t.db.write({ text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`, params: [] });
+		try { sessionStorage.clear(); } catch { /* none */ }
+		const target = document.createElement('div');
+		document.body.append(target);
+		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: { conversation: thread }, onClose: () => {}, admin: true } });
+		try {
+			await until(() => target.querySelector('[data-role="decision"][data-awaiting] [data-reply-pending]') !== null);
+			release(reply('On my way.'));
+			await until(() => target.querySelector('[data-role="assistant"]') !== null && target.querySelector('[data-reply-pending]') === null);
+		} finally { void unmount(v); target.remove(); }
+	});
+
+	it('a member who is not an administrator sees no decision marks', async () => {
 		const s = await setup(async () => reply('Done.'), envoyManifest);
 		const handle = '6590000001@s.whatsapp.net';
 		await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id: 'w1', thread: handle, sentAt: s.t.clock.now(),
@@ -262,10 +293,9 @@ describe('the agent panel restored', () => {
 		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: { conversation: thread }, onClose: () => {} } });
 		try {
 			await until(() => target.querySelector('[data-agent-read-only]') !== null);
-			await press([...target.querySelectorAll<HTMLElement>('[role="tab"]')].find((x) => x.textContent?.trim() === 'Decisions')!);
-			await until(() => target.querySelector('[data-agent-decisions]') !== null);
-			expect(target.querySelector('[data-decision]')).toBeNull();
-			expect(target.querySelector('[data-agent-decisions]')?.textContent).toContain('Triage decisions are an administrator’s.');
+			await until(() => target.querySelector('[data-role="user"]') !== null);
+			expect(target.querySelector('[data-decision-toggle]')).toBeNull();
+			expect(target.querySelector('[role="tab"]')).toBeNull();
 		} finally { void unmount(v); target.remove(); }
 	});
 });
