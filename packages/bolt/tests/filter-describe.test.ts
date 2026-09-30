@@ -130,6 +130,23 @@ const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (
 };
 
 describe('filter.describe offers System 1 the exposure and maps its choices onto the grammar', () => {
+	it('a phrase a found record holds is read once, loosely, through its relation; "not" before it negates it; its words echo nowhere else', async () => {
+		// members declare a search: the lookup reads their search document and every searched text field
+		const searchable = { ...manifest, models: { ...manifest.models, members: { ...manifest.models.members, search: { text: ['name'] } } } } as unknown as EngineManifest;
+		const found = (port: System1Port) => filterDescribe({ manifest: searchable, clock: () => '2026-09-26T00:00:00.000Z',
+			db: { async write() { return []; } } as unknown as TenantDb,
+			read: (async (qs: readonly { collection?: string }[]) => qs.map((q) => ({ rows: q.collection === 'members' ? [{ id: 'm1', name: 'Bob Tan' }] : [] }))) as unknown as ReadEngine['run'],
+			ai: { sys_1: port, sys_2: { models: ['x'], async infer() { throw new Error('never'); } } } as unknown as AiPort });
+		const reading = 'Assignee \u00b7 whose Name contains \u201cbob tan\u201d';
+		for (const [text, where] of [['jobs for bob tan', { assignee: { is: { name: { like: '%bob%tan%' } } } }], ['jobs not for bob tan', { not: { assignee: { is: { name: { like: '%bob%tan%' } } } } }]] as const) {
+			// System 1 also says Title contains the echoed "bob": a word the phrase already read is no second condition
+			const port = system1((r) => ({ ...byField({ Title: { op: 'contains', value: 'bob' } })(r), span1: reading }));
+			expect(await found(port).describe({ collection: 'jobs', text, authority: caller(), bindings })).toEqual({ ok: true, where });
+			const q = port.requests[0]!.questions['span1'];
+			expect(q?.type === 'choice' ? Object.keys(q.criteria) : []).toContain(reading);
+		}
+	});
+
 	it('a description that states nothing is a refusal, never an empty filter reported as applied (staging: "dsajdasomda")', async () => {
 		const r = await describer(system1(byField({}))).describe({ collection: 'jobs', text: 'dsajdasomda', authority: caller(), bindings });
 		expect(r).toMatchObject({ ok: false, message: expect.stringMatching(/No field here matches/) });

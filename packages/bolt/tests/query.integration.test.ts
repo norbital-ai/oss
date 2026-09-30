@@ -229,6 +229,27 @@ describe('next query engine (PGlite)', () => {
 		expect((await run(workspace, ir.read(cat, 'orders', { limit: 0 })))[0]).toEqual({ rows: [], next: null });
 	});
 
+	it('nearest first: a point orders by great-circle distance from a point, pages by cursor, rows without a point last', async () => {
+		const at = { lat: 3.5, lng: 101.5 };
+		const rad = (d: number) => d * Math.PI / 180;
+		const metres = (p: { lat: number; lng: number }) => 6371008.8 * 2 * Math.asin(Math.sqrt(Math.sin(rad(p.lat - at.lat) / 2) ** 2
+			+ Math.cos(rad(at.lat)) * Math.cos(rad(p.lat)) * Math.sin(rad(p.lng - at.lng) / 2) ** 2));
+		const want = [...ORDERS].sort((x, y) => x.spot === null ? (y.spot === null ? x.id.localeCompare(y.id) : 1) : y.spot === null ? -1
+			: metres(x.spot) - metres(y.spot) || x.id.localeCompare(y.id)).map((o) => o.id);
+		const orderBy = { spot: { near: at } };
+		const seen: string[] = [];
+		let after: string | undefined;
+		do {
+			const page = (await run(workspace, ir.read(cat, 'orders', { orderBy, limit: 7, ...(after === undefined ? {} : { after }), select: { spot: true } })))[0] as Page;
+			seen.push(...page.rows.map((r) => r.id as string));
+			after = page.next ?? undefined;
+		} while (after !== undefined);
+		expect(seen).toEqual(want);
+		// through a one-relation's point is the same key shape; a non-point field is refused
+		expect(() => ir.read(cat, 'orders', { orderBy: { total: { near: at } }, limit: 5 })).toThrow(/not a point/);
+		expect(() => ir.read(cat, 'orders', { orderBy: { spot: { near: { lat: 99, lng: 1 } } }, limit: 5 })).not.toThrow(); // the grammar checks shape, not range
+	});
+
 	it('rules 11 and 14: a related sort key orders by the target field, pages through it by cursor, and needs the target read unmasked', async () => {
 		const acc = new Map(ACCOUNTS.map((a) => [a.id, a]));
 		const ord = new Map(ORDERS.map((o) => [o.id, o]));

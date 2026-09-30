@@ -4,7 +4,7 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fromWhere, likeOf, orderKeys, orderOf, orderText, parseOrder, sortable, sortRows, toWhere } from '../src/views/filter.ts';
+import { fromWhere, likeOf, matches, nodeText, orderKeys, orderOf, orderText, parseOrder, sortable, sortRows, sortText, toWhere } from '../src/views/filter.ts';
 import { listSelect, MANY_SHOWN, unref } from '../src/views/model.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
@@ -22,11 +22,36 @@ const catalog = {
 		many: ['lines'],
 		masked: ['salary'],
 	},
-	accounts: { label: ['name'], fields: { name: { kind: 'text' } }, relations: { owner: { targets: ['sys_user'] } } },
+	accounts: { label: ['name'], fields: { name: { kind: 'text' }, spot: { kind: 'point', optional: true } }, relations: { owner: { targets: ['sys_user'] } } },
 	sys_user: { label: ['name'], fields: { name: { kind: 'text' } } },
 	job_lines: { label: [], fields: { qty: { kind: 'int' }, amount: { kind: 'money' } }, relations: { job: { targets: ['jobs'], inverse: 'lines' } } },
 };
 const cond = (path, op, arg = null) => ({ t: 'cond', path, op, arg });
+
+test('contains is loose: the words in order with anything between, both ways; a described near and a nearest sort round-trip', () => {
+	// "1f pine grove" matches "1F Pine Grove #17-30" and "1F-Pine  Grove": the engine's `%1f%pine%grove%`
+	assert.equal(likeOf('1f pine  grove'), '%1f%pine%grove%');
+	const w = { account: { is: { name: { like: '%1f%pine%grove%' } } } };
+	const rows = fromWhere(catalog, 'jobs', w);
+	assert.deepEqual(rows, [cond('account.name', 'like', { lit: '1f pine grove' })]);
+	assert.deepEqual(toWhere(catalog, 'jobs', rows[0]), w);
+	assert.equal(matches({ name: '1F-Pine  Grove #17-30' }, cond('name', 'like', { lit: '1f pine grove' })), true);
+	assert.equal(matches({ name: 'Grove Pine 1F' }, cond('name', 'like', { lit: '1f pine grove' })), false);
+	// within metres of a point: a row with its words, lowered back unchanged
+	const near = { account: { is: { spot: { near: [{ lat: 1.3291, lng: 103.769 }, 1500] } } } };
+	const n = fromWhere(catalog, 'jobs', near);
+	assert.equal(n[0].op, 'near');
+	assert.deepEqual(toWhere(catalog, 'jobs', n[0]), near);
+	assert.match(nodeText(catalog, 'jobs', n[0], (x) => x), /within 1\.5 km of 1\.3291, 103\.7690/);
+	assert.equal(fromWhere(catalog, 'jobs', { title: { near: [{ lat: 1, lng: 1 }, 5] } }), null, 'near needs a point');
+	// nearest first: through the URL text and back to the OrderBy
+	const order = { account: { spot: { near: { lat: 1.3291, lng: 103.769 } } } };
+	const keys = orderKeys(order);
+	assert.deepEqual(keys, [{ field: 'account.spot', dir: 'asc', near: { lat: 1.3291, lng: 103.769 } }]);
+	assert.deepEqual(parseOrder(orderText(keys), sortable(catalog.jobs, true, catalog)), { keys, dropped: 0 });
+	assert.deepEqual(orderOf(keys), [order]);
+	assert.match(sortText(catalog, 'jobs', keys[0], (x) => x), /nearest to 1\.3291, 103\.7690/);
+});
 
 test('every grammar element is a row that lowers to a Where and parses back to the same row', () => {
 	const rows = [

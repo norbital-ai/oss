@@ -235,6 +235,8 @@ export function liveHub(config: LiveConfig) {
 		const keys = [...r.order ?? [], { field: 'id', dir: 'asc' as const }];
 		const before = (x: Row, y: Row): boolean | null => {
 			for (const k of keys) {
+				// a distance is the database's to compute: a row that moves re-reads
+				if ('near' in k && k.near !== undefined) return null;
 				const p = sortable(x[k.field]), q = sortable(y[k.field]);
 				if (p === undefined || q === undefined) return null;
 				if (p === q) continue;

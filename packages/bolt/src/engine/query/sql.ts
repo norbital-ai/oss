@@ -138,11 +138,7 @@ function pred(b: Build, c: CollectionInfo, a: string, p: Pred, lv: Level): strin
 		case 'geo': {
 			const x = col(b, c, a, p.field, lv);
 			const [lat, lng] = [`(${x})[1]`, `(${x})[0]`];
-			if (p.near !== undefined) {
-				const [pt, m] = p.near;
-				const [plat, plng] = [b.bind(pt.lat, 'float8'), b.bind(pt.lng, 'float8')];
-				return `(6371008.8 * 2 * asin(sqrt(power(sin(radians(${lat} - ${plat}) / 2), 2) + cos(radians(${plat})) * cos(radians(${lat})) * power(sin(radians(${lng} - ${plng}) / 2), 2))) <= ${b.bind(m, 'float8')})`;
-			}
+			if (p.near !== undefined) return `(${metres(b, x, p.near[0])} <= ${b.bind(p.near[1], 'float8')})`;
 			const s = p.within!;
 			if ('bbox' in s) {
 				const [u, v] = s.bbox;
@@ -220,15 +216,23 @@ function arm(b: Build, c: CollectionInfo, a: string, rel: string, r: RelSelectIR
 }
 const invalidPage = (): never => { throw invalid('a many-relation arm states { limit } or { all: true } (rule 9)'); };
 
+/** Great-circle metres from a `point` column to a point (haversine, mean Earth radius). */
+function metres(b: Build, x: string, pt: { lat: number; lng: number }): string {
+	const [lat, lng, plat, plng] = [`(${x})[1]`, `(${x})[0]`, b.bind(pt.lat, 'float8'), b.bind(pt.lng, 'float8')];
+	return `(6371008.8 * 2 * asin(sqrt(power(sin(radians(${lat} - ${plat}) / 2), 2) + cos(radians(${plat})) * cos(radians(${lat})) * power(sin(radians(${lng} - ${plng}) / 2), 2))))`;
+}
 // ── order and cursors (rule 11) ──
 type Key = { expr: string; pg: string; dir: 'asc' | 'desc' };
 const UNORDERED = new Set(['json', 'file', 'custom', 'vector', 'point', 'ref', 'daterange', 'tstzrange']);
 function orderBy(b: Build, c: CollectionInfo, a: string, o: Order, lv: Level, first: Key[] = []): Key[] {
-	const keys = o.map(({ field, dir }): Key => {
+	const keys = o.map(({ field, dir, near }): Key => {
 		const own = !field.includes('.');
 		if (!own && lv.exposed) readable(b, c, field, lv);
 		// a related key is a scalar subselect over the same joins and scopes as a filter; a missing or unseen target is null
 		const { expr, f } = own ? { expr: col(b, c, a, field, lv), f: fieldOf(c, field, lv) } : path(b, c, a, field, lv);
+		// nearest first: the distance is the key, so a cursor pages by it like any number (a row without a point sorts last)
+		// ponytail: haversine per row, no KNN index use; order by the GiST `<->` when a large table needs nearest-N fast
+		if (near !== undefined) { if (f.kind !== 'point') throw invalid(`'${field}' is not a point`); return { expr: metres(b, expr, near), pg: 'float8', dir: 'asc' }; }
 		if (UNORDERED.has(f.kind) || UNORDERED.has(f.pg) || f.many) throw invalid(`'${field}' has no order`);
 		return { expr, pg: f.pg, dir };
 	});

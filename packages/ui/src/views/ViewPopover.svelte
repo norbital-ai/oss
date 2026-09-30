@@ -10,7 +10,7 @@
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from './bolt.js';
 	import { useBolt } from './bolt.js';
-	import { fromWhere, nodeText, ORDER_MAX_KEYS, pathLabel, pathOf, type Node as FilterRow, type SortKey } from './filter.js';
+	import { fromWhere, nodeText, ORDER_MAX_KEYS, pathLabel, pathOf, sortText, type Node as FilterRow, type SortKey } from './filter.js';
 	import FilterNode from './FilterNode.svelte';
 	import Glyph from './Glyph.svelte';
 	import { recordLabels } from './live.svelte.js';
@@ -114,10 +114,15 @@
 				<p class="text-muted-foreground text-xs font-medium">{msg(bolt, 'view.sort', 'Sort')}</p>
 				{#each view.order as k, i (k.field)}
 					<div class="flex items-center gap-1.5" data-sort={k.field}>
+						{#if k.near !== undefined}
+							<!-- nearest first from a described place: shown, not re-pointed here -->
+							<span class="text-sm" data-sort-near>{sortText(catalog, collection, k, humanize)}</span>
+						{:else}
 						<Combobox class="w-auto" aria-label={msg(bolt, 'view.sortField', 'Sort by')} value={k.field} onChange={(f) => { if (f !== null) setKey(i, { ...k, field: f }); }}
 							options={sortable.filter((f) => f === k.field || !view.order.some((o) => o.field === f)).map((f) => ({ value: f, label: pathLabel(catalog, collection, f, humanize) }))} />
 						<Combobox class="w-auto" aria-label={msg(bolt, 'view.direction', 'Direction')} value={k.dir} onChange={(d) => { if (d !== null) setKey(i, { ...k, dir: d }); }}
 							options={[{ value: 'asc' as const, label: msg(bolt, 'view.asc', 'Ascending') }, { value: 'desc' as const, label: msg(bolt, 'view.desc', 'Descending') }]} />
+						{/if}
 						<button type="button" class="text-muted-foreground hover:bg-muted grid size-9 place-items-center rounded-sm disabled:opacity-40" disabled={i === 0}
 							aria-label={msg(bolt, 'view.up', 'Move up')} onclick={() => move(i, -1)}>↑</button>
 						<button type="button" class="text-muted-foreground hover:bg-muted grid size-9 place-items-center rounded-sm disabled:opacity-40" disabled={i === view.order.length - 1}

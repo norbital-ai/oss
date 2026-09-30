@@ -70,7 +70,7 @@
 	import { initial, problems } from '../kinds/kind.js';
 	import { uiText } from '../primitives/utils.js';
 	import { offerContexts, openRecord, useBolt, type Outcome } from './bolt.js';
-	import { nodeText, pathLabel, pathOf } from './filter.js';
+	import { nodeText, pathLabel, pathOf, sortText } from './filter.js';
 	import { filesOf, humanize, label, msg, refOf, rowsOf, searchIndexes, SEMANTIC_SEARCH, show, SLASH, unref, valueAt, type SearchIndex } from './model.js';
 	import type { ViewState } from './view-state.svelte.js';
 	import Glyph, { type GlyphName } from './Glyph.svelte';
@@ -423,7 +423,7 @@
 				{/each}
 				{#each view?.order ?? [] as k, i (k.field)}
 					<span class="bg-muted/60 inline-flex h-6 items-center gap-1 rounded-full border pr-1 pl-2" data-sort-chip>
-						<span>{pathLabel(catalog, source, k.field, humanize)} {k.dir === 'asc' ? '↑' : '↓'}</span>
+						<span>{k.near === undefined ? `${pathLabel(catalog, source, k.field, humanize)} ${k.dir === 'asc' ? '↑' : '↓'}` : sortText(catalog, source, k, humanize)}</span>
 						<button type="button" class="hover:bg-accent grid size-4 place-items-center rounded-full" aria-label={msg(bolt, 'view.removeSort', 'Remove sort')}
 							onclick={() => view?.setOrder(view.order.filter((_, j) => j !== i))}><Glyph name="x" class="size-3" /></button>
 					</span>

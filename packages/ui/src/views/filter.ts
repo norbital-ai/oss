@@ -5,7 +5,8 @@ import type { Json, Kind } from '../kinds/kind.js';
 
 /** A `Where` literal (§3.3.9). ui has no bolt dependency, so it is structural here; `$bolt` narrows it to `Where<C>`. */
 export type Where = { readonly [key: string]: Json };
-export type SortKey = { field: string; dir: 'asc' | 'desc' };
+/** A sort key; `near` orders by distance from that point, nearest first (a point field). */
+export type SortKey = { field: string; dir: 'asc' | 'desc'; near?: { lat: number; lng: number } };
 /** One `OrderBy` key object: `{ field: dir }`, or through a one-relation `{ account: { name: dir } }`. */
 export type SortObject = { readonly [field: string]: 'asc' | 'desc' | SortObject };
 /** An `OrderBy` literal: a field, a key object, or up to 4 of them. */
@@ -14,7 +15,7 @@ type Catalog = { readonly [collection: string]: CollectionExposure };
 
 export type Cmp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
 export type Op = Cmp | 'in' | 'nin' | 'like' | 'isNull' | 'notNull' | 'has' | 'hasAny' | 'hasAll' | 'isEmpty' | 'notEmpty'
-	| 'during' | 'contains' | 'overlaps' | 'within';
+	| 'during' | 'contains' | 'overlaps' | 'within' | 'near';
 export type Unit = 'week' | 'month' | 'quarter' | 'year';
 /** A condition's value: a literal, a list, a relative date span (with the catalogue's label, when it came from one), an
  * actor, or a `today`/`now`/`startOf` operand. */
@@ -167,9 +168,17 @@ export function validLit(k: Kind, v: Json): boolean {
 		default: return typeof v === 'string' && v !== '';
 	}
 }
-/** `like` text with `%`, `_` and `\` escaped, wrapped as "contains". */
-export const likeOf = (text: string) => `%${text.replace(/[%_\\]/g, '\\$&')}%`;
-const unlike = (p: string): string | null => /^%.*%$/s.test(p) && !/(^|[^\\])(\\\\)*[%_]/.test(p.slice(1, -1)) ? p.slice(1, -1).replace(/\\(.)/g, '$1') : null;
+/** "contains", loosely: the words in order with anything between them (`%1f%pine%grove%`), each escaped. */
+export const likeOf = (text: string) => `%${text.trim().split(/\s+/).map((w) => w.replace(/[%_\\]/g, '\\$&')).join('%')}%`;
+/** A `like` pattern as its words: an unescaped `%` inside separates them; an unescaped `_` is not text. */
+const unlike = (p: string): string | null => {
+	if (!/^%.*%$/s.test(p) || /(^|[^\\])(\\\\)*_/.test(p.slice(1, -1))) return null;
+	return p.slice(1, -1).split(/(?<!\\)%/).map((w) => w.replace(/\\(.)/g, '$1')).filter((w) => w !== '').join(' ');
+};
+const isPoint = (v: Json): v is { lat: number; lng: number } => isObj(v) && typeof v['lat'] === 'number' && typeof v['lng'] === 'number';
+/** A radius as words: "500 m", "1.5 km". */
+export const radiusText = (m: number) => m >= 1000 ? `${Math.round(m / 100) / 10} km` : `${Math.round(m)} m`;
+const pointText = (p: { lat: number; lng: number }) => `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`;
 
 // ── lowering: Node → Where ──
 function operand(a: Arg): Json {
@@ -292,6 +301,10 @@ function fieldNodes(cat: Catalog, collection: string, path: string, ops: Json): 
 			const text = typeof v === 'string' ? unlike(v) : null;
 			if (text === null) return null;
 			arg = { lit: text };
+		} else if (k === 'near') {
+			// within metres of a point (a described "near <place>"): shown, its radius editable
+			if (r.leaf !== 'field' || r.kind.kind !== 'point' || !Array.isArray(v) || v.length !== 2 || !isPoint(v[0]!) || typeof v[1] !== 'number') return null;
+			arg = { lit: v };
 		} else {
 			arg = argOf(r, op, v);
 			if (arg === null) return null;
@@ -390,15 +403,17 @@ export function sortable(x: CollectionExposure | undefined, system = true, cat?:
 	return [...own, ...(system ? ['created_at', 'updated_at'].filter((f) => !own.includes(f)) : []), ...related];
 }
 export const ORDER_MAX_KEYS = 4;
-export const orderText = (keys: readonly SortKey[]) => keys.map((k) => `${k.field}:${k.dir}`).join(',');
+export const orderText = (keys: readonly SortKey[]) => keys.map((k) => k.near === undefined ? `${k.field}:${k.dir}` : `${k.field}:near(${k.near.lat} ${k.near.lng})`).join(',');
 /** `field:asc,field:desc` → keys; each junk key is dropped (and counted). */
 export function parseOrder(text: string, allowed: readonly string[] | null): { keys: SortKey[]; dropped: number } {
 	const keys: SortKey[] = [];
 	let dropped = 0;
 	for (const part of text.split(',').filter(Boolean)) {
-		const m = /^(\w+(?:\.\w+){0,2}):(asc|desc)$/.exec(part);
-		if (m === null || (allowed !== null && !allowed.includes(m[1]!)) || keys.some((k) => k.field === m[1]) || keys.length >= ORDER_MAX_KEYS) dropped++;
-		else keys.push({ field: m[1]!, dir: m[2] as 'asc' | 'desc' });
+		const m = /^(\w+(?:\.\w+){0,2}):(?:(asc|desc)|near\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\))$/.exec(part);
+		// a nearest-first key names a point, never in the sortable list: the decode holds it to a point the viewer reads
+		const near = m?.[3] === undefined ? undefined : { lat: Number(m[3]), lng: Number(m[4]) };
+		if (m === null || (near === undefined && allowed !== null && !allowed.includes(m[1]!)) || keys.some((k) => k.field === m[1]) || keys.length >= ORDER_MAX_KEYS) dropped++;
+		else keys.push(near === undefined ? { field: m[1]!, dir: m[2] as 'asc' | 'desc' } : { field: m[1]!, dir: 'asc', near });
 	}
 	return { keys, dropped };
 }
@@ -406,12 +421,16 @@ export function parseOrder(text: string, allowed: readonly string[] | null): { k
 export function orderKeys(o: Json | undefined): SortKey[] {
 	const items = o === undefined || o === null ? [] : Array.isArray(o) ? o : [o];
 	const flat = (x: Json, at: string): SortKey[] => typeof x === 'string' ? (x === 'asc' || x === 'desc' ? [{ field: at, dir: x }] : [])
+		: isObj(x) && keysOf(x).length === 1 && isPoint(x['near'] ?? null) ? [{ field: at, dir: 'asc', near: x['near'] as { lat: number; lng: number } }]
 		: isObj(x) ? Object.entries(x).flatMap(([k, v]) => flat(v, `${at}.${k}`)) : [];
 	return items.flatMap((x): SortKey[] => typeof x === 'string' ? [{ field: x, dir: 'asc' }]
 		: isObj(x) ? Object.entries(x).flatMap(([k, v]) => flat(v, k)) : []);
 }
 /** Keys as an `OrderBy`: a path nests (`account.name` → `{ account: { name: dir } }`). */
-export const orderOf = (keys: readonly SortKey[]): Json => keys.map((k) => k.field.split('.').reduceRight<Json>((v, f) => ({ [f]: v }), k.dir));
+export const orderOf = (keys: readonly SortKey[]): Json => keys.map((k) => k.field.split('.').reduceRight<Json>((v, f) => ({ [f]: v }), k.near === undefined ? k.dir : { near: k.near }));
+/** A sort key in words: "Site › Location nearest to 1.3291, 103.7690", or the field's own label. */
+export const sortText = (cat: Catalog, collection: string, k: SortKey, human: (s: string) => string) =>
+	k.near === undefined ? pathLabel(cat, collection, k.field, human) : `${pathLabel(cat, collection, k.field, human)} nearest to ${pointText(k.near)}`;
 
 // ── URL state (`?<key>.where=`, `?<key>.order=`, rule 16b) ──
 export type ViewUrl = { where: Json | undefined; order: string | undefined; badJson: boolean };
@@ -444,7 +463,11 @@ export function matches(row: { readonly [f: string]: Json }, n: Node): boolean {
 	switch (n.op) {
 		case 'isNull': return v === null;
 		case 'notNull': return v !== null;
-		case 'like': return String(v ?? '').toLowerCase().includes(String(a).toLowerCase());
+		case 'like': { // the words in order, as the engine's `%w1%w2%`
+			const s = String(v ?? '').toLowerCase();
+			let at = 0;
+			return String(a).toLowerCase().trim().split(/\s+/).every((w) => { const i = s.indexOf(w, at); if (i < 0) return false; at = i + w.length; return true; });
+		}
 		case 'eq': return v !== null && String(v) === String(a);
 		case 'ne': return v === null || String(v) !== String(a);
 		case 'in': return list.some((x) => String(x) === String(v));
@@ -522,6 +545,10 @@ export function nodeText(cat: Catalog, collection: string, n: Node, human: (s: s
 		return ['some', 'none', 'every'].includes(n.q)
 			? `${head} ${QUANT_LABEL[n.q]}${n.of.length ? `: ${n.of.map((x) => nodeText(cat, child, x, human, ref, opLabel)).join(' and ')}` : ''}`
 			: `${head} ${QUANT_LABEL[n.q]}${n.field ? ` ${pathLabel(cat, child, n.field, human)}` : ''} ${opLabel(n.op!, n.rel)} ${n.n}`;
+	}
+	if (n.op === 'near' && n.arg !== null && 'lit' in n.arg && Array.isArray(n.arg.lit)) {
+		const [p, m] = n.arg.lit as [{ lat: number; lng: number }, number];
+		return `${head} within ${radiusText(m)} of ${pointText(p)}`;
 	}
 	const r = resolve(cat, collection, n.path), a = n.arg;
 	const named = (v: Json) => r?.leaf === 'rel' && ref !== undefined && typeof v === 'string' ? ref(r.targets[0]!, v) : String(v);

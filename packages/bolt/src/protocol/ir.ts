@@ -265,6 +265,8 @@ function sortKey(x: unknown, i: number): [string, unknown] {
 	let v: unknown = x;
 	for (;;) {
 		if (typeof v === 'string' && steps.length === 0 && !v.includes('.')) return [v, 'asc'];
+		// nearest first: `{ location: { near: { lat, lng } } }`
+		if (steps.length > 0 && isObj(v) && Object.keys(v).length === 1 && point(v.near)) return [steps.join('.'), { near: v.near }];
 		const e = isObj(v) ? entries(v) : [];
 		if (e.length !== 1 || e[0]![0].includes('.')) throw invalid(`orderBy[${i}]: one { field: 'asc' | 'desc' } per key`);
 		steps.push(e[0]![0]);
@@ -281,7 +283,9 @@ export function order(o: unknown, cat?: Catalog, m?: string): Order {
 	if (items.length > ORDER_MAX_KEYS) throw invalid(`orderBy: at most ${ORDER_MAX_KEYS} keys`);
 	const seen = new Set<string>();
 	return items.map((x, i) => {
-		const [field, dir] = sortKey(x, i);
+		const [field, key] = sortKey(x, i);
+		const near = isObj(key) ? key.near as { lat: number; lng: number } : undefined;
+		const dir = near === undefined ? key : 'asc';
 		if (dir !== 'asc' && dir !== 'desc') throw invalid(`orderBy[${i}]: '${field}' is asc or desc`);
 		if (seen.has(field)) throw invalid(`orderBy[${i}]: '${field}' twice`);
 		seen.add(field);
@@ -296,10 +300,10 @@ export function order(o: unknown, cat?: Catalog, m?: string): Order {
 			const last = steps.at(-1)!;
 			const f = last.includes('.') ? undefined : info.fields.get(last);
 			const system = (SYSTEM_COLUMNS as readonly string[]).includes(last);
-			if (f === undefined || f.many || UNSORTABLE.has(f.kind) || (system && !SORTABLE_SYSTEM.has(last)))
-				throw invalid(`orderBy[${i}]: '${field}' is not sortable`);
+			if (near !== undefined ? f?.kind !== 'point' : f === undefined || f.many || UNSORTABLE.has(f.kind) || (system && !SORTABLE_SYSTEM.has(last)))
+				throw invalid(`orderBy[${i}]: '${field}' is not ${near === undefined ? 'sortable' : 'a point'}`);
 		}
-		return { field, dir };
+		return near === undefined ? { field, dir } : { field, dir, near };
 	});
 }
 export function select(cat: Catalog, m: string, s: unknown, depth = 0): SelectIR {

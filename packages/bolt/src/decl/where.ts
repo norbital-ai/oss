@@ -113,8 +113,13 @@ type SortHop<C> = C extends CollectionName
 type Dir = 'asc' | 'desc';
 type Prev = [never, 0, 1];
 /** Each key's value at one level: a direction, and through a hop (`D` left) one key of the target's level. */
-type SortLevel<C, D extends 0 | 1 | 2> = { [K in Sortable<C> | ([D] extends [0] ? never : SortHop<C>)]:
-	(K extends Sortable<C> ? Dir : never) | ([D] extends [0] ? never : K extends SortHop<C> ? OneKey<SortLevel<OneTarget<C, K>, Prev[D]>> : never) };
+/** Point fields a read may order by distance from a point, nearest first: `{ location: { near: { lat, lng } } }`. */
+type PointField<C> = C extends CollectionName
+	? { [P in ReadField<C> & keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'point' } ? P : never }[ReadField<C> & keyof Columns<C> & string]
+	: never;
+type SortLevel<C, D extends 0 | 1 | 2> = { [K in Sortable<C> | PointField<C> | ([D] extends [0] ? never : SortHop<C>)]:
+	(K extends Sortable<C> ? Dir : never) | (K extends PointField<C> ? { near: Point } : never)
+	| ([D] extends [0] ? never : K extends SortHop<C> ? OneKey<SortLevel<OneTarget<C, K>, Prev[D]>> : never) };
 /** Exactly one key of `L`. */
 type OneKey<L> = { [F in keyof L]: { [K in F]: L[F] } & { [K in Exclude<keyof L, F>]?: never } }[keyof L];
 /** A sort key: a field (ascending), `{ field: dir }`, or a related field through at most two one-relations

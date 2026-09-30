@@ -14,7 +14,7 @@
 	import { useBolt } from './bolt.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import {
-		argKind, childOf, manyOffers, offersFor, operandsFor, QUANT_LABEL, resolve, valueKind,
+		argKind, childOf, manyOffers, offersFor, operandsFor, QUANT_LABEL, radiusText, resolve, valueKind,
 		type Arg, type Cmp, type FilterStep, type Node, type Offer, type Op, type Quant, type Resolved, type Unit,
 	} from './filter.js';
 	import FilterNode from './FilterNode.svelte';
@@ -153,8 +153,14 @@
 			{@const c = node}
 			{@const operands = operandsFor(r, c.op)}
 			<Combobox class="w-auto" aria-label={msg(bolt, 'view.operator', 'Operator')} value={c.op} onChange={(op) => { if (op !== null) onChange({ ...c, op: op as Op, arg: null }); }}
-				options={at.map((o) => ({ value: o.op, label: o.opLabel }))} />
-			{#if !NO_VALUE.includes(c.op)}
+				options={[...at.map((o) => ({ value: o.op, label: o.opLabel })), ...(c.op === 'near' && !at.some((o) => o.op === 'near') ? [{ value: 'near', label: msg(bolt, 'view.near', 'is within') }] : [])]} />
+			{#if c.op === 'near' && c.arg !== null && 'lit' in c.arg && Array.isArray(c.arg.lit)}
+				<!-- a described "near <place>": the radius is editable; the place is where the found record is -->
+				{@const [p, m] = c.arg.lit as [{ lat: number; lng: number }, number]}
+				<input class={cn(CONTROL, 'w-24')} type="number" min="0.1" step="0.1" aria-label={msg(bolt, 'view.radius', 'Kilometres')} value={m / 1000}
+					oninput={(e) => { const km = Number(e.currentTarget.value); if (km > 0) setArg({ lit: [p, Math.round(km * 1000)] }); }} />
+				<span class="text-muted-foreground text-sm" data-near>{msg(bolt, 'view.kmOf', 'km of')} {p.lat.toFixed(4)}, {p.lng.toFixed(4)} <span class="sr-only">({radiusText(m)})</span></span>
+			{:else if !NO_VALUE.includes(c.op)}
 				{#if c.op !== 'during' && c.op !== 'like' && operands.length > 1}
 					{@const lit = r.leaf === 'rel' ? 'record' : r.kind.kind === 'date' || r.kind.kind === 'instant' || r.kind.kind === 'period' ? 'date' : 'lit'}
 					<Combobox class="w-auto" aria-label={msg(bolt, 'view.operand', 'Compare with')} value={argKind(c.arg)} onChange={(o) => setArg(operand(o ?? 'lit'))}

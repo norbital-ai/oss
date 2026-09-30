@@ -171,7 +171,8 @@ export type Pred =
 	| { t: 'json'; field: string; isEmpty: boolean }; // hook:codec — a json list is empty (null counts as empty)
 /** Rule 9: a limit or everything, never a default. `after` is bound to the query's AST hash (rule 11). */
 export type PageIR = { limit: number; after?: string } | { all: true };
-export type Order = readonly { field: string; dir: 'asc' | 'desc' }[];
+/** A sort key; `near` orders by great-circle distance from that point, nearest first (a point field only). */
+export type Order = readonly { field: string; dir: 'asc' | 'desc'; near?: { lat: number; lng: number } }[];
 /** `null` fields = the list's default projection (X-33: no `json`, `custom`, `file` values). */
 export type SelectIR = { fields: readonly string[] | null; relations: { readonly [rel: string]: RelSelectIR } };
 export type RelSelectIR = { target: string; many: boolean; select: SelectIR; where?: Pred; order?: Order; page?: PageIR };
