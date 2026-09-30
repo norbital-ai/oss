@@ -18,7 +18,7 @@ const manifest = {
 } as unknown as EngineManifest;
 
 describe('the session cookie', () => {
-	it('slides with the database session on every boot, and a duplicate name keeps the first', async () => {
+	it('slides with the database session on every boot, and of duplicate names the first live one wins', async () => {
 		const t = await testWorkspace({ manifest });
 		const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db),
 			mail: { send: async () => ({ providerId: 'x' }), subscribe: () => () => {} }, devSink: true, publicUrl: 'https://acme.example/acme' };
@@ -39,6 +39,8 @@ describe('the session cookie', () => {
 		expect(later.headers.get('set-cookie')).toContain('; Path=/acme;');
 
 		expect((await boot(`${session}; ${COOKIES.session}=stray`))!.status).toBe(200);
-		expect((await boot(`${COOKIES.session}=stray; ${session}`))!.status).toBe(401);
+		// a dead cookie sent first (one set before cookies were Partitioned) no longer hides the live one behind it
+		expect((await boot(`${COOKIES.session}=stray; ${session}`))!.status).toBe(200);
+		expect((await boot(`${COOKIES.session}=stray`))!.status).toBe(401);
 	});
 });

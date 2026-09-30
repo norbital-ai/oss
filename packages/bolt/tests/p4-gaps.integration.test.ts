@@ -162,6 +162,22 @@ describe('envoy registration through the shell host (§3.9)', () => {
 	});
 });
 
+describe('two session cookies of one name (a Partitioned one beside one set before 0.0.142)', () => {
+	it('the live session is found behind a dead one the browser sends first, and sign-out revokes both', async () => {
+		const { t, user } = await setup();
+		const ann = await user('ann');
+		const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), devSink: true, publicUrl: 'https://acme.example' };
+		const shell = shellHost({ manifest, identity, authorities: new Authorities(manifest, 'test'), workspace: { name: 'Acme', handle: 'acme' }, ip: () => '203.0.113.9' });
+		const token = ((await mint(identity, ann)) as { value: { token: string } }).value.token;
+		const cookie = `nb_s=dead-token-from-before-a-reset; nb_s=${encodeURIComponent(token)}`;
+		const boot = await shell.handle(new Request('https://acme.example/__bolt/shell', { headers: { cookie } }));
+		expect(boot!.status).toBe(200);
+		expect(((await boot!.json()) as { value: { actor: Json } }).value.actor).toMatchObject({ kind: 'member', id: ann });
+		await shell.handle(new Request('https://acme.example/__bolt/session/signout', { method: 'POST', headers: { cookie } }));
+		expect((await t.db.read([{ text: 'SELECT count(*)::int AS n FROM sys_session', params: [] }]))[0]!.rows[0]).toEqual({ n: 0 });
+	});
+});
+
 describe('the journal crash test (rule 55, t.crash)', () => {
 	it('a run whose host died after its effects replays from its journal: each effect once', async () => {
 		const { t, act, user } = await setup();

@@ -108,6 +108,14 @@ function cookies(request: Request): Map<string, string> {
 	}
 	return out;
 }
+/**
+ * Every session token the request carries, in the order sent. A cookie set `Partitioned` (0.0.142) and one of the same name
+ * set before it are two cookies: the browser sends both, the older first, so the first value can be a dead session.
+ */
+const sessionTokens = (request: Request): string[] => (request.headers.get('cookie') ?? '').split(';').flatMap((part) => {
+	const at = part.indexOf('=');
+	return at > 0 && part.slice(0, at).trim() === COOKIES.session ? [decodeURIComponent(part.slice(at + 1).trim())] : [];
+}).filter((t) => t !== '');
 async function body(request: Request): Promise<{ readonly [k: string]: Json }> {
 	let b: unknown;
 	try {
@@ -134,14 +142,22 @@ export function shellHost(c: ShellHostConfig) {
 	 * Rule 38d: a visitor page's request runs as that app's visitor, signed in or not — unless the member signed in holds a
 	 * policy naming that app (a customer who verified their number on the portal): they run as themselves.
 	 */
+	/** The first of the request's session tokens that authenticates. */
+	async function signedIn(request: Request) {
+		for (const token of sessionTokens(request)) {
+			const s = await authenticate(h, token);
+			if (s !== null) return { token, ...s };
+		}
+		return null;
+	}
+
 	async function caller(request: Request): Promise<Caller> {
 		const jar = cookies(request);
 		const app = publicApp(request.headers.get(VISITOR_APP));
 		if (app !== null) {
-			const token = jar.get(COOKIES.session) ?? null;
-			const s = token === null ? null : await authenticate(h, token);
+			const s = await signedIn(request);
 			const me = s === null ? null : await c.authorities.member(h.db, s.user);
-			if (me !== null && holdsPublic(me, app)) return { authority: me, real: me, token, preview: null, expiresAt: s!.expiresAt };
+			if (me !== null && holdsPublic(me, app)) return { authority: me, real: me, token: s!.token, preview: null, expiresAt: s!.expiresAt };
 			return { authority: c.authorities.visitor(app, jar.get(COOKIES.visitor) ?? uuid()), real: null, token: null, preview: null };
 		}
 		const bearer = /^Bearer (nbk_\S+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
@@ -150,8 +166,7 @@ export function shellHost(c: ShellHostConfig) {
 			const a = key === null ? null : await c.authorities.apiKey(h.db, key);
 			return { authority: a, real: a, token: null, preview: null };
 		}
-		const token = jar.get(COOKIES.session) ?? null;
-		const s = token === null ? null : await authenticate(h, token);
+		const s = await signedIn(request), token = s?.token ?? null;
 		const expiresAt = s === null ? {} : { expiresAt: s.expiresAt };
 		const real = s === null ? null : await c.authorities.member(h.db, s.user);
 		const target = jar.get(COOKIES.preview);
@@ -254,8 +269,7 @@ export function shellHost(c: ShellHostConfig) {
 				(s) => json({ value: { user: s.user } }, 200, { 'set-cookie': cookie(COOKIES.session, s.token, SESSION_S) }));
 		}
 		if (request.method === 'POST' && path === PATHS.session.signout) {
-			const token = cookies(request).get(COOKIES.session);
-			if (token !== undefined) {
+			for (const token of sessionTokens(request)) {
 				await h.db.write({ text: 'DELETE FROM sys_session WHERE token_hash = $1', params: [sha256(token)] });
 				forget(h, token); // ponytail: this cell only; another cell serving the workspace keeps the token up to 30 s
 			}
