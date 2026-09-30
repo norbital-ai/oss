@@ -4,17 +4,17 @@ import { respondSystem1 } from '../src/test/index.ts'; // hook:decisions
 import { describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import type { AiPort, AiRequest, AiResponse, CrossCall, EngineManifest } from '../src/engine/contracts.ts';
-import { inferFacility, modelCall } from '../src/engine/agent/ai.ts';
+import { applyPatch, inferFacility, modelCall } from '../src/engine/agent/ai.ts';
 import { bound, BOUNDS, messages, outline, projection, system } from '../src/engine/agent/context.ts';
 import { listed, preview, type MessageRow } from '../src/engine/agent/schema.ts';
 
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const row = (seq: number, o: Partial<MessageRow> = {}): MessageRow => ({ id: `m${seq}`, conversation: 'c', seq, role: 'user', content: { text: `t${seq}` }, text: `t${seq}`,
 	state: 'consumed', mode: 'agent', as: null, author: null, meta: null, supersedes: null, turn: null, ...o });
-const port = (answers: ((req: AiRequest, signal: AbortSignal, onDelta?: (t: string) => void) => Promise<AiResponse>)[]) => {
+const port = (answers: ((req: AiRequest, signal: AbortSignal, onDelta?: (t: string) => void, onReasoning?: (t?: string) => void) => Promise<AiResponse>)[]) => {
 	const requests: AiRequest[] = [];
 	let i = 0;
-	const p: AiPort = { sys_1: respondSystem1, sys_2: { models: ['default'], infer: (req, signal, onDelta) => { requests.push(req); return answers[i++]!(req, signal, onDelta); } } };
+	const p: AiPort = { sys_1: respondSystem1, sys_2: { models: ['default'], infer: (req, signal, onDelta, onReasoning) => { requests.push(req); return answers[i++]!(req, signal, onDelta, onReasoning); } } };
 	return { p, requests };
 };
 /** A stream that yields `text`, then stays open until the wall aborts it. */
@@ -108,8 +108,9 @@ describe('the AI port under the 60 s wall (rule 63)', () => {
 		expect(requests[1]!.messages).toEqual([{ role: 'user', content: 'q' }, { role: 'assistant', content: 'The answer ' }]);
 		const json = inferFacility(port([stalls('{"n":'), done('42}')]).p, { wallMs: 20 });
 		expect(await json({ ...call, args: [{ prompt: 'q', output: { kind: 'json' } }] }, AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 42 } });
-		const never = inferFacility(port([stalls('a'), stalls('b')]).p, { wallMs: 20 });
-		expect(await never({ ...call, args: [{ prompt: 'q', steps: 2 }] }, AbortSignal.timeout(5_000))).toMatchObject({ ok: false, error: { kind: 'timeout' } });
+		// no step budget: a model that never finishes runs until the ceiling on the whole call (the run's signal) ends it
+		const never = inferFacility(port(Array.from({ length: 200 }, () => stalls('a'))).p, { wallMs: 20 });
+		expect(await never({ ...call, args: [{ prompt: 'q' }] }, AbortSignal.timeout(400))).toMatchObject({ ok: false, error: { kind: 'timeout', message: expect.stringContaining('did not finish within') } });
 	});
 
 	const call: Extract<CrossCall, { op: 'facility' }> = { op: 'facility', facility: 'ai', method: 'sys_2.infer', args: [] };
@@ -117,21 +118,52 @@ describe('the AI port under the 60 s wall (rule 63)', () => {
 	const tool = (name: string, input: Json, id = name) => async (): Promise<AiResponse> => ({ content: '', toolCalls: [{ id, name, input }], finish: 'tool', usage: { input: 1, output: 1 } });
 	const output = { kind: 'object', fields: { n: { kind: 'int' }, note: { kind: 'text', optional: true } } } as Json;
 
-	it('sys_2.infer: a structured output is sent as JSON Schema and decoded, naming each offending field (L-BOLT-371)', async () => {
-		const { p, requests } = port([done('{"n":"x","extra":1}')]);
-		const got = await inferFacility(p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000));
-		expect(requests[0]!.output).toEqual({ type: 'object', additionalProperties: false, properties: { n: { type: 'integer' }, note: { type: 'string' } }, required: ['n'] });
-		expect(got).toMatchObject({ ok: false, error: { kind: 'invalid', message: expect.stringMatching(/output\.extra: is not an input.*output\.n: expected an integer/) } });
-		expect(await inferFacility(port([done('{"n":2}')]).p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 2 } });
+	it('sys_2.infer: a structured answer is built with patch and handed in with submit; a failed submit comes back by path and the loop goes on', async () => {
+		const { p, requests } = port([tool('patch', { ops: [{ op: 'add', path: '/n', value: 'x' }] }, 'p1'), tool('submit', {}, 's1'),
+			tool('patch', { ops: [{ op: 'replace', path: '/n', value: 3 }, { op: 'add', path: '/note', value: 'seen' }] }, 'p2'), tool('submit', {}, 's2')]);
+		expect(await inferFacility(p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 3, note: 'seen' } });
+		expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['patch', 'submit']);
+		expect(requests[0]!.output).toBeUndefined();
+		// the shape to build is in the prompt, as JSON Schema
+		expect(requests[0]!.messages[0]!.content).toContain('"required":["n"]');
+		expect(requests[2]!.messages.at(-1)).toMatchObject({ role: 'tool', content: { id: 's1', result: { error: expect.stringContaining('/n: expected an integer') } } });
 	});
 
-	it('sys_2.infer: a prose answer to a structured request is asked again, at most 3 times running', async () => {
+	it('applyPatch: RFC 6902 add, replace and remove at JSON Pointers, parents created, "-" appends, a batch whole or not at all', () => {
+		const doc = { entries: { a: [{ label: '1' }] } } as Json;
+		expect(applyPatch(doc, [{ op: 'add', path: '/entries/a/-', value: { label: '2' } }, { op: 'add', path: '/entries/b/label', value: 'x' },
+			{ op: 'replace', path: '/entries/a/0/label', value: '1A' }, { op: 'remove', path: '/entries/a/1' }, { op: 'add', path: '/items', value: ['1A'] }]))
+			.toEqual({ entries: { a: [{ label: '1A' }], b: { label: 'x' } }, items: ['1A'] });
+		expect(() => applyPatch(doc, [{ op: 'add', path: '/ok', value: 1 }, { op: 'replace', path: '/missing', value: 1 }])).toThrow(/operation 1 \(replace \/missing\)/);
+		expect(doc).toEqual({ entries: { a: [{ label: '1' }] } }); // the draft is never edited in place
+	});
+
+	it('sys_2.infer: the wall is idle time, so a model streaming its reasoning past it is one call, never cut', async () => {
+		// every 10 ms a reasoning token for 100 ms against a 30 ms wall, then the answer
+		const reasons = async (_: AiRequest, signal: AbortSignal, _d?: (t: string) => void, onReasoning?: (t?: string) => void): Promise<AiResponse> => {
+			for (let i = 0; i < 10; i++) { if (signal.aborted) throw new Error('aborted'); onReasoning?.('thinking '); await new Promise((r) => setTimeout(r, 10)); }
+			return { content: '{"n":5}', toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } };
+		};
+		const { p, requests } = port([reasons]);
+		expect(await inferFacility(p, { wallMs: 30 })(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 5 } });
+		expect(requests).toHaveLength(1);
+	});
+
+	it('sys_2.infer: a structured answer that misses the output is handed back with its problems, at most 3 times running', async () => {
+		// one impossible field used to end the inference, which cost the automation that owned it the whole answer
+		const { p, requests } = port([done('{"n":"x"}'), done('{"n":4}')]);
+		expect(await inferFacility(p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 4 } });
+		expect(requests).toHaveLength(2);
+		expect(requests[1]!.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('/n: expected an integer') });
+	});
+
+	it('sys_2.infer: a structured answer written out as text is taken as a submission; prose is asked to patch, at most 3 times running', async () => {
 		// one chatty turn used to fail the whole inference, which failed the automation that owned it
 		const { p, requests } = port([done('Sure! Here is the verdict: suspicious.'), done('{"n":3}')]);
 		expect(await inferFacility(p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { n: 3 } });
-		expect(requests[1]!.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('not JSON') });
+		expect(requests[1]!.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('Build the answer with patch') });
 		expect(await inferFacility(port([done('prose'), done('more prose'), done('still prose'), done('never json')]).p)(at({ prompt: 'q', output }), AbortSignal.timeout(5_000)))
-			.toMatchObject({ ok: false, error: { kind: 'invalid', message: 'the output is not JSON' } });
+			.toMatchObject({ ok: false, error: { kind: 'invalid', message: 'the model did not build its answer with patch and submit' } });
 	});
 
 	it('sys_2.infer: a reasoning-only reply is continued, at most 3 times running (L-BOLT-371)', async () => {
@@ -141,26 +173,16 @@ describe('the AI port under the 60 s wall (rule 63)', () => {
 		expect(await inferFacility(port([done(''), done(''), done(''), done('')]).p)(at({ prompt: 'q' }), AbortSignal.timeout(5_000))).toMatchObject({ ok: false, error: { kind: 'invalid' } });
 	});
 
-	it('sys_2.infer with tools: the model calls them, then submits a decoded answer through return_result (L-BOLT-372)', async () => {
+	it('sys_2.infer with tools: the model calls them beside patch and submit (L-BOLT-372)', async () => {
 		const seen: Json[] = [];
 		const browse = { name: 'browse', description: 'Read a page', input: { type: 'object' }, call: async (input: Json) => { seen.push(input); return { text: 'rate is 3' }; } };
-		const { p, requests } = port([tool('browse', { url: 'https://x' }), tool('return_result', { result: { n: 'three' } }, 'r1'), tool('return_result', { result: { n: 3 } }, 'r2')]);
+		const { p, requests } = port([tool('browse', { url: 'https://x' }), tool('patch', { ops: [{ op: 'add', path: '/n', value: 3 }] }, 'p1'), tool('submit', {}, 's1')]);
 		expect(await inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'] }), AbortSignal.timeout(5_000), [browse])).toEqual({ ok: true, value: { n: 3 } });
 		expect(seen).toEqual([{ url: 'https://x' }]);
-		expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['browse', 'return_result']);
-		expect(requests[0]!.output).toBeUndefined();
+		expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['browse', 'patch', 'submit']);
 		expect(requests[1]!.messages.at(-1)).toEqual({ role: 'tool', content: { id: 'browse', name: 'browse', result: { text: 'rate is 3' } } });
-		expect(requests[2]!.messages.at(-1)).toMatchObject({ role: 'tool', content: { id: 'r1', result: { error: expect.stringContaining('output.n: expected an integer') } } });
 	});
 
-	it('sys_2.infer with tools: the last step offers only return_result, so a model still researching hands in what it has', async () => {
-		const browse = { name: 'browse', description: 'Read a page', input: { type: 'object' }, call: async () => ({ text: 'more' }) };
-		const { p, requests } = port([tool('browse', {}, 'b1'), tool('browse', {}, 'b2'), tool('return_result', { result: { n: 1 } }, 'r')]);
-		expect(await inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'], steps: 3 }), AbortSignal.timeout(5_000), [browse])).toEqual({ ok: true, value: { n: 1 } });
-		expect(requests[1]!.tools!.map((t) => t.name)).toEqual(['browse', 'return_result']);
-		expect(requests[2]!.tools!.map((t) => t.name)).toEqual(['return_result']);
-		expect(requests[2]!.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('budget is spent') });
-	});
 });
 
 describe('the panel conversation list', () => {

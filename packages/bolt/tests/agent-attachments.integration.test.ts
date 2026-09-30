@@ -83,3 +83,54 @@ describe('in-app attachments', () => {
 		expect(got).toEqual({ name: 'pump.png', mime: 'image/png', size: PNG.length });
 	});
 });
+
+// A file already filed on a record (a site photo on a job) is read with `read_file`, only by someone who reads that record.
+describe('read_file', () => {
+	const filed = {
+		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
+		models: { photos: { description: 'A photo', label: 'title', fields: { title: { kind: 'text' }, file: { kind: 'file', accept: ['image/*'], max: '1MiB' } } } },
+		relationships: {}, collections: { photos: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } } },
+		policies: { inspector: { description: 'Inspectors', grants: { photos: { read: true } } } }, teams: { Inspectors: ['inspector'] },
+		agent: { internal: 'Staff brief.', skills: {} },
+		integrations: {}, pipelines: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {}, customFields: {},
+	} as unknown as EngineManifest;
+
+	it('reads a record\'s file into the next step for a reader, and refuses anyone who cannot read the record', async () => {
+		const requests: AiRequest[] = [];
+		let fileId = '';
+		const ai: AiPort = {
+			sys_1: { async ask() { throw new Error('no triage'); } },
+			sys_2: { models: ['default'], async infer(r) {
+				requests.push(r);
+				return requests.length % 2 === 1
+					? { content: '', toolCalls: [{ id: 'f1', name: 'read_file', input: { id: fileId, as: 'image' } }], finish: 'tool', usage: { input: 1, output: 1 } }
+					: { content: 'Read.', toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } };
+			} } };
+		let t: TestWorkspace | undefined;
+		t = await testWorkspace({ manifest: filed, ai, agent: { attachments: { read: (f, as, signal) => fileAttachments(t!.db, t!.fakes.files).read(f, as, signal) } } });
+		const admin = t.as(t.admin);
+		const up = await admin.upload('photos.file', { name: 'sheet.png', mime: 'image/png', bytes: PNG });
+		if (up.kind !== 'committed') throw new Error(up.kind);
+		fileId = (up.output as { id: string }).id;
+		await admin.act('photos.create', { title: 'Site sheet', file: up.output });
+		await t.db.write({ text: `INSERT INTO sys_team (id, name) VALUES ('t-ins', 'Inspectors')`, params: [] });
+		await t.db.write({ text: `INSERT INTO sys_user (id, email, name, team) VALUES ('ann', 'ann@x.test', 'Ann', 't-ins'), ('bob', 'bob@x.test', 'Bob', NULL)`, params: [] });
+		const authorities = new Authorities(filed, 'test');
+		const bolt = boltHandler({ engine: t.engine, uuid: randomUUID, bindings: () => ({ now: t!.clock.now(), today: t!.clock.now().slice(0, 10), tz: 'UTC', params: {} }),
+			session: async (r) => (await authorities.member(t!.db, r.headers.get('x-user') ?? ''))! });
+		const act = async (as: string, callable: string, input: Json) => ((await (await bolt(new Request('http://cell/__bolt/act', { method: 'POST',
+			headers: { 'x-user': as, 'content-type': 'application/json', 'Idempotency-Key': randomUUID() }, body: JSON.stringify({ callable, input, issuedAt: t!.clock.now() }) })))!
+			.json()) as { outcome: Outcome }).outcome;
+		const ask = async (who: string) => {
+			const c = String(((await act(who, 'sys_conversation.start', {})) as unknown as { output: { id: string } }).output.id);
+			await act(who, 'sys_message.post', { conversation: c, text: 'what does the sheet show?' });
+			await bolt.settled();
+			return requests.at(-1)!;
+		};
+		const read = await ask('ann');
+		expect([...read.files![0]!.bytes]).toEqual([...PNG]);
+		const refused = await ask('bob');
+		expect(refused.files ?? []).toHaveLength(0);
+		expect(JSON.stringify(refused.messages)).toContain('No file you can read has this id.');
+	});
+});

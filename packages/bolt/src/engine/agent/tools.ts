@@ -6,6 +6,7 @@
 // what the actor may invoke; every call runs as the actor, so a refusal is the engine's answer, never the agent's judgement.
 import { randomUUID } from 'node:crypto';
 import { RUN_VIEW_COLUMNS, runView } from '../runs/index.ts';
+import { readableFile } from '../decisions/index.ts';
 import { csvOf, xlsxCells, xlsxSheets } from './xlsx.ts';
 import type { Json } from '../../decl/values.ts';
 import { docs } from '../../docs/index.ts';
@@ -506,21 +507,38 @@ export function catalogue(x: ToolContext): Tool[] {
 				sent: r.sent_at ?? r.created_at ?? null, text: r.text, files: [...filesOf(r)], addressed: !ambient(r) })) as Json,
 				note: 'Only messages since this channel was connected are here; senders may have edited or deleted some since.' });
 		});
+	/** A stored file as text, an image, a sheet or a PDF document; an image or document rides into the next step. */
+	const readStored = async (port: NonNullable<typeof x.attachments>, file: Json, i: { readonly [k: string]: Json }) => {
+		const as = i['as'] === 'image' ? 'image' : i['as'] === 'sheet' ? 'sheet' : i['as'] === 'document' ? 'document' : 'text';
+		const got = await callPort('files', port, 30_000, (p, signal) => p.read(file, as, signal,
+			i['sheet'] === undefined ? undefined : Number(i['sheet'])));
+		if (isFacilityError(got)) return err(got.kind === 'unavailable' ? 'The file cannot be read here.' : got.message);
+		if (got !== null && typeof got === 'object' && 'bytes' in got && got.bytes instanceof Uint8Array) {
+			const dropped = attach(x.files, got as { mime: string; bytes: Uint8Array });
+			return ok({ attached: 'the file is attached to your next step', ...(dropped > 0 ? { dropped: `${dropped} older file(s) dropped to stay within 8 files / 20 MiB` } : {}) });
+		}
+		return ok(got as Json);
+	};
+	const readAs = { as: { type: 'string', enum: ['text', 'image', 'sheet', 'document'] }, sheet: int('0-based XLSX worksheet number, default 0') };
 	if (x.attachments !== undefined) add('read_attachment', 'Read a file attached to a message (its seq and file index as the message lists them). For XLSX, choose a 0-based worksheet number; the response lists sheet names. A PDF can be attached to your next step as a document.',
-		obj({ seq: { type: 'integer' }, file: int('index, default 0'), as: { type: 'string', enum: ['text', 'image', 'sheet', 'document'] }, sheet: int('0-based XLSX worksheet number, default 0') }, ['seq', 'as']),
+		obj({ seq: { type: 'integer' }, file: int('index, default 0'), ...readAs }, ['seq', 'as']),
 		async (i) => {
 			const row = await x.row(Number(i['seq']));
 			const file = row === undefined ? undefined : filesOf(row)[Number(i['file'] ?? 0)];
 			if (file === undefined) return err('That message has no such file.');
-			const as = i['as'] === 'image' ? 'image' : i['as'] === 'sheet' ? 'sheet' : i['as'] === 'document' ? 'document' : 'text';
-			const got = await callPort('files', x.attachments, 30_000, (p, signal) => p.read(file, as, signal,
-				i['sheet'] === undefined ? undefined : Number(i['sheet'])));
-			if (isFacilityError(got)) return err(got.kind === 'unavailable' ? 'The file cannot be read here.' : got.message);
-			if (got !== null && typeof got === 'object' && 'bytes' in got && got.bytes instanceof Uint8Array) {
-				const dropped = attach(x.files, got as { mime: string; bytes: Uint8Array });
-				return ok({ attached: 'the file is attached to your next step', ...(dropped > 0 ? { dropped: `${dropped} older file(s) dropped to stay within 8 files / 20 MiB` } : {}) });
-			}
-			return ok(got as Json);
+			return readStored(x.attachments!, file, i);
+		});
+	// a file already filed on a record (a scan on a job, a photo on a report): read only when the person reads that record
+	if (x.attachments !== undefined) add('read_file', 'Read a file stored in a record\'s file field, by the file reference the record shows ({ id }): as an image or a PDF document (attached to your next step), text, or an XLSX sheet. Use it to compare values with the original evidence.',
+		obj({ id: str('the file id from the record'), ...readAs }, ['id', 'as']),
+		async (i) => {
+			const id = String(i['id'] ?? '');
+			const [r] = await x.engine.db.read([{ text: `SELECT field FROM sys_file WHERE id = $1`, params: [id] }]);
+			const field = r?.rows[0]?.['field'];
+			if (typeof field !== 'string' || !field.includes('.') || field === 'sys_message.files'
+				|| !await readableFile({ manifest: x.engine.manifest, db: x.engine.db, read: x.engine.read, authority: x.authority, bindings: x.bindings }, id, field))
+				return err('No file you can read has this id.');
+			return readStored(x.attachments!, { id }, i);
 		});
 	if (x.geocoder !== undefined) add('geocode', 'Places for an address or place name ({ query }), or the place at a point ({ reverse: { lat, lng } }): at most 8, each with the point a geolocation field takes.',
 		obj({ query: str('an address or place'), reverse: anyObj('a { lat, lng } point') }),

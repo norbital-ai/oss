@@ -120,8 +120,12 @@ export type ConvertOptions = { [T in DeclaredConvertTarget]: { to: T; name: stri
 export type Convert = { document: Call<[source: ConvertSource, options: ConvertOptions], FileRef> };
 
 // ── ai, geo ──
-/** `steps`: model calls it may take (continuing a cut answer, calling tools), 8 by default, at most 64; each is bounded on its own. */
-type InferRequest<O, Tools> = { model?: AiModelClass; system?: string; prompt: string; files?: readonly FileRef[]; output?: Out<O>; steps?: number }
+/**
+ * The model works in as many calls as it needs (continuing a cut answer, calling tools); each ends only after 60 s without a
+ * token. A structured `output` is built by the model with `patch` (JSON Patch on a draft) and handed in with `submit`; a
+ * submission that does not match `output` comes back with its problems and the model goes on until one matches.
+ */
+type InferRequest<O, Tools> = { model?: AiModelClass; system?: string; prompt: string; files?: readonly FileRef[]; output?: Out<O> }
 	& (Tools extends true ? { tools?: readonly HostToolName[] } : {});
 interface Infer<Tools> {
 	<const O extends InputKind = { kind: 'text' }>(request: InferRequest<O, Tools>): Promise<ValueOf<O>>;

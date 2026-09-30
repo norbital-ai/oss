@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/doctor",
-	"version": "0.0.144",
+	"version": "0.0.145",
 	"description": "The static rules `bolt check` runs: four fixed workspace packs (boundaries, layout, svelte, reactive), plus the realm packs, over TypeScript and Svelte.",
 	"type": "module",
 	"license": "AGPL-3.0-only",

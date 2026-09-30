@@ -21,7 +21,7 @@ import { deliverWebhook, type WebhookRequest, type WebhookResponse } from './web
 import { authorDecide, authorEmbed, readableFile, storedFiles, type AuthorDecideConfig } from '../decisions/index.ts';
 import { prepareSend, sendPiece } from '../channels/outbound.ts'; // hook:envoys
 import { FILE_METHODS, runConvert, runFiles } from './files.ts';
-import { inferFacility, inferWallMs, type InferTool } from '../agent/ai.ts';
+import { INFER_MS, inferFacility, type InferTool } from '../agent/ai.ts';
 import type { AgentConfig } from '../agent/index.ts';
 import { connectionCall } from '../connections.ts';
 import type { HttpPort } from '../integrations/runner.ts';
@@ -529,7 +529,7 @@ export function runs(cfg: RunsConfig): Runs {
 					if (!effecting(call)) return facility(call, AbortSignal.any([signal, AbortSignal.timeout(LIMITS.callMs.other)]));
 					const { key, digest } = await keyOf(`${call.facility}.${call.method}`, '', call.args);
 					if (journal.has(key)) return { ...hit(key) as unknown as CrossAnswer, journal: true }; // hook:runner
-					const got = await facility(call, AbortSignal.any([signal, AbortSignal.timeout(call.facility === 'ai' && call.method === 'sys_2.infer' ? inferWallMs(call.args) : LIMITS.callMs.database)]));
+					const got = await facility(call, AbortSignal.any([signal, AbortSignal.timeout(call.facility === 'ai' && call.method === 'sys_2.infer' ? INFER_MS : LIMITS.callMs.database)]));
 					// bytes are not journalled: a replay of a byte-returning effect answers its JSON only
 					const recorded: CrossAnswer = got.ok ? { ok: true, value: got.value } : got;
 					await journalled(key, digest, () => {}, (c) => `${c.p(recorded as unknown as Json)}::jsonb`);
