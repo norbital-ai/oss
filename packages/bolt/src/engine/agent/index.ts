@@ -425,7 +425,7 @@ export function agents(config: AgentConfig) {
 				const request: AiRequest = {
 					model: conv.model,
 					system: system({ envoy: envoySpec === undefined ? undefined : envoyName(envoySpec.name), brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf(),
-						source: tools.some((t) => t.name === 'workspace_search') }),
+						tools: tools.map((t) => t.name) }),
 					messages: history,
 					tools: tools.map(({ name, description, input }) => ({ name, description, input })),
 					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),

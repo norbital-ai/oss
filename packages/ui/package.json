@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/ui",
-	"version": "0.0.142",
+	"version": "0.0.143",
 	"description": "Svelte views, inputs, primitives, layout and design tokens for Bolt workspaces.",
 	"type": "module",
 	"sideEffects": false,

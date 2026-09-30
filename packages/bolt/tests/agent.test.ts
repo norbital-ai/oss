@@ -62,7 +62,7 @@ describe('the context projection (rule 60)', () => {
 		expect(s).toContain('Never describe the workspace\'s own automated checks');
 		// a turn without the source tools (an envoy's) is never told to call them; staff in the app are
 		expect(system({ skills: {}, outline: '# Workspace outline' })).not.toMatch(/workspace_search|workspace_type/);
-		expect(system({ skills: {}, outline: '# Workspace outline', source: true })).toMatch(/workspace_search reads the source[\s\S]*Search or read any path with workspace_search/);
+		expect(system({ skills: {}, outline: '# Workspace outline', tools: ['workspace_search'] })).toMatch(/workspace_search reads the source[\s\S]*Search or read any path with workspace_search/);
 	});
 });
 

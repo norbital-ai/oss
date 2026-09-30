@@ -24,6 +24,11 @@ function cassette(steps: Step[], sys_1: System1Port = respondSystem1) {
 	return { port, requests };
 }
 const names = (r: AiRequest | undefined) => (r?.tools ?? []).map((t) => t.name);
+/**
+ * The tools a request's prompt names but does not offer. A prompt naming a tool the turn lacks is a call to nothing:
+ * staging's WhatsApp envoy called workspace_search, and its tool-call markup went out as a chat message.
+ */
+const unoffered = (r: AiRequest) => [...new Set(r.system?.match(/\b(?:read|write|workspace|update|sandbox)_[a-z_]+\b/g))].filter((n) => !names(r).includes(n));
 const results = (r: AiRequest) => r.messages.filter((m) => m.role === 'tool').map((m) => (m.content as { result: Json }).result);
 const member = (id: string, o: { admin?: boolean; external?: boolean } = {}) => ({ text: `INSERT INTO sys_user (id, email, name, admin, kind) VALUES ($1, $2, $3, $4, $5)`,
 	params: [id, `${id}@x.test`, id, o.admin ?? false, o.external ? 'external' : 'staff'] as Json[] });
@@ -98,6 +103,7 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 		expect(names(ai.requests[0])).toContain('workspace_type');
 		expect(names(ai.requests[0])).not.toContain('workspace_search');
 		expect(ai.requests[0]!.system).not.toContain('# Workspace outline');
+		expect(unoffered(ai.requests[0]!)).toEqual([]);
 		expect(results(ai.requests[1]!)[0]).toEqual({ names: [] }); // no collection of hers, no components
 	});
 });
@@ -176,6 +182,7 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 		expect(decided).toHaveLength(1); // a mention bypasses System 1
 		expect(texts()).toEqual(['Noted.']);
 		expect(JSON.stringify(ai.requests[0]!.messages)).not.toContain('lunch at 12?');
+		expect(unoffered(ai.requests[0]!)).toEqual([]);
 
 		await inbound('6592220000@s.whatsapp.net', 'can you check job 7');
 		await debounce();
