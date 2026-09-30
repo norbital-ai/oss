@@ -12,6 +12,8 @@ export type WaSocket = {
 	/** The account's LID↔phone map. A group mention names our LID, and `user.lid` is optional and often absent. */
 	signalRepository?: { getLIDForPN(pn: string): Promise<string | null> } | undefined;
 	sendMessage(jid: string, content: { text: string }): Promise<{ key?: { id?: string | null } } | undefined>;
+	/** "typing…" (`composing`) in the chat, until a message is sent or it pauses. */
+	sendPresenceUpdate?(type: 'composing' | 'paused', jid: string): Promise<void>;
 	requestPairingCode(phone: string): Promise<string>;
 	/** A group's metadata; its `subject` is the group chat's name. */
 	groupMetadata?(jid: string): Promise<{ subject?: string }>;
@@ -168,6 +170,10 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 			const id = sent?.key?.id;
 			if (typeof id !== 'string') throw new Error('WhatsApp returned no message id');
 			return { providerId: id };
+		},
+		async typing(_channel, to) {
+			if (socket === undefined || current.state !== 'connected') return;
+			await socket.sendPresenceUpdate?.('composing', to);
 		},
 		subscribe(sink) { sinks.add(sink); return () => { sinks.delete(sink); }; },
 	};

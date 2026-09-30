@@ -64,7 +64,7 @@ function decider() {
 			port.inputs.push(seen(r));
 			if (port.throws) throw new Error('provider down');
 			const s = port.script[Math.min(port.inputs.length - 1, port.script.length - 1)]!;
-			const d = typeof s === 'string' ? { action: s, wait: 9 } : s;
+			const d = typeof s === 'string' ? { action: s, wait: 2 } : s;
 			port.answers.push(d.action);
 			const p = 'p' in d && d.p !== undefined ? d.p : 0.9;
 			const answers: Record<string, unknown> = {};
@@ -171,18 +171,20 @@ describe('envoy triage (G12 (10))', () => {
 	});
 
 	it('a guessed wait (under 0.7) answers at once: silence costs the person, a coin flip is no reason for it', async () => {
-		port.script = [{ action: 'wait', wait: 5, p: 0.58 }];
+		port.script = [{ action: 'wait', wait: 1, p: 0.58 }];
 		await say(DM, 'run the review for the Kismis job');
 		await debounce();
 		expect(port.inputs).toHaveLength(1);
 		expect((await row('run the review for the Kismis job'))['delivered_turn']).not.toBeNull();
 	});
 
-	it('a wait is at most 9 s (the top score level); after 12 consecutive waits the rows are admitted with no 13th call; a new row resets the count', async () => {
-		port.script = [{ action: 'wait', wait: 9 }];
+	it('a wait is at most 2 s, with the channel showing typing; after 12 consecutive waits the rows are admitted with no 13th call; a new row resets the count', async () => {
+		port.script = [{ action: 'wait', wait: 2 }];
 		await say(DM, 'part one');
 		await debounce();
-		expect(Date.parse(String((await queued())[0]!['due'])) - Date.parse(t.clock.now())).toBe(9_000);
+		expect(Date.parse(String((await queued())[0]!['due'])) - Date.parse(t.clock.now())).toBe(2_000);
+		// the person sees the assistant is on it rather than silence
+		expect(t.fakes.transports.whatsapp.typed).toEqual([{ channel: 'field_wa', to: DM }]);
 		for (let i = 1; i < 5; i++) { t.clock.advance('10s'); await t.runDue(); }
 		expect((await queued())[0]!['input']).toMatchObject({ waits: 5 });
 		await say(DM, 'part two');
@@ -299,8 +301,8 @@ describe('in-app triage', () => {
 		await debounce();
 		await t.engine.triage.post({ conversation: c, as: { member: ADA }, text: 'for the Kismis job', author: ADA, mode: 'agent' });
 		await debounce();
-		// one question per pending message, both parts of the second decision in the same call; the agent is unnamed in-app
-		expect(port.inputs.map((i) => [i.kind, i.assistant, i.asked.length, i.pending.length])).toEqual([['in-app, one-to-one', 'the workspace agent', 1, 1], ['in-app, one-to-one', 'the workspace agent', 2, 2]]);
+		// one question per pending message, both parts of the second decision in the same call; in-app the agent is Norbius
+		expect(port.inputs.map((i) => [i.kind, i.assistant, i.asked.length, i.pending.length])).toEqual([['in-app, one-to-one', 'Norbius', 1, 1], ['in-app, one-to-one', 'Norbius', 2, 2]]);
 		expect(ai.requests).toHaveLength(1);
 		expect(ai.requests[0]).toEqual(['draft a note', 'for the Kismis job']);
 		await neverTwice();
@@ -329,9 +331,25 @@ describe('in-app triage', () => {
 		await t.engine.triage.post({ conversation: c, as: { member: ADA }, text: 'one', author: ADA, mode: 'agent' });
 		await t.engine.triage.post({ conversation: c, as: { member: CAL }, text: 'two', author: CAL, mode: 'agent' });
 		await debounce();
-		expect(port.inputs[0]).toMatchObject({ kind: 'in-app, shared', assistant: 'the workspace agent', asked: ['m0', 'm1'] });
+		expect(port.inputs[0]).toMatchObject({ kind: 'in-app, shared', assistant: 'Norbius', asked: ['m0', 'm1'] });
 		expect(await row('two')).toMatchObject({ ambient: true, delivered_turn: null });
 		expect(ai.requests).toHaveLength(0);
+	});
+
+	it('a message that names the assistant is answered like a mention, in a shared conversation too: no decision call', async () => {
+		// seen on staging: "Hello norbius" in a shared panel conversation was judged "Not for the assistant"
+		const c = await start();
+		port.script = ['ignore'];
+		await t.engine.triage.post({ conversation: c, as: { member: ADA }, text: 'one', author: ADA, mode: 'agent' });
+		await t.engine.triage.post({ conversation: c, as: { member: CAL }, text: 'two', author: CAL, mode: 'agent' });
+		await debounce(); // shared, and the decider ignores the chatter
+		expect(await row('two')).toMatchObject({ ambient: true, delivered_turn: null });
+		const calls = port.inputs.length;
+		await t.engine.triage.post({ conversation: c, as: { member: ADA }, text: 'Hello norbius', author: ADA, mode: 'agent' });
+		await debounce();
+		expect(port.inputs).toHaveLength(calls);
+		expect((await row('Hello norbius'))['delivered_turn']).not.toBeNull();
+		expect(ai.requests.at(-1)).toContain('Hello norbius');
 	});
 
 	it('`agent: { triage: false }` opts the in-app agent out', async () => {

@@ -2,7 +2,7 @@
 // read engine, compiled authorities, the act pipeline, and the guest runner behind the transform's workspace reads.
 // Hosts (bolt-server, the test kit) build one per activation; nothing here names a host (P18).
 import type { Json } from '../decl/values.ts';
-import type { AiPort, Authority, Bindings, Bridge, Captured, CrossAnswer, ConvertPort, DeadlinesPort, EngineManifest, FilesPort, GuestPort, Invocation, MeteringPort, ReadEngine, ReadIR, RowData, TenantDb } from './contracts.ts'; // hook:triage (MeteringPort)
+import type { AiPort, Authority, Bindings, Bridge, Captured, CrossAnswer, ConvertPort, DeadlinesPort, EngineManifest, FilesPort, GuestPort, Invocation, MeteringPort, ReadEngine, ReadIR, RowData, TenantDb, TransportPort } from './contracts.ts'; // hook:triage (MeteringPort)
 import { BoltError, callPort, LIMITS } from './contracts.ts';
 import { compileAuthority, type Holder } from './access/authority.ts';
 import { catalogOf } from './access/pred.ts';
@@ -282,7 +282,15 @@ export function engine(config: EngineConfig): Engine {
 	e.filters = filterDescribe({ manifest: m, db, read: e.read, clock, ...decided }); // hook:decisions
 	e.triage = triage({ engine: e, clock, scope: config.scope ?? '', ...decided, // hook:triage — attachments as metadata only (P37 (3))
 		...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }),
-		drain: (c, envoy) => envoy ? e.envoys.drain(c) : e.agents.drain(c) });
+		drain: (c, envoy) => envoy ? e.envoys.drain(c) : e.agents.drain(c),
+		// an envoy conversation's typing indicator, on the channel's transport when it has one
+		typing: async (c) => {
+			const [r] = await db.read([{ text: `SELECT channel, thread FROM sys_conversation WHERE id = $1`, params: [c] }]);
+			const row = r!.rows[0], channel = row?.['channel'];
+			if (typeof channel !== 'string' || typeof row?.['thread'] !== 'string') return;
+			const transport = String((m.channels[channel] as { transport?: string } | undefined)?.transport ?? '');
+			await (config.transports as { readonly [t: string]: TransportPort } | undefined)?.[transport]?.typing?.(channel, row['thread'], AbortSignal.timeout(5_000));
+		} });
 	({ channels: e.channels, envoys: e.envoys } = messaging({ engine: e, agents: e.agents, clock, ...config.envoys, scope: config.scope ?? '', triage: e.triage,
 		...(config.transports === undefined ? {} : { transports: config.transports }), ...(config.files === undefined ? {} : { files: config.files }),
 		...(guest === undefined ? {} : { guest }), ...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }), ...(config.epoch === undefined ? {} : { epoch: config.epoch }) }));

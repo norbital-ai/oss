@@ -201,6 +201,8 @@ export function resendEvent(channel: string, headers: { readonly [lowercase: str
 // ── the test fake (P20: every transport has one; G12 runs against them) ──
 export type FakeTransport = TransportPort & {
 	sent: { channel: string; message: Json; providerId: string }[];
+	/** Every typing indicator shown, by chat. */
+	typed: { channel: string; to: string }[];
 	/** Decides a send's fate: throw to fail it (a `timeout`-named error hangs past the wall is not simulated). */
 	fail: ((message: Json) => Error | null) | null;
 	/** Hands one event to every subscriber, as the adapter would; rejects when a sink rejects (a redelivery). */
@@ -210,7 +212,8 @@ export function fakeTransport(prefix = 'p'): FakeTransport {
 	const sinks = new Set<(e: TransportEvent) => Promise<void>>();
 	let n = 0;
 	const t: FakeTransport = {
-		sent: [], fail: null,
+		sent: [], typed: [], fail: null,
+		async typing(channel, to) { t.typed.push({ channel, to }); },
 		async send(channel, message) {
 			const err = t.fail?.(message) ?? null;
 			if (err !== null) throw err;

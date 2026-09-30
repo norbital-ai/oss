@@ -22,7 +22,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 /** A Baileys socket double: tests drive `connection.update` and `messages.upsert` as the library would. */
 function fakeBaileys() {
-	const sockets: (WaSocket & { emit(e: string, x: unknown): void; ended: boolean; loggedOut: boolean; sent: { jid: string; text: string }[]; groupReads: string[] })[] = [];
+	const sockets: (WaSocket & { emit(e: string, x: unknown): void; ended: boolean; loggedOut: boolean; sent: { jid: string; text: string }[]; groupReads: string[]; presence: string[] })[] = [];
 	const open: WaOpen = async (dir) => {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, 'creds.json'), '{}');
@@ -33,6 +33,8 @@ function fakeBaileys() {
 			emit: (e: string, x: unknown) => { ev.emit(e, x); },
 			async sendMessage(jid: string, c: { text: string }) { s.sent.push({ jid, text: c.text }); return { key: { id: `wa-${s.sent.length}` } }; },
 			async requestPairingCode() { return 'ABCD-EFGH'; },
+			presence: [] as string[],
+			async sendPresenceUpdate(type: 'composing' | 'paused', jid: string) { s.presence.push(`${type} ${jid}`); },
 			async groupMetadata(jid: string) { s.groupReads.push(jid); return { subject: 'Site crew' }; },
 			groupReads: [] as string[],
 			async logout() { s.loggedOut = true; },
@@ -60,6 +62,9 @@ describe('WhatsApp over a persistent socket (G12 (9))', () => {
 		expect(wa.state()).toEqual({ state: 'pairing', qr: 'QR-1', code: null });
 		sockets[0]!.emit('connection.update', { connection: 'open' });
 		expect(wa.state()).toEqual({ state: 'connected', as: '6590000000:7@s.whatsapp.net' });
+		// an agent at work shows "typing…" in the chat
+		await wa.typing!('field_ops', '6591111111@s.whatsapp.net', AbortSignal.timeout(1_000));
+		expect(sockets[0]!.presence).toEqual(['composing 6591111111@s.whatsapp.net']);
 
 		const got: TransportEvent[] = [];
 		wa.subscribe(async (e) => { got.push(e); });

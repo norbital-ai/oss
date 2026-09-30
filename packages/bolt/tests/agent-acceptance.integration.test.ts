@@ -157,7 +157,7 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 				const v = script.shift()!;
 				answers[id] = { type: 'choice', choice: v, confidence: 0.9, probabilities: { [v]: 0.9 } };
 			}
-			answers['wait'] = { type: 'score', score: 3, level: 3, confidence: 0.9, probabilities: {}, legend: {} };
+			answers['wait'] = { type: 'score', score: 2, level: 2, confidence: 0.9, probabilities: {}, legend: {} };
 			return { answers: answers as never, costUsd: 0.0001, provider: 'scripted' };
 		} };
 		const ai = cassette([say('Noted.'), say('On it.')], sys_1);

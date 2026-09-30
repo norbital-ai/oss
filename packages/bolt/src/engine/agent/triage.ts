@@ -2,10 +2,10 @@
 // turn, never under whose authority. A triaged row is stored `pending` and (re)queues the conversation's one platform run
 // `agent.triage` at `min(arrival + TRIAGE_DEBOUNCE, first + TRIAGE_DEBOUNCE_MAX)`: a trailing debounce, so a burst is one
 // `sys_1` call once the sender pauses. The run asks the AI facility's `sys_1` (text only: attachments as metadata) to
-// `respond` (admit every pending row), `wait` (ask again ≤ 10 s later, exact time) or, in a group conversation only,
+// `respond` (admit every pending row), `wait` (ask again ≤ 2 s later, exact time; the channel shows typing) or, in a group conversation only,
 // `ignore` (the rows become ambient); a direct conversation (envoy DM, in-app one-to-one) offers respond and wait alone.
 // A failed decision admits now (`respond`): the single failure outcome, not a fallback. Without an AI facility nothing
-// is triaged. Mentions, replies, the in-app send-now and respond-now are deterministic: they admit at once with every
+// is triaged. Mentions, replies, a message naming the assistant, the in-app send-now and respond-now are deterministic: they admit at once with every
 // pending row, flush the queued decision and ask nothing. `delivered_turn` (set by the agent's claim, guarded by
 // `IS NULL`) and `ambient` are the one record of what the agent received, so no row is new input twice.
 import { randomUUID } from 'node:crypto';
@@ -23,7 +23,8 @@ export const TRIAGE_DEBOUNCE = 2_000;
 export const TRIAGE_DEBOUNCE_MAX = 10_000;
 export const TRIAGE_CONTEXT_ROWS = 20;
 export const TRIAGE_MAX_WAITS = 12;
-const WAIT_MS = 10_000;
+/** A wait is short: the person sees a typing indicator, never a long silence. */
+const WAIT_MS = 2_000;
 /** Below this the decider is guessing, and a guessed wait is only delay. */
 const WAIT_MIN_PROBABILITY = 0.7;
 
@@ -35,9 +36,13 @@ const VERDICTS: { readonly [v in Verdict]: string } = {
 	no: 'this one is not for the assistant; leave it',
 	delay: 'this one is for the assistant but more is likely coming',
 };
-/** The score's levels: one per second of wait, so its continuous `score` is the wait in seconds. */
-/** 0 s … 9 s: the decision service accepts at most 10 score levels; the score is the wait in seconds. */
-const WAIT_LEVELS = Array.from({ length: 10 }, (_, i) => `${i} s`);
+/** The score's levels: one per second of wait, so its continuous `score` is the wait in seconds (at most WAIT_MS). */
+const WAIT_LEVELS = Array.from({ length: WAIT_MS / 1000 + 1 }, (_, i) => `${i} s`);
+/** The in-app agent's name: what a person calls it ("Hello Norbius"), as an envoy is called by its own. */
+export const AGENT_NAME = 'Norbius';
+/** Whether `text` names the assistant: a word match, `@` or not, any case. Saying its name is addressing it. */
+export const names = (text: string, name: string): boolean =>
+	name.trim() !== '' && new RegExp(`(^|[^\\p{L}\\p{N}])@?${name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}\\p{N}])`, 'iu').test(text);
 
 export type TriageConfig = {
 	engine: { manifest: EngineManifest; db: TenantDb; live?: Pick<LiveHub, 'publish'>; runs?: Pick<Runs, 'nudge'> };
@@ -45,6 +50,8 @@ export type TriageConfig = {
 	clock: () => string;
 	/** Runs a conversation whose rows were just queued: the envoy drain (which ships the replies) or the in-app one. */
 	drain: (conversation: string, envoy: boolean) => Promise<unknown>;
+	/** The channel's typing indicator in an envoy conversation, best effort: a wait or a starting turn is visible, not silence. */
+	typing?: (conversation: string) => Promise<void>;
 };
 
 type Q = { text: string; params: Json[] };
@@ -87,6 +94,7 @@ export function triage(cfg: TriageConfig) {
 	/** Every pending row of the conversation is queued, then the turn runs (a deterministic trigger, `respond`, the bound). */
 	async function admit(conversation: string, envoy: boolean): Promise<void> {
 		await release(conversation);
+		if (envoy) await cfg.typing?.(conversation).catch(() => undefined);
 		await cfg.drain(conversation, envoy);
 	}
 
@@ -110,6 +118,11 @@ export function triage(cfg: TriageConfig) {
 		if (waits >= TRIAGE_MAX_WAITS) { await admit(conversation, envoy); return { action: 'respond', bound: true }; }
 
 		const spec = (envoy ? m.envoys[envoyKey] : undefined) as { task?: string; groupMessages?: string; name?: string } | undefined;
+		const assistant = envoy ? envoyName(spec?.name) : AGENT_NAME;
+		// saying the assistant's name addresses it, as a mention does: those rows are answered without asking the decider,
+		// and a burst of nothing else is admitted at once
+		const named = pending.map((r) => r['invocation'] === 'mention' || r['invocation'] === 'reply' || names(String(r['text'] ?? ''), assistant));
+		if (named.every(Boolean)) { await admit(conversation, envoy); return { action: 'respond', named: true }; }
 		// P41: a group (an envoy group, or an in-app conversation more than one member posted in) may be not for the agent;
 		// a direct one (an envoy DM, an in-app one-to-one) always is, so it decides only when
 		const group = envoy ? conv['kind'] === 'group' : Number(posters!.rows[0]?.['n'] ?? 0) > 1;
@@ -142,13 +155,13 @@ export function triage(cfg: TriageConfig) {
 				addressesAssistant: pending.some((r) => r['invocation'] === 'mention' || r['invocation'] === 'reply'),
 				// An envoy is named, and a message that says its name is for it whether or not the mention was mechanical:
 				// without this the decider is asked about a nameless assistant and reads `hi <name>` as not addressed.
-				assistant: envoy ? envoyName(spec?.name) : 'the workspace agent',
+				assistant,
 			} as DecisionRequest['state'],
 			// ONE call, one verdict per message: the decider is asked about each pending message by name, so a burst is
 			// judged together and blind to each other rather than folded into a single action for the whole conversation.
 			questions: {
 				...Object.fromEntries(pending.map((r, i) => [`m${i}`, { type: 'choice' as const,
-					instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${String(r['sender'] ?? 'someone')}: should ${envoy ? envoyName(spec?.name) : 'the agent'} answer this one?`,
+					instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${String(r['sender'] ?? 'someone')}: should ${assistant} answer this one?`,
 					criteria: VERDICTS }])),
 				wait: { type: 'score', instructions: 'If any message is better answered after a pause, how many seconds until the next part is likely to arrive?', criteria: WAIT_LEVELS },
 			},
@@ -166,7 +179,7 @@ export function triage(cfg: TriageConfig) {
 		};
 		// A direct conversation is never left unanswered: it offers no `ignore`, so a `no` read there is a misread of the
 		// decider — a DM from one person is always theirs to have answered — and is taken as `yes`.
-		const verdicts = pending.map((_, i) => { const v = verdictOf(i); return !group && v === 'no' ? 'yes' : v; });
+		const verdicts = pending.map((_, i) => { const v = verdictOf(i); return named[i] ? (v === 'delay' ? 'delay' : 'yes') : !group && v === 'no' ? 'yes' : v; });
 		// a wait costs the person seconds of silence: only a probable one holds. A `delay` whose pause is a guess is still a
 		// message for the assistant, so it is answered now rather than left — doubt about the timing is no reason to drop it.
 		const waitAnswer = bad ? undefined : d.answers['wait'];
@@ -178,11 +191,13 @@ export function triage(cfg: TriageConfig) {
 		const base: Json[] = [conversation, now, bad ? 'warn' : 'info', call, JSON.stringify(event)];
 		if (action === 'wait') {
 			const w = bad ? undefined : d.answers['wait'];
-			// the continuous score is the wait in seconds (3.4 → 3.4 s), clipped to 10 s
+			// the continuous score is the wait in seconds (1.4 → 1.4 s), clipped to WAIT_MS
 			const seconds = Math.min(WAIT_MS / 1000, Math.max(0, w?.type === 'score' ? w.score : 0));
 			const at = new Date(Date.parse(now) + Math.round(seconds * 1000)).toISOString();
 			await db.write({ text: `WITH ${log}, ${recheck('$1', '$6', '$7')} SELECT 1`, params: [...base, at, waits + 1] });
 			announce(at);
+			// the person sees the assistant is on it while it waits for the rest
+			if (envoy) await cfg.typing?.(conversation).catch(() => undefined);
 		} else {
 			// only the rows the decider saw; a row that arrived meanwhile has its own queued decision. A `no` verdict is
 			// left exactly as an ignored conversation is — the message stays as ambient context for the next address.

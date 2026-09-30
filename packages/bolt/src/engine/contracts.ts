@@ -383,6 +383,8 @@ export type TransportEvent = { kind: 'inbound'; channel: string; message: Json; 
 /** Mail, WhatsApp (a persistent socket the adapter owns), Telegram, web push. */
 export interface TransportPort {
 	send(channel: string, message: Json, signal: AbortSignal): Promise<{ providerId: string }>;
+	/** The platform's typing indicator in the chat `to` (WhatsApp "typing…", a Telegram typing action), best effort: an agent at work shows it. */
+	typing?(channel: string, to: string, signal: AbortSignal): Promise<void>;
 	/** The adapter calls `sink` for every event; returns the unsubscribe. A sink rejection is a redelivery. */
 	subscribe(sink: (event: TransportEvent) => Promise<void>): () => void;
 }

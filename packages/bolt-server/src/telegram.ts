@@ -40,6 +40,11 @@ export function telegram(token: string, channel: string, f: typeof fetch = fetch
 			const sent = await call('sendMessage', { chat_id: chat, text: m.text, ...(thread === undefined ? {} : { message_thread_id: Number(thread) }) }, signal);
 			return { providerId: `${chat}:${String(sent['message_id'])}` };
 		},
+		/** "typing…" in the chat (a Bot API chat action; it lasts about five seconds or until the next message). */
+		async typing(_channel, to, signal) {
+			const [chat, , thread] = String(to).split(':');
+			await call('sendChatAction', { chat_id: chat, action: 'typing', ...(thread === undefined ? {} : { message_thread_id: Number(thread) }) }, signal);
+		},
 		subscribe(sink) { sinks.add(sink); return () => { sinks.delete(sink); }; },
 		async webhook(request) {
 			const headers = { 'x-telegram-bot-api-secret-token': request.headers.get('x-telegram-bot-api-secret-token') ?? undefined };
