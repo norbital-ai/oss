@@ -29,7 +29,7 @@
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
-	let open = $state(false), text = $state(''), busy = $state(false), applied = $state(false);
+	let open = $state(false), text = $state(''), busy = $state(false), applied = $state(false), failed = $state(false);
 	let details: HTMLDetailsElement | null = $state(null);
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
 	const count = $derived(view.rows.length + view.order.length);
@@ -48,13 +48,13 @@
 		e.preventDefault();
 		if (text.trim() === '') return;
 		busy = true;
-		applied = false;
-		try { applied = await view.describe(text); } finally { busy = false; }
+		applied = failed = false;
+		try { applied = await view.describe(text); failed = !applied; } finally { busy = false; }
 	}
 </script>
 
 <!-- portaled, so a sticky table header never paints over it (it sat under the roster's day header on staging) -->
-<Popover.Root bind:open onOpenChange={(o) => { if (o) { applied = false; if (details) details.open = !describes; } }}>
+<Popover.Root bind:open onOpenChange={(o) => { if (o) { applied = failed = false; if (details) details.open = !describes; } }}>
 	<Popover.Trigger>
 		{#snippet child({ props })}
 			<button {...props} type="button" class={cn('hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none', count > 0 && 'bg-accent')}
@@ -74,7 +74,7 @@
 			<header class="flex items-center gap-2" data-view-header>
 				{#if describes}
 					<form class="flex min-w-0 flex-1 gap-2" onsubmit={describe} data-describe>
-						<input class={cn(CONTROL, 'h-9 min-w-0 flex-1')} type="text" maxlength={500} bind:value={text} oninput={() => (applied = false)} disabled={busy}
+						<input class={cn(CONTROL, 'h-9 min-w-0 flex-1')} type="text" maxlength={500} bind:value={text} oninput={() => (applied = failed = false)} disabled={busy}
 							placeholder={msg(bolt, 'view.describe', 'Describe what to show…')} aria-label={msg(bolt, 'view.describe', 'Describe what to show…')} />
 						<button type="submit" disabled={busy || text.trim() === ''} class="bg-primary text-primary-foreground grid size-9 shrink-0 place-items-center rounded-md disabled:opacity-50" aria-label={msg(bolt, 'view.apply', 'Apply filter and sort')}>
 							<Icon icon={busy ? 'lucide:loader-circle' : 'lucide:arrow-right'} class={cn('size-4', busy && 'animate-spin')} />
@@ -87,7 +87,9 @@
 			</header>
 			{#if busy}<p role="status" class="text-muted-foreground text-xs" data-view-loading>{msg(bolt, 'view.applying', 'Applying filter and sort…')}</p>
 			{:else if applied}<p role="status" class="text-xs text-primary" data-view-applied>{msg(bolt, 'view.applied', 'Filter and sort applied')}</p>{/if}
-			{#if view.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>{view.notice}</p>{/if}
+			<!-- a description that built nothing is an error the person must act on, never a quiet note beside "applied" -->
+			{#if failed && view.notice}<p role="alert" class="text-destructive flex items-center gap-1 text-xs" data-view-error><Icon icon="lucide:circle-alert" class="size-3.5 shrink-0" />{view.notice}</p>
+			{:else if view.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>{view.notice}</p>{/if}
 			<details bind:this={details} open={!describes} class="group" data-view-details>
 				<summary class="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1 text-xs" data-show-builder>
 					<Icon icon="lucide:chevron-right" class="size-3.5 transition-transform group-open:rotate-90" />

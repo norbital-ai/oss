@@ -89,7 +89,8 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 		clear() { rows = []; order = []; touched = true; notice = null; },
 		/** Rule 16a: the description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
 		async describe(text: string): Promise<boolean> {
-			const fail = () => { notice = msg(bolt, 'view.describeFailed', 'Could not build a filter from that description'); return false; };
+			// the engine's refusal says why ("No field here matches…"); a lost reply falls back to the generic words
+			const fail = (why?: unknown) => { notice = why instanceof Error && why.message !== '' ? why.message : msg(bolt, 'view.describeFailed', 'Could not build a filter from that description'); return false; };
 			if (bolt.describe === undefined || text.trim() === '') return false;
 			try {
 				const c = o.collection();
@@ -102,8 +103,8 @@ export function viewState(bolt: ViewBolt, o: { key: () => string; collection: ()
 				notice = null;
 				if (keys !== null) order = keys.keys;
 				return true;
-			} catch {
-				return fail();
+			} catch (e) {
+				return fail(e);
 			}
 		},
 	};

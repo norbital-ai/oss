@@ -192,6 +192,28 @@ test('Table: one sliders popover; by default only the describe input, the builde
 	v.done();
 });
 
+test('Table: a description the engine refuses shows its reason as an error, never "applied" (staging: "dsajdasomda")', async () => {
+	const s = scripted({ describe: async () => { throw new Error('No field here matches that description. Try naming a field and a value.'); } });
+	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'] }, s.bolt);
+	document.querySelector('[data-view-trigger]').click();
+	flushSync();
+	const input = document.querySelector('[data-describe] input');
+	input.value = 'dsajdasomda';
+	input.dispatchEvent(new Event('input', { bubbles: true }));
+	document.querySelector('[data-describe]').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	await settle();
+	assert.equal(document.querySelector('[data-view-applied]'), null);
+	const error = document.querySelector('[data-view-error]');
+	assert.equal(error?.getAttribute('role'), 'alert');
+	assert.match(error.textContent, /No field here matches/);
+	// typing again clears the error
+	input.value = 'done ones';
+	input.dispatchEvent(new Event('input', { bubbles: true }));
+	flushSync();
+	assert.equal(document.querySelector('[data-view-error]'), null);
+	v.done();
+});
+
 test('Table: a described relation filter and sort are editable rows ANDed under the author where (rule 16a)', async () => {
 	const s = scripted({ describe: async () => ({ where: { and: [{ lines: { some: { qty: { gt: 2 } } } }, { account: { is: { name: { like: '%acme%' } } } }] }, orderBy: { hours: 'desc' } }) });
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'], where: { status: { eq: 'done' } } }, s.bolt);

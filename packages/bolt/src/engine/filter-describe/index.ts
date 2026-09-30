@@ -79,6 +79,7 @@ export type LocalFilterField = { name: string; label: string; kind: 'text' | 'nu
 type Op = { op: string; label: string };
 /** One offered field: its operators and values. `path` is the serialisable replacement for the old `put` closure. */
 type Field = { label: string; path: readonly FilterStep[]; kind: string; ops: readonly Op[]; values: FilterValue[]; sort?: string; hit?: boolean;
+	/** The records a search on the description's words found, as evidence the description names this relation. */ found?: string[];
 	/** How strongly the description names the field: its words in the label, a row a search found, one of its own values. */ named?: number };
 
 const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum', 'duration']);
@@ -256,8 +257,9 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 				const system = target === collection && (f.name === 'created_at' || f.name === 'updated_at');
 				if (f.name.includes('.') || (!system && s === undefined && !tc.model.one.has(f.name)) || s?.hidden || !exposedField(tc, f.name)) continue;
 				if (!unmasked(a, target, f.name)) continue;
-				const label = prefix + (system ? (f.name === 'created_at' ? 'Created' : 'Updated') : s?.label ?? human(f.name));
 				const rel = tc.model.one.get(f.name);
+				// a relation is named for its record ("Site"), never its key column ("Site id": System 1 read it as a code)
+				const label = prefix + (system ? (f.name === 'created_at' ? 'Created' : 'Updated') : s?.label ?? human(rel === undefined ? f.name : f.name.replace(/_id$/, '')));
 				if (rel === undefined) {
 					const o = options(f, s, lit, ws);
 					if (o === undefined) continue;
@@ -327,6 +329,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 					}
 					// the word that found this row came from the description, so the field is one it plausibly means
 					searched.add(s.field);
+					if (!(s.field.found ??= []).includes(label)) s.field.found.push(label);
 				}
 			});
 		}
@@ -432,8 +435,12 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			const q = forField(f);
 			choices2.set(f, q);
 			Object.assign(first, {
-				[`f${n + 1}`]: { type: 'noul', instructions: `Does the description restrict the records by ${f.label}?`,
-					criteria: { true: `it states a condition on ${f.label}`, false: `it states no condition on ${f.label}` } },
+				[`f${n + 1}`]: f.ops.every((x) => x.op === 'isNull' || x.op === 'notNull')
+					// a field only ever tested for presence (a point, a file): naming it is not asking whether it is set
+					? { type: 'noul', instructions: `Does the description ask whether ${f.label} is recorded at all (empty or not empty)?`,
+						criteria: { true: `it asks for records with or without a ${f.label}`, false: `it does not ask whether ${f.label} is recorded` } }
+					: { type: 'noul', instructions: `Does the description restrict the records by ${f.label}?${f.found === undefined ? '' : ` Its words match these ${f.label} records: ${f.found.join('; ')}.`}`,
+						criteria: { true: `it states a condition on ${f.label}`, false: `it states no condition on ${f.label}` } },
 				[`f${n + 1}.op`]: { type: 'choice', instructions: `Which comparison does the condition on ${f.label} use?`, criteria: own([...q.ops.keys()]) },
 				[`f${n + 1}.value`]: { type: 'choice', instructions: `Which value does the condition on ${f.label} compare with?`, criteria: own([NONE, ...q.vals.keys()]) } });
 		}
@@ -454,14 +461,19 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			const q = choices2.get(f)!;
 			const op = q.ops.get(choiceOf(r1, `f${n + 1}.op`) ?? ''), arg = q.vals.get(choiceOf(r1, `f${n + 1}.value`) ?? '');
 			const c = condition(f.path, op?.op ?? '', arg);
-			if (c === undefined) return fail(`Could not build a condition on ${f.label}.`);
+			// a relation the description names while its words match several records: say which, so the person can pick one
+			if (c === undefined) return fail((f.found?.length ?? 0) > 1 ? `Several ${f.label} records match: ${f.found!.slice(0, CANDIDATES).join('; ')}. Name one.` : `Could not build a condition on ${f.label}.`);
 			conds.push(c);
 			if (conds.length === FILTER_MAX_CONDITIONS) break;
 		}
+		const sortField = sortable.length > 0 && noulOf(r1, 'sort.yes') > 0.5 ? sortable.find((f) => f.label === choiceOf(r1, 'sort.field')) : undefined;
+		// a description that states nothing (gibberish, or words no field holds) applies nothing: an empty `and` read as "applied"
+		if (conds.length === 0 && sortField === undefined) return fail('No field here matches that description. Try naming a field and a value.');
 		const combine = COMBINE[choiceOf(r1, 'combine') ?? ''] ?? ALL;
 		const group = conds.length === 1 ? conds[0]! : { [combine.join]: conds };
-		const where: Json = conds.length === 0 ? { and: [] } : combine.not ? { not: group } : group;
-		const sortField = sortable.length > 0 && noulOf(r1, 'sort.yes') > 0.5 ? sortable.find((f) => f.label === choiceOf(r1, 'sort.field')) : undefined;
+		// one condition negates through its own operator ("is not"): a negated composition of one is System 1 misreading
+		// "jobs at 1F Pine Grove" as "none of them hold"
+		const where: Json = combine.not && conds.length > 1 ? { not: group } : group;
 		const dir: Json = choiceOf(r1, 'sort.dir') === DIRS.asc ? 'asc' : 'desc';
 		const orderBy: Json | undefined = sortField === undefined ? undefined : sortField.sort!.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), dir);
 		try { // rule 11a: the same strict decode as any read literal, held to the caller's exposure

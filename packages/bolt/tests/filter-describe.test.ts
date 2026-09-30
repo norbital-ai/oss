@@ -14,7 +14,7 @@ const manifest = {
 		audits: { description: 'a', label: 'note', fields: { note: { kind: 'text' } } },
 		jobs: { description: 'j', label: 'title', fields: {
 			title: { kind: 'text' }, hours: { kind: 'decimal', scale: 1 }, notes: { kind: 'text', optional: true }, internal_code: { kind: 'text' },
-			scheduled_on: { kind: 'date' }, window: { kind: 'period', of: 'date', optional: true }, tags: { kind: 'text', many: true },
+			scheduled_on: { kind: 'date' }, spot: { kind: 'point', optional: true }, window: { kind: 'period', of: 'date', optional: true }, tags: { kind: 'text', many: true },
 			status: { kind: 'state', initial: 'open', states: { open: { to: ['done'] }, done: {} } } } },
 		job_lines: { description: 'l', label: 'item', fields: { item: { kind: 'text' }, qty: { kind: 'int' }, amount: { kind: 'money' } } },
 	},
@@ -28,7 +28,7 @@ const manifest = {
 		members: { read: { fields: 'all' } },
 		job_lines: { read: { fields: 'all' } },
 		// `internal_code` and the `audit` relation are not exposed; `audits` is no collection at all
-		jobs: { read: { fields: ['title', 'hours', 'notes', 'scheduled_on', 'window', 'status', 'tags', 'assignee'], relations: ['assignee', 'lines'] } },
+		jobs: { read: { fields: ['title', 'hours', 'notes', 'scheduled_on', 'spot', 'window', 'status', 'tags', 'assignee'], relations: ['assignee', 'lines'] } },
 	},
 	integrations: {}, pipelines: {}, policies: {}, teams: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {},
 	customFields: {}, agent: { skills: {} },
@@ -130,6 +130,29 @@ const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (
 };
 
 describe('filter.describe offers System 1 the exposure and maps its choices onto the grammar', () => {
+	it('a description that states nothing is a refusal, never an empty filter reported as applied (staging: "dsajdasomda")', async () => {
+		const r = await describer(system1(byField({}))).describe({ collection: 'jobs', text: 'dsajdasomda', authority: caller(), bindings });
+		expect(r).toMatchObject({ ok: false, message: expect.stringMatching(/No field here matches/) });
+	});
+
+	it('one condition is never negated by the composition: its own operator says "is not" (staging: "jobs at 1F Pine Grove" → not)', async () => {
+		const plan = byField({ Title: { op: 'contains', value: 'pump' } }, { combine: 'none of them hold' });
+		expect(await describer(system1(plan)).describe({ collection: 'jobs', text: 'title contains pump', authority: caller(), bindings }))
+			.toEqual({ ok: true, where: { title: { like: '%pump%' } } });
+		const two = byField({ Title: { op: 'contains', value: 'pump' }, Status: { op: 'is', value: 'done' } }, { combine: 'none of them hold' });
+		expect(await describer(system1(two)).describe({ collection: 'jobs', text: 'neither pump titles nor done', authority: caller(), bindings }))
+			.toMatchObject({ ok: true, where: { not: { or: expect.any(Array) } } });
+	});
+
+	it('a presence-only field is asked about presence, not by name (staging: "site location contains …" → location is not empty)', async () => {
+		const port = system1(byField({ Title: { op: 'contains', value: 'pump' } }));
+		const r = await describer(port).describe({ collection: 'jobs', text: 'spot title contains pump', authority: caller(), bindings });
+		expect(r).toEqual({ ok: true, where: { title: { like: '%pump%' } } });
+		const q = port.requests[0]!.questions;
+		const spot = Object.keys(q).find((id) => /^f\d+$/.test(id) && labelOf(port.requests[0]!, id) === 'Spot')!;
+		expect(q[spot]).toMatchObject({ instructions: expect.stringMatching(/whether Spot is recorded at all/) });
+	});
+
 	it('describes a local roster from its supplied fields without a collection read', async () => {
 		const port = system1(byField({ Number: { op: 'more than', value: '20' } },
 			{ 'sort.yes': true, 'sort.field': 'Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' }));

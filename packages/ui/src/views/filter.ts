@@ -496,7 +496,8 @@ export function pathLabel(cat: Catalog, collection: string, path: string, human:
 	for (const step of path.split('.')) {
 		const [name, arm] = step.split(':') as [string, string | undefined];
 		const x = cat[c], rel = x?.relations?.[name];
-		out.push((rel?.label ?? x?.fields[name]?.label ?? human(name)) + (arm === undefined ? '' : ` (${human(arm)})`));
+		// a relation is named for its record ("Site"), never its key column ("Site id"): the describer's own words
+		out.push((rel?.label ?? x?.fields[name]?.label ?? human(rel === undefined ? name : name.replace(/_id$/, ''))) + (arm === undefined ? '' : ` (${human(arm)})`));
 		c = arm ?? rel?.targets[0] ?? c;
 	}
 	return out.join(' › ');
