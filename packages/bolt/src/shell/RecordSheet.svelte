@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { Sheet } from '@norbital-ai/ui';
-	import { carriedContexts, onPageContexts, pageContexts, RecordShell } from '@norbital-ai/ui';
+	import { carriedContexts, onPageContexts, pageContexts, RecordShell, singular } from '@norbital-ai/ui';
 	import { onDestroy } from 'svelte';
 	import Carry from './Carry.svelte';
 	import { currentBolt } from './runtime.ts';
@@ -18,11 +18,9 @@
 	let page = $state(carried === undefined ? pageContexts(collection) : undefined);
 	onDestroy(onPageContexts(() => { if (carried === undefined && page === undefined) page = pageContexts(collection); }));
 	const bolt = currentBolt();
-	// hook:agent-ui — the sheet's accessible title is the collection's label (ui's `label`: the catalog key, else humanized)
-	const title = $derived.by(() => {
-		const key = `models.${collection}.label`, s = bolt.t(key);
-		return s !== key ? s : collection.replace(/[_.]+/g, ' ').trim().replace(/^./, (c) => c.toUpperCase());
-	});
+	// hook:agent-ui — the sheet's accessible title is one record of the collection (ui's `singular`: `models.<c>.singular`,
+	// else its label made singular); the visible heading is `RecordShell`'s, the record's own label
+	const title = $derived(singular(bolt, collection));
 </script>
 
 <!-- the opener's contexts (a page's create scope) sit above the sheet, which then resets its own; the shell mounts one

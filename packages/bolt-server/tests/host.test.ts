@@ -73,9 +73,22 @@ describe('the Postgres URL (§5.11.6)', () => {
 
 describe('activation requirements (rule 69)', () => {
 	const config = (over: { [k: string]: string } = {}) => decodeConfig({ BOLT_ARTIFACT: '/a', BOLT_PGLITE_DIR: '/d', BOLT_PUBLIC_URL: 'http://localhost:3100',
-		BOLT_FILES_PROVIDER: 'local', BOLT_FILES_ENDPOINT: '/f', BOLT_MAIL: 'smtp://127.0.0.1:2525', ...over });
+		BOLT_FILES_PROVIDER: 'local', BOLT_FILES_ENDPOINT: '/f', ...over });
 	const manifest = (over: object = {}) => ({ workspace: { tz: 'UTC' }, models: {}, collections: {}, channels: {}, connections: {}, apps: {}, agent: {}, envoys: {}, ...over }) as unknown as EngineManifest;
 	const errors = (c: ReturnType<typeof config>, m: EngineManifest, dev = false) => requirements(c, m, { dev }).errors.join('\n');
+
+	it('reads speech (BOLT_AI_SPEECH_*) as its own optional facility with a model per capability', () => {
+		expect(config().speech).toBeNull();
+		const on = { BOLT_AI_SPEECH_PROVIDER: 'openrouter', BOLT_AI_SPEECH_CREDENTIAL: 'k' };
+		expect(config({ ...on, BOLT_AI_TRANSCRIBE_MODEL: 'google/gemini-3.5-flash' }).speech)
+			.toEqual({ endpoint: 'https://openrouter.ai/api/v1', credential: 'k', transcribe: 'google/gemini-3.5-flash', speak: null, voice: null });
+		expect(config({ ...on, BOLT_AI_SPEECH_ENDPOINT: 'https://or.test/v1', BOLT_AI_SPEAK_MODEL: 'tts', BOLT_AI_SPEAK_VOICE: 'Kore' }).speech)
+			.toMatchObject({ endpoint: 'https://or.test/v1', transcribe: null, speak: 'tts', voice: 'Kore' });
+		expect(() => config({ ...on })).toThrow(/BOLT_AI_TRANSCRIBE_MODEL or BOLT_AI_SPEAK_MODEL/);
+		expect(() => config({ BOLT_AI_SPEECH_PROVIDER: 'openrouter', BOLT_AI_TRANSCRIBE_MODEL: 'm' })).toThrow(/BOLT_AI_SPEECH_CREDENTIAL/);
+		expect(() => config({ BOLT_AI_TRANSCRIBE_MODEL: 'm' })).toThrow(/BOLT_AI_SPEECH_PROVIDER/);
+		expect(() => config({ ...on, BOLT_AI_SPEECH_PROVIDER: 'acme', BOLT_AI_TRANSCRIBE_MODEL: 'm' })).toThrow(/not registered/);
+	});
 
 	it('--dev / BOLT_DEV runs only on a loopback origin outside production (L-BOLT-366)', () => {
 		expect(config().dev).toBe(false);
@@ -106,8 +119,16 @@ describe('activation requirements (rule 69)', () => {
 		expect(requirements(config(), manifest({ agent: { internal: 'You help.' } }), {}).warnings.join('\n')).toMatch(/AI is not configured/); // the agent needs one too
 		// the engine reads files (§5.8.1): a file field warns of nothing
 		expect(requirements(config(), manifest({ models: { photos: { fields: { photo: { kind: 'file' } } } } }), {}).warnings.join('\n')).not.toMatch(/files\./);
-		expect(errors(decodeConfig({ BOLT_ARTIFACT: '/a', BOLT_PGLITE_DIR: '/d', BOLT_PUBLIC_URL: 'http://localhost:3100' }), manifest()))
-			.toMatch(/files are required[\s\S]*BOLT_MAIL/);
+		// a deployed host needs the host's messaging; a local one prints it to its log
+		expect(errors(decodeConfig({ BOLT_ARTIFACT: '/a', BOLT_PGLITE_DIR: '/d', BOLT_PUBLIC_URL: 'https://acme.example' }), manifest()))
+			.toMatch(/files are required[\s\S]*BOLT_TRANSACTIONAL_EMAIL/);
+		expect(errors(decodeConfig({ BOLT_ARTIFACT: '/a', BOLT_PGLITE_DIR: '/d', BOLT_PUBLIC_URL: 'http://localhost:3100', BOLT_FILES_PROVIDER: 'local', BOLT_FILES_ENDPOINT: '/f' }), manifest())).toBe('');
+		expect(errors(config({ BOLT_ENVIRONMENT: 'production' }), manifest())).toMatch(/BOLT_TRANSACTIONAL_EMAIL/);
+		// phone sign-up needs a phone provider on a deployed host
+		const phone = manifest({ workspace: { tz: 'UTC', signup: { via: ['phone'], policies: [] } } });
+		const deployed = { BOLT_PUBLIC_URL: 'https://acme.example', BOLT_TRANSACTIONAL_EMAIL: 'resend', BOLT_RESEND_API_KEY: 're_k' };
+		expect(errors(config(deployed), phone)).toMatch(/BOLT_TRANSACTIONAL_PHONE/);
+		expect(errors(config({ ...deployed, BOLT_TRANSACTIONAL_PHONE: 'twilio', BOLT_TWILIO_ACC_SID: 'AC1', BOLT_TWILIO_AUTH_TOKEN: 't' }), phone)).toBe('');
 	});
 
 	it('binds ctx.convert to Norbital Convert, and warns of declared targets when it is absent', () => {

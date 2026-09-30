@@ -48,10 +48,16 @@
 	<span class="inline-flex max-w-full min-w-0 items-center gap-1 align-middle" data-ref="one">
 		<Glyph name="link" class="text-muted-foreground size-3 shrink-0" />{@render link(ref.of, value, ref.text)}
 	</span>
+{:else if kind === undefined && (value === null || value === undefined)}
+	<span class="text-muted-foreground">—</span>
+{:else if kind?.kind === 'text' && kind.format === 'markdown' && dense && typeof value === 'string'}
+	<!-- one line of a stored document: its text, the prose is the record's -->
+	{value}
 {:else if kind !== undefined && dense && structured(kind) && !isMasked(value) && value !== null && value !== undefined}
 	<code class="text-muted-foreground block truncate font-mono text-xs" data-json-preview>{JSON.stringify(value)}</code>
-{:else if kind !== undefined}
-	<Show {kind} {value} {...row === undefined ? {} : { row }} {...name === undefined ? {} : { name }} />
+{:else if kind !== undefined || typeof value === 'boolean'}
+	<!-- a boolean without a catalog kind (a local array's column) is still a check or a cross, not a glyph in text -->
+	<Show kind={kind ?? { kind: 'bool' }} {value} {...row === undefined ? {} : { row }} {...name === undefined ? {} : { name }} />
 {:else if isMasked(value)}
 	<span class="text-muted-foreground" title="restricted" aria-label="restricted">•••</span>
 {:else if files.length > 0}

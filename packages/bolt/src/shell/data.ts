@@ -3,6 +3,7 @@
 // identity tables. Every verb is an identity function (admin-only there); this file decodes and routes.
 import type { Json } from '../decl/values.ts';
 import type { Authority, EngineManifest, FilesPort, TenantDb } from '../engine/contracts.ts';
+import type { DeliveryEntry } from '../engine/channels/status.ts';
 import type { AttachmentPort } from '../engine/agent/tools.ts';
 import { xlsxCells, xlsxSheets } from '../engine/agent/xlsx.ts';
 import { imageJob } from '../engine/runs/files.ts';
@@ -74,7 +75,9 @@ export async function runList(db: TenantDb, auth: Authority, limit = 100, automa
 
 /** One raw channel message as the channel's Messages tab lists it: either direction, as stored. */
 export type ChannelMessage = { id: string; seq: string; direction: 'inbound' | 'outbound'; at: string; thread: string | null; kind: string | null;
-	title: string | null; sender: string | null; sender_name: string | null; text: string | null; files: number; status: string | null; error: string | null };
+	title: string | null; sender: string | null; sender_name: string | null; text: string | null; files: number; status: string | null; error: string | null;
+	/** Outbound: the delivery timeline (§5.9), oldest first; `[]` inbound. */
+	delivery: DeliveryEntry[] };
 /**
  * A channel's raw messages (§5.9 built-in reads): every inbound and outbound `sys_message` on it, newest first, a page of
  * 100 before `seq`; an administrator's, like the rest of Settings.
@@ -84,7 +87,8 @@ export async function channelMessages(db: TenantDb, auth: Authority, m: EngineMa
 	if (denied) return denied;
 	if (m.channels[channel] === undefined) return refuse('notFound', `No channel '${channel}'.`);
 	const [rows] = await db.read([q(`SELECT m.id, m.seq::text AS seq, m.direction, coalesce(m.sent_at, m.created_at)::text AS at, c.thread, c.kind, c.title,
-			m.sender, m.sender_name, m.text, jsonb_array_length(coalesce(m.files, '[]'::jsonb)) AS files, m.status, m.error
+			m.sender, m.sender_name, m.text, jsonb_array_length(coalesce(m.files, '[]'::jsonb)) AS files, m.status, m.error,
+			CASE WHEN m.direction = 'outbound' AND jsonb_typeof(m.delivery) = 'array' THEN m.delivery ELSE '[]'::jsonb END AS delivery
 		FROM sys_message m LEFT JOIN sys_conversation c ON c.id = m.conversation
 		WHERE m.channel = $1 AND m.direction IN ('inbound', 'outbound') AND ($2::bigint IS NULL OR m.seq < $2::bigint)
 		ORDER BY m.seq DESC LIMIT 100`, channel, before !== undefined && /^\d{1,18}$/.test(before) ? before : null)]);
@@ -94,7 +98,7 @@ export async function channelMessages(db: TenantDb, auth: Authority, m: EngineMa
 export type Settings = {
 	members: Row[]; teams: Row[]; assignments: Row[]; invitations: Row[]; keys: Row[];
 	policies: string[]; secrets: { name: string; label: string; set: boolean | null }[];
-	channels: { name: string; transport: Json; address: Json; delivery: ChannelDelivery }[]; connections: { name: string; auth: Json }[]; mcp: { name: string; url: Json }[];
+	channels: { name: string; transport: Json; delivery: ChannelDelivery }[]; connections: { name: string; auth: Json }[]; mcp: { name: string; url: Json }[];
 	/** Identity changes (`bolt_history` of the identity tables), newest first (L-BOLT-518). */
 	audit: { collection: string; record: string; revision: number; at: string; actor: string | null; op: string; changes: Json }[];
 	/** `<collection>.integration`s; an administrator pauses or resumes each (L-BOLT-365). */
@@ -105,9 +109,10 @@ export type Settings = {
 
 /**
  * A channel's outbound deliveries over the last day (L-BOLT-521): automatic retries are progress (`retrying`, with the
- * next attempt), only a settled failure is terminal; `lastError` is the newest failure's text.
+ * next attempt), only a settled failure is terminal; `lastError` is the newest failure's text. A `skipped` message (its rule's
+ * `message` answered `null`: nothing to send for that record) is its own neutral count, never a failure.
  */
-export type ChannelDelivery = { sent: number; pending: number; retrying: number; failed: number; nextRetry: string | null; lastError: string | null };
+export type ChannelDelivery = { sent: number; pending: number; retrying: number; failed: number; skipped: number; nextRetry: string | null; lastError: string | null };
 const AUDIT_LIMIT = 200;
 
 /** The settings pages' rows (§5.11.1): one row per member with sessions collapsed to a last-seen time; admins only. */
@@ -116,7 +121,7 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 	if (denied) return denied;
 	const [users, teams, assignments, invitations, keys, audit, deliveries, signup] = await h.db.read([
 		// administrators first, then staff, then external members; by name, else address (L-BOLT-516)
-		q(`SELECT u.id, u.email, u.phone, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
+		q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
 			FROM sys_user u ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
 		q('SELECT id, name, parent FROM sys_team ORDER BY lower(name)'),
 		q('SELECT id, principal_type, principal, policy, scope FROM sys_assignment ORDER BY policy, id'),
@@ -125,16 +130,16 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 		q('SELECT id, name, prefix, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'),
 		q(`SELECT collection, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
 			WHERE collection IN ('sys_user', 'sys_team', 'sys_assignment', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
-		q(`SELECT channel, count(*) FILTER (WHERE status = 'sent')::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
-			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'skipped'))::int AS failed,
+		q(`SELECT channel, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
+			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained'))::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
 			min(next_attempt_at) FILTER (WHERE status = 'queued' AND attempts > 0)::text AS next_retry,
-			(array_agg(error ORDER BY created_at DESC) FILTER (WHERE status IN ('failed', 'uncertain', 'skipped') AND error IS NOT NULL))[1] AS last_error
+			(array_agg(error ORDER BY created_at DESC) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained') AND error IS NOT NULL))[1] AS last_error
 			FROM sys_message WHERE direction = 'outbound' AND created_at > $1::timestamptz - interval '1 day' GROUP BY channel`, h.now().toISOString()),
 		q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
 	]);
-	const idle: ChannelDelivery = { sent: 0, pending: 0, retrying: 0, failed: 0, nextRetry: null, lastError: null };
+	const idle: ChannelDelivery = { sent: 0, pending: 0, retrying: 0, failed: 0, skipped: 0, nextRetry: null, lastError: null };
 	const delivery = new Map(deliveries!.rows.map((r) => [String(r['channel']), { sent: Number(r['sent']), pending: Number(r['pending']), retrying: Number(r['retrying']),
-		failed: Number(r['failed']), nextRetry: (r['next_retry'] ?? null) as string | null, lastError: (r['last_error'] ?? null) as string | null }]));
+		failed: Number(r['failed']), skipped: Number(r['skipped']), nextRetry: (r['next_retry'] ?? null) as string | null, lastError: (r['last_error'] ?? null) as string | null }]));
 	const env = Object.entries((m.workspace.env ?? {}) as { readonly [n: string]: { label: string; secret?: boolean } }).filter(([, d]) => d.secret !== false);
 	const status = secrets === undefined ? null : await secrets.status('workspace');
 	const paused = await pausedIntegrations(h.db);
@@ -142,7 +147,7 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 		members: [...users!.rows], teams: [...teams!.rows], assignments: [...assignments!.rows], invitations: [...invitations!.rows], keys: [...keys!.rows],
 		policies: Object.keys(m.policies),
 		secrets: env.map(([name, d]) => ({ name, label: d.label, set: status === null ? null : status[name] === true })),
-		channels: Object.entries(m.channels).map(([name, c]) => ({ name, transport: (c as Row)['transport'] ?? null, address: (c as Row)['address'] ?? null, delivery: delivery.get(name) ?? idle })),
+		channels: Object.entries(m.channels).map(([name, c]) => ({ name, transport: (c as Row)['transport'] ?? null, delivery: delivery.get(name) ?? idle })),
 		audit: audit!.rows as unknown as Settings['audit'],
 		connections: Object.entries(m.connections).map(([name, c]) => ({ name, auth: (c as { auth?: Json }).auth ?? null })),
 		mcp: Object.entries(m.mcp).map(([name, s]) => ({ name, url: (s as { url?: Json }).url ?? null })),
@@ -204,6 +209,11 @@ export async function settingsOp(h: IdentityHost, m: EngineManifest, auth: Autho
 		case 'deactivate': return str(id) ? members.deactivate(h, auth, id) : bad(op);
 		case 'reactivate': return str(id) ? members.reactivate(h, auth, id) : bad(op);
 		case 'assignTeam': return str(id) && strOrNull(x['team']) ? members.assignTeam(h, auth, id, x['team']) : bad(op);
+		case 'setHandles': {
+			const handle = (k: string) => x[k] === undefined || x[k] === null || typeof x[k] === 'string';
+			return str(id) && handle('phone') && handle('telegram')
+				? members.setHandles(h, auth, id, { ...(x['phone'] === undefined ? {} : { phone: x['phone'] as string | null }), ...(x['telegram'] === undefined ? {} : { telegram: x['telegram'] as string | null }) }) : bad(op);
+		}
 		case 'createTeam': return str(x['name']) && strOrNull(x['parent'] ?? null) ? members.createTeam(h, auth, x['name'], (x['parent'] ?? null) as string | null) : bad(op);
 		case 'moveTeam': return str(id) && strOrNull(x['parent']) ? members.moveTeam(h, auth, id, x['parent']) : bad(op);
 		case 'renameTeam': return str(id) && str(x['name']) ? members.renameTeam(h, auth, id, x['name'].trim()) : bad(op);

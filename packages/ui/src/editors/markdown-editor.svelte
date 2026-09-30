@@ -29,6 +29,8 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 		'aria-label'?: string;
 		onkeydown?(event: KeyboardEvent): void;
 		onpaste?(event: ClipboardEvent): void;
+		/** The textarea, bindable: a page inserts at its caret (`selectionStart`) or focuses it. */
+		textarea?: HTMLTextAreaElement | null;
 	};
 </script>
 
@@ -42,9 +44,8 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 
 	let {
 		value, onChange, readonly = false, preview = false, commands = BLOCKS, commandStart = 'line', mentions, placeholder, rows = 8, id, disabled = false,
-		invalid = false, class: className, 'aria-label': ariaLabel, onkeydown, onpaste
+		invalid = false, class: className, 'aria-label': ariaLabel, onkeydown, onpaste, textarea: ta = $bindable(null)
 	}: MarkdownEditorProps = $props();
-	let ta = $state<HTMLTextAreaElement | null>(null);
 	let tab = $state<'write' | 'preview'>('write');
 	const triggers = $derived<CommandTrigger[]>([
 		...(commands.length === 0 ? [] : [{ char: '/', start: commandStart, items: (q: string) => filterItems(commands, q) }]),

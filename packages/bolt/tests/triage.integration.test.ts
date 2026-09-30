@@ -19,7 +19,7 @@ const manifest = {
 	automations: {},
 	channels: { field_wa: { transport: 'whatsapp' } },
 	connections: {},
-	envoys: { field_ops: { channel: 'field_wa', audience: 'authenticated', name: 'Norbius', policies: ['desk'], groupMessages: 'mention_or_reply',
+	envoys: { field_ops: { channel: 'field_wa', audience: 'private', name: 'Norbius', policies: ['desk'], groupMessages: 'mention_or_reply',
 		delegation: 'disabled', triage: {}, task: 'Keep jobs up to date.' } },
 	mcp: {}, apps: {}, customFields: {}, agent: { internal: 'Staff brief.', skills: {} },
 } as unknown as EngineManifest;
@@ -272,7 +272,7 @@ describe('envoy triage (G12 (10))', () => {
 	it('an envoy built before names were required is asked about generically, never as an empty name', async () => {
 		// a tenant's active release is a built artifact that outlives its template: an artifact from before `name` was
 		// required declares none, and `names you ()` is worse than not naming it. The wording is the generic one.
-		const nameless = { ...manifest, envoys: { field_ops: { channel: 'field_wa', audience: 'authenticated', policies: ['desk'],
+		const nameless = { ...manifest, envoys: { field_ops: { channel: 'field_wa', audience: 'private', policies: ['desk'],
 			groupMessages: 'mention_or_reply', delegation: 'disabled', triage: {}, task: 'Keep jobs up to date.' } } } as unknown as EngineManifest;
 		await open({ manifest: nameless });
 		await say(DM, 'hello');

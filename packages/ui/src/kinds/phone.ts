@@ -49,6 +49,18 @@ export function formatPhone(text: string): string {
 	return p === null ? text : `+${p.code} ${groupDigits(p.national)}`.trim();
 }
 
+/**
+ * A message sender or recipient for reading: its display `name` when there is one; a WhatsApp number (a JID such as
+ * `6591234567:14@s.whatsapp.net`, the device suffix dropped; Twilio's `whatsapp:+6591234567`; bare digits on
+ * `whatsapp`) as its phone (`+65 9123 4567`, `+<digits>` for an unknown calling code); anything else (email, Telegram,
+ * Slack, Discord and WeChat ids, a `@lid` or group JID) as given.
+ */
+export function formatHandle(transport: string | null, handle: string, name?: string | null): string {
+	if (name != null && name.trim() !== '') return name.trim();
+	const m = /^(whatsapp:)?\+?(\d+)(?::\d+)?(@s\.whatsapp\.net|@c\.us)?$/.exec(handle.trim());
+	return m !== null && (m[1] !== undefined || m[3] !== undefined || transport === 'whatsapp') ? formatPhone(`+${m[2]}`) : handle;
+}
+
 /** The viewer's region from a locale (`en-SG` → `SG`), else `fallback`. */
 export function regionOf(locale: string | undefined, fallback = 'US'): string {
 	try {

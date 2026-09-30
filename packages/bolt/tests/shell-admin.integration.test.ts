@@ -96,6 +96,25 @@ describe('shell administration', () => {
 		expect(await boot(admin)).toMatchObject({ admin: true, preview: null });
 	});
 
+	it('an administrator sets a member\'s mobile number (international form) and Telegram handle; audited; nobody else may', async () => {
+		const id = String((await settings(admin)).members.find((u) => u['email'] === 'rep@acme.example')!['id']);
+		expect((await op(rep, 'setHandles', { id, phone: '+6581234567' })).status).toBe(403);
+		expect((await op(admin, 'setHandles', { id, phone: '81234567' })).body!.error!.code).toBe('check');
+		expect((await op(admin, 'setHandles', { id, phone: '+65 8123 4567', telegram: '@Rep_Tg' })).status).toBe(200);
+		const s = await settings(admin);
+		expect(s.members.find((u) => u['id'] === id)).toMatchObject({ phone: '+6581234567', telegram: 'Rep_Tg' });
+		expect(s.audit).toContainEqual(expect.objectContaining({ collection: 'sys_user', record: id, op: 'update' }));
+		const boss = String(s.members.find((u) => u['email'] === 'boss@acme.example')!['id']);
+		expect((await op(admin, 'setHandles', { id: boss, phone: '+6581234567' })).body!.error!.code).toBe('check'); // another member's number
+		expect((await op(admin, 'setHandles', { id, telegram: null })).status).toBe(200); // a key left out keeps its value
+		expect((await settings(admin)).members.find((u) => u['id'] === id)).toMatchObject({ phone: '+6581234567', telegram: null });
+	});
+
+	it('the envoy registration routes are gone: 404', async () => {
+		for (const [method, path] of [['GET', '/__bolt/envoys/register?claim=c1'], ['GET', '/__bolt/shell/register?claim=c1'], ['POST', '/__bolt/shell/register']] as const)
+			expect((await call(admin, method, path, method === 'POST' ? { claim: 'c1' } : undefined)).status).toBe(404);
+	});
+
 	it('members list administrators first; the audit reads newest first; teams rename and delete; invitations resend', async () => {
 		await t.db.write({ text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('ext1', 'aa@partner.example', 'Aaron', 'external')`, params: [] });
 		const s = await settings(admin);

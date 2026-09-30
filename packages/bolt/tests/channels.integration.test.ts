@@ -4,8 +4,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import { channels, type Channels } from '../src/engine/channels/index.ts';
+import { SendRefused } from '../src/engine/channels/status.ts';
 import { fakeTransport, type FakeTransport } from '../src/engine/channels/transports.ts';
-import type { EngineManifest, Outcome } from '../src/engine/contracts.ts';
+import type { Authority, EngineManifest, Outcome } from '../src/engine/contracts.ts';
+import type { IdentityHost } from '../src/engine/identity/session.ts';
+import { settings } from '../src/shell/data.ts';
 import { guestRunner } from '../src/engine/guest/runner.ts';
 import { lowerRead } from '../src/engine/index.ts';
 import { testWorkspace, type TestWorkspace } from '../src/test/index.ts';
@@ -34,7 +37,7 @@ const manifest = {
 	teams: { Clerks: ['clerk'], Leads: ['staff'] },
 	automations: { ping: { description: 'Sends a WhatsApp line', runAs: ['staff'] } },
 	channels: {
-		customer_mail: { transport: 'email', address: 'support', policies: ['mailer'], outbound: { notice: { from: 'sent_emails', on: 'create' } } },
+		customer_mail: { transport: 'email', policies: ['mailer'], outbound: { notice: { from: 'sent_emails', on: 'create' } } },
 		desk_wa: { transport: 'whatsapp' },
 	},
 	connections: {}, envoys: {}, mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
@@ -42,10 +45,11 @@ const manifest = {
 
 const guestSource = `export default {
 	channel: { customer_mail: {
-		outbound: { notice: { message: ({ record }) => ({ to: [record.to], subject: record.subject, text: record.body, thread: record.id }) } },
+		outbound: { notice: { message: ({ record }) => record.to === 'nobody' ? null : ({ to: [record.to], subject: record.subject, text: record.body, thread: record.id }) } },
 		events: {
 			sent: (e) => ({ sent_at: e.at }), delivered: (e) => ({ delivered_at: e.at }), opened: (e) => ({ opened_at: e.at }),
 			bounced: (e) => ({ failed_reason: e.reason }), failed: (e) => ({ failed_reason: e.reason }), replied: (e) => ({ replied_at: e.at }),
+			deferred: (e) => ({ failed_reason: 'deferred ' + (e.code ?? '') }), auto_replied: (e) => ({ failed_reason: 'auto: ' + e.reply.subject }),
 		},
 	} },
 	automation: { ping: { body: async (input, ctx) => ctx.send('desk_wa', { to: '6591234567@s.whatsapp.net', text: 'hello from a run' }) } },
@@ -69,6 +73,17 @@ const row = async (id: string) => (await t.as(t.admin).get('sent_emails', id))!;
 const outbox = async () => (await t.db.read([{ text: `SELECT id, status, attempts, error, conversation, provider_id, record FROM sys_message WHERE direction = 'outbound' ORDER BY seq`, params: [] }]))[0]!.rows;
 
 describe('record-driven outbound (G12 (3))', () => {
+	it('a message that answers null sends nothing for that row: skipped, not failed, and the row is not patched', async () => {
+		const id = ok(await staff().act('sent_emails.create', { to: 'nobody', subject: 'x', body: 'y' })).records[0]!.id;
+		await ch.deliver();
+		expect(mail.sent).toHaveLength(0);
+		expect(await outbox()).toMatchObject([{ status: 'skipped', error: expect.stringContaining('sends nothing') }]);
+		expect(await row(id)).toMatchObject({ failed_reason: null, sent_at: null });
+		// the channel's day in Settings counts it on its own, neutral: never a failure, never the last error
+		const s = await settings({ db: t.db, now: () => new Date(t.clock.now()) } as unknown as IdentityHost, manifest,
+			{ admin: true, actor: t.admin.actor } as unknown as Authority);
+		expect(s.ok && s.value.channels.find((c) => c.name === 'customer_mail')?.delivery).toMatchObject({ failed: 0, skipped: 1, lastError: null });
+	});
 	it('a notice row\'s create queues its mail and the delivery run in the same statement', async () => {
 		t.count.reset();
 		const id = await notice();
@@ -83,7 +98,7 @@ describe('record-driven outbound (G12 (3))', () => {
 		const id = await notice();
 		await t.runDue();
 		expect(mail.sent).toHaveLength(1);
-		expect(mail.sent[0]!.message).toMatchObject({ to: ['carol@acme.com'], subject: 'PCN 1234', text: 'Your parts change.', thread: id, from: 'support' });
+		expect(mail.sent[0]!.message).toMatchObject({ to: ['carol@acme.com'], subject: 'PCN 1234', text: 'Your parts change.', thread: id });
 		expect((await row(id))['sent_at']).not.toBeNull();
 		await t.runDue();
 		await ch.deliver();
@@ -96,8 +111,8 @@ describe('record-driven outbound (G12 (3))', () => {
 		ok(await staff().act('sent_emails.update', { target: id, set: { status: 'closed' } }));
 		expect(await staff().act('sent_emails.update', { target: id, set: { failed_reason: 'x' } })).toMatchObject({ kind: 'refused', code: 'locked' });
 		const providerId = mail.sent[0]!.providerId;
-		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId, event: 'delivered', at: '2026-09-25T10:01:00.000Z' });
-		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId, event: 'opened', at: '2026-09-25T10:02:00.000Z' });
+		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId, report: { kind: 'delivered', at: '2026-09-25T10:01:00.000Z', provider: 'fake' } });
+		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId, report: { kind: 'opened', at: '2026-09-25T10:02:00.000Z', provider: 'fake', approximate: true } });
 		await ch.receive({ kind: 'inbound', channel: 'customer_mail', message: { id: '<reply-1@acme.com>', thread: null, sentAt: '2026-09-25T10:03:00.000Z',
 			from: { address: 'Carol@acme.com', name: 'Carol' }, replyTo: null, to: [], cc: [], subject: 'Re: PCN 1234', text: 'Thanks', html: null,
 			headers: { 'in-reply-to': providerId }, attachments: [] } });
@@ -117,9 +132,83 @@ describe('record-driven outbound (G12 (3))', () => {
 	it('a bounce reported later marks the row failed with the provider\'s reason', async () => {
 		const id = await notice();
 		await t.runDue();
-		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId: mail.sent[0]!.providerId, event: 'bounced', at: '2026-09-25T10:05:00.000Z', data: { reason: 'mailbox full' } });
+		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId: mail.sent[0]!.providerId, report: { kind: 'bounced', at: '2026-09-25T10:05:00.000Z', provider: 'fake', code: '552 5.2.2', reason: 'mailbox full', permanent: true } });
 		expect((await row(id))['failed_reason']).toBe('mailbox full');
-		expect(await outbox()).toMatchObject([{ status: 'failed' }]);
+		expect(await outbox()).toMatchObject([{ status: 'bounced', error: 'mailbox full' }]);
+	});
+});
+
+describe('delivery status (§5.9)', () => {
+	const timeline = async () => (await t.db.read([{ text: `SELECT status, delivery FROM sys_message WHERE direction = 'outbound' ORDER BY seq`, params: [] }]))[0]!.rows[0]!;
+	const report = (kind: 'delivered' | 'bounced' | 'deferred', at: string, extra: { [k: string]: Json } = {}) =>
+		ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId: mail.sent[0]!.providerId, report: { kind, at, provider: 'fake', ...extra } });
+	const inbound = (id: string, headers: { [k: string]: string }, subject: string) => ch.receive({ kind: 'inbound', channel: 'customer_mail', message: {
+		id, thread: null, sentAt: '2026-09-25T11:00:00.000Z', from: { address: 'carol@acme.com', name: 'Carol' }, replyTo: null, to: [], cc: [], subject,
+		text: 'x', html: null, headers: { 'in-reply-to': mail.sent[0]!.providerId, ...headers }, attachments: [] } });
+
+	it('every report lands on the timeline; a bounce is terminal: a later delivered neither moves the status nor maps; a redelivery is recorded once', async () => {
+		const id = await notice();
+		await t.runDue();
+		await report('bounced', '2026-09-25T10:05:00.000Z', { code: '550 5.1.1', reason: 'no such user', permanent: true });
+		await report('bounced', '2026-09-25T10:05:00.000Z', { code: '550 5.1.1', reason: 'no such user', permanent: true });
+		await report('delivered', '2026-09-25T10:06:00.000Z');
+		const got = await timeline();
+		expect(got['status']).toBe('bounced');
+		expect((got['delivery'] as { kind: string }[]).map((e) => e.kind)).toEqual(['queued', 'sent', 'bounced', 'delivered']);
+		expect(got['delivery']).toMatchObject([{ provider: 'bolt' }, { provider: 'bolt' }, { code: '550 5.1.1', reason: 'no such user', permanent: true, provider: 'fake' }, {}]);
+		expect(await row(id)).toMatchObject({ failed_reason: 'no such user', delivered_at: null });
+	});
+
+	it('status only advances: deferred after delivered is recorded, not applied', async () => {
+		await notice();
+		await t.runDue();
+		await report('delivered', '2026-09-25T10:05:00.000Z');
+		await report('deferred', '2026-09-25T10:06:00.000Z', { code: '451 4.7.1' });
+		expect((await timeline())['status']).toBe('delivered');
+	});
+
+	it('an auto-reply is recorded and mapped as auto_replied, never as the customer\'s reply; a person\'s reply then is', async () => {
+		const id = await notice();
+		await t.runDue();
+		await inbound('<ooo@acme.com>', { 'auto-submitted': 'auto-replied' }, 'Automatic reply: PCN 1234');
+		expect(await timeline()).toMatchObject({ status: 'sent' });
+		expect(await row(id)).toMatchObject({ replied_at: null, failed_reason: 'auto: Automatic reply: PCN 1234' });
+		await inbound('<human@acme.com>', {}, 'Re: PCN 1234');
+		const got = await timeline();
+		expect(got['status']).toBe('replied');
+		expect((got['delivery'] as { kind: string }[]).map((e) => e.kind)).toEqual(['queued', 'sent', 'auto_replied', 'replied']);
+		expect((await row(id))['replied_at']).toEqual({ $t: '2026-09-25T11:00:00.000Z' });
+	});
+
+	it('a quiet window without a report presumes the mail delivered, once', async () => {
+		mail.presumeAfterMs = 86_400_000;
+		const id = await notice();
+		await t.runDue();
+		t.clock.advance('23h');
+		await ch.deliver();
+		expect((await timeline())['status']).toBe('sent');
+		t.clock.advance('2h');
+		await ch.deliver();
+		const got = await timeline();
+		expect(got['status']).toBe('delivered');
+		expect((got['delivery'] as Json[]).at(-1)).toMatchObject({ kind: 'delivered', presumed: true, provider: 'bolt' });
+		expect((await row(id))['delivered_at']).not.toBeNull();
+		const [due] = await t.db.read([{ text: `SELECT count(*)::int AS n FROM sys_message WHERE presume_at IS NOT NULL`, params: [] }]);
+		expect(due!.rows[0]!['n']).toBe(0);
+	});
+
+	it('a provider refusal: permanent fails at once with its code, a temporary one is deferred and retried', async () => {
+		mail.fail = () => new SendRefused('mailbox busy', '451 4.3.2', false);
+		const id = await notice();
+		await ch.deliver();
+		expect(await timeline()).toMatchObject({ status: 'queued', delivery: [{ kind: 'queued' }, { kind: 'deferred', code: '451 4.3.2', reason: 'mailbox busy', permanent: false }] });
+		expect((await row(id))['failed_reason']).toBe('deferred 451 4.3.2');
+		mail.fail = () => new SendRefused('no such user', '550 5.1.1');
+		t.clock.advance('10min');
+		await ch.deliver();
+		expect(await outbox()).toMatchObject([{ status: 'failed', attempts: 2, error: 'no such user' }]);
+		expect((await timeline())['delivery']).toMatchObject([{}, {}, { kind: 'failed', code: '550 5.1.1', permanent: true }]);
+		expect((await row(id))['failed_reason']).toBe('no such user');
 	});
 });
 
@@ -218,5 +307,35 @@ describe('inbound history', () => {
 		expect(t.fakes.files.blobs.size).toBe(1);
 		expect(new Set(rows.map((r) => r['conversation'])).size).toBe(1);
 		await expect(ch.receive({ kind: 'inbound', channel: 'desk_wa', message: { id: 'bad' } })).rejects.toThrow(/malformed/);
+	});
+});
+
+describe('outbound attachments', () => {
+	const stored = async (id: string, name: string, bytes: Uint8Array, size = bytes.byteLength) => {
+		const blob = await t.fakes.files.put(bytes, { name, mime: 'application/pdf' }, AbortSignal.timeout(1_000));
+		await t.db.write({ text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) VALUES ($1, $2, 'application/pdf', $3, $4, '', 'x.file', now())`,
+			params: [id, name, size, blob.key] });
+		return { id, name, mime: 'application/pdf' };
+	};
+	const failed = async () => (await t.db.read([{ text: `SELECT status, error FROM sys_message WHERE direction = 'outbound'`, params: [] }]))[0]!.rows;
+
+	it('a message\'s stored files reach the provider as bytes, in order, with their names and types; the row keeps the refs', async () => {
+		const report = await stored('f-report', 'report.pdf', new TextEncoder().encode('%PDF report'));
+		const sheet = await stored('f-sheet', 'datasheet.pdf', new TextEncoder().encode('%PDF sheet'));
+		await ch.send('desk_wa', { to: '6591234567@s.whatsapp.net', text: 'your notice', attachments: [report, sheet] });
+		expect(wa.sent).toHaveLength(1);
+		expect(wa.sent[0]!.message).toMatchObject({ attachments: [{ id: 'f-report' }, { id: 'f-sheet' }] });
+		expect(wa.sent[0]!.attachments!.map((a) => [a.name, a.mime, new TextDecoder().decode(a.bytes)]))
+			.toEqual([['report.pdf', 'application/pdf', '%PDF report'], ['datasheet.pdf', 'application/pdf', '%PDF sheet']]);
+	});
+
+	it('over the per-message cap, or a file no longer stored, the message fails for good and never reaches the provider', async () => {
+		const big = await stored('f-big', 'big.pdf', new Uint8Array(8), 21 * 2 ** 20);
+		await ch.send('desk_wa', { to: '6591234567@s.whatsapp.net', text: 'too big', attachments: [big] });
+		await ch.send('desk_wa', { to: '6597654321@s.whatsapp.net', text: 'gone', attachments: [{ id: 'f-none' }] });
+		expect(wa.sent).toHaveLength(0);
+		expect(await failed()).toEqual(expect.arrayContaining([
+			{ status: 'failed', error: 'the attachments are 21.0 MiB, over the 20 MiB a message carries' },
+			{ status: 'failed', error: 'attachment f-none is not a stored file' }]));
 	});
 });

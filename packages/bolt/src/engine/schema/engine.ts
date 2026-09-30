@@ -58,9 +58,6 @@ const REGISTRY = (): readonly Private[] => [
 		sql: [`create table if not exists bolt_approvals (id uuid primary key, state text not null check (state in ('Pending', 'Approved', 'Rejected', 'ChangesRequested', 'Withdrawn')), step int not null, collection text not null, record text not null, action text not null, requestor text not null, requestor_user text, route jsonb not null, superseded boolean not null default false, decided_by text, reason text, conflicted boolean not null default false, sealed_at timestamptz, restored_at timestamptz, at timestamptz not null, decisions jsonb not null default '[]')`] },
 	{ name: 'bolt_run_admitted', rank: 'table', why: 'the first-admission marker (rule 70): one timestamp row, no key',
 		sql: ['create table if not exists bolt_run_admitted (at timestamptz not null)'] },
-	{ name: 'bolt_envoy_link', rank: 'table', why: "an unlinked envoy sender's pending registration claim (rule 57): expiring engine state",
-		sql: [`create table if not exists bolt_envoy_link (id text primary key, envoy text not null, transport text not null, sender text not null, status text not null default 'pending', claimed_by text, expires_at timestamptz not null, created_at timestamptz not null)`,
-			`create index if not exists bolt_envoy_link_sender on bolt_envoy_link (envoy, transport, sender) where status = 'pending'`] },
 	noticeTrigger('bolt_notice_deliver', NOTIFY, '<>'),
 	noticeTrigger('bolt_notice_push', NOTICE_PUSH, '=', ' and exists (select 1 from bolt_push_subscriptions)'),
 ];

@@ -1,5 +1,5 @@
 <!--
-	`AccessFrame`: the one access look — Bolt's sign-in, invitation and registration, and a host's workspace picker. The
+	`AccessFrame`: the one access look — Bolt's sign-in and invitation, and a host's workspace picker. The
 	Norbius band behind, the Norbital mark and environment badge, the language and theme switches and the "secure access"
 	overline, then the page's own column (its card is the caller's). Every string is the caller's, in its own locale.
 -->

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { TenantDb } from '../src/engine/contracts.ts';
-import { authenticate, forget, type IdentityHost } from '../src/engine/identity/session.ts';
+import { authenticate, defaultName, forget, type IdentityHost } from '../src/engine/identity/session.ts';
 
 /** An identity host whose database answers one session row (or fails), counting reads. */
 const host = (answer: () => Promise<unknown[]>) => {
@@ -47,5 +47,14 @@ describe('session memo (L-COL-034)', () => {
 		const a = host(async () => [row]), b = host(async () => []);
 		expect(await authenticate(a.h, 'tok')).toMatchObject({ user: 'u1' });
 		expect(await authenticate(b.h, 'tok')).toBeNull();
+	});
+});
+
+describe('a new member\'s default name (A12)', () => {
+	it('is the email local part as title-cased words, never the raw handle', () => {
+		expect(defaultName({ kind: 'email', value: 'mei.ling.tan@x.test' })).toBe('Mei Ling Tan');
+		expect(defaultName({ kind: 'email', value: 'ada_lovelace-byron@x.test' })).toBe('Ada Lovelace Byron');
+		expect(defaultName({ kind: 'email', value: 'ops@x.test' })).toBe('Ops');
+		expect(defaultName({ kind: 'phone', value: '+6581234567' })).toBe('+6581234567');
 	});
 });

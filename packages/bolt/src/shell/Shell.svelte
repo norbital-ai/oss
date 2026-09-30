@@ -1,15 +1,15 @@
 <!--
 	The workspace shell (§5.10): boots the caller, routes the URL, and renders a page inside the sidebar shell, or
-	a visitor page with no chrome, or the sign-in, invitation and registration pages. `$bolt` is created from the boot
+	a visitor page with no chrome, or the sign-in and invitation pages. `$bolt` is created from the boot
 	before any page chunk loads.
 -->
 <script lang="ts">
-	import { tick, type Component } from 'svelte';
+	import { setContext, tick, type Component } from 'svelte';
 	import { watch } from 'runed';
 	import { PersistedState } from 'runed';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { Bound, Center, Cover, INSET_X_CLASS, Inline, Stack, setAppIdentitySlot, type AppIdentitySlot } from '@norbital-ai/ui/layout';
-	import { Button, Drawer, Icon, Sheet, Toaster, cn, openRecord, provideBolt, provideKinds, provideRepresentations, setUiText, type ViewBolt } from '@norbital-ai/ui';
+	import { Button, Drawer, Icon, Sheet, TAB_LEVEL, Toaster, cn, openRecord, provideBolt, provideKinds, provideRepresentations, setUiText, type ViewBolt } from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
 	import { based, isOpenRoute, logical, recordsOf, route, withRecords, type AppSpec, type ShellBoot } from './nav.ts';
@@ -21,7 +21,6 @@
 	import Access from './Access.svelte';
 	import SignIn from './SignIn.svelte';
 	import Invite from './Invite.svelte';
-	import Register from './Register.svelte';
 	import AgentPanel from './Agent.svelte';
 	import Inbox from './Inbox.svelte';
 	import Settings from './Settings.svelte';
@@ -123,7 +122,7 @@
 	// a `site: true` page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
 	const site = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.site === true);
 	const publicApp = $derived(current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined);
-	watch(() => failure !== null || boot !== null || current.kind === 'signIn' || current.kind === 'invite' || current.kind === 'register', (ready) => {
+	watch(() => failure !== null || boot !== null || current.kind === 'signIn' || current.kind === 'invite', (ready) => {
 		if (ready) void tick().then(() => document.getElementById('bolt-loading')?.remove());
 	});
 
@@ -226,6 +225,9 @@
 	let waiting = $state<number | null>(null);
 	const model = $derived(boot === null ? null : navigationModel(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t));
 	const app = $derived(model === null ? null : activeApp(model));
+	// the open app's pages strip is tab level 1 (ui's `TAB_LEVEL` context): a page's own Tabs nest under it as level 2
+	const strip = $derived(current.kind === 'page' && !site && boot?.visitor === null ? app?.pages ?? null : null);
+	setContext(TAB_LEVEL, { get level() { return strip === null ? undefined : 1; }, get shown() { return strip?.map((p) => p.label) ?? []; } });
 	const mobileTitle = $derived(app?.label ?? model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ?? boot?.workspace.name ?? '');
 	// an administrator's team preview from the account menu: the teams Settings lists
 	async function teams(): Promise<{ id: string; name: string }[]> {
@@ -265,10 +267,10 @@
 						title={identity.current?.title ?? app?.label ?? null} description={identity.current?.description ?? app?.description ?? null}
 						{...identity.current?.actions === undefined ? {} : { actions: identity.current.actions }} />
 				{/if}
-				{#if !site && app?.pages !== undefined && boot?.visitor === null}
+				{#if strip !== null}
 					<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
-						<Inline gap="none" class="w-fit max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]">
-							{#each app.pages as p (p.key)}
+						<Inline gap="none" class="gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]">
+							{#each strip as p (p.key)}
 								<a href={based(p.href)} aria-current={p.active ? 'page' : undefined}
 									class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm">
 									{#if p.icon}<Icon name={p.icon} class="size-3.5" />{/if}{p.label}
@@ -307,17 +309,13 @@
 <div class="contents" onclick={intercept} style="--shell-sidebar-width: {boot !== null && boot.visitor === null && !site && !narrow.current && failure === null ? (expanded.current ? '16rem' : '3rem') : '0px'}; --shell-header-height: {narrow.current && headerHeight > 0 ? `${headerHeight}px` : 'env(safe-area-inset-top)'}">
 	{#if failure !== null}
 		<Center><p role="alert">{failure}</p></Center>
-	{:else if current.kind === 'signIn' || current.kind === 'invite' || current.kind === 'register'}
+	{:else if current.kind === 'signIn' || current.kind === 'invite'}
 		<Access {t} environment={workspace?.environment} {locale} onLocale={setLocale} apex={workspace?.apex}
 			dark={dark} onTheme={() => chooseTheme(dark ? 'light' : 'dark')}>
 			{#if current.kind === 'signIn'}
 				<SignIn {api} {t} next={current.next ?? '/'} workspace={workspace?.name} handle={workspace?.handle} />
-			{:else if current.kind === 'invite'}
-				<Invite {api} {t} id={current.id} signedIn={boot?.actor?.kind === 'member'} workspace={workspace?.name} />
-			{:else if boot?.actor?.kind === 'member'}
-				<Register {api} {t} claim={current.claim} />
 			{:else}
-				<SignIn {api} {t} next={url.pathname} workspace={workspace?.name} handle={workspace?.handle} />
+				<Invite {api} {t} id={current.id} signedIn={boot?.actor?.kind === 'member'} workspace={workspace?.name} />
 			{/if}
 		</Access>
 	{:else if boot === null}

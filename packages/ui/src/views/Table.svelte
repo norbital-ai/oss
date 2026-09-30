@@ -58,15 +58,15 @@
 	import { Combobox } from '../primitives/combobox/index.js';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
 	import { useKinds } from '../kinds/context.js';
-	import { NUMERIC } from '../kinds/kind.js';
-	import { openRecord, useBolt, type Outcome } from './bolt.js';
+	import { likeWhere, NUMERIC } from '../kinds/kind.js';
+	import { openRecord, provideCollection, useBolt, type Outcome } from './bolt.js';
 	import EmptyState from './EmptyState.svelte';
 	import Glyph, { type GlyphName } from './Glyph.svelte';
 	import { watch } from './live.svelte.js';
 	import { notify } from './notify.js';
 	import { localExposure, matches, orderOf, sortable, sortRows } from './filter.js';
 	import {
-		and, compact, COUNT_EVERY_MS, countOf, filesOf, humanize, isRow, label, like, msg, nextOf,
+		and, compact, COUNT_EVERY_MS, countOf, filesOf, humanize, isRow, label, like, lowerLead, msg, nextOf,
 		listSelect, once, pageRead, queryIds, plain, rangeText, readTableState, removeRow, rowsOf, refOf, show, unref, searchRows, setCell, valueAt, writeTableState, type ReadState, type TableState,
 	} from './model.js';
 	import { viewState } from './view-state.svelte.js';
@@ -90,15 +90,19 @@
 	// in the same statement (kind `collection` only)
 	const refs = $derived(kind === 'collection' ? columns.filter((c) => colOf(c).cell === undefined).map((c) => colOf(c).field) : []);
 	const tb = $derived(toolbar === false ? {} : toolbar);
-	// search where the collection declares search fields (rule 16), or over a local array's columns
-	// or through a named similarity or query (the toolbar's `/<name>`)
+	// search where the collection declares search fields (rule 16), else `like` over its label's text fields, or over a
+	// local array's columns, or through a named similarity or query (the toolbar's `/<name>`)
 	const exposed = $derived(kinds.catalog?.[collection]);
-	const canSearch = $derived(kind === 'local' || (kind === 'collection' && ((exposed?.search?.length ?? 0) > 0 || exposed?.similarity !== undefined || exposed?.queries !== undefined)));
+	const indexed = $derived((exposed?.search?.length ?? 0) > 0);
+	const byLabel = (q: string) => indexed ? undefined : likeWhere(exposed, exposed?.label ?? [], q);
+	const canSearch = $derived(kind === 'local' || (kind === 'collection' && (indexed || byLabel('x') !== undefined || exposed?.similarity !== undefined || exposed?.queries !== undefined)));
 	const kindOf = (f: string) => kinds.catalog?.[collection]?.fields[f];
 	/** A number column reads right-aligned in tabular figures (staging's money and number cells). */
 	const numeric = (f: string) => NUMERIC.has(kindOf(f)?.kind ?? '');
-	const colLabel = (c: Col) => colOf(c).label ?? kindOf(colOf(c).field)?.label ?? (collection === '' ? fieldLabel(colOf(c).field) : label(bolt, collection, colOf(c).field));
-	const fieldLabel = (f: string) => kindOf(f)?.label ?? (collection === '' ? humanize(f) : label(bolt, collection, f));
+	const colLabel = (c: Col) => colOf(c).label ?? fieldLabel(colOf(c).field);
+	const fieldLabel = (f: string) => collection === '' ? kindOf(f)?.label ?? humanize(f) : label(bolt, collection, f, kindOf(f)?.label);
+	// the cells' enum and state words read this collection's catalog keys
+	provideCollection(() => collection);
 	const canFilter = $derived(kind === 'collection' || kind === 'local');
 	// the view popover's catalog: the caller's exposure, or a local array's columns (kinds from its values)
 	const LOCAL = '$local';
@@ -163,11 +167,13 @@
 	// ── the page (rule 7: cursor-only, live) ──
 	const scope = $derived(and(where, vs.where));
 	const order = $derived(vs.order.length > 0 ? orderOf(vs.order) : orderBy as Json | undefined);
+	/** The page's search: the declared index's `search`, else a `where` over the label fields. */
+	const searched = $derived(indexed ? { where: scope, search: st.q || undefined } : { where: and(scope, byLabel(st.q)), search: undefined });
 	const page = watch(() => {
 		const after = st.after ?? undefined;
 		// hook:agent-ui — a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
 		if (kind === 'collection' && probe !== null) return once(probed(probe));
-		if (kind === 'collection') return pageRead(bolt, (limit, at) => bolt.read(name, compact({ where: scope, orderBy: order, search: st.q || undefined, select: listSelect(kinds.catalog, name, fields, refs), limit, after: at })),
+	if (kind === 'collection') return pageRead(bolt, (limit, at) => bolt.read(name, compact({ ...searched, orderBy: order, select: listSelect(kinds.catalog, name, fields, refs), limit, after: at })),
 			size, back.length > 0 ? back.length : null, after, every);
 		if (kind === 'query') {
 			const input = isRow(of) && isRow(of['input']) ? of['input'] : {};
@@ -216,7 +222,7 @@
 	}
 	// the toolbar's CSV: every row of the current scope, search and sort, over the view's columns
 	const exporter = $derived(kind === 'collection' ? { fields, labels: columns.map(colLabel),
-		read: () => bolt.read(name, compact({ where: scope, orderBy: order, search: st.q || undefined, select: listSelect(kinds.catalog, name, fields, refs), all: true })) }
+	read: () => bolt.read(name, compact({ ...searched, orderBy: order, select: listSelect(kinds.catalog, name, fields, refs), all: true })) }
 		: kind === 'local' && tb.export === true ? { fields, labels: columns.map(colLabel), read: () => Promise.resolve(local) } : undefined);
 	// the footer (staging's pagination bar): the range, the page size, "page X of Y" and previous/next over the cursor
 	const paged = $derived(kind === 'collection' || kind === 'query');
@@ -265,10 +271,17 @@
 		addEventListener('pointerup', up);
 	}
 	const PIN_EDGE = 'shadow-[inset_-1px_0_0_0_var(--color-border)]';
+	// the row actions stay at the right edge while wide rows scroll sideways (else a many-column table hides them past it)
+	const ACTS_EDGE = 'sticky right-0 shadow-[inset_1px_0_0_0_var(--color-border)]';
 	const held = (row: Row) => typeof row['approval_id'] === 'string';
 
 	const opens = $derived(kind === 'collection' || onOpen !== undefined);
 	const open = (row: Row) => onOpen ? onOpen(row) : kind === 'collection' && typeof row['id'] === 'string' && openRecord(collection, row['id']);
+	/** A click on a row opens it, as the phone's card does; a link, a control, a sheet or selected text keeps its own. */
+	const rowClick = (e: MouseEvent, row: Row) => {
+		if (!opens || (e.target as Element).closest('a, button, input, select, textarea, label, [contenteditable], [role=dialog]') || (getSelection()?.toString() ?? '') !== '') return;
+		open(row);
+	};
 	/** A cell's full text, its tooltip when the single line truncates. */
 	const fullText = (row: Row, f: string) => refOf(row, f)?.text ?? show(valueAt(row, f), bolt.locale);
 
@@ -308,6 +321,18 @@
 	</button>
 {/snippet}
 
+<!-- the grid's sticky actions cell: two or more actions fold into one menu, so the cell stays narrow and never covers the
+     columns it floats over; the phone's card keeps them inline -->
+{#snippet rowMenu(row: Row, i: number)}
+	{#if actions.length + (kind === 'local' && onChange && remove ? 1 : 0) > 1}
+		<Popover.Root>
+			<Popover.Trigger class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-7 place-items-center rounded-sm"
+				aria-label={msg(bolt, 'table.rowActions', 'Row actions')} data-row-menu><Glyph name="more" class="size-4" /></Popover.Trigger>
+			<Popover.Content align="end" class="flex w-auto min-w-40 flex-col gap-0.5 p-1.5 [&>button]:justify-start">{@render rowActions(row, i)}</Popover.Content>
+		</Popover.Root>
+	{:else}{@render rowActions(row, i)}{/if}
+{/snippet}
+
 {#snippet rowActions(row: Row, i: number)}
 	{#each actions as a (a.action)}
 		<Button size="sm" variant="ghost" onclick={(e: MouseEvent) => { e.stopPropagation(); rowAct(a, row); }}>{a.label ?? humanize(a.action.slice(a.action.lastIndexOf('.') + 1))}</Button>
@@ -332,7 +357,7 @@
 				{#if empty}{@render empty()}
 				{:else}
 					<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
-					{@const what = collection === '' ? msg(bolt, 'table.rows', 'rows') : label(bolt, collection).toLowerCase()}
+					{@const what = collection === '' ? msg(bolt, 'table.rows', 'rows') : lowerLead(label(bolt, collection))}
 					<div class="bg-card flex min-h-72 min-w-0 flex-1 flex-col justify-center rounded-md border" data-table-card>
 						{#if filtered}
 							<EmptyState icon="search" title={msg(bolt, 'table.noMatch', 'No {what} match this search or filter', { what })} hint={msg(bolt, 'table.noMatchHint', 'Try a different search, or clear the filters.')}>
@@ -347,9 +372,11 @@
 				{/if}
 			{:else}
 				<div class="bg-card flex max-h-[calc(100dvh-8rem)] min-h-72 min-w-0 flex-1 flex-col rounded-md border" data-table-card>
-					<!-- its own scroll port (staging's grid): the grey header sticks, pinned columns stay while the rest scrolls sideways -->
+					<!-- its own scroll port (staging's grid): the grey header sticks, pinned columns stay while the rest scrolls sideways.
+					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
+					     the nowrap row actions never squeeze a truncating column down to its first letters -->
 					<div class={['min-h-0 flex-1 overflow-auto rounded-t-md', !(kind === 'local' && onChange) && 'hidden @3xl:block']} data-table-wide>
-						<table class="w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r">
+						<table class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r">
 							<thead class="bg-muted sticky top-0 z-20">
 								<tr>
 									{#if selectable}
@@ -394,14 +421,17 @@
 											</span>
 										</th>
 									{/each}
-									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th></th>{/if}
+									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th class={['bg-muted z-10', ACTS_EDGE]}></th>{/if}
 								</tr>
 							</thead>
 							<tbody>
 								{#if wide.on}<tr aria-hidden="true" {@attach wide.anchor}><td colspan={span} style="height:{wide.before}px;padding:0;border:0"></td></tr>{/if}
 								{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
 									{@const i = wide.start + j}
-									<tr class="group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]" {@attach wide.measure(rowKey(i))}>
+									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+									<tr class={['group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]', opens && 'focus-visible:[&>td]:bg-accent cursor-pointer outline-none']} {@attach wide.measure(rowKey(i))}
+										tabindex={opens ? 0 : undefined} onclick={(e) => rowClick(e, row)}
+										onkeydown={(e) => { if (opens && e.target === e.currentTarget && e.key === 'Enter') { e.preventDefault(); open(row); } }}>
 										{#if selectable}
 											<td class="bg-card sticky left-0 z-[1] px-2!">
 												{#if held(row)}<span class="bg-brand absolute inset-y-1 left-0 w-1 rounded-r-full" title={msg(bolt, 'record.pending', 'Pending review')} aria-hidden="true"></span>{/if}
@@ -421,17 +451,17 @@
 														value={String(plain(value) ?? '')} onchange={(e) => edit(i, col.field, e.currentTarget.value)} />
 												{:else}
 													<!-- one line: a long value truncates, its full text is the tooltip -->
-													<div class={['truncate', w === undefined && 'max-w-80', ci === 0 && opens && 'pr-7']} title={fullText(row, col.field) || undefined}>{@render cell(row, col)}</div>
+													<div class={['truncate [&_[data-enum-list]]:flex-nowrap', w === undefined && 'max-w-80', ci === 0 && opens && 'pr-7']} title={fullText(row, col.field) || undefined}>{@render cell(row, col)}</div>
 												{/if}
 												{#if ci === 0 && opens}
-													<!-- the open button (staging's expand): shown on hover or focus; a click on a cell itself opens nothing -->
+													<!-- the open button (staging's expand): shown on hover or focus, beside the row's own click -->
 													<button type="button" class="bg-card text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm border opacity-0 shadow-xs outline-none group-hover/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2"
 														aria-label={msg(bolt, 'table.openRow', 'Open')} title={msg(bolt, 'table.openRow', 'Open')} onclick={() => open(row)} data-row-open><Glyph name="expand" class="size-3.5" /></button>
 												{/if}
 											</td>
 										{/each}
 										{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
-											<td class="bg-card">{@render rowActions(row, i)}</td>
+											<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions>{@render rowMenu(row, i)}</td>
 										{/if}
 									</tr>
 								{/each}
@@ -462,7 +492,7 @@
 										{#if rest.length > 0}
 											<span class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
 												{#each rest.slice(0, 4) as c (c.field)}
-													<span class="inline-flex min-w-0 gap-1"><span class="shrink-0">{colLabel(c)}</span><span class="text-foreground/80 min-w-0 truncate">{@render cell(row, c)}</span></span>
+													<span class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"><span class="shrink-0">{colLabel(c)}</span><span class="text-foreground/80 min-w-0 truncate [&_[data-enum-list]]:flex-nowrap">{@render cell(row, c)}</span></span>
 												{/each}
 												{#if rest.length > 4}<span>{msg(bolt, 'table.moreFields', '+{n} fields', { n: rest.length - 4 })}</span>{/if}
 											</span>

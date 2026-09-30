@@ -54,6 +54,7 @@ export const sites = model({
 	fields: {
 		name: { kind: 'text', max: 120 },
 		zone: { kind: 'text', format: 'zone' },
+		notes: { kind: 'text', format: 'markdown', optional: true },
 		location: { kind: 'point', optional: true },
 		open: { kind: 'period', of: 'date' },
 		opens_at: { kind: 'time', optional: true },

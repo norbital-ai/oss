@@ -125,3 +125,79 @@ test('every stored record: both toggles and a one-tick scrubber on revision 1; a
 	await settle();
 	assert.match(v.target.textContent, /No approval on this record/);
 });
+
+// A record's words are the catalog's: an enum or state by its catalog label, a relation by its target's label, never raw.
+const WORDS = { 'models.deals.fields.kind.sow': 'SOW', 'models.deals.fields.channel.mail': 'Email' };
+const deals = {
+	deals: { label: ['title'], fields: { title: { kind: 'text' }, kind: { kind: 'enum', values: ['sow', 'nda'] }, channel: { kind: 'enum', values: ['mail'] } },
+		relations: { client: { targets: ['clients'] } }, update: { columns: ['title', 'kind', 'channel'] } },
+	clients: { label: ['name'], fields: { name: { kind: 'text' } } },
+};
+const DEAL = { id: 'd1', revision: 1, title: 'Build', kind: 'sow', channel: 'mail', client: 'c1' };
+async function mountDeal(part, props) {
+	const { bolt, calls } = fake(DEAL);
+	bolt.t = (k) => WORDS[k] ?? k;
+	const get = bolt.get;
+	// a select naming the relation reads its target nested, as the engine does
+	bolt.get = (c, id, select, options) => select?.client ? (calls.gets.push({ c, id, select }), q({ ...DEAL, client: { id: 'c1', name: 'Acme' } }, 'get', [c, id])) : get(c, id, select, options);
+	const target = document.createElement('div');
+	document.body.append(target);
+	const app = mount(Harness, { target, props: { bolt, catalog: deals, part, props } });
+	await settle();
+	mounted.push(() => { unmount(app); target.remove(); });
+	return { target, calls };
+}
+
+test('a subtitle relation shows its target label in one read; enums show their catalog words', async () => {
+	const { calls } = await mountDeal('record', { of: 'deals', id: 'd1', subtitle: ['kind', 'client'] });
+	const sub = document.querySelector('[data-record-head] p');
+	assert.equal(sub?.textContent, 'SOW · Acme');
+	assert.equal(calls.gets.filter((g) => g.select?.client).length, 1, 'one read for the subtitle relations');
+});
+
+test('the generated read view shows enum values by their catalog words', async () => {
+	const { target } = await mountDeal('record', { of: 'deals', id: 'd1' });
+	assert.match(target.querySelector('[data-field=kind]').textContent, /SOW/);
+	assert.match(target.querySelector('[data-field=channel]').textContent, /Email/);
+});
+
+test('a readonly form shows enum values by their catalog words', async () => {
+	const { target } = await mountDeal('form', { of: 'deals', id: 'd1', readonly: true });
+	assert.match(target.querySelector('[data-field=kind]').textContent, /SOW/);
+	assert.match(target.querySelector('[data-field=channel]').textContent, /Email/);
+});
+
+// A child line's money reads in its document's currency before the host stamps the line's own copy.
+const lines = {
+	quotes: { label: ['number'], fields: { number: { kind: 'text' }, currency: { kind: 'currency', optional: true } } },
+	quote_lines: { label: ['name'], fields: { name: { kind: 'text' }, currency: { kind: 'currency' }, unit_price: { kind: 'money', currency: 'currency', scale: 4 } },
+		relations: { quote_id: { targets: ['quotes'] } }, create: { columns: ['quote_id', 'name', 'unit_price'] }, update: { columns: ['unit_price'] } },
+};
+async function mountLine(props, rows) {
+	const { bolt } = fake(null);
+	bolt.get = (c, id) => q(rows[`${c}/${id}`] ?? null, 'get', [c, id]);
+	const target = document.createElement('div');
+	document.body.append(target);
+	const app = mount(Harness, { target, props: { bolt, catalog: lines, part: 'form', props } });
+	await settle();
+	mounted.push(() => { unmount(app); target.remove(); });
+	return target;
+}
+test('a new line under a quote prices in the quote currency', async () => {
+	const target = await mountLine({ of: 'quote_lines', mode: 'create', values: { quote_id: 'q1' } }, { 'quotes/q1': { id: 'q1', number: 'Q-1', currency: 'USD' } });
+	assert.match(target.querySelector('[data-field=unit_price]').textContent, /USD/);
+});
+test('editing a line prices in the line own currency', async () => {
+	const target = await mountLine({ of: 'quote_lines', id: 'l1' }, { 'quote_lines/l1': { id: 'l1', name: 'A', currency: 'CNY', unit_price: '2.5', quote_id: 'q1' } });
+	assert.match(target.querySelector('[data-field=unit_price]').textContent, /CNY/);
+});
+
+test('a create is headed "New <singular>", never the collection label', async () => {
+	const { bolt } = fake(null);
+	const target = document.createElement('div');
+	document.body.append(target);
+	const app = mount(Harness, { target, props: { bolt, catalog, part: 'record', props: { of: 'jobs', mode: 'create' } } });
+	await settle();
+	mounted.push(() => { unmount(app); target.remove(); });
+	assert.equal(document.querySelector('[data-record-head] h2').textContent.trim(), 'New job');
+});

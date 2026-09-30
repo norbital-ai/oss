@@ -19,12 +19,48 @@ export const signupOf = (m: { readonly workspace: object }): Signup | undefined 
 export const SIGNUP_KEY = 'signup';
 
 /**
- * What identity needs from its host. `mail` sends emailed codes and invitations, `sms` texted ones. `devSink` is
- * `bolt dev` and the test kit only: the fixed code `123456` (38a(f)).
+ * Sends and checks its own six-digit codes to a mobile number, by each of `via`. `check` is `false` for a wrong,
+ * expired or used code; a throw is a failure to ask.
+ */
+export type PhoneVerifier = {
+	via: readonly ('sms' | 'whatsapp')[];
+	start(to: string, via: 'sms' | 'whatsapp', signal: AbortSignal): Promise<void>;
+	check(to: string, code: string, signal: AbortSignal): Promise<boolean>;
+};
+/**
+ * The host's transactional messaging, its one injected messaging facility (the host picks the provider: Sinch,
+ * Twilio). `email` is required; without `sms` nobody is texted an invitation, without `phone` nobody signs in by number.
+ */
+export type TransactionalProvider = { email: TransportPort; sms?: TransportPort; phone?: PhoneVerifier };
+/**
+ * A local host's phone verifier: its own code, printed by `log` as `(sign-in code 123456)` (bolt dev, a local host,
+ * tests). `fixed` is 38a(f)'s `123456`.
+ */
+export function loggedPhone(log: (line: string) => void, fixed = false): PhoneVerifier {
+	const codes = new Map<string, { code: string; until: number }>();
+	return {
+		via: ['sms', 'whatsapp'],
+		async start(to, via) {
+			const code = fixed ? '123456' : sixDigits();
+			codes.set(to, { code, until: Date.now() + CODE_MS });
+			log(`${via} → ${to}: Your sign-in code is ${code}. (sign-in code ${code})`);
+		},
+		async check(to, code) {
+			const held = codes.get(to);
+			if (held === undefined || held.until <= Date.now() || held.code !== code) return false;
+			codes.delete(to);
+			return true;
+		},
+	};
+}
+/**
+ * What identity needs from its host (its `TransactionalProvider`'s parts): `mail` sends emailed codes and
+ * invitations, `sms` texted invitations, `phone` sends and checks a mobile number's code — without it, numbers
+ * cannot sign in. `devSink` is `bolt dev` and the test kit only: the fixed code `123456` (38a(f)).
  */
 export type IdentityHost = {
 	db: TenantDb; now: () => Date; windows: RateWindows; keys: Keys;
-	mail?: TransportPort; sms?: TransportPort; devSink?: boolean; publicUrl: string;
+	mail?: TransportPort; sms?: TransportPort; phone?: PhoneVerifier; devSink?: boolean; publicUrl: string;
 	/** The workspace's `signup` declaration; absent, only invited members join. */
 	signup?: Signup;
 	/**
@@ -116,13 +152,15 @@ const invitationsTo = (a: Address, now: Date) => ({
 
 /**
  * Rule 38a(a–c): persists the challenge (replacing any earlier one) and only then hands the code to the mail port (an
- * email) or the SMS port (a mobile number), whether or not the address is a member. A text costs money and a stranger's
+ * email) or has the phone verifier send its own by `via` (a mobile number; SMS unless WhatsApp is chosen), whether or
+ * not the address is a member. The challenge still carries our attempts and expiry for the verifier's code. A text costs money and a stranger's
  * number is anyone's to type, so a number that is no member's, invited nor free to sign up is answered the same and
  * sent nothing. A port refusal is returned; a fresh `sendCode` is allowed at once.
  */
-export async function sendCode(h: IdentityHost, typed: string, ip: string): Promise<Result<null>> {
+export async function sendCode(h: IdentityHost, typed: string, ip: string, via: 'sms' | 'whatsapp' = 'sms'): Promise<Result<null>> {
 	const a = parseAddress(typed);
 	if (a === null) return refuse('check', ADDRESS_HINT);
+	if (a.kind === 'phone' && h.phone?.via.includes(via) !== true) return refuse('unavailable', `This workspace cannot send a code by ${via === 'sms' ? 'text' : 'WhatsApp'}.`);
 	const charges = preSignIn(h, 'session.sendCode', a, ip);
 	const limited = admitMemory(h, charges);
 	if (limited) return limited;
@@ -153,8 +191,7 @@ SELECT count(*)::int AS saved FROM ch` });
 	const sent = a.kind === 'email'
 		? await callPort('email', h.mail, LIMITS.callMs.other, (m, signal) =>
 			m.send('email', { to: a.value, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in 10 minutes.`, html: codeEmail(code) }, signal))
-		: await callPort('sms', h.sms, LIMITS.callMs.other, (m, signal) =>
-			m.send('sms', { to: a.value, text: `Your sign-in code is ${code}. It expires in 10 minutes.` }, signal));
+		: await callPort('phone', h.phone, LIMITS.callMs.other, (p, signal) => p.start(a.value, via, signal).then(() => ({ providerId: via })));
 	return 'kind' in sent ? refuse(sent.kind === 'unavailable' ? 'unavailable' : sent.kind === 'timeout' ? 'timeout' : 'upstream', 'The code could not be sent.') : ok(null);
 }
 
@@ -259,8 +296,11 @@ export async function verifyCode(h: IdentityHost, typed: string, code: string, i
 	if (ch === undefined || Date.parse(ch.expires_at) <= now.getTime()) return refuse('invalidCode', 'The code is wrong or has expired.');
 	const s = stmt();
 	const rate = ratePiece(charges, now.getTime(), s.p);
-	const given = Buffer.from(codeMac(h, a, /^\d{6}$/.test(code) ? code : 'x'), 'hex');
-	if (!timingSafeEqual(given, Buffer.from(ch.code_mac, 'hex'))) {
+	// a number's code is the verifier's, checked there; an email's is ours, compared in constant time
+	const checked = a.kind === 'email' ? timingSafeEqual(Buffer.from(codeMac(h, a, /^\d{6}$/.test(code) ? code : 'x'), 'hex'), Buffer.from(ch.code_mac, 'hex'))
+		: /^\d{6}$/.test(code) && await callPort('phone', h.phone, LIMITS.callMs.other, (p, signal) => p.check(a.value, code, signal));
+	if (typeof checked === 'object') return refuse(checked.kind === 'unavailable' || checked.kind === 'timeout' ? checked.kind : 'upstream', 'The code could not be checked. Try again.');
+	if (!checked) {
 		const at = s.p(address), n = s.p(ch.attempts);
 		await h.db.write({ params: s.params, text: `WITH ${rate.cte},
 bump AS (UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 < ${ATTEMPTS} RETURNING 1),
@@ -279,7 +319,7 @@ SELECT 1` });
 	const used = `used AS (DELETE FROM sys_challenge WHERE address_mac = ${s.p(address)} AND attempts = ${s.p(ch.attempts)} AND ${rate.admitted} RETURNING 1)`;
 	const pieces = [rate.cte, used];
 	const email = a.kind === 'email' ? a.value : inv?.email ?? null, phone = a.kind === 'phone' ? a.value : inv?.phone ?? null;
-	const name = a.kind === 'email' ? a.value.split('@')[0]! : a.value;
+	const name = defaultName(a);
 	if (user === undefined && inv !== undefined) {
 		pieces.push(`born AS (INSERT INTO sys_user (id, email, phone, name, kind, team, party)
 	SELECT ${s.p(userId)}, ${s.p(email)}, ${s.p(phone)}, ${s.p(name)}, ${s.p(inv.external ? 'external' : 'staff')}, ${s.p(inv.team)}, ${s.p(jsonb(inv.party))}::jsonb
@@ -370,6 +410,10 @@ WHERE u.id = ${s.p(user)} AND u.active RETURNING expires_at` });
 	return e === undefined ? refuse('notFound', 'No active member.') : ok({ token, user, expiresAt: new Date(String(e)).toISOString() });
 }
 
+/** A new member's display name until they set one: an email's local part as words (`mei.ling.tan` → `Mei Ling Tan`), else the number. */
+export const defaultName = (a: Address): string => a.kind === 'phone' ? a.value
+	: a.value.split('@')[0]!.split(/[._+-]+/).filter(Boolean).map((w) => w[0]!.toUpperCase() + w.slice(1)).join(' ') || a.value;
+
 /**
  * `founder.bootstrap { address, name? }` (§5.11.3): host only; creates the first admin and a session for the proven
  * address (an email or a mobile number); idempotent per address (a second call mints a session for the same member);
@@ -382,7 +426,7 @@ export async function founderBootstrap(h: IdentityHost, typed: string, name?: st
 	try {
 		const out = await h.db.write({ params: s.params, text: `WITH existing AS (SELECT id FROM sys_user WHERE ${memberColumn(a, s.p(memberValue(a)))} AND admin AND active),
 ins AS (INSERT INTO sys_user (id, email, phone, name, kind, admin)
-	SELECT ${s.p(id)}, ${s.p(a.kind === 'email' ? a.value : null)}, ${s.p(a.kind === 'phone' ? a.value : null)}, ${s.p(name ?? (a.kind === 'email' ? a.value.split('@')[0]! : a.value))}, 'staff', true
+	SELECT ${s.p(id)}, ${s.p(a.kind === 'email' ? a.value : null)}, ${s.p(a.kind === 'phone' ? a.value : null)}, ${s.p(name ?? defaultName(a))}, 'staff', true
 	WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE admin) ${IMAGES}),
 ${historyOf(s, 'sys_user', 'ins', now, 'host')},
 u AS (SELECT id FROM existing UNION ALL SELECT id FROM ins),

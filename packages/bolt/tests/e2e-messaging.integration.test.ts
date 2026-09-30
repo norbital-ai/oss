@@ -39,11 +39,11 @@ const manifest = {
 	automations: {},
 	channels: {
 		field_wa: { transport: 'whatsapp' }, sales_tg: { transport: 'telegram' },
-		customer_mail: { transport: 'email', address: 'support', policies: ['mailer'], outbound: { notice: { from: 'sent_emails', on: 'create' } } },
+		customer_mail: { transport: 'email', policies: ['mailer'], outbound: { notice: { from: 'sent_emails', on: 'create' } } },
 	},
 	connections: {},
 	envoys: {
-		field_ops: { channel: 'field_wa', audience: 'authenticated', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
+		field_ops: { channel: 'field_wa', audience: 'private', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
 		sales_desk: { channel: 'sales_tg', audience: 'public', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Answer about jobs.' },
 	},
 	mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
@@ -105,12 +105,12 @@ describe('envoys through the engine entry (P22, rules 57–60)', () => {
 		expect(sentTexts().at(-1)).toMatch(/No tool 'act'|forbidden|refused/i);
 	});
 
-	it('an unlinked sender gets one registration notice and no turn', async () => {
+	it('an unknown sender to a private envoy gets one fixed notice, no link and no turn', async () => {
 		await say('field_wa', '6590000001@s.whatsapp.net', 'hello?');
 		await say('field_wa', '6590000001@s.whatsapp.net', 'anyone?');
 		expect(ai.requests).toBe(0);
 		expect(sentTexts()).toHaveLength(1);
-		expect(sentTexts()[0]).toContain('Register this whatsapp account with Acme Field to continue.');
+		expect(sentTexts()[0]).toBe('This whatsapp account is not recognised by Acme Field. Ask an administrator to add it to your profile.');
 		expect(await inbound('anyone?')).toMatchObject({ refused: 'unregistered', role: null });
 	});
 
@@ -148,8 +148,8 @@ describe('channels through the engine entry (rule 61)', () => {
 		await t.runDue();
 		const mail = t.fakes.transports.email;
 		expect(mail.sent).toHaveLength(1);
-		expect(mail.sent[0]!.message).toMatchObject({ to: ['carol@acme.com'], subject: 'PCN 1234', thread: id, from: 'support' });
-		await mail.emit({ kind: 'delivery', channel: 'customer_mail', providerId: mail.sent[0]!.providerId, event: 'delivered', at: '2026-09-25T10:01:00.000Z' });
+		expect(mail.sent[0]!.message).toMatchObject({ to: ['carol@acme.com'], subject: 'PCN 1234', thread: id });
+		await mail.emit({ kind: 'delivery', channel: 'customer_mail', providerId: mail.sent[0]!.providerId, report: { kind: 'delivered', at: '2026-09-25T10:01:00.000Z', provider: 'fake' } });
 		expect(await t.as(t.admin).get('sent_emails', id)).toMatchObject({ sent_at: { $t: t.clock.now() }, delivered_at: { $t: '2026-09-25T10:01:00.000Z' } });
 	});
 

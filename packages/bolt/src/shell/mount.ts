@@ -17,8 +17,8 @@ export type ShellMountConfig = {
 	/** Each collection's `+representation.svelte`, loaded on first use; every `RecordShell` (sheet or page) reads it. */
 	representations?: { readonly [collection: string]: () => Promise<{ default: Component<{ view: RecordView }> }> };
 	/**
-	 * Each channel's `+*.connect.svelte`, by channel name, loaded on first use. `connectOf` picks this over bolt's own
-	 * component for the channel's transport, so the two sources are one map and the page cannot tell them apart.
+	 * Each `custom` channel's `+*.connect.svelte`, by channel name, loaded on first use. Every other channel is drawn from
+	 * its provider's setup description, which the host publishes.
 	 */
 	connects?: { readonly [channel: string]: ConnectLoader };
 	/** The workspace's custom fields: their shape, and the `+renderer.svelte` that shows and edits them. */

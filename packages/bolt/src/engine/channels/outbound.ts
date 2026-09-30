@@ -8,6 +8,8 @@ import { GATED, type Chain } from '../write/sql.ts';
 import { conversationId, isObj, preview, sql, type Obj } from './store.ts';
 
 export const DELIVER = 'channels.deliver';
+/** Every transport that takes a chat message (`{ to, text, attachments? }`): the chat providers and a custom channel. */
+const CHAT = new Set(['whatsapp', 'telegram', 'slack', 'discord', 'wechat', 'custom']);
 type Rule = { channel: string; rule: string; from: string };
 const cache = new WeakMap<EngineManifest, readonly Rule[]>();
 export function outboundRules(m: EngineManifest): readonly Rule[] {
@@ -23,6 +25,8 @@ export function outboundRules(m: EngineManifest): readonly Rule[] {
 export const queuesOutbound = (m: EngineManifest, captured: readonly { collection: string; op: string; cause: string }[]): boolean =>
 	captured.some((x) => x.op === 'create' && x.cause === 'direct' && outboundRules(m).some((r) => r.from === x.collection));
 
+/** A new row's timeline: accepted by bolt, not yet handed to the provider (§5.9). */
+const QUEUED = (c: Chain, now: string) => `jsonb_build_array(jsonb_build_object('kind', 'queued', 'at', ${c.p(now)}::text, 'provider', 'bolt'))`;
 /** The epoch new outbound rows carry; a row of another epoch (a fork, a restore) is never sent. */
 const EPOCH = `coalesce((SELECT value FROM sys_config WHERE key = 'channels.epoch'), '')`;
 const deliverRun = (c: Chain, from: string, now: string) =>
@@ -35,9 +39,9 @@ export function outboundPiece(m: EngineManifest, c: Chain, now: string): void {
 	if (rules.length === 0) return;
 	const rows = rules.map((r) => `SELECT ${c.p(r.channel)}::text AS ch, ${c.p(r.rule)}::text AS rule, x.c, x.id FROM allp x
 		WHERE x.c = ${c.p(r.from)} AND x.op = 'create' AND x.cause = 'direct'`).join(' UNION ALL ');
-	c.cte('outbound', `INSERT INTO sys_message (id, channel, direction, status, record, rule, epoch, next_attempt_at, created_at)
+	c.cte('outbound', `INSERT INTO sys_message (id, channel, direction, status, record, rule, epoch, next_attempt_at, created_at, delivery)
 		SELECT gen_random_uuid()::text, o.ch, 'outbound', 'queued', jsonb_build_object('collection', o.c, 'id', o.id), o.rule, ${EPOCH},
-			${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz FROM (${rows}) o RETURNING id`);
+			${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz, ${QUEUED(c, now)} FROM (${rows}) o RETURNING id`);
 	deliverRun(c, 'outbound', now);
 }
 
@@ -49,9 +53,9 @@ export function sendPiece(c: Chain, s: Send, now: string, gated = false): string
 	c.cte('sconv', `INSERT INTO sys_conversation (id, channel, thread, kind) SELECT ${c.p(conv)}, ${c.p(s.channel)}, ${c.p(s.thread)}, ${c.p(s.kind ?? 'dm')}
 		${gated ? `WHERE ${GATED}` : ''} ON CONFLICT (id) DO NOTHING RETURNING id`);
 	const sent = c.cte('sent', `INSERT INTO sys_message (id, conversation, channel, direction, status, message, thread, text, preview, epoch, sent_at,
-		next_attempt_at, created_at)
+		next_attempt_at, created_at, delivery)
 		SELECT ${c.p(s.id)}, ${c.p(conv)}, ${c.p(s.channel)}, 'outbound', 'queued', ${c.p(s.message)}::jsonb, ${c.p(typeof s.message['thread'] === 'string' ? s.message['thread'] : null)},
-			${c.p(text)}, ${c.p(preview(text))}, ${EPOCH}, ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz
+			${c.p(text)}, ${c.p(preview(text))}, ${EPOCH}, ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz, ${QUEUED(c, now)}
 		${gated ? `WHERE ${GATED}` : ''} ON CONFLICT (id) DO NOTHING RETURNING id`);
 	deliverRun(c, 'sent', now);
 	return sent;
@@ -89,7 +93,7 @@ export function checkOutbound(transport: string, x: Json): { message: Obj } | { 
 		if (typeof x['text'] !== 'string' && typeof x['html'] !== 'string') return { error: 'an email needs `text` or `html`' };
 		return { message: x };
 	}
-	if (transport === 'whatsapp' || transport === 'telegram') {
+	if (CHAT.has(transport)) {
 		if (typeof x['to'] !== 'string' || x['to'] === '') return { error: `a ${transport} message needs \`to\`` };
 		if (typeof x['text'] !== 'string') return { error: `a ${transport} message needs \`text\`` };
 		return { message: x };

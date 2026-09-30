@@ -34,17 +34,17 @@ const artifact = join(root, 'artifact');
 const OPS_KEY = createHash('sha256').update('ops').digest('hex');
 const FOUNDER = 'boss@acme.example';
 
-function writeFixture(dir = artifact, m: EngineManifest = manifest): void {
+function writeFixture(dir = artifact, m: EngineManifest = manifest, g = guest): void {
 	mkdirSync(join(dir, 'client'), { recursive: true });
 	mkdirSync(join(dir, 'assets'), { recursive: true });
 	const text = JSON.stringify(m);
 	writeFileSync(join(dir, 'manifest.json'), text);
-	writeFileSync(join(dir, 'guest.mjs'), guest);
+	writeFileSync(join(dir, 'guest.mjs'), g);
 	writeFileSync(join(dir, 'client', 'index.html'), '<!doctype html><div id="bolt"></div>');
 	writeFileSync(join(dir, 'assets', 'thumbnail.svg'), '<svg/>');
 	// the recorded digests the reader verifies (L-BOLT-903)
 	const body = { format: 1, contract: CONTRACT, handle: 'acme', name: 'Acme', schema: fingerprint(schemaSlice(m)),
-		transforms: [], client: { entry: '', css: [] }, hashes: { manifest: sha(text), guest: sha(guest), client: treeHash(join(dir, 'client')) } };
+		transforms: [], client: { entry: '', css: [] }, hashes: { manifest: sha(text), guest: sha(g), client: treeHash(join(dir, 'client')) } };
 	writeFileSync(join(dir, 'artifact.json'), JSON.stringify({ ...body, hash: artifactHash(dir, body as Parameters<typeof artifactHash>[1]) }));
 }
 const env = (over: { [k: string]: string } = {}) => ({ BOLT_ARTIFACT: artifact, BOLT_PORT: '0', BOLT_PUBLIC_URL: 'http://localhost:3100',
@@ -235,7 +235,7 @@ describe('bolt start on PGlite', () => {
 	}, 60_000);
 
 	it('refuses activation without the required facilities and on a foreign contract', async () => {
-		await expect(start(decodeConfig(env({ BOLT_PGLITE_DIR: join(root, 'db2') }), []), { log: () => {} })).rejects.toThrow(/BOLT_MAIL/);
+		await expect(start(decodeConfig(env({ BOLT_PGLITE_DIR: join(root, 'db2'), BOLT_PUBLIC_URL: 'https://acme.example' }), []), { log: () => {} })).rejects.toThrow(/BOLT_TRANSACTIONAL_EMAIL/);
 		const { BOLT_FILES_PROVIDER: _p, BOLT_FILES_ENDPOINT: _e, ...noFiles } = env({ BOLT_PGLITE_DIR: join(root, 'db3') });
 		await expect(start(decodeConfig(noFiles, []), { mail, log: () => {} })).rejects.toThrow(/files are required/);
 		await expect(start(decodeConfig(env({ BOLT_PGLITE_DIR: join(root, 'db4') }), []), { mail, contracts: ['other'], log: () => {} })).rejects.toBeInstanceOf(ActivationError);
@@ -255,6 +255,22 @@ describe('bolt start on PGlite', () => {
 		await (await start(decodeConfig(env(db), []), { mail, log: () => {} })).close();
 		await expect(start(decodeConfig(env({ ...db, BOLT_ARTIFACT: narrower }), []), { mail, log: () => {} })).rejects.toThrow(/--accept/);
 		await (await start(decodeConfig(env({ ...db, BOLT_ARTIFACT: narrower }), ['--accept']), { mail, log: () => {} })).close();
+	}, 60_000);
+
+	it('runs a cron automation at the fixed `clock`, binding ctx.now and ctx.today to it', async () => {
+		const dir = join(root, 'cron-artifact');
+		writeFixture(dir, { ...manifest, automations: { stamp: { description: 'Stamps a quote at 08:00', on: { cron: '0 8 * * *' }, runAs: ['ops'] } } } as EngineManifest,
+			`export default { automation: { stamp: { body: async (input, ctx) => { await ctx.act('quotes.create', { title: ctx.now + ' ' + ctx.today }); } } } };`);
+		let now = '2031-02-03T07:59:00.000Z';
+		const s = await start(decodeConfig(env({ BOLT_ARTIFACT: dir, BOLT_PGLITE_DIR: join(root, 'cron') }), []), { mail, log: () => {}, clock: () => now });
+		try {
+			const [slot] = await s.db.read([{ text: `SELECT due_at FROM sys_run WHERE automation = 'stamp'`, params: [] }]);
+			expect(new Date(String(slot!.rows[0]!['due_at'])).toISOString()).toBe('2031-02-03T08:00:00.000Z');
+			now = '2031-02-03T08:00:00.000Z';
+			await s.engine.runs!.tick();
+			const [q] = await s.db.read([{ text: `SELECT title FROM quotes`, params: [] }]);
+			expect(q!.rows).toEqual([{ title: '2031-02-03T08:00:00.000Z 2031-02-03' }]);
+		} finally { await s.close(); }
 	}, 60_000);
 
 	const pgUrl = process.env['BOLT_TEST_POSTGRES_URL'];

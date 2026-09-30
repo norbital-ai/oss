@@ -1,26 +1,19 @@
-// A channel's connection UI (rule 61). One resolution seam, one component contract, two sources.
-//
-// The shell owns the connection — it reads the host, holds the stream, and sends the verbs — and a connect component
-// owns one thing: what pairing looks like. A provider bolt ships (WhatsApp, Telegram, email) and one a workspace writes
-// as `+*.connect.svelte` are the same component behind `connectOf`, so nothing downstream can tell which it is holding,
-// and adding a provider is a new entry in `BUILTIN` rather than a new branch anywhere.
-//
-// Nothing here branches on a transport to decide behaviour: `pairing.kind` says what the provider published and the
-// component draws it. A provider nobody has written a component for is `null`, which the page says out loud.
+// A channel's connection UI (rule 61). The shell owns the connection — it reads the host, holds the stream, and sends
+// the verbs — and draws every provider from the data the host publishes: the provider's `SetupDescription` while it is
+// being set up, its `about` facts once it is connected. Bolt names no provider (P18), so there is no provider's
+// component here; a `custom` channel is the one exception, drawn by the workspace's own `+<name>.connect.svelte`.
 import type { Component } from 'svelte';
 import type { Json } from '../../decl/values.ts';
-import type { ChannelConnection } from '../../engine/channels/connection.ts';
-import WhatsApp from './WhatsApp.svelte';
-import Telegram from './Telegram.svelte';
-import Email from './Email.svelte';
+import { localText, type ChannelConnection, type LocalText } from '../../engine/channels/connection.ts';
+import { isObj } from '../../engine/channels/store.ts';
 
-/** What a connect component is given. The host is reached through the two verbs, never through the client. */
+/** What a workspace's connect component is given. The host is reached through the two verbs, never through the client. */
 export type ConnectProps = {
 	/** The declared channel, not the transport. */
 	channel: string;
 	/** The last state the host published; `null` while the first read is in flight. */
 	connection: ChannelConnection | null;
-	/** Pairs: `{ credential }` for a token-shaped provider, `{ phone }` for one that texts a code. Either may be omitted. */
+	/** Pairs with whatever the provider's setup collects; the host refuses a malformed body. */
 	pair: (input?: Json) => Promise<void>;
 	/** Unpairs: the credential is destroyed and the provider forgets this host. */
 	unpair: () => Promise<void>;
@@ -30,26 +23,32 @@ export type ConnectProps = {
 	error: string | null;
 	/** The page's translator. */
 	t: (key: string) => string;
+	/** The viewer's locale: a provider's own text (`LocalText`) is picked by it. */
+	locale?: string | undefined;
 };
 
-/** A connect component, loaded the same way whether it is bolt's own or the workspace's: one lazy module. */
+/** A provider's text in the viewer's locale; a plain string goes through the page's translator like any shell key. */
+export const sayOf = (t: (key: string) => string, locale: string | undefined) => (x: LocalText): string => typeof x === 'string' ? t(x) : localText(x, locale ?? 'en');
+
+/** A workspace's connect component: one lazy module. */
 export type ConnectLoader = () => Promise<{ default: Component<ConnectProps> }>;
 
-/** Bolt's own providers, by transport. A workspace's file replaces the entry for its channel, not this one. */
-const BUILTIN: Readonly<Record<string, Component<ConnectProps>>> = { whatsapp: WhatsApp, telegram: Telegram, email: Email };
+/** The host's `about` as an object; anything else publishes no facts. */
+export const aboutOf = (c: ChannelConnection | null): { readonly [k: string]: Json } => isObj(c?.about) ? c.about : {};
 
-/**
- * The one place a channel's connect component is chosen: the workspace's own file for that channel, else bolt's for the
- * channel's transport, else nothing to pair. Both branches return the same loader, so the caller renders one thing.
- */
-export function connectOf(channel: string, transport: string, workspace: Readonly<Record<string, ConnectLoader>> | undefined): ConnectLoader | null {
-	const own = workspace?.[channel];
-	if (own !== undefined) return own;
-	const builtin = BUILTIN[transport];
-	return builtin === undefined ? null : async () => ({ default: builtin });
-}
+/** Transports and words a channel name carries, in their brands' own casing. */
+const BRANDS: { readonly [word: string]: string } = { whatsapp: 'WhatsApp', wechat: 'WeChat', telegram: 'Telegram', slack: 'Slack',
+	discord: 'Discord', email: 'Email', imap: 'IMAP', smtp: 'SMTP', sms: 'SMS' };
+const cap = (w: string) => w.replace(/^\w/, (x) => x.toUpperCase());
+/** A transport as its brand's name (`whatsapp` → `WhatsApp`). */
+export const transportLabel = (transport: string): string => BRANDS[transport] ?? cap(transport);
+/** A channel's name: the catalog's `channels.<name>.label`, else humanized with brand casing (`site_whatsapp` → `Site WhatsApp`). */
+export const channelLabel = (name: string, t: (key: string) => string): string => {
+	const key = `channels.${name}.label`, s = t(key);
+	return s !== key ? s : name.split(/[_-]+/).filter((w) => w !== '').map((w, i) => BRANDS[w] ?? (i === 0 ? cap(w) : w)).join(' ');
+};
 
-/** The state line every provider's frame shows, so two providers never word the same state differently. */
+/** The state line every channel shows, so two providers never word the same state differently. */
 export const connectionLabel = (c: ChannelConnection | null, t: (key: string) => string): string => {
 	if (c === null) return t('Asking the host…');
 	switch (c.state) {

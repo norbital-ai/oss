@@ -171,7 +171,8 @@ describe('next guest runner', () => {
 
 	it('refuses a crossing answer over 4 MiB (rule 9)', async () => {
 		const { bridge } = recorder(() => ({ ok: true, value: 'x'.repeat(LIMITS.crossingBytes) }));
-		expect(failure(await runIn(automation('async (_, ctx) => ctx.get("t", "a")'), invocation(), bridge))).toMatchObject({ code: 'tooLarge' });
+		expect(failure(await runIn(automation('async (_, ctx) => ctx.get("t", "a")'), invocation(), bridge))).toEqual({ code: 'tooLarge',
+			message: `ctx.get of 't' answered ${LIMITS.crossingBytes + 22} bytes (${LIMITS.crossingBytes + 22} this crossing), over the 4 MiB crossing limit at guest.mjs:2; page it with \`limit\` and the returned cursor, or \`select\` fewer fields` });
 	});
 
 	it('stops a guest spinning past its CPU budget across awaits (rule 71)', async () => {
@@ -200,6 +201,14 @@ describe('next guest runner', () => {
 		const { bridge } = recorder(() => new Promise(() => {}));
 		const o = await runIn(automation('async (_, ctx) => (await ctx.web.read.try("https://a.test")).kind'), invocation(), bridge, { callWallMs: 50 });
 		expect(ok(o)).toBe('timeout');
+	});
+
+	it('lets a transcription outlast the per-call wall and the CPU budget: the guest only awaits it', async () => {
+		const { crossings, bridge } = recorder((c) => new Promise((r) => setTimeout(() => r({ ok: true, value: c.op === 'facility' ? c.method : null }), 200)));
+		const o = await runIn(automation('async (_, ctx) => [await ctx.ai.transcribe({ id: "f" }), await ctx.ai.speak.try("hi", { for: "a" })]'),
+			invocation(null, { cpuMs: 100 }), bridge, { callWallMs: 50 });
+		expect(ok(o)).toEqual(['transcribe', 'speak']);
+		expect(crossings.flat()).toMatchObject([{ op: 'facility', facility: 'ai', method: 'transcribe' }, { op: 'facility', facility: 'ai', method: 'speak' }]);
 	});
 
 	it('stops a guest past 256 MiB', async () => {

@@ -78,6 +78,33 @@ describe('exposure (the boot catalog ui reads)', () => {
 		expect(exposure(em, auth)).toEqual({ jobs: { label: ['title'], search: ['title'], fields: { title: { kind: 'text' }, pay: { kind: 'money' } },
 			relations: { site: { targets: ['sites'], optional: true } }, actions: { close: { input: {}, target: 'record', description: 'Close' } }, masked: ['pay'], description: 'Work orders on site' } });
 	});
+	it('sends a readable computed field, so a label naming one resolves (A5)', () => {
+		const withComputed = { ...em, models: { ...em.models, jobs: { ...em.models['jobs']!, label: 'code', computed: { code: { kind: 'text', expr: { field: 'title' } } } } },
+			collections: { jobs: { ...em.collections['jobs']!, read: { fields: 'all' } } } } as unknown as EngineManifest;
+		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({ label: ['code'], fields: { title: { kind: 'text' }, code: { kind: 'text' } } });
+		expect(exposure(em, { ...member([]), admin: true })['jobs']!.fields).not.toHaveProperty('code');
+	});
+	it('a roll-up sum over a money field keeps its money and literal currency (A9)', () => {
+		const orders = { ...em, models: { ...em.models,
+			orders: { label: 'code', fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'lines.amount' }, qty: { kind: 'sum', of: 'lines.n' } } },
+			lines: { label: 'code', fields: { code: { kind: 'text' }, amount: { kind: 'money', currency: 'SGD' }, n: { kind: 'decimal', scale: 2 } } } },
+			relationships: { ...em.relationships, 'lines.order': { to: 'orders', inverse: 'lines' } },
+			collections: { orders: { read: { fields: 'all' } } } } as unknown as EngineManifest;
+		expect(exposure(orders, { ...member([]), admin: true })['orders']!.fields).toEqual({ code: { kind: 'text' },
+			total: { kind: 'sum', of: 'lines.amount', money: { currency: 'SGD' } }, qty: { kind: 'sum', of: 'lines.n' } });
+	});
+	it('a roll-up sum over money in a per-row currency reads in the parent\'s same-named currency field', () => {
+		const orders = { ...em, models: { ...em.models,
+			orders: { label: 'code', fields: { code: { kind: 'text' }, currency: { kind: 'currency' }, total: { kind: 'sum', of: 'lines.amount' } } },
+			lines: { label: 'code', fields: { code: { kind: 'text' }, currency: { kind: 'currency' }, amount: { kind: 'money', currency: 'currency' } } },
+			bills: { label: 'code', fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'bill_lines.amount' } } } },
+			relationships: { ...em.relationships, 'lines.order': { to: 'orders', inverse: 'lines' }, 'lines.bill': { to: 'bills', inverse: 'bill_lines' } },
+			collections: { orders: { read: { fields: 'all' } }, bills: { read: { fields: 'all' } } } } as unknown as EngineManifest;
+		const x = exposure(orders, { ...member([]), admin: true });
+		expect(x['orders']!.fields['total']).toEqual({ kind: 'sum', of: 'lines.amount', money: { currency: 'currency' } });
+		// a parent without that field shows the sum in the workspace default
+		expect(x['bills']!.fields['total']).toEqual({ kind: 'sum', of: 'bill_lines.amount', money: {} });
+	});
 	it('a create form offers only the columns the holder\'s create arms admit; the host fills the rest', () => {
 		const withCreate = { ...em, collections: { jobs: { ...em.collections['jobs']!, create: { input: { columns: ['title', 'notes'] } } } } } as EngineManifest;
 		const auth: Authority = { ...member([]), collections: { jobs: { read: [], history: [], create: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'], approval: [] }],
@@ -126,8 +153,9 @@ describe('routes and hrefs', () => {
 		expect(at('/sign-in?next=/app/sales')).toEqual({ kind: 'signIn', next: '/app/sales' });
 		expect(at('/sign-in?next=//evil.example')).toEqual({ kind: 'signIn' });
 	});
-	it('only public pages, sign-in, invitation and registration open signed out', () => {
-		expect(['/app/careers/apply', '/sign-in', '/invite/x', '/register/t'].every((p) => isOpenRoute(m, at(p)))).toBe(true);
+	it('only public pages, sign-in and invitation open signed out; there is no registration page', () => {
+		expect(at('/register/t')).toEqual({ kind: 'notFound' });
+		expect(['/app/careers/apply', '/sign-in', '/invite/x'].every((p) => isOpenRoute(m, at(p)))).toBe(true);
 		expect(['/app/sales', '/inbox', '/'].some((p) => isOpenRoute(m, at(p)))).toBe(false);
 	});
 });

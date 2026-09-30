@@ -31,11 +31,12 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	import Editor from '../kinds/editor.svelte';
 	import ReadValue from '../kinds/read-value.svelte';
 	import { useForm } from './form-state.svelte.js';
-	import { humanize } from '../views/model.js';
+	import { useFieldLabel } from '../views/bolt.js';
 
 	let { name, label, help, editor, address, class: className, readonly, disabled }: FieldProps = $props();
 	const form = useForm();
 	const t = uiText();
+	const fieldLabel = useFieldLabel();
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
 	const id = $props.id();
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
@@ -55,8 +56,8 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	<!-- hidden: the host fills it -->
 {:else if controls.readonly}
 	<div class={cn('grid content-start gap-1', className)} data-field={name} data-readonly role="group" aria-labelledby={`${id}-${name}-label`}>
-		<span id={`${id}-${name}-label`} class="text-xs font-medium text-muted-foreground">{label ?? field.kind.label ?? humanize(name)}</span>
-		<ReadValue kind={field.kind} value={form.get(name)} {name} row={form.values} relation={field.relation} {address} />
+		<span id={`${id}-${name}-label`} class="text-xs font-medium text-muted-foreground">{label ?? fieldLabel(name, field.kind.label)}</span>
+		<ReadValue kind={field.kind} value={form.get(name)} {name} row={form.row} relation={field.relation} {address} />
 		{#if help ?? field.kind.help}<p class="text-meta">{help ?? field.kind.help}</p>{/if}
 	</div>
 {:else}
@@ -64,7 +65,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	{@const error = form.errors.get(name)}
 	<div class={cn('grid gap-1.5', className)} data-field={name}>
 		<label id={`${id}-${name}-label`} for={`${id}-${name}`} class="text-sm font-medium">
-			{label ?? field.kind.label ?? humanize(name)}
+			{label ?? fieldLabel(name, field.kind.label)}
 			{#if !field.kind.optional && field.kind.default === undefined && field.kind.kind !== 'bool'}<span class="text-destructive" aria-label={t('required')}>*</span>{/if}
 		</label>
 		{#if editor}
@@ -79,7 +80,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 				labelledby={`${id}-${name}-label`}
 				{disabled}
 				errors={form.errors}
-				row={form.values}
+				row={form.row}
 				relation={field.relation}
 				{address}
 				onAddress={address === undefined ? undefined : (a) => form.set(address, a)}

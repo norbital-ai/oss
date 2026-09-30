@@ -4,11 +4,13 @@ Renders Markdown text for reading.
 -->
 <script lang="ts">
 	// Markdown for reading (`MarkdownEditor readonly`, a preview, a stored document): the kit's typography, no raw HTML.
+	import type { HTMLAttributes } from 'svelte/elements';
 	import { cn } from '../primitives/utils.js';
 	import { markdownHtml } from './markdown.js';
 
-	let { value, class: className }: { value: string; class?: string } = $props();
+	// other attributes (`id`, `data-*`, `aria-*`) reach the rendered block
+	let { value, class: className, ...rest }: { value: string; class?: string } & Omit<HTMLAttributes<HTMLDivElement>, 'class'> = $props();
 </script>
 
 <!-- markdownHtml escapes raw HTML and neuters script-capable hrefs -->
-<div class={cn('prose prose-sm max-w-none min-w-0 dark:prose-invert [overflow-wrap:anywhere]', className)} data-markdown>{@html markdownHtml(value)}</div>
+<div {...rest} class={cn('prose prose-sm max-w-none min-w-0 dark:prose-invert [overflow-wrap:anywhere]', className)} data-markdown>{@html markdownHtml(value)}</div>

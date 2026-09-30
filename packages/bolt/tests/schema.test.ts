@@ -41,6 +41,15 @@ describe('next schema: fingerprint and plan', () => {
 		expect([...constraintIndex(applied).keys()].sort()).toEqual([...constraintIndex(s).keys()].sort());
 	});
 
+	it('a money field with a declared scale checks that many places instead of the minor unit (a unit price)', () => {
+		const s = withModel(slice(), 'prices', { description: 'prices', label: 'code', fields: {
+			code: { kind: 'text' }, unit: { kind: 'money', currency: 'SGD', scale: 4 }, total: { kind: 'money', currency: 'JPY' },
+		} });
+		const sql = schemaObjects(s).filter((o) => o.table === 'prices').flatMap((o) => o.create).join('\n');
+		expect(sql).toContain('round("unit", 4) = "unit"');
+		expect(sql).toContain('round("total", 0) = "total"');
+	});
+
 	it('an empty database plans every object as additive', () => {
 		const steps = plan(null, slice()).steps;
 		expect(steps.length).toBeGreaterThan(50);
@@ -107,7 +116,7 @@ describe('next schema: fingerprint and plan', () => {
 			expect(objects.find((o) => o.id === `table:${t}`)?.drop).toBe(`drop table if exists "${t}" cascade`);
 		const engine = objects.filter((o) => o.id.startsWith('engine:'));
 		const creates = engine.flatMap((o) => o.create).join('\n');
-		for (const t of ['bolt_schema', 'bolt_history', 'bolt_seq', 'bolt_idem', 'bolt_sync', 'bolt_envoy_link', 'bolt_approvals'])
+		for (const t of ['bolt_schema', 'bolt_history', 'bolt_seq', 'bolt_idem', 'bolt_sync', 'bolt_approvals'])
 			expect(creates).toContain(`create table if not exists ${t} (`);
 		expect(engine.every((o) => o.drop === null)).toBe(true);
 		expect(new Set(engine.map((o) => o.id)).size).toBe(engine.length);

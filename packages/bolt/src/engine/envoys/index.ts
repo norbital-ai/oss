@@ -1,17 +1,15 @@
-// Envoys (P22's triggers, admission and registration, rules 57–60; today's `runtime/envoys/envoys.ts`; authority by P32).
-// An envoy binds the agent to a channel, and every turn runs as the `envoy` actor. Senders are resolved to members by a
-// verified handle under both audiences. A group turn holds exactly the envoy's `policies`; a DM holds the envoy's
-// `policies` ∪ the linked sender's own authority (their policies, or the admin bypass). An unlinked sender's DM runs
-// under the envoy's policies alone on a `public` envoy; on an `authenticated` one it gets the host-authored registration
-// notice (`envoys.registration`, default 1/s per sender — a repeat reuses the claim and sends the same link, so the
-// window only guards against a flood), sent to the sender privately, never into a group,
-// and no turn. In a group, `groupMessages` decides what is addressed; the rest is ambient history `read_messages`
+// Envoys (P22's triggers and admission, rules 57–60; today's `runtime/envoys/envoys.ts`; authority by P32).
+// An envoy binds the agent to a channel, and every turn runs as the `envoy` actor. Senders are resolved to members by the
+// handle registered on the member (`senders.ts`) under both audiences. A group turn holds exactly the envoy's `policies`;
+// a DM holds the envoy's `policies` ∪ the member's own authority (their policies, or the admin bypass). An unknown
+// sender's DM runs under the envoy's policies alone on a `public` envoy; a `private` one admits no
+// unknown sender: it gets one fixed notice (`envoys.unrecognised`, default 1 per 15 minutes per sender), sent to the
+// sender privately, never into a group, and no turn. There is no registration: an administrator records the handle. In a group, `groupMessages` decides what is addressed; the rest is ambient history `read_messages`
 // reads. Each addressed message becomes the agent's queued input with its sender header (a steer: the running turn
 // takes it at its next step). Every limit is the envoy's own: `envoys.receive` per sender and per subject, `agent` desk-wide.
 import type { Json } from '../../decl/values.ts';
 import { chargesFor, RateWindows } from '../access/rate.ts';
 import type { Agents, As } from '../agent/index.ts';
-import type { Authority } from '../contracts.ts';
 import type { Channels, ChannelsConfig, Ingested } from '../channels/index.ts';
 import { channels as openChannels } from '../channels/index.ts';
 import { preview, sql, type Obj } from '../channels/store.ts';
@@ -19,7 +17,7 @@ import type { Engine } from '../index.ts';
 import { Authorities } from '../identity/actor.ts';
 import { DELIVER } from '../channels/outbound.ts';
 import type { Triage } from '../agent/triage.ts';
-import { canonicalHandle, inspectClaim, issueClaim, memberByHandle, redeemClaim, REGISTRATION_MINUTES } from './registration.ts';
+import { canonicalHandle, memberByHandle } from './senders.ts';
 
 export type EnvoysConfig = {
 	engine: Pick<Engine, 'manifest' | 'db'>;
@@ -27,8 +25,6 @@ export type EnvoysConfig = {
 	agents: Pick<Agents, 'drain'>;
 	authorities?: Authorities;
 	clock?: () => string;
-	/** The host's registration page for a claim (Bolt never names a host); default the workspace-relative path. */
-	registrationLink?: (claim: string) => string;
 	/** The name a notice uses for this workspace. */
 	workspace?: string;
 	/** Rule 60a: System 1 triage, when the host binds its port. */
@@ -38,8 +34,8 @@ export type Admission = 'ignored' | 'ambient' | 'unregistered' | 'rateLimited' |
 /** Rule 59: fixed, recorded replies; internal text never reaches a sender. */
 export const NOTICES = {
 	rateLimited: 'You are sending messages faster than I can answer. Please wait a moment and send your message again.',
-	register: (transport: string, workspace: string, link: string) =>
-		[`Register this ${transport} account with ${workspace} to continue.`, '', 'Complete registration:', link, '', `This link expires in ${REGISTRATION_MINUTES} minutes.`].join('\n'),
+	unrecognised: (transport: string, workspace: string) =>
+		`This ${transport} account is not recognised by ${workspace}. Ask an administrator to add it to your profile.`,
 } as const;
 
 export function envoys(cfg: EnvoysConfig) {
@@ -50,7 +46,6 @@ export function envoys(cfg: EnvoysConfig) {
 	/** One limited-message notice per sender per window, so a flood is never answered by a flood. */
 	const warned = new Set<string>();
 	const inflight = new Set<Promise<unknown>>();
-	const link = cfg.registrationLink ?? ((claim: string) => `/__bolt/envoys/register?claim=${encodeURIComponent(claim)}`);
 	const envoyOn = (channel: string): [string, Obj] | undefined => Object.entries(m.envoys).find(([, e]) => e['channel'] === channel) as [string, Obj] | undefined;
 	const transportOf = (channel: string) => String(m.channels[channel]?.['transport']);
 
@@ -58,7 +53,7 @@ export function envoys(cfg: EnvoysConfig) {
 	 * Every limit is the envoy's own (P32, §3.9): `envoys.*` per sender and per subject, and rule 72's `agent` keyed by the
 	 * envoy, so a desk's turns share one budget whoever sends (G12 (4)). A member's policies never add limits.
 	 */
-	const charge = async (envoy: string, channel: string, key: 'envoys.receive' | 'envoys.registration', sender: string, turn = false) => {
+	const charge = async (envoy: string, channel: string, key: 'envoys.receive' | 'envoys.unrecognised', sender: string, turn = false) => {
 		const desk = (await authorities.envoy(db, { envoy, channel, sender, member: null, dm: false }))!;
 		return windows.charge([...chargesFor(desk, [key], { sender: canonicalHandle(transportOf(channel), sender), subject: envoy }),
 			...turn ? chargesFor(desk, ['agent'], { actor: envoy }) : []], Date.parse(clock()));
@@ -67,14 +62,14 @@ export function envoys(cfg: EnvoysConfig) {
 	const notify = (row: Ingested, text: string) => cfg.channels.send(row.channel, transportOf(row.channel) === 'email'
 		? { to: [row.sender], subject: reSubject(row.email?.['subject']), text, thread: row.thread }
 		: { to: row.conversation, text }, { kind: row.group ? 'group' : 'dm' });
-	/** A notice only the sender may read (a registration link): their own DM, never the group that mentioned the envoy. */
+	/** A notice only the sender should read (not recognised): their own DM, never the group that mentioned the envoy. */
 	const tell = (row: Ingested, text: string) => row.group && transportOf(row.channel) !== 'email'
 		? cfg.channels.send(row.channel, { to: row.sender, text }, { kind: 'dm' }) : notify(row, text);
 	const mark = (row: string, set: string, ...params: Json[]) => db.write(sql(`UPDATE sys_message SET ${set} WHERE id = $1`, row, ...params));
 
 	/**
-	 * Rule 57 (P32): the sender, resolved to a member by a verified handle under both audiences; `null` for an unlinked
-	 * sender to an `authenticated` envoy (the registration notice answers). A DM carries the member's authority; a group does not.
+	 * Rule 57 (P32): the sender, resolved to a member by their registered handle under both audiences; `null` for an
+	 * unknown sender to a `private` envoy (not admitted). A DM carries the member's authority; a group does not.
 	 */
 	async function subject(envoy: string, spec: Obj, row: Ingested): Promise<As | null> {
 		const found = await memberByHandle(db, transportOf(row.channel), row.sender);
@@ -105,13 +100,12 @@ export function envoys(cfg: EnvoysConfig) {
 		}
 
 		const as = await subject(envoy, spec, row);
-		// an unlinked sender's unaddressed message stays ambient: the notice answers only a mention or reply, as without triage
+		// an unknown sender's unaddressed message stays ambient: the notice answers only a mention or reply, as without triage
 		if (as === null && !addressed) { await mark(row.row, 'addressed = false'); return 'ambient'; }
 		if (as === null) {
 			await mark(row.row, `addressed = true, refused = 'unregistered'`);
-			if (!(await charge(envoy, row.channel, 'envoys.registration', row.sender)).ok) return 'unregistered';
-			const claim = await issueClaim(db, envoy, transportOf(row.channel), row.sender, clock());
-			if (claim !== null) await tell(row, NOTICES.register(transportOf(row.channel), cfg.workspace ?? 'this workspace', link(claim)));
+			if (canonicalHandle(transportOf(row.channel), row.sender) !== '' && (await charge(envoy, row.channel, 'envoys.unrecognised', row.sender)).ok)
+				await tell(row, NOTICES.unrecognised(transportOf(row.channel), cfg.workspace ?? 'this workspace'));
 			return 'unregistered';
 		}
 		// a triaged group row may become a turn, so it is charged like an addressed one; over the limit it stays ambient, unanswered
@@ -174,32 +168,9 @@ export function envoys(cfg: EnvoysConfig) {
 
 	return {
 		admit, drain,
-		/** The registration page's read-only probe: it shows the handle. */
-		inspect: (claim: string) => inspectClaim(db, claim, clock()),
-		/** The signed-in member claims the handle; with `replay` ticked, their unregistered messages of the window are admitted now. */
-		async redeem(claim: string, authority: Authority, options: { replay?: boolean } = {}) {
-			const r = await redeemClaim(db, claim, authority, clock(), options.replay === true);
-			if (r.state === 'registered' || r.state === 'already_registered') for (const id of r.replay) {
-				const row = await ingested(id);
-				if (row !== null && row.sender !== '' && canonicalHandle(transportOf(row.channel), row.sender) !== '') await admit(row);
-			}
-			return r;
-		},
 		/** Every drain this instance started has finished (tests, a host's graceful stop). */
 		async settled(): Promise<void> { while (inflight.size > 0) await Promise.all([...inflight]); },
 	};
-
-	/** An inbound row read back as the ingest reported it (registration replay). */
-	async function ingested(id: string): Promise<Ingested | null> {
-		const [res] = await db.read([sql(`SELECT m.id, m.channel, m.conversation, m.provider_id, m.sender, m.sender_name, m.text, m.files, m.email, m.invocation,
-			m.reply_to, m.sent_at::text AS sent_at, c.thread, c.kind, c.title FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation WHERE m.id = $1`, id)]);
-		const r = res!.rows[0];
-		if (r === undefined) return null;
-		return { row: id, channel: String(r['channel']), conversation: String(r['conversation']), inserted: true, id: String(r['provider_id']),
-			thread: String(r['thread']), sentAt: String(r['sent_at']), sender: String(r['sender'] ?? ''), senderName: r['sender_name'] as string | null,
-			text: String(r['text'] ?? ''), replyTo: r['reply_to'] as string | null, group: r['kind'] === 'group', title: r['title'] as string | null, invocation: r['invocation'] as Ingested['invocation'],
-			version: '', deleted: false, history: false, attachments: [], mentions: [], email: r['email'] as Obj | null, references: [], files: (r['files'] ?? []) as Json[] };
-	}
 }
 export type Envoys = ReturnType<typeof envoys>;
 

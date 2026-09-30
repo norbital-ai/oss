@@ -16,7 +16,7 @@ const manifest = {
 	relationships: {},
 	collections: { quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
 	policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
-	envoys: { field: { channel: 'field', audience: 'authenticated', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Help.' },
+	envoys: { field: { channel: 'field', audience: 'private', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Help.' },
 		desk: { channel: 'desk', audience: 'public', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
 	channels: { field: { transport: 'whatsapp' }, desk: { transport: 'whatsapp' } },
 	agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
@@ -82,7 +82,7 @@ describe('conversation controls over /__bolt/act', () => {
 			await t.engine.envoys.settled();
 		};
 		const sees = async (as: string, c: string) => (await call(as, 'GET', `/__bolt/agent?conversation=${c}`))!.status;
-		// an authenticated envoy's DM: its linked sender alone; not other staff, not an admin, not an external member
+		// a private envoy's DM: its linked sender alone; not other staff, not an admin, not an external member
 		await say('field', 'w1', '6590000001@s.whatsapp.net', '6590000001@s.whatsapp.net');
 		const dm = conversationId('field', '6590000001@s.whatsapp.net');
 		expect(await sees('kim', dm)).toBe(200);

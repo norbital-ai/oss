@@ -2,6 +2,7 @@
 // OpenRouter) against a fake fetch: classes map to models, the transcript and files to chat messages, a streamed answer's
 // text deltas reach `onDelta` as they arrive, tool calls assemble from their pieces, usage and cost come from the last
 // chunk, a refusal carries its HTTP status, and an abort stops a stream held open by keep-alives.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { openAiChat } from '../src/engine/agent/openai-chat.ts';
 
@@ -92,6 +93,23 @@ describe('openAiChat', () => {
 		expect(sent.messages[2]!.content).toEqual([{ type: 'text', text: 'again' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
 			{ type: 'file', file: { filename: 'attachment-2', file_data: 'data:application/pdf;base64,Ag==' } }]);
 		await expect(infer({ model: 'default', messages: [{ role: 'user', content: 'too long' }] }, AbortSignal.timeout(1000))).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/maximum context length/) });
+	});
+
+	it('sends text and an xlsx as text parts, never as file parts providers refuse; an unreadable type is refused before the call', async () => {
+		const { f, seen } = capture(() => Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} }));
+		const infer = openAiChat({ endpoint: 'https://llm.test/v1', models: { default: 'gpt-x' } }, f);
+		const book = new Uint8Array(readFileSync(new URL('./fixtures/files/items.xlsx', import.meta.url)));
+		await infer({ model: 'default', messages: [{ role: 'user', content: 'read' }], files: [{ mime: 'text/plain', bytes: new TextEncoder().encode('hello') },
+			{ mime: 'application/json', bytes: new TextEncoder().encode('{"a":1}') }, { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: book }] }, AbortSignal.timeout(1000));
+		const parts = seen[0]!.sent.messages[0]!.content as { type: string; text?: string }[];
+		expect(parts.map((p) => p.type)).toEqual(['text', 'text', 'text', 'text']);
+		expect(parts[1]!.text).toBe('attachment-1 (text/plain):\nhello');
+		expect(parts[2]!.text).toBe('attachment-2 (application/json):\n{"a":1}');
+		expect(parts[3]!.text).toMatch(/^attachment-3 sheet 0 ".+" \(CSV\):\n.+,/);
+		await expect(infer({ model: 'default', messages: [{ role: 'user', content: 'read' }],
+			files: [{ mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', bytes: new Uint8Array([1]) }] }, AbortSignal.timeout(1000)))
+			.rejects.toThrow(/attachment-1: a file of type application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document cannot be sent to the model/);
+		expect(seen).toHaveLength(1);
 	});
 
 	it('reasoning streams through onProgress, comes back verbatim, and is sent back with its reply; a switched call id is refused (L-BOLT-412, L-BOLT-432)', async () => {

@@ -1,0 +1,47 @@
+{
+	"name": "@norbital-ai/providers",
+	"version": "0.0.149",
+	"description": "Provider adapters behind Bolt's host ports (Twilio, Resend, Sinch, WhatsApp Web, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes), injected by a host.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/providers"
+	},
+	"dependencies": {
+		"@norbital-ai/bolt": "workspace:*",
+		"imapflow": "2.1.2",
+		"nodemailer": "10.0.12",
+		"postal-mime": "4.0.0"
+	},
+	"optionalDependencies": {
+		"@whiskeysockets/baileys": "7.0.0-rc14"
+	},
+	"devDependencies": {
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:",
+		"vitest": "4.1.11"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/providers"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

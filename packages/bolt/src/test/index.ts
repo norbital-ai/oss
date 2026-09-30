@@ -43,6 +43,8 @@ export type TestOptions = {
 	http?: EngineConfig['http']; runs?: EngineConfig['runs'];
 	/** `ctx.convert.document`'s converter: a fake answering fixed bytes, or `documentConverter` over real services. */
 	convert?: EngineConfig['convert'];
+	/** `ctx.ai.transcribe` / `ctx.ai.speak`: a fake answering scripted segments and audio (absent → `unavailable`). */
+	speech?: EngineConfig['speech'];
 	/** The agent's model port (a scripted fake in tests), MCP/host tools, and the envoys' notice wording. */
 	ai?: EngineConfig['ai']; agent?: EngineConfig['agent']; envoys?: EngineConfig['envoys'];
 	/** P33: the meter System 1 decisions report to (System 1 itself is `ai.sys_1`). */ // hook:decisions
@@ -82,7 +84,7 @@ export type As = {
 /** In-memory host ports: stored blobs, and every `due_at` announced to the deadlines port (rule 52a). */
 export type Fakes = { files: FilesPort & { blobs: Map<string, Uint8Array> }; deadlines: DeadlinesPort & { announced: { scope: string; at: string }[] };
 	/** One fake per transport, subscribed to the channels and integrations: `emit` an inbound event, read `sent`. */
-	transports: { email: FakeTransport; whatsapp: FakeTransport; telegram: FakeTransport; push: FakeTransport };
+	transports: { email: FakeTransport; whatsapp: FakeTransport; telegram: FakeTransport; slack: FakeTransport; discord: FakeTransport; wechat: FakeTransport; push: FakeTransport };
 	/** The cassette `fakes.ai` bound: every request it answered, and the turns each class has left. */
 	ai?: Omit<CassettePlayer, 'port'> };
 /**
@@ -125,7 +127,7 @@ function fakes(): Fakes {
 			async url(key) { return `memory://${key}`; },
 			async remove(key) { blobs.delete(key); } },
 		deadlines: { announced, announce(scope, at) { announced.push({ scope, at }); }, settle() {}, teardown() {} },
-		transports: { email: fakeTransport('mail'), whatsapp: fakeTransport('wa'), telegram: fakeTransport('tg'), push: fakeTransport('push') },
+		transports: { email: fakeTransport('mail'), whatsapp: fakeTransport('wa'), telegram: fakeTransport('tg'), slack: fakeTransport('slack'), discord: fakeTransport('discord'), wechat: fakeTransport('wechat'), push: fakeTransport('push') },
 	};
 }
 
@@ -198,7 +200,7 @@ export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
 	let now = o.now ?? '2026-09-25T10:00:00.000Z';
 	const e = engine({ manifest: m, db, ...(guest === undefined ? {} : { guest }), ...(transforms === undefined ? {} : { transforms }),
 		...(o.approval === undefined ? {} : { approval: o.approval }), console: () => {}, deadlines: f.deadlines, scope: 'test', clock: () => now,
-		files: f.files, ...(o.http === undefined ? {} : { http: o.http }), ...(o.convert === undefined ? {} : { convert: o.convert }), ...(o.runs === undefined ? {} : { runs: o.runs }), transports: f.transports,
+		files: f.files, ...(o.http === undefined ? {} : { http: o.http }), ...(o.convert === undefined ? {} : { convert: o.convert }), ...(o.speech === undefined ? {} : { speech: o.speech }), ...(o.runs === undefined ? {} : { runs: o.runs }), transports: f.transports,
 		...(ai === undefined ? {} : { ai }), ...(o.agent === undefined ? {} : { agent: o.agent }), ...(o.envoys === undefined ? {} : { envoys: o.envoys }),
 		...(o.metering === undefined ? {} : { metering: o.metering }) }); // hook:decisions
 	await e.migrate({ accept: true });

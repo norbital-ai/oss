@@ -51,7 +51,10 @@ export default model({
 		message: { kind: 'json', optional: true },
 		thread: { kind: 'text', optional: true },
 		epoch: { kind: 'text', optional: true },
-		delivery: { kind: 'json', default: {} },
+		/** The delivery timeline (§5.9): `DeliveryEntry[]`, oldest first. */
+		delivery: { kind: 'json', default: [] },
+		/** When a sent message with no report yet counts as delivered, presumed (the provider's quiet window). */
+		presume_at: { kind: 'instant', optional: true },
 	},
 	index: [['conversation', 'seq'], ['channel', 'provider_id']],
 	table: {

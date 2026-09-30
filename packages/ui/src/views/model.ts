@@ -12,11 +12,21 @@ export function msg(bolt: Pick<ViewBolt, 't'>, key: string, fallback: string, va
 	return s === `ui.${key}` ? fill(fallback, vars) : s;
 }
 export const humanize = (name: string) => name.replace(/[_.]+/g, ' ').trim().replace(/^\w/, (c) => c.toUpperCase());
-/** A collection's or field's label: the catalog key, else the humanized name (final-ui rule 32). */
-export function label(bolt: Pick<ViewBolt, 't'>, collection: string, field?: string): string {
+/**
+ * A collection's or field's label: the catalog key, else the field's `declared` label, else the humanized name (final-ui
+ * rule 32); a FK names its target (`project_id` → `Project`).
+ */
+export function label(bolt: Pick<ViewBolt, 't'>, collection: string, field?: string, declared?: string): string {
 	const key = field === undefined ? `models.${collection}.label` : `models.${collection}.fields.${field}`;
 	const s = bolt.t(key);
-	return s === key ? humanize(field ?? collection) : s;
+	return s !== key ? s : declared ?? humanize((field ?? collection).replace(/_id$/, ''));
+}
+/** A label inside a sentence: its first letter lowered unless it leads an acronym (`Jobs` → `jobs`, `SOW documents` stays). */
+export const lowerLead = (s: string) => /^\p{Lu}\p{Ll}/u.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+/** One record of a collection: the catalog's `models.<c>.singular`, else its label made singular (`Categories` → `Category`). */
+export function singular(bolt: Pick<ViewBolt, 't'>, collection: string): string {
+	const key = `models.${collection}.singular`, s = bolt.t(key);
+	return s !== key ? s : label(bolt, collection).replace(/ies$/, 'y').replace(/(ss|x|ch|sh)es$/, '$1').replace(/([^su])s$/, '$1');
 }
 
 // ── read state: no grant is never "no rows" (final-ui B7; memory plausible-emptiness-is-suspicious) ──
@@ -55,19 +65,21 @@ export function plain(v: Json | undefined): Json {
 export const isMasked = (v: Json | undefined) => isRow(v) && v['$masked'] === true;
 export const isFile = (v: unknown): v is FileRef => isRow(v) && typeof v['id'] === 'string' && typeof v['name'] === 'string' && typeof v['mime'] === 'string';
 export const filesOf = (v: Json | undefined): readonly FileRef[] => (Array.isArray(v) ? v : [v]).filter(isFile);
+/** An instant: a medium date and a short time, never seconds. */
+const AT = { dateStyle: 'medium', timeStyle: 'short' } as const;
 /** Display text for one value in the viewer's locale; a masked value is a locked dash (OD-UI-6). */
 export function show(v: Json | undefined, locale = 'en'): string {
 	if (v === null || v === undefined) return '';
 	if (isMasked(v)) return '•••';
 	if (typeof v === 'boolean') return v ? '✓' : '✗';
 	if (typeof v === 'number') return new Intl.NumberFormat(locale).format(v);
-	if (typeof v === 'string') return INSTANT.test(v) ? new Date(v).toLocaleString(locale) : v; // hook:codec — a decoded instant
+	if (typeof v === 'string') return INSTANT.test(v) ? new Date(v).toLocaleString(locale, AT) : v; // hook:codec — a decoded instant
 	if (isDecimal(v)) return new Intl.NumberFormat(locale, { maximumFractionDigits: 20 }).format(Number(v.toJSON())); // hook:codec
 	if (Array.isArray(v)) return v.map((x) => show(x, locale)).join(', ');
 	const o = v as Row;
 	if ('$dec' in o) return new Intl.NumberFormat(locale, { maximumFractionDigits: 20 }).format(Number(o['$dec']));
 	if ('$d' in o) return String(o['$d']);
-	if ('$t' in o) return new Date(String(o['$t'])).toLocaleString(locale);
+	if ('$t' in o) return new Date(String(o['$t'])).toLocaleString(locale, AT);
 	if ('from' in o || 'start' in o) return `${show(o['from'] ?? o['start'], locale)} – ${show(o['to'] ?? o['end'], locale) || '…'}`;
 	if ('lat' in o && 'lng' in o) return `${o['lat']}, ${o['lng']}`;
 	if (isFile(o)) return o.name;
@@ -149,6 +161,18 @@ export const searchRows = (rows: readonly Row[], q: string, fields: readonly str
 	const t = q.trim().toLowerCase();
 	return t === '' ? rows : rows.filter((r) => fields.some((f) => show(valueAt(r, f)).toLowerCase().includes(t)));
 };
+/** Excel reads a CSV as UTF-8 (Chinese included) only behind this byte-order mark. */
+export const CSV_BOM = '\uFEFF';
+/** One CSV cell: a relation by its label, an enum or state by its `words`, a date or an instant as its ISO text (what a
+ * spreadsheet parses), the rest as shown. */
+export function csvCell(row: Row, f: string, kind: Kind | undefined, words: (value: string) => string, locale = 'en'): string {
+	const ref = refOf(row, f);
+	if (ref !== undefined) return ref.text;
+	const v = plain(valueAt(row, f));
+	if (kind?.kind === 'enum' || kind?.kind === 'state') return (Array.isArray(v) ? v : [v]).filter((x) => x !== null).map((x) => words(String(x))).join(', ');
+	if (typeof v === 'string' && (kind?.kind === 'date' || kind?.kind === 'instant' || INSTANT.test(v))) return v;
+	return show(valueAt(row, f), locale);
+}
 /** "rows 26–50 of 312" (final-ui rule 7); the count may still be loading. */
 export function rangeText(bolt: Pick<ViewBolt, 't'>, offset: number, shown: number, count: number | null): string {
 	const from = shown === 0 ? 0 : offset + 1, to = offset + shown;
@@ -275,7 +299,7 @@ export type Refs = { readonly [rel: string]: Ref };
 export function unref(cat: Catalog, of: string, refs: readonly string[], rows: readonly Row[], locale = 'en'): readonly Row[] {
 	const rels = refs.filter((r) => refLabel(cat, of, r).length > 0 || manyTarget(cat, of, r) !== undefined);
 	if (rels.length === 0) return rows;
-	const text = (rel: string, t: Row) => refLabel(cat, of, rel).map((l) => show(t[l] ?? null, locale)).filter(Boolean).join(' · ') || String(t['id']);
+	const text = (rel: string, t: Row) => refLabel(cat, of, rel).map((l) => show(t[l] ?? null, locale)).filter(Boolean).join(' · ') || '—';
 	return rows.map((r) => {
 		const refs: { [rel: string]: Ref } = {};
 		const out: { [f: string]: Json } = { ...r };

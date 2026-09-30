@@ -32,7 +32,7 @@
 	import { watch } from 'runed';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
-	import { Button, Combobox, Dialog, Icon, MarkdownEditor, Popover, Progress, ReadonlyMarkdown, Spinner, Tabs, Tooltip, pickerRead, useKinds, virtualList, type CommandItem } from '@norbital-ai/ui';
+	import { Button, Combobox, Dialog, formatHandle, Icon, MarkdownEditor, Popover, Progress, ReadonlyMarkdown, Spinner, Tabs, Tooltip, pickerRead, useKinds, virtualList, type CommandItem } from '@norbital-ai/ui';
 	import type { FileRef, Json } from '../decl/values.ts';
 	import type { Usage } from '../engine/agent/schema.ts';
 	import type { AiModel } from '../engine/contracts.ts';
@@ -126,7 +126,7 @@
 		return c.kind === 'group' ? { order: 2, label: `${name} (${t('Group')}: ${c.title ?? c.thread ?? ''})` } : { order: 1, label: `${name} (DM)` };
 	}
 	/** A conversation's own line: its title, else a DM's peer (the provider's address) or the group's thread. */
-	const nameOf = (c: AgentConversation) => c.title ?? (c.channel === null || c.thread === null ? t('Conversation') : c.thread.split('@')[0]!);
+	const nameOf = (c: AgentConversation) => c.title ?? (c.channel === null || c.thread === null ? t('Conversation') : formatHandle(null, c.thread));
 	// svelte-ignore state_referenced_locally
 	const conversations = bolt.live<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] },
 		then: (ok, bad) => Promise.reject<{ rows: AgentConversation[] }>(new Error('the conversations are read live')).then(ok, bad) });

@@ -14,9 +14,14 @@ test('tagged wire values untag to exact text, never floats', () => {
 test('money formats exactly in its currency minor digits', () => {
 	assert.equal(k.minorDigits('JPY'), 0);
 	assert.equal(k.minorDigits('BHD'), 3);
-	assert.equal(k.format({ kind: 'money', currency: 'SGD' }, { $dec: '1234567.5' }, { locale: 'en', currency: 'SGD' }), 'SGD1,234,567.50');
+	assert.equal(k.format({ kind: 'money', currency: 'SGD' }, { $dec: '1234567.5' }, { locale: 'en', currency: 'SGD' }), 'SGD 1,234,567.50');
 	assert.equal(k.moneyProblem('10.005', 'SGD'), 'SGD has 2 decimal places');
 	assert.equal(k.moneyProblem('10.50', 'SGD'), null);
+	// a declared scale (a unit price) keeps its places beyond the minor unit and reads padded only to the minor digits
+	assert.equal(k.moneyProblem('1.2345', 'SGD', 4), null);
+	assert.equal(k.moneyProblem('1.23456', 'SGD', 4), 'at most 4 decimal places');
+	assert.equal(k.format({ kind: 'money', currency: 'SGD', scale: 4 }, '1234.5', { locale: 'en', currency: 'SGD' }), 'SGD 1,234.50');
+	assert.equal(k.format({ kind: 'money', currency: 'SGD', scale: 4 }, '1234.5678', { locale: 'en', currency: 'SGD' }), 'SGD 1,234.5678');
 	assert.equal(k.currencyOf({ kind: 'money', currency: 'currency' }, { currency: 'MYR' }), 'MYR');
 	assert.equal(k.currencyOf({ kind: 'money', currency: 'EUR' }), 'EUR');
 	assert.equal(k.currencyOf({ kind: 'money' }, {}, 'SGD'), 'SGD');
@@ -91,8 +96,8 @@ test('state helpers: edges, edit locks and a stable tone', () => {
 test('display text: dates never shift, masked values stay masked', () => {
 	assert.equal(k.format({ kind: 'date' }, { $d: '2026-01-01' }, { locale: 'en-US' }), 'Jan 1, 2026');
 	assert.equal(k.format({ kind: 'text' }, { $masked: true }), '•••');
-	assert.equal(k.format({ kind: 'decimal', scale: 2 }, '1234.5', { locale: 'en' }), '1,234.50');
-	assert.equal(k.format({ kind: 'enum', values: ['a', 'b'], many: true }, ['a', 'b']), 'a, b');
+	assert.equal(k.format({ kind: 'decimal', scale: 2 }, '1234.50', { locale: 'en' }), '1,234.5'); // only money pads
+	assert.equal(k.format({ kind: 'enum', values: ['a', 'b'], many: true }, ['a', 'b']), 'A, B');
 });
 
 test('a picker searches on the server, patterned seq labels included, and sorts by its label unless told otherwise', () => {

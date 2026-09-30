@@ -15,8 +15,10 @@
 		values?: Partial<InsertOf<C>>;
 		/** Generated view: create offers these beyond `values`' keys; update shows only these, in this order (else every field). */
 		fields?: readonly RecordFieldOf<C>[];
+		/** The heading; default the record's label fields by kind (a create: "New <singular>"). */
 		title?: string;
-		subtitle?: string;
+		/** A line under the heading: text, or field names shown by kind (`['customer', 'due_on']` → `Acme · Jan 2, 2026`). */
+		subtitle?: string | readonly string[];
 		/** Iconify id inside the state pill. */
 		icon?: string;
 		/** The state pill's text. */
@@ -56,14 +58,15 @@
 	import RecordInfo from '../form/record-info.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
 	import { useKinds } from '../kinds/context.js';
-	import { openRecord, provideRecordView, representations, useBolt, type RecordView } from './bolt.js';
-	import { humanize } from './model.js';
+	import { fieldsText } from '../kinds/kind.js';
+	import { openRecord, provideCollection, provideRecordView, representations, useBolt, type RecordView } from './bolt.js';
 	import ApprovalPanel from './ApprovalPanel.svelte';
 	import EmptyState from './EmptyState.svelte';
 	import Glyph from './Glyph.svelte';
 	import { notify } from './notify.js';
 	import { watch } from './live.svelte.js';
-	import { checkpoints, label, msg, show, type Checkpoint } from './model.js';
+	import { checkpoints, label, listSelect, lowerLead, msg, refLabel, show, singular, unref, type Checkpoint, type Refs } from './model.js';
+	import { RUNS_GROUP } from './RunsFor.svelte';
 	import RecordTimeline from './RecordTimeline.svelte';
 	import RunsFor from './RunsFor.svelte';
 	import Value from './Value.svelte';
@@ -71,6 +74,7 @@
 	let { of, id, mode = 'update', values = {}, fields = [], title, subtitle, icon, badge, hint, actions, trailing, tabs = [], runs = [], children, onDone }: RecordShellProps = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
+	provideCollection(() => of);
 	const SYSTEM = new Set(['id', 'revision', 'approval_id', 'created_at', 'created_by', 'updated_at', 'updated_by']);
 
 	// a representation that renders <RecordShell of={same}> without a body gets the generated view, not itself again;
@@ -161,6 +165,26 @@
 		else if (mode === 'create') { const mine = o.records.find((r) => r.collection === of); if (mine !== undefined) openRecord(of, mine.id); }
 	}
 
+	// the heading: the author's title, else the record's label fields by kind, else (a create, an unlabelled record) the
+	// collection's label; above a record's own heading, the singular model label
+	// a relation in the heading or subtitle reads as its target's label (a table cell's rule): one read of the record with
+	// those targets' labels nested, never its id (blank until it arrives)
+	const labelled = $derived([...exposure?.label ?? [], ...typeof subtitle === 'object' ? subtitle : []].filter((f) => refLabel(kinds.catalog, of, f).length > 0));
+	const related = watch(() => mode === 'update' && id !== undefined && labelled.length > 0 ? bolt.live(bolt.get<Row | null>(of, id, listSelect(kinds.catalog, of, [], labelled))) : null);
+	const refs = $derived.by<Refs>(() => {
+		const r = related.state.kind === 'ready' ? related.state.value : null;
+		return r === null ? {} : (unref(kinds.catalog, of, labelled, [r], bolt.locale)[0]?.['$refs'] ?? {}) as Refs;
+	});
+	const shownAs = (fs: readonly string[]) => row === null || exposure === undefined ? '' : fieldsText(exposure.fields,
+		{ ...row, ...Object.fromEntries(labelled.map((f) => [f, refs[f]?.text ?? null])) }, fs,
+		{ locale: kinds.locale ?? bolt.locale, zone: kinds.zone, currency: kinds.currency, t: (k) => bolt.t(k), collection: of });
+	const heading = $derived(title ?? (mode === 'update' ? shownAs(exposure?.label ?? []) : ''));
+	const subline = $derived(typeof subtitle === 'string' ? subtitle : subtitle === undefined ? '' : shownAs(subtitle));
+	// a Runs tab says "No runs yet" once, when none of its automations has a run
+	let runCounts = $state<{ [automation: string]: number }>({});
+	setContext(RUNS_GROUP, (automation: string, n: number) => { runCounts[automation] = n; });
+	const noRuns = $derived(runs.every((r) => runCounts[r.automation] === 0));
+
 	const tabItems = $derived<TabItem[]>([
 		{ name: 'ui', title: msg(bolt, 'record.tab.record', 'Record'), icon: 'lucide:file-text', body, keepAlive: true },
 		...tabs.filter((t) => !around?.shown.includes(t.name) && !around?.shown.includes(t.title)),
@@ -169,16 +193,16 @@
 </script>
 
 {#snippet head()}
-	<div class="flex min-w-0 flex-wrap items-center gap-2" data-record-head>
+	<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap" data-record-head>
 		<div class="mr-auto flex min-w-0 flex-col">
-			{#if title}<span class="text-micro text-muted-foreground truncate leading-4">{label(bolt, of)}</span>{/if}
+			{#if heading}<span class="text-micro text-muted-foreground truncate leading-4">{singular(bolt, of)}</span>{/if}
 			<div class="flex items-center gap-2">
-				<h2 class="truncate text-sm leading-5 font-semibold">{title ?? label(bolt, of)}</h2>
+				<h2 class="truncate text-sm leading-5 font-semibold">{heading || (mode === 'create' ? msg(bolt, 'record.new', 'New {what}', { what: lowerLead(singular(bolt, of)) }) : label(bolt, of))}</h2>
 				{#if badge || icon}<Badge variant="outline" title={hint}>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge>{/if}
 				{#if heldBy !== null}<Badge variant="warning">{msg(bolt, 'record.pending', 'Pending review')}</Badge>{/if}
 				{#if trailing}{@render trailing()}{/if}
 			</div>
-			{#if subtitle}<p class="text-muted-foreground truncate text-sm">{subtitle}</p>{/if}
+			{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
 		</div>
 		{#if actions}{@render actions()}{/if}
 	</div>
@@ -193,10 +217,10 @@
 	{:else}
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2" data-view="record-generated">
 			{#each shown as f (f)}
-				{@const name = exposure?.fields[f]?.label ?? label(bolt, of, f)}
+				{@const name = label(bolt, of, f, exposure?.fields[f]?.label)}
 				<div class="flex flex-col gap-0.5 text-sm" data-field={f}>
 					<span class="text-muted-foreground text-xs">{name}</span>
-				<span><Value value={row?.[f]} kind={exposure?.fields[f]} row={row ?? {}} /></span>
+				<span><Value value={row?.[f]} kind={exposure?.fields[f]} row={row ?? {}} name={f} /></span>
 				</div>
 			{/each}
 			<!-- one-relations: the target's label, opening the target record -->
@@ -204,10 +228,11 @@
 				{@const v = row?.[fk]}
 				{@const target = rel.targets[0]!}
 				<div class="flex flex-col gap-0.5 text-sm" data-field={fk}>
-					<span class="text-muted-foreground text-xs">{label(bolt, of, fk) === humanize(fk) ? humanize(fk.replace(/_id$/, '')) : label(bolt, of, fk)}</span>
+					<span class="text-muted-foreground text-xs">{label(bolt, of, fk)}</span>
 					{#if typeof v === 'string' && rel.targets.length === 1}
 						<button type="button" class="text-primary w-fit text-left underline-offset-4 hover:underline" onclick={() => openRecord(target, v)}>
-							{#await bolt.get(target, v)}{v}{:then r}{[rel.label ?? kinds.catalog?.[target]?.label ?? []].flat().map((l) => show(r?.[l] ?? null, bolt.locale)).filter(Boolean).join(' · ') || v}{:catch}{v}{/await}
+							<!-- the target's label; never its id (a target this viewer cannot read is a dash) -->
+							{#await bolt.get(target, v)}…{:then r}{[rel.label ?? kinds.catalog?.[target]?.label ?? []].flat().map((l) => show(r?.[l] ?? null, bolt.locale)).filter(Boolean).join(' · ') || '—'}{:catch}—{/await}
 						</button>
 					{:else}
 						<span><Value value={v} /></span>
@@ -280,7 +305,10 @@
 {/snippet}
 
 {#snippet runsTab()}
-	<div class="flex flex-col gap-3">{#each runs as r (r.automation)}<RunsFor {...r} />{/each}</div>
+	<div class="flex flex-col gap-3">
+		{#each runs as r (r.automation)}<RunsFor {...r} />{/each}
+		{#if noRuns}<p class="text-muted-foreground text-sm" data-read="empty">{msg(bolt, 'run.none', 'No runs yet')}</p>{/if}
+	</div>
 {/snippet}
 
 {#snippet content()}

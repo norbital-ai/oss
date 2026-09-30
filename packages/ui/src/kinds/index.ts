@@ -6,6 +6,7 @@ export { default as MoneyInput, type MoneyInputProps } from './money-input.svelt
 export { default as MonthInput, type MonthInputProps } from './month-input.svelte';
 export { default as PeriodInput, type PeriodInputProps } from './period-input.svelte';
 export { default as PhoneInput, type PhoneInputProps } from './phone-input.svelte';
+export { formatHandle } from './phone.js';
 export { BUILTIN_FIELDS, fieldEntry } from './builtin/index.js';
 import type { ComponentConstructorOptions, SvelteComponent } from 'svelte';
 import type { CollectionKey } from '../views/bolt.js';
@@ -27,4 +28,4 @@ export {
 	type CollectionExposure, type CustomFieldEntry, type CustomFieldView, type Geocoder, type KindsHost
 } from './context.js';
 export type { DatePrecision, Precision, TimePrecision } from './precision.js';
-export { fieldName, pickerRead, type Fields, type FileRef, type Json, type Kind, type KindOf, type Point } from './kind.js';
+export { enumText, fieldsText, format, fieldName, pickerRead, type EnumScope, type ShowOptions, type Fields, type FileRef, type Json, type Kind, type KindOf, type Point } from './kind.js';

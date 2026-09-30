@@ -8,10 +8,12 @@ export type Json = null | boolean | number | string | readonly Json[] | { readon
 type Common = { optional?: true; default?: unknown; unique?: true; label?: string; help?: string; hidden?: true };
 /** A field kind literal as the ui reads it: every stored and input kind, structurally (no bolt dependency). */
 export type Kind = Common & (
-	| { kind: 'text'; format?: 'email' | 'phone' | 'url' | 'zone'; max?: number; many?: true }
+	/** `markdown`: stored Markdown, read as prose. */
+	| { kind: 'text'; format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown'; max?: number; many?: true }
 	| { kind: 'int' | 'number'; min?: number; max?: number }
 	| { kind: 'decimal'; scale: number; precision?: number; min?: number; max?: number }
-	| { kind: 'money'; currency?: string }
+	/** `scale`: places kept beyond the currency's minor unit (a unit price); shown padded only to the minor digits. */
+	| { kind: 'money'; currency?: string; scale?: number }
 	| { kind: 'currency' | 'bool' | 'duration' | 'point' }
 	/** `precision`: the unit a picker offers and snaps to (`precision.ts`). */
 	| { kind: 'date' | 'instant' | 'time'; precision?: Precision }
@@ -19,7 +21,8 @@ export type Kind = Common & (
 	| { kind: 'enum'; values: readonly string[]; many?: true }
 	| { kind: 'state'; initial: string; states: { readonly [s: string]: { to?: readonly string[]; edit?: 'all' | 'none' | readonly string[] } } }
 	| { kind: 'seq'; pattern?: string; per?: readonly string[] }
-	| { kind: 'sum'; of: string; where?: object } | { kind: 'count'; of: string; where?: object }
+	/** `money`: the boot's mark of a sum over a money field (the child's literal code, or the parent's currency field): it reads as money. */
+	| { kind: 'sum'; of: string; where?: object; money?: { currency?: string } } | { kind: 'count'; of: string; where?: object }
 	| { kind: 'json'; shape?: Kind }
 	| { kind: 'file'; accept: readonly string[]; max: string; multiple?: true }
 	| { kind: 'vector'; dim: number; metric: 'l2' | 'cosine' | 'ip' }
@@ -47,6 +50,7 @@ export const NUMERIC = new Set(['int', 'number', 'decimal', 'money', 'sum', 'cou
 export function fieldName(kind: Kind): string | undefined {
 	if (kind.kind === 'custom') return kind.of;
 	if (kind.kind === 'money' || kind.kind === 'file' || kind.kind === 'point') return kind.kind;
+	if (kind.kind === 'sum' && kind.money !== undefined) return 'money';
 	return kind.kind === 'text' && kind.format === 'phone' && kind.many !== true ? 'phone' : undefined;
 }
 /** Kinds a person never types: the platform derives or the transform writes them. */
@@ -134,8 +138,41 @@ export function fileProblem(kind: KindOf<'file'>, file: { readonly type: string;
 /** Rule 72: at most 20 files per field. */
 export const MAX_FILES = 20;
 
+// ── enum and state values: the catalog's words, else the value in words ──
+/** Where an enum or state value's catalog key is: `models.<collection>.fields.<field>.<value>`, read through `t`. */
+export type EnumScope = { t?: (key: string) => string; collection?: string; field?: string };
+/**
+ * An enum or state value as words: its catalog key, else humanized (`not_sent` → `Not sent`, `PENDING_REVIEW` →
+ * `Pending review`). An upper-case word without a vowel or with a digit stays an acronym (`SG_CPF` → `SG CPF`), as does
+ * an upper-case word inside a lower-case value (`sent_to_HR`).
+ */
+export function enumText(value: string, o: EnumScope = {}): string {
+	if (o.t !== undefined && o.collection && o.field) {
+		const key = `models.${o.collection}.fields.${o.field}.${value}`, s = o.t(key);
+		if (s !== key) return s;
+	}
+	const caps = value === value.toUpperCase();
+	const s = value.split(/[_\s.-]+/).filter(Boolean)
+		.map((w) => w.length > 1 && /^[A-Z0-9]+$/.test(w) && (!caps || /\d/.test(w) || !/[AEIOUY]/.test(w)) ? w : w.toLowerCase()).join(' ');
+	return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // ── display ──
-export type ShowOptions = { locale?: string; currency?: string; zone?: string };
+/** How `format` renders a value: the enum's collection and field for catalog labels, the locale, the default currency and the zone. */
+export type ShowOptions = EnumScope & { locale?: string; currency?: string; zone?: string };
+/** Instants read as a medium date and a short time, never seconds. */
+const AT = { dateStyle: 'medium', timeStyle: 'short' } as const;
+/** A `sum` of a money field (`money`, set by the boot) reads as money in that currency, else the workspace's; any other kind is itself. */
+export const shownKind = (kind: Kind): Kind => kind.kind === 'sum' && kind.money !== undefined
+	? { kind: 'money', ...(kind.money.currency === undefined ? {} : { currency: kind.money.currency }) } : kind;
+/** Named fields of a row as one line by kind (a record's title, a subtitle): `Q-1 · Jan 2, 2026 · On hold`; empties left out. */
+export function fieldsText(fields: Fields, row: { readonly [f: string]: unknown }, names: readonly string[], o: ShowOptions = {}): string {
+	return names.map((f) => {
+		const kind = shownKind(fields[f] ?? { kind: 'text' });
+		const currency = kind.kind === 'money' ? currencyOf(kind, row, o.currency) : o.currency;
+		return format(kind, row[f] ?? null, { ...o, field: f, ...(currency === undefined ? {} : { currency }) });
+	}).filter(Boolean).join(' · ');
+}
 /** One value as text in the viewer's locale; '' for none. Structured values render through `Show`, this is their summary. */
 export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string {
 	const v = untag(value);
@@ -144,7 +181,7 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 	if (isMasked(value)) return '•••';
 	switch (kind.kind) {
 		case 'int': case 'number': case 'count': return typeof v === 'number' ? new Intl.NumberFormat(locale).format(v) : String(v);
-		case 'decimal': case 'sum': return decimalText(String(v), locale, kind.kind === 'decimal' ? kind.scale : undefined);
+		case 'decimal': case 'sum': return decimalText(String(v), locale);
 		case 'money': {
 			const c = o.currency;
 			return c === undefined ? decimalText(String(v), locale) : moneyText(String(v), c, locale);
@@ -153,15 +190,16 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 		// a year or a month shows as one (its stored first day would read as a day)
 		case 'date': return kind.precision === 'year' ? String(v).slice(0, 4) : kind.precision === 'month'
 			? new Date(`${String(v).slice(0, 7)}-01T00:00:00Z`).toLocaleDateString(locale, { timeZone: 'UTC', month: 'long', year: 'numeric' }) : dateText(String(v), locale);
-		case 'instant': return new Date(String(v)).toLocaleString(locale, o.zone === undefined ? {} : { timeZone: o.zone });
+		case 'instant': return instantText(String(v), locale, o.zone);
 		case 'time': return String(v).slice(0, 5);
 		case 'duration': return typeof v === 'number' ? formatDuration(v) : String(v);
 		case 'period': {
 			if (!isObj(v)) return '';
-			const at = (x: Json | undefined) => x === null || x === undefined ? '…' : kind.of === 'date' ? dateText(String(x), locale) : new Date(String(x)).toLocaleString(locale);
+			const at = (x: Json | undefined) => x === null || x === undefined ? '…' : kind.of === 'date' ? dateText(String(x), locale) : instantText(String(x), locale, o.zone);
 			return kind.of === 'date' ? `${at(v['from'])} – ${at(v['to'])}` : `${at(v['start'])} – ${at(v['end'])}`;
 		}
-		case 'enum': case 'text': return Array.isArray(v) ? v.join(', ') : String(v);
+		case 'enum': case 'state': return (Array.isArray(v) ? v : [v]).map((x) => enumText(String(x), o)).join(', ');
+		case 'text': return Array.isArray(v) ? v.join(', ') : String(v);
 		case 'point': return isPoint(v) ? formatPoint(v) : '';
 		case 'file': return (Array.isArray(v) ? v : [v]).filter(isFile).map((f) => f.name).join(', ');
 		case 'vector': return Array.isArray(v) ? `[${v.length}]` : '';
@@ -171,26 +209,17 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 		default: return String(v);
 	}
 }
-function decimalText(s: string, locale: string, scale?: number): string {
-	// exact: format the integer part through Intl, keep the fraction digits as written
+function decimalText(s: string, locale: string, pad = 0): string {
+	// exact: format the integer part through Intl, keep the fraction digits as written, trailing zeros trimmed (money pads to its minor digits)
 	const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(s);
 	if (m === null) return s;
-	const frac = scale === undefined ? (m[3] ?? '') : (m[3] ?? '').padEnd(scale, '0').slice(0, Math.max(scale, (m[3] ?? '').replace(/0+$/, '').length));
+	const frac = (m[3] ?? '').replace(/0+$/, '').padEnd(pad, '0');
 	const sep = new Intl.NumberFormat(locale).formatToParts(1.1).find((p) => p.type === 'decimal')?.value ?? '.';
 	return `${m[1]}${new Intl.NumberFormat(locale).format(BigInt(m[2]!))}${frac === '' ? '' : sep + frac}`;
 }
-function moneyText(s: string, currency: string, locale: string): string {
-	const digits = minorDigits(currency);
-	const parts = new Intl.NumberFormat(locale, { style: 'currency', currency }).formatToParts(0);
-	const symbol = parts.filter((p) => p.type === 'currency').map((p) => p.value).join('');
-	const before = parts.findIndex((p) => p.type === 'currency') < parts.findIndex((p) => p.type === 'integer');
-	const n = decimalText(padScale(s, digits), locale);
-	return before ? `${symbol}${n}` : `${n} ${symbol}`;
-}
-const padScale = (s: string, scale: number) => {
-	const [i, f = ''] = s.split('.');
-	return scale === 0 ? i! : `${i}.${f.padEnd(scale, '0')}`;
-};
+/** Money reads the same everywhere: `SGD 1,234.50`, the code, a space, the amount at the currency's minor digits. */
+const moneyText = (s: string, currency: string, locale: string) => `${currency} ${decimalText(s, locale, minorDigits(currency))}`;
+const instantText = (s: string, locale: string, zone?: string) => new Date(s).toLocaleString(locale, zone === undefined ? AT : { ...AT, timeZone: zone });
 function dateText(s: string, locale: string): string {
 	const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
 	if (m === null) return s;
@@ -218,11 +247,13 @@ export function parse(kind: Kind, text: string): Parsed {
 		default: return { value: t };
 	}
 }
-/** A money amount's minor-unit check (the column's CHECK, rule 68). */
-export function moneyProblem(amount: string, currency: string | undefined): string | null {
+/** A money amount's minor-unit check, or its declared scale's (the column's CHECK, rule 68). */
+export function moneyProblem(amount: string, currency: string | undefined, scale?: number): string | null {
+	const places = amount.split('.')[1]?.replace(/0+$/, '').length ?? 0;
+	if (scale !== undefined) return places > scale ? `at most ${scale} decimal places` : null;
 	if (currency === undefined) return null;
 	const d = minorDigits(currency);
-	return (amount.split('.')[1]?.replace(/0+$/, '').length ?? 0) > d ? `${currency} has ${d} decimal places` : null;
+	return places > d ? `${currency} has ${d} decimal places` : null;
 }
 
 // ── advisory validation, same wording as decode ──
@@ -322,16 +353,26 @@ export function editable(kind: KindOf<'state'>, state: string, field: string): b
 	return e === 'all' ? true : e === 'none' ? false : e.includes(field);
 }
 /** A stable tone per state name, so the same state reads the same colour on every page. */
+const SUCCESS = /^(approv|done|complet|paid|won|closed|activ|sealed|sent|accept|confirm|deliver)/;
 export function tone(state: string): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
-	const s = state.toLowerCase();
-	if (/(draft|new|open|pending|queued)/.test(s)) return 'neutral';
-	if (/(reject|cancel|void|fail|lost|declin|terminat|block)/.test(s)) return 'danger';
-	if (/(approv|done|complete|paid|won|closed|active|sealed|sent|accept|confirm|deliver)/.test(s)) return 'success';
-	if (/(hold|review|wait|overdue|expir|chang)/.test(s)) return 'warning';
+	const words = state.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+	const any = (re: RegExp) => words.some((w) => re.test(w));
+	// a negation first, so `inactive`, `unpaid` and `not_sent` never read as a success
+	if (words.some((w) => w === 'not' || w === 'non' || (/^(un|in|non)/.test(w) && SUCCESS.test(w.replace(/^(un|in|non)/, ''))))) return 'neutral';
+	if (any(/^(draft|new|open$|pending|queued|skip)/)) return 'neutral'; // `open`, never `opened` (an email read)
+	if (any(/^(reject|cancel|void|fail|lost|declin|terminat|block|bounc|complain|undeliver)/)) return 'danger';
+	if (any(SUCCESS)) return 'success';
+	if (any(/^(hold|review|wait|overdue|expir|chang|defer)/)) return 'warning';
 	return 'info';
 }
 
 const UNSORTED = new Set(['json', 'file', 'custom', 'vector', 'point', 'period', 'object', 'list', 'union', 'record']);
+/** `like` over the label's text and patterned `seq` fields: the search of a collection that declares no `search.text`; none when nothing is typed or searchable. */
+export function likeWhere(target: { readonly fields: Fields } | undefined, labels: readonly string[], q: string): Json | undefined {
+	const text = q.trim();
+	const searchable = labels.filter((f) => { const k = target?.fields[f]; return k === undefined || k.kind === 'text' || (k.kind === 'seq' && k.pattern !== undefined); });
+	return text === '' || searchable.length === 0 ? undefined : { or: searchable.map((f) => ({ [f]: { like: `%${text.replace(/[%_\\]/g, '\\$&')}%` } })) };
+}
 /**
  * A picker's page read (§3.6): the target's `search.text` when it declares one, else `like` over the label's text and
  * patterned `seq` fields; sorted by `orderBy`, else by the first sortable label field (a typed search ranks instead).
@@ -339,8 +380,8 @@ const UNSORTED = new Set(['json', 'file', 'custom', 'vector', 'point', 'period',
 export function pickerRead(target: { readonly search?: readonly string[]; readonly fields: Fields } | undefined, labels: readonly string[],
 	o: { where?: Json | undefined; orderBy?: Json | undefined; limit: number }, q: string): { readonly [k: string]: Json } {
 	const text = q.trim(), indexed = (target?.search?.length ?? 0) > 0;
-	const searchable = labels.filter((f) => { const k = target?.fields[f]; return k === undefined || k.kind === 'text' || (k.kind === 'seq' && k.pattern !== undefined); });
-	const like = text === '' || indexed || searchable.length === 0 ? [] : [{ or: searchable.map((f) => ({ [f]: { like: `%${text.replace(/[%_\\]/g, '\\$&')}%` } })) }];
+	const w = indexed ? undefined : likeWhere(target, labels, q);
+	const like = w === undefined ? [] : [w];
 	const all: Json[] = [...(o.where === undefined ? [] : [o.where]), ...like];
 	const label = labels.find((f) => { const k = target?.fields[f]; return k !== undefined && !UNSORTED.has(k.kind) && !('many' in k && k.many === true); });
 	const orderBy = o.orderBy ?? (indexed && text !== '' || label === undefined ? undefined : { [label]: 'asc' });

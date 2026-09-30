@@ -141,7 +141,9 @@ export function locked(fields: Fields, record: Row | null): (field: string) => b
 	const state = Object.entries(fields).find(([, k]) => k.kind === 'state');
 	if (state === undefined) return () => false;
 	const [name, kind] = state as [string, Extract<Kind, { kind: 'state' }>];
-	const e = kind.states[String(untag(record[name]))]?.edit ?? 'all';
-	// the state field itself moves along `to` whatever `edit` says, as the host's rule 40 check exempts it
-	return (field) => field !== name && (e === 'none' || (e !== 'all' && !e.includes(field)));
+	const at = kind.states[String(untag(record[name]))];
+	const e = at?.edit ?? 'all';
+	// the state field itself moves along `to` whatever `edit` says (the host's rule 40 check exempts it); a final state has
+	// no move left, so it is read-only
+	return (field) => field === name ? (at?.to ?? []).length === 0 : e === 'none' || (e !== 'all' && !e.includes(field));
 }

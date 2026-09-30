@@ -16,13 +16,13 @@ export const ws = workspace({
 });
 
 export const support = channel({
-	transport: 'email', address: 'support', policies: ['sales_rep'],
+	transport: 'email', policies: ['sales_rep'],
 	outbound: { confirmations: { from: 'orders', on: 'create',
 		message: ({ record }) => ({ to: ['sales@example.com'], subject: `Order ${record.number}`, text: record.note ?? '', thread: record.id }) } },
 	events: {
 		sent: ({ at }) => ({ placed_at: at }),
 		bounced: ({ reason }) => ({ note: reason }),
-		replied: ({ mail }) => ({ note: mail.text.slice(0, 200) }),
+		replied: ({ reply }) => ({ note: reply.text.slice(0, 200) }),
 	},
 });
 export const whatsapp = channel({ transport: 'whatsapp', policies: ['sales_rep'] });
@@ -30,7 +30,7 @@ export const whatsapp = channel({ transport: 'whatsapp', policies: ['sales_rep']
 export const erp = connection({ baseUrl: 'ERP_URL', auth: { bearer: 'ERP_TOKEN' } });
 export const erp_mcp = mcp({ description: 'Product documentation', url: 'MCP_URL', tools: ['search_docs'] });
 
-export const desk = envoy({ channel: 'whatsapp', audience: 'authenticated', name: 'Norbius', policies: ['sales_rep'],
+export const desk = envoy({ channel: 'whatsapp', audience: 'private', name: 'Norbius', policies: ['sales_rep'],
 	groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep orders up to date from what people report.' });
 
 export const nightly = automation({ description: 'Nightly order digest', runAs: ['sales_rep'], on: { cron: '0 2 * * *' },

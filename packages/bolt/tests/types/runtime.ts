@@ -171,8 +171,13 @@ channel({ transport: 'inbox', outbound: { x: { from: 'orders', on: 'create', mes
 channel({ transport: 'whatsapp', outbound: { x: { from: 'orders', on: 'create', message: () => ({ to: 'x', text: 'x' }) } },
 	events: { replied: ({ reply }) => ({ note: reply.text }) } });
 channel({ transport: 'whatsapp', outbound: { x: { from: 'orders', on: 'create', message: () => ({ to: 'x', text: 'x' }) } },
-	// @ts-expect-error CH12 a chat reply has no mail
+	// @ts-expect-error CH12 a reply is `reply` on every transport, never `mail`
 	events: { replied: ({ mail }) => ({ note: mail }) } });
+channel({ transport: 'email', outbound: { x: { from: 'orders', on: 'create', message: () => ({ to: [], subject: 'x' }) } },
+	events: { auto_replied: ({ reply }) => ({ note: reply.subject }), deferred: ({ code, reason }) => ({ note: `${code} ${reason}` }) } });
+channel({ transport: 'email', outbound: { x: { from: 'orders', on: 'create', message: () => ({ to: [], subject: 'x' }) } },
+	// @ts-expect-error CH13 only a reply or an auto-reply carries `reply`
+	events: { delivered: ({ reply }) => ({ note: reply }) } });
 
 // ── connection() ──
 connection({ baseUrl: 'ERP_URL', auth: { oauth2: { grant: 'authorization_code', per: 'user', authorizeUrl: 'ERP_URL', tokenUrl: 'ERP_URL',

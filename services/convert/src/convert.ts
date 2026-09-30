@@ -2,9 +2,11 @@
 // pandoc to the files on its command line (no local reads, no fetched resources), `+RTS -M` caps its heap, and the
 // process is killed at the timeout.
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const TARGETS = {
 	pdf: 'application/pdf',
@@ -19,6 +21,11 @@ export const PAPER = { A4: 'a4', A3: 'a3', Letter: 'us-letter' } as const;
 /** Targets a reference document styles (pandoc's `--reference-doc`). */
 export const STYLED: readonly Target[] = ['docx', 'pptx', 'odt'];
 
+/** CJK font fallback, table-cell escaping and data-URI image names (see the filter). */
+const FILTER = fileURLToPath(new URL('./convert.lua', import.meta.url));
+/** pandoc's reference.docx with an A4 portrait section and the PDF's margins; the Dockerfile writes it. */
+const A4 = fileURLToPath(new URL('./a4.docx', import.meta.url));
+
 export type Request = { from: 'markdown' | 'html'; to: Target; source: string; page?: keyof typeof PAPER; landscape?: boolean };
 export type Converter = (request: Request, reference: Uint8Array | null) => Promise<Uint8Array>;
 
@@ -26,16 +33,16 @@ export const pandoc = ({ timeoutMs, heap }: { timeoutMs: number; heap: string })
 	const dir = await mkdtemp(join(tmpdir(), 'convert-'));
 	try {
 		const out = join(dir, `out.${request.to}`);
-		const args = ['+RTS', `-M${heap}`, '-RTS', '--sandbox', '--standalone', '-f', request.from, '-o', out];
+		const args = ['+RTS', `-M${heap}`, '-RTS', '--sandbox', '--standalone', '-f', request.from, '-o', out, `--lua-filter=${FILTER}`];
 		if (request.to === 'pdf') {
 			args.push('--pdf-engine=typst', '-V', `papersize=${PAPER[request.page ?? 'A4']}`);
-			if (request.landscape) args.push('-V', 'header-includes=#set page(flipped: true)');
+			if (request.landscape) args.push('-M', 'landscape=true');
 		} else args.push('-t', request.to);
 		if (reference) {
 			const ref = join(dir, `reference.${request.to}`);
 			await writeFile(ref, reference);
 			args.push(`--reference-doc=${ref}`);
-		}
+		} else if (request.to === 'docx' && existsSync(A4)) args.push(`--reference-doc=${A4}`);
 		await run(args, request.source, dir, timeoutMs);
 		return new Uint8Array(await readFile(out));
 	} finally {

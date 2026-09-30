@@ -381,8 +381,8 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 		const isCall = (x: CrossCall | CrossAnswer): x is CrossCall => 'op' in x;
 		const wallOf = (part: readonly (CrossCall | CrossAnswer)[]): number => {
 			const [only] = part;
-			return part.length === 1 && only !== undefined && isCall(only) && only.op === 'facility' && only.facility === 'ai' && only.method === 'sys_2.infer'
-				? INFER_MS : wallMs;
+			if (part.length !== 1 || only === undefined || !isCall(only) || only.op !== 'facility' || only.facility !== 'ai') return wallMs;
+			return only.method === 'sys_2.infer' ? INFER_MS : only.method === 'transcribe' || only.method === 'speak' ? LIMITS.callMs.speech : wallMs;
 		};
 		// batches in flight: each drain's calls cross together, and whichever batch answers first is given back first,
 		// so a body's concurrent branches (`Promise.all` over slow AI calls) proceed as each answer lands, not in lockstep
@@ -448,7 +448,7 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 			tally.crossings = crossings;
 			tally.statements += landed.lowered.filter((x) => isCall(x) && STATEMENTS.has(x.op)).length;
 
-			let bytes = 0;
+			let bytes = 0, biggest = 0, biggestAt = 0;
 			const texts = answers.map((a, i) => {
 				let text: string | undefined;
 				try {
@@ -458,6 +458,7 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 				}
 				const size = Buffer.byteLength(text) + (a.ok ? a.bins ?? [] : []).reduce((n, b) => n + b.byteLength, 0);
 				bytes += size;
+				if (size > biggest) { biggest = size; biggestAt = i; }
 				const call = landed.lowered[i];
 				if (call !== undefined && isCall(call) && call.op === 'read') readBytes += size;
 				if (!a.ok && call !== undefined && isCall(call) && call.op === 'facility' && a.error.kind !== 'bolt')
@@ -465,7 +466,13 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 				return text;
 			});
 			const at = landed.calls[0]![2];
-			if (bytes > LIMITS.crossingBytes) return failed('tooLarge', `a crossing answered over ${LIMITS.crossingBytes} bytes at ${where(at)}`);
+			if (bytes > LIMITS.crossingBytes) {
+				const big = landed.lowered[biggestAt]!;
+				const what = !isCall(big) ? 'a refused call' : big.op === 'read' ? `ctx.${big.read.kind} of '${big.read.collection}'`
+					: big.op === 'act' ? `ctx.act('${big.callable}')` : big.op === 'facility' ? `ctx.${big.facility}.${big.method}` : `ctx.${big.op}`;
+				const hint = isCall(big) && big.op === 'read' ? 'page it with `limit` and the returned cursor, or `select` fewer fields' : 'return less from it';
+				return failed('tooLarge', `${what} answered ${biggest} bytes (${bytes} this crossing), over the ${LIMITS.crossingBytes / 1024 / 1024} MiB crossing limit at ${where(landed.calls[biggestAt]![2])}; ${hint}`);
+			}
 			if (readBytes > inv.budget.readBytes) return failed('readBudgetExceeded', `the invocation read over ${inv.budget.readBytes} bytes; the last read was at ${where(at)}`);
 			await slice(() => give.apply(undefined, [landed.calls.map((c) => c[3]), texts, answers.map((a) => a.ok ? [...(a.bins ?? [])] : [])], { arguments: { copy: true } }));
 		}

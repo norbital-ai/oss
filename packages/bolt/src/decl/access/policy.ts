@@ -85,7 +85,7 @@ type Grantable = Exclude<ReadableName, 'sys_invitation' | 'sys_api_key'>;
 export type Limit = Rate | { rate: Rate; per: 'actor' | 'ip' } | readonly { rate: Rate; per: 'actor' | 'ip' }[];
 /** A rate limit on an envoy's inbound traffic, counted `per` sender or per subject. */
 export type EnvoyLimit = Rate | { rate: Rate; per: 'sender' | 'subject' } | readonly { rate: Rate; per: 'sender' | 'subject' }[];
-type EnvoyKey = 'envoys.receive' | 'envoys.registration';
+type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
 /**
  * What a `limits` entry throttles: acts, reads, agent turns, registration, uploads, envoy traffic, or one `'<c>.<query|action>'`.
  */

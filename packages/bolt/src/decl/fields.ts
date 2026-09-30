@@ -8,7 +8,8 @@ import type {
 
 /** A `file` field's cap: at most 20 MiB (the stored-file cap; `bolt check` bounds the KiB form). */
 export type FileSize = `${bigint}KiB` | `${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20}MiB`;
-export type TextFormat = 'email' | 'phone' | 'url' | 'zone';
+/** `markdown`: the text is Markdown, rendered as prose; the others are checked on write (rule 68). */
+export type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown';
 /** The unit a time field is picked in and snapped to (its start; weeks from Monday); the ui's pickers render it. */
 export type DatePrecision = 'year' | 'month' | 'week' | 'day';
 export type TimePrecision = 'hour' | 'minute';
@@ -22,7 +23,8 @@ type StoredArm =
 	| { kind: 'text'; format?: TextFormat; max?: number; many?: true }
 	| { kind: 'int'; min?: number; max?: number }
 	| { kind: 'decimal'; scale: number; precision?: number; min?: number; max?: number }
-	| { kind: 'money'; currency?: string }
+	/** `scale`: places kept beyond the currency's minor unit (a unit price at 4); the CHECK holds it instead of the minor unit. */
+	| { kind: 'money'; currency?: string; scale?: number }
 	| { kind: 'currency' } | { kind: 'bool' } | { kind: 'duration' }
 	| { kind: 'date'; precision?: DatePrecision } | { kind: 'instant'; precision?: InstantPrecision } | { kind: 'time'; precision?: TimePrecision }
 	| { kind: 'period'; of: 'date'; precision?: DatePrecision } | { kind: 'period'; of: 'instant'; precision?: InstantPrecision }
@@ -182,7 +184,7 @@ export type ValidField<T, F> =
 		// `edit` may also name an owned relationship's inverse: checked by `Verify`, not here
 		states: { [K in keyof S]: { to?: readonly (keyof S & string)[]; edit?: 'all' | 'none' | readonly string[] } };
 	} & DerivedCommon
-	: T extends { kind: 'money' } ? { kind: 'money'; currency?: CurrencyCode | FieldsOfKind<F, 'currency'> } & Common<DefaultOf<T>> & MoneyCurrency<T>
+	: T extends { kind: 'money' } ? { kind: 'money'; currency?: CurrencyCode | FieldsOfKind<F, 'currency'>; scale?: number } & Common<DefaultOf<T>> & MoneyCurrency<T>
 	: T extends { kind: DerivedKind } ? ArmOf<KindKey<T>> & DerivedCommon
 	: T extends { kind: 'json' } ? ValidInput<T, true>
 	: T extends { kind: 'number' | 'id' | 'list' | 'object' | 'union' | 'record' } ? `error: '${KindKey<T>}' is an input-only kind`

@@ -16,12 +16,12 @@ const DYNAMIC = ['queued', 'running', 'succeeded', 'failed', 'stopped', 'skipped
 describe('framework catalogs', () => {
 	it('every string the shell translates has its zh text', () => {
 		const keys = new Set(DYNAMIC);
-		for (const f of readdirSync(SHELL).filter((n) => n.endsWith('.svelte') || n === 'model.ts')) {
+		for (const f of [...readdirSync(SHELL), ...readdirSync(new URL('channels/', SHELL)).map((n) => `channels/${n}`)].filter((n) => n.endsWith('.svelte') || n === 'model.ts')) {
 			const src = readFileSync(new URL(f, SHELL), 'utf8');
 			for (const m of src.matchAll(/\bt\(\s*(['"])((?:\\.|(?!\1).)+)\1/g)) keys.add(m[2]!.replace(/\\'/g, "'"));
 			for (const m of src.matchAll(/\b(?:leaf|group)\('[^']+', '([^']+)'/g)) keys.add(m[1]!);
-			// literal maps whose values reach `t`: Settings' TITLES, Register's SAID, Studio's SECTION_TITLES
-			for (const map of src.matchAll(/const (?:TITLES|SAID|SECTION_TITLES)\b[^=]*=\s*\{([\s\S]*?)\};/g))
+			// literal maps whose values reach `t`: Settings' TITLES, Studio's SECTION_TITLES
+			for (const map of src.matchAll(/const (?:TITLES|SECTION_TITLES)\b[^=]*=\s*\{([\s\S]*?)\};/g))
 				for (const v of map[1]!.matchAll(/:\s*'((?:\\.|[^'])+)'/g)) keys.add(v[1]!.replace(/\\'/g, "'"));
 		}
 		expect([...keys].filter((k) => SHELL_ZH[k] === undefined)).toEqual([]);

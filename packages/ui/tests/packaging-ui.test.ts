@@ -124,3 +124,24 @@ test('a representation loads on first use, for a page-level RecordShell too', as
 	assert.equal(loads, 1);
 	v.done();
 });
+
+test('a local array\'s boolean column is a check or a cross icon, not a glyph in text', async () => {
+	const { addIcon } = await import('@iconify/svelte'); // offline: the icons the cell draws, so it renders synchronously
+	for (const name of ['lucide:check', 'lucide:x']) addIcon(name, { body: '<path d="M0 0"/>' });
+	const v = await show({ part: 'table', props: { of: [{ id: 'a', name: 'Ada', admin: true }, { id: 'b', name: 'Bo', admin: false }], columns: ['name', 'admin'] } });
+	assert.deepEqual([...v.target.querySelectorAll('tbody svg[aria-label]')].map((x) => x.getAttribute('aria-label')), ['Yes', 'No']);
+	assert.equal(/[✓✗]/.test(v.target.querySelector('tbody').textContent), false);
+});
+
+test('two or more row actions fold into one menu in the grid; a single action stays a button', async () => {
+	const rows = [{ id: 'a', name: 'Ada' }];
+	const two = await show({ part: 'table', props: { of: rows, columns: ['name'], actions: [{ action: 'x.reassign', label: 'Reassign' }, { action: 'x.cancel', label: 'Cancel' }] } });
+	const cell = two.target.querySelector('tbody [data-row-actions]');
+	assert.ok(cell.querySelector('[data-row-menu]'), 'one menu trigger');
+	assert.equal(/Reassign|Cancel/.test(cell.textContent), false, 'the labels live in the menu, not the cell');
+	two.done();
+	const one = await show({ part: 'table', props: { of: rows, columns: ['name'], actions: [{ action: 'x.cancel', label: 'Cancel' }] } });
+	assert.equal(one.target.querySelector('tbody [data-row-actions] [data-row-menu]'), null);
+	assert.match(one.target.querySelector('tbody [data-row-actions]').textContent, /Cancel/);
+	one.done();
+});

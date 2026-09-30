@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -147,4 +147,22 @@ test('pandoc and Typst write every target', { skip: !hasPandoc && 'pandoc is not
 	const reference = await convert({ from: 'markdown', to: 'docx', source: '# Letterhead' }, null);
 	assert.equal(new TextDecoder().decode((await convert({ from: 'html', to: 'docx', source: '<h1>x</h1>' }, reference)).slice(0, 2)), 'PK');
 	await assert.rejects(convert({ from: 'markdown', to: 'pdf', source: '```{=typst}\n#read("/etc/passwd")\n```' }, null));
+});
+
+test('Chinese typesets, a cell marker stays text, a docx is A4 and a data-URI logo is not its own description', { skip: !hasPandoc && 'pandoc is not on PATH (runs in the image)' }, async () => {
+	const convert = pandoc({ timeoutMs: 30_000, heap: '512m' });
+	const logo = '![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==)';
+	const md = `---\nheader-includes: "#let own = 1"\n---\n\n${logo}\n\n检测报告 Report\n\n| a | b |\n|---|---|\n| \\- none | 1\\. first |`;
+	const pdf = new TextDecoder('latin1').decode(await convert({ from: 'markdown', to: 'pdf', source: md, landscape: true }, null));
+	assert.match(pdf, /NotoSansCJKsc-Regular/);
+	assert.match(pdf, /MediaBox \[0 0 841\.\d+ 595\.\d+\]/);
+	const filter = new URL('../src/convert.lua', import.meta.url).pathname;
+	const typst = execFileSync('pandoc', ['--standalone', '-t', 'typst', `--lua-filter=${filter}`], { input: md }).toString();
+	assert.match(typst, /\[\\- none\], \[1\\\. first\]/);
+	assert.match(typst, /#let own = 1/);
+	const out = join(dir, 'a4.docx');
+	writeFileSync(out, await convert({ from: 'markdown', to: 'docx', source: md }, null));
+	const xml = execFileSync('unzip', ['-p', out, 'word/document.xml']).toString();
+	assert.match(xml, /<w:pgSz w:h="16838" w:w="11906"/);
+	assert.doesNotMatch(xml, /descr="data:/);
 });

@@ -16,7 +16,7 @@ The built-in `money` custom field's renderer: the amount box with its currency a
 </script>
 
 {#if view.mode === 'edit'}
-	<MoneyInput value={view.value} onChange={view.onChange} {currency} id={view.id} disabled={view.disabled} invalid={view.error !== undefined} />
+	<MoneyInput value={view.value} onChange={view.onChange} {currency} scale={kind.scale} id={view.id} disabled={view.disabled} invalid={view.error !== undefined} />
 {:else if view.dense}
 	<span class="tabular-nums">{text}</span>
 {:else}

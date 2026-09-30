@@ -3,9 +3,11 @@ export { main } from './main.ts';
 export { start, type Server as RunningServer } from './server.ts';
 export type { Config as ServerConfig } from './config.ts';
 export { localFiles, publicWeb, s3Files, timekeeper as inProcessDeadlines } from './ports.ts';
-export { baileys as baileysSocket, whatsapp as whatsappTransport, type WaOpen, type WaState, type WhatsApp } from './whatsapp.ts';
-export { telegram as telegramTransport, TELEGRAM_HOOK, type Telegram } from './telegram.ts';
-export { mailTransport as emailTransport, mailSender as mailPort } from './mail.ts';
+export { mailTransport as emailTransport } from './mail.ts';
+// the transactional providers, for a host that pins this package and not `@norbital-ai/providers`
+export { transactional, type TransactionalConfig } from '@norbital-ai/providers';
+export { openRouterSpeech, type OpenRouterSpeechConfig } from '@norbital-ai/providers'; // `ctx.ai.transcribe` / `ctx.ai.speak`
+// the channel providers an administrator chooses at setup, for the same host
+export { baileys, discord, mailbox, slack, telegram, twilioWhatsapp, wechat, type WaOpen } from '@norbital-ai/providers';
 export { push as webPush } from './push.ts';
-export { smsTransport } from './sms.ts';
 export { readPublicPage, type PublicPage } from './web.ts';

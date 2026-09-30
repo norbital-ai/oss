@@ -1,13 +1,11 @@
 // P4 gaps over the host half on PGlite: the in-app agent's `/__bolt` callables (`sys_conversation.start`,
-// `sys_message.post`, `sys_message.confirm`) with the transcript; envoy registration inspect
-// and redeem through the shell host; web push of inbox notices through `bolt.push`; and the journal crash test
+// `sys_message.post`, `sys_message.confirm`) with the transcript; web push of inbox notices through `bolt.push`; and the journal crash test
 // (`t.crash`, rule 55).
 import { describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import type { AiPort, AiResponse, EngineManifest, Outcome, TransportPort } from '../src/engine/contracts.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { issueClaim } from '../src/engine/envoys/registration.ts';
 import { loadKeys, mint, type IdentityHost } from '../src/engine/identity/session.ts';
 import { boltHandler } from '../src/protocol/http.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
@@ -28,7 +26,7 @@ const manifest = {
 	},
 	policies: { rep: { description: 'Rep', grants: { quotes: { read: true, create: true, actions: ['mark'] }, logs: { read: true, create: true } } } },
 	automations: { log: { description: 'Log each new quote', on: { created: 'quotes' }, runAs: ['rep'] } },
-	envoys: { field: { channel: 'field', audience: 'authenticated', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
+	envoys: { field: { channel: 'field', audience: 'private', name: 'Norbius', policies: ['rep'], triage: false, groupMessages: 'disabled', delegation: 'disabled', task: 'Help.' } },
 	channels: { field: { transport: 'whatsapp' } },
 	agent: { internal: 'Staff brief.', skills: {} },
 	integrations: {}, pipelines: {}, teams: {}, connections: {}, mcp: {}, apps: {}, customFields: {},
@@ -134,31 +132,6 @@ describe('web push of inbox notices (§5.7)', () => {
 		expect(t.fakes.transports.push.sent).toHaveLength(1);
 		expect((await call(ann, 'POST', '/__bolt/push', { endpoint: 'https://push.example/ann', remove: true })).status).toBe(204);
 		expect((await t.db.read([{ text: `SELECT count(*)::int AS n FROM bolt_push_subscriptions`, params: [] }]))[0]!.rows[0]).toEqual({ n: 0 });
-	});
-});
-
-describe('envoy registration through the shell host (§3.9)', () => {
-	it('redirects the engine link to the page, inspects without consuming, and redeems for the signed-in member', async () => {
-		const { t, user } = await setup();
-		const ann = await user('ann');
-		const mail: TransportPort = { send: async () => ({ providerId: 'x' }), subscribe: () => () => {} };
-		const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, devSink: true, publicUrl: 'https://acme.example' };
-		const shell = shellHost({ manifest, identity, authorities: new Authorities(manifest, 'test'), workspace: { name: 'Acme', handle: 'acme' }, ip: () => '203.0.113.9', envoys: t.engine.envoys });
-		const session = await mint(identity, ann);
-		const cookie = `nb_s=${encodeURIComponent((session as { value: { token: string } }).value.token)}`;
-		const get = (path: string, auth = true) => shell.handle(new Request(`https://acme.example${path}`, auth ? { headers: { cookie } } : {}));
-		const claim = (await issueClaim(t.db, 'field', 'whatsapp', '6591234567:3@s.whatsapp.net', t.clock.now()))!;
-		const link = await get(`/__bolt/envoys/register?claim=${claim}`, false);
-		expect(link!.status).toBe(303);
-		expect(link!.headers.get('location')).toBe(`https://acme.example/register/${claim}`);
-		const seen = await (await get(`/__bolt/shell/register?claim=${claim}`))!.json() as { value: Json };
-		expect(seen.value).toEqual({ state: 'ready', envoy: 'field', transport: 'whatsapp', handle: '6591234567' });
-		expect((await get(`/__bolt/shell/register?claim=${claim}`, false))!.status).toBe(401);
-		const redeem = await shell.handle(new Request('https://acme.example/__bolt/shell/register', { method: 'POST', headers: { cookie, 'content-type': 'application/json' },
-			body: JSON.stringify({ claim, replay: false }) }));
-		expect(((await redeem!.json()) as { value: Json }).value).toMatchObject({ state: 'registered', envoy: 'field', replay: [] });
-		expect((await t.db.read([{ text: `SELECT phone FROM sys_user WHERE id = $1`, params: [ann] }]))[0]!.rows[0]).toEqual({ phone: '6591234567' });
-		expect(((await (await get(`/__bolt/shell/register?claim=${claim}`))!.json()) as { value: Json }).value).toEqual({ state: 'registered' });
 	});
 });
 

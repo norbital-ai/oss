@@ -1,5 +1,5 @@
 // The agent UI's engine half (§5.9): an in-app conversation starts on the workspace's `ai.default`; a failed turn's log
-// line and staff row name the real reason; `setAgent`, `file`, `markRead` and `linkHandle` over `/__bolt/act`; staff
+// line and staff row name the real reason; `setAgent`, `file` and `markRead` over `/__bolt/act`; staff
 // list the envoy conversations with an unread mark; `read_attachment` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
@@ -104,12 +104,6 @@ describe('the agent UI actions', () => {
 		await t.db.write({ text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`, params: [] });
 		expect(await act('ann', 'sys_message.file', { message, about: { collection: 'quotes', id: q } })).toMatchObject({ kind: 'committed' });
 		expect((await t.db.read([{ text: `SELECT about FROM sys_message WHERE id = $1`, params: [message] }]))[0]!.rows[0]!['about']).toEqual({ collection: 'quotes', id: q });
-	});
-
-	it('linkHandle redeems only the real member\'s own claim', async () => {
-		const { act } = await setup();
-		expect(await act('ann', 'sys_user.linkHandle', { claim: 'no-such-claim' })).toMatchObject({ kind: 'refused', code: 'invalidInput' });
-		expect(await act('ann', 'sys_user.linkHandle', { claim: 'no-such-claim' }, true)).toMatchObject({ kind: 'refused', code: 'forbidden' });
 	});
 });
 

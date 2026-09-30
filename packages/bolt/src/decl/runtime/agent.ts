@@ -8,9 +8,9 @@ import type { EnvName, TransportOf } from './names.ts';
 type EnvoyBase = {
 	/** The channel it answers. */
 	channel: string;
-	/** `authenticated`: unlinked senders get the registration notice; `public`: their DMs run under `policies` alone. */
-	audience: 'public' | 'authenticated';
-	/** The authority of every turn (a linked sender's own joins it in a DM). */
+	/** `private`: only members whose registered handle is the sender's; `public`: anyone, under `policies` alone. */
+	audience: 'public' | 'private';
+	/** The authority of every turn (a member sender's own joins it in a DM). */
 	policies: NonEmpty<string>;
 	/** What the envoy is called on its channel: the name a person says when they mean it (`Norbital`). */
 	name: string;
@@ -25,9 +25,13 @@ type EnvoyBase = {
 };
 type EnvoyFor<S> = {
 	channel: ChannelName;
-	/** 'authenticated': an unlinked sender gets the registration notice and no turn; 'public': their DM runs under `policies` alone (P32). */
-	audience: 'public' | 'authenticated';
-	/** Required: every group turn's whole authority, joined in a DM by a linked sender's own (P32); the source of every envoy limit. */
+	/**
+	 * 'private': only a sender whose handle is registered on a member (phone on WhatsApp, email on email,
+	 * `telegram` on Telegram) is admitted; anyone else gets one fixed "not recognised" reply and no turn. 'public': anyone;
+	 * an unknown sender's DM runs under `policies` alone (P32).
+	 */
+	audience: 'public' | 'private';
+	/** Required: every group turn's whole authority, joined in a DM by a member sender's own (P32); the source of every envoy limit. */
 	policies: NonEmpty<PolicyName>;
 	/** What people call it on the channel; a message that says this name is addressed to it, mention or not. */
 	name: string;

@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { watch } from 'runed';
-	import { Button, Picker, Table, openRecord } from '@norbital-ai/ui';
+	import { Button, Picker, Table, format, label, openRecord } from '@norbital-ai/ui';
 	import type { InboxRequest } from './data.ts';
 	import type { ShellApi, ShellBolt } from './runtime.ts';
 	import type { Act } from './Acts.svelte';
@@ -42,7 +42,9 @@
 		...(r.canSupersede ? [{ label: t('Supersede'), run: () => decide(r, 'SUPERSEDED') }] : []),
 		...(r.mine ? [{ label: t('Withdraw'), run: () => decide(r, 'WITHDRAW') }] : []),
 	];
-	const requestRows = $derived((requests ?? []).map((r) => ({ ...r, progress: `${r.step + 1}/${r.steps}` })));
+	// the collection's catalog label and the action as a verb (`create` → `Create`); `collection` stays the key openRecord needs
+	const verb = (a: string) => { const s = t(a); return s !== a ? s : a.replace(/_/g, ' ').replace(/^\w/, (x) => x.toUpperCase()); };
+	const requestRows = $derived((requests ?? []).map((r) => ({ ...r, of: label(bolt, r.collection), verb: verb(r.action), progress: `${r.step + 1}/${r.steps}` })));
 
 	const waiting = $derived(requests === null ? null : requests.filter((r) => r.canDecide).length);
 	watch(() => waiting, (n) => { if (n !== null) onCount?.(n); });
@@ -61,7 +63,7 @@
 			pushed = 'denied';
 		}
 	}
-	const when = (v: unknown) => typeof v === 'string' ? new Date(v).toLocaleString(bolt.locale) : '—';
+	const when = (v: unknown) => typeof v === 'string' ? format({ kind: 'instant' }, v, { locale: bolt.locale }) : '—';
 </script>
 
 {#snippet at({ value }: { row: object; value: unknown })}<time class="tabular-nums">{when(value)}</time>{/snippet}
@@ -83,7 +85,7 @@
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:else}
 		<Table of={requestRows} key="approvals" toolbar={{ title: t('Approvals'), export: true }} onOpen={(r) => openRecord(r.collection, r.record)}
-			columns={[{ field: 'record', label: t('Record'), cell: record_ }, { field: 'collection', label: t('Collection') }, { field: 'action', label: t('Action') }, { field: 'progress', label: t('Step') },
+			columns={[{ field: 'record', label: t('Record'), cell: record_ }, { field: 'of', label: t('Collection') }, { field: 'verb', label: t('Action') }, { field: 'progress', label: t('Step') },
 				{ field: 'by', label: t('Requested by') }, { field: 'at', label: t('When'), cell: at }, { field: 'id', label: t('Actions'), hide: 'narrow', cell: decide_ }]}>
 			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('Nothing waits on you.')}</p>{/snippet}
 		</Table>

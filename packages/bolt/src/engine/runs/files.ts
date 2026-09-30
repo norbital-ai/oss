@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { Json } from '../../decl/values.ts';
 import { sizeBytes } from '../callables/upload.ts';
-import type { ConvertPort, CrossAnswer, CrossCall, EngineManifest, FilesPort, TenantDb } from '../contracts.ts';
+import type { ConvertPort, CrossAnswer, CrossCall, EngineManifest, FilesPort, SpeechPort, TenantDb } from '../contracts.ts';
 import { CONVERT_TARGETS, LIMITS } from '../contracts.ts';
 import type { ConvertTarget } from '../../decl/runtime/facilities.ts';
 import { PATHS } from '../../protocol/wire.ts';
@@ -111,6 +111,63 @@ export function runConvert(o: Store & { convert: ConvertPort; readable(id: strin
 			...(x.page === undefined ? {} : { page: x.page as 'A4' }), ...(x.landscape === true ? { landscape: true } : {})
 		}, signal);
 		return store(o, bytes, x.name, MIME[to], x.for, 'convert.document', signal);
+	};
+}
+
+const isObject = (v: unknown): v is { readonly [k: string]: unknown } => v !== null && typeof v === 'object' && !Array.isArray(v);
+const segmentsOk = (v: unknown): boolean => isObject(v) && Array.isArray(v['segments']) && typeof v['durationMs'] === 'number'
+	&& (v['language'] === null || typeof v['language'] === 'string')
+	&& v['segments'].every((x: unknown) => isObject(x) && typeof x['speaker'] === 'string' && typeof x['text'] === 'string'
+		&& typeof x['start'] === 'number' && typeof x['end'] === 'number');
+const FORMATS = new Set(['mp3', 'wav', 'ogg']);
+
+/**
+ * `ctx.ai.transcribe(file, options?)` and `ctx.ai.speak(text, options)` over the host's optional SpeechPort: a transcribed
+ * file must be one the run may read (its bytes stay here, never in the guest); spoken audio is stored as `for`'s file.
+ */
+export function runSpeech(o: Store & { speech: SpeechPort; readable(id: string, field: string): Promise<boolean> }) {
+	const answer = speech(o);
+	return (call: Extract<CrossCall, { op: 'facility' }>, signal: AbortSignal): Promise<CrossAnswer> => answer(call, signal).catch((err: unknown): CrossAnswer => {
+		const kind = (err as { kind?: unknown } | null)?.kind, status = (err as { status?: unknown } | null)?.status;
+		return { ok: false, error: { kind: typeof kind === 'string' && KINDS.has(kind) ? kind as 'upstream' : 'upstream', message: err instanceof Error ? err.message : String(err),
+			...(typeof status === 'number' ? { status } : {}) } };
+	});
+}
+/** A port's throw carrying one of these `kind`s is answered as it; any other throw is `upstream`. */
+const KINDS = new Set(['upstream', 'timeout', 'rateLimited', 'invalid', 'tooLarge', 'unsupported']);
+function speech(o: Store & { speech: SpeechPort; readable(id: string, field: string): Promise<boolean> }) {
+	return async (call: Extract<CrossCall, { op: 'facility' }>, signal: AbortSignal): Promise<CrossAnswer> => {
+		const [first = null, options = null] = call.args;
+		const x = (options ?? {}) as { readonly [k: string]: Json };
+		if (!isObject(x)) return invalid(`ai.${call.method}: options are an object`);
+		const text = (k: string) => x[k] === undefined || typeof x[k] === 'string';
+		if (call.method === 'transcribe') {
+			if (o.speech.transcribe === undefined) return { ok: false, error: { kind: 'unavailable', facility: 'ai.transcribe', reason: 'the host provides no transcription' } };
+			if (!text('language') || !text('prompt') || (x['diarize'] !== undefined && typeof x['diarize'] !== 'boolean')
+				|| (x['speakers'] !== undefined && !(Number.isInteger(x['speakers']) && Number(x['speakers']) > 0)))
+				return invalid('ai.transcribe takes { diarize?: boolean, language?: string, speakers?: a positive integer, prompt?: string }');
+			const id = isObject(first) ? first['id'] : undefined;
+			if (typeof id !== 'string') return invalid('ai.transcribe takes a FileRef');
+			const [r] = await o.db.read([{ text: `SELECT name, mime, key, field FROM sys_file WHERE id = $1`, params: [id] }]);
+			const f = r!.rows[0] as { name: string; mime: string; key: string; field: string } | undefined;
+			if (f === undefined || !await o.readable(id, f.field)) return invalid(`this run cannot read file ${id}`);
+			const bytes = await o.files.get(f.key, LIMITS.storedFileBytes, signal);
+			const given = Object.fromEntries(['diarize', 'language', 'speakers', 'prompt'].flatMap((k) => x[k] === undefined ? [] : [[k, x[k]]]));
+			const t = await o.speech.transcribe({ name: f.name, mime: f.mime, bytes }, given, signal);
+			return segmentsOk(t) ? { ok: true, value: t as unknown as Json } : { ok: false, error: { kind: 'upstream', message: 'the transcription answered something that is not a transcript' } };
+		}
+		if (call.method === 'speak') {
+			if (o.speech.speak === undefined) return { ok: false, error: { kind: 'unavailable', facility: 'ai.speak', reason: 'the host provides no speech' } };
+			const format = x['format'] ?? 'mp3';
+			if (typeof first !== 'string' || first.trim() === '') return invalid('ai.speak takes the text to say');
+			if (typeof x['for'] !== 'string' || !text('name') || !text('voice') || !text('language') || !FORMATS.has(String(format)))
+				return invalid('ai.speak takes { for, name?, voice?, format?: mp3 | wav | ogg, language? }');
+			const audio = await o.speech.speak(first, { format: format as 'mp3', ...(x['voice'] === undefined ? {} : { voice: x['voice'] as string }),
+				...(x['language'] === undefined ? {} : { language: x['language'] as string }) }, signal);
+			if (!(audio?.bytes instanceof Uint8Array) || typeof audio.mime !== 'string') return { ok: false, error: { kind: 'upstream', message: 'speech answered no audio' } };
+			return store(o, audio.bytes, (x['name'] as string | undefined) ?? `speech.${String(format)}`, audio.mime, x['for'], 'ai.speak', signal);
+		}
+		return invalid(`ai.${call.method} is not a speech call`);
 	};
 }
 

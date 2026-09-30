@@ -18,7 +18,9 @@ import type { CollectionSpec } from '../decl/collection.ts';
 import type { Refused, Unknown } from '../decl/ctx.ts';
 import type { ModelSpec } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
-import type { ConvertTarget, FacilityError, GeoHit, WebPage } from '../decl/runtime/facilities.ts';
+import type { Transport } from '../decl/runtime/names.ts';
+import type { DeliveryReport } from './channels/status.ts';
+import type { ConvertTarget, FacilityError, GeoHit, SpeechFormat, TranscribeOptions, Transcript, WebPage } from '../decl/runtime/facilities.ts';
 import type { Json, Offset, Point, Rate } from '../decl/values.ts';
 import type { Operand, Shape } from '../decl/where.ts';
 
@@ -28,12 +30,15 @@ const MiB = 1024 * 1024;
 export const LIMITS = {
 	guestCpuMs: 2_000, guestMemoryMiB: 256,
 	/** Per facility call, never per invocation (X-28). */
-	callMs: { database: 60_000, ai: 60_000, tool: 60_000, http: 30_000, web: 30_000, image: 30_000, other: 5_000 },
+	/** `speech`: `ctx.ai.transcribe`/`speak`, long audio in chunks; the guest awaits it off its CPU budget. */
+	callMs: { database: 60_000, ai: 60_000, tool: 60_000, http: 30_000, web: 30_000, image: 30_000, other: 5_000, speech: 30 * 60_000 },
 	crossings: { sync: 40, automation: 10_000 }, readBytes: 32 * MiB, crossingBytes: 4 * MiB, argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB, changesPerAct: 10_000, expandedRowsPerStatement: 100_000, writeDepth: 8,
 	page: { max: 10_000, all: 50_000, allBytes: 8 * MiB, relationArm: 10_000 },
 	statement: { shapes: 500, params: 30_000 },
 	fileBytes: 4 * MiB, storedFileBytes: 20 * MiB,
+	/** An outbound channel message's attachments together, read for its provider; more refuses the message (permanent). */
+	messageAttachmentBytes: 20 * MiB,
 } as const;
 
 // ── failures (rule 72a) ──
@@ -327,6 +332,16 @@ export interface ConvertPort {
 	convert(source: { markdown: string } | { html: string }, to: ConvertTarget,
 		options: { reference?: Uint8Array; page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean }, signal: AbortSignal): Promise<Uint8Array>;
 }
+/**
+ * Speech behind `ctx.ai.transcribe` and `ctx.ai.speak` (optional; each member absent → `unavailable`). `transcribe` gets a
+ * stored file's bytes and answers segments in seconds from the audio's start, speaker labels `S1`, `S2`, … consistent across
+ * the file; `speak` answers the audio in `format`. A throw carrying a FacilityError `kind` (`rateLimited`, `tooLarge`,
+ * `invalid`, `unsupported`, `timeout`) is answered as that kind; any other throw is `upstream`.
+ */
+export interface SpeechPort {
+	transcribe?(audio: { name: string; mime: string; bytes: Uint8Array }, options: TranscribeOptions, signal: AbortSignal): Promise<Transcript>;
+	speak?(text: string, options: { voice?: string; format: SpeechFormat; language?: string }, signal: AbortSignal): Promise<{ bytes: Uint8Array; mime: string }>;
+}
 export interface SecretsPort {
 	get(name: string, signal: AbortSignal): Promise<string | null>;
 	set(name: string, value: string, signal: AbortSignal): Promise<void>;
@@ -380,10 +395,22 @@ export interface WebReadPort {
 }
 /** What a transport hands the engine: an inbound message or a delivery event on a sent one. */
 export type TransportEvent = { kind: 'inbound'; channel: string; message: Json; bins?: readonly Uint8Array[] }
-	| { kind: 'delivery'; channel: string; providerId: string; event: string; at: string; data?: Json };
-/** Mail, WhatsApp (a persistent socket the adapter owns), Telegram, web push. */
+	/** A provider's report on a message it sent (§5.9 delivery status); `providerId` is what its `send` returned. */
+	| { kind: 'delivery'; channel: string; providerId: string; report: DeliveryReport };
+/**
+ * One of `message.attachments` (stored FileRefs, in order) as bolt hands it to `send`: the bytes read through the host's files
+ * port, all of a message's together at most `LIMITS.messageAttachmentBytes`. `url` is a signed link a provider that fetches
+ * media itself may pass on (Twilio's MediaUrl); it throws where the host serves no file links.
+ */
+export type OutboundAttachment = { readonly id: string; readonly name: string; readonly mime: string; readonly bytes: Uint8Array;
+	url(expiresInS: number): Promise<string> };
+/** Mail, a chat provider's link (a socket or a webhook the host owns), web push. */
 export interface TransportPort {
-	send(channel: string, message: Json, signal: AbortSignal): Promise<{ providerId: string }>;
+	/**
+	 * Throws `SendRefused` for a refusal (permanent, or a retryable 4xx); any other throw is retried. `presumeAfterMs`: with no
+	 * `delivered`, `bounced` or `failed` report in that long, bolt records `delivered` with `presumed: true` (email).
+	 */
+	send(channel: string, message: Json, signal: AbortSignal, attachments?: readonly OutboundAttachment[]): Promise<{ providerId: string; presumeAfterMs?: number }>;
 	/** The platform's typing indicator in the chat `to` (WhatsApp "typing…", a Telegram typing action), best effort: an agent at work shows it. */
 	typing?(channel: string, to: string, signal: AbortSignal): Promise<void>;
 	/** The adapter calls `sink` for every event; returns the unsubscribe. A sink rejection is a redelivery. */
@@ -406,11 +433,14 @@ export interface DeadlinesPort {
 	settle(scope: string, nextDue: string | null): void;
 	teardown(scope: string): void;
 }
+/** One port per transport a host serves (each dispatches by channel) plus web `push`; `custom` sends through its connection. */
+/** `custom` carries only inbound: its webhook's verified bodies, which the channel's own `inbound` maps (it sends through its connection). */
+export type Transports = { readonly [T in Exclude<Transport, 'inbox'> | 'push']?: TransportPort };
 export type DatabasePort = TenantDb;
 export type HostPorts = {
 	database: DatabasePort; files: FilesPort; deadlines: DeadlinesPort;
-	secrets?: SecretsPort; convert?: ConvertPort; ai?: AiPort; geocoder?: GeocoderPort;
-	web?: WebReadPort; transports?: { readonly email?: TransportPort; readonly whatsapp?: TransportPort; readonly telegram?: TransportPort; readonly push?: TransportPort };
+	secrets?: SecretsPort; convert?: ConvertPort; ai?: AiPort; speech?: SpeechPort; geocoder?: GeocoderPort;
+	web?: WebReadPort; transports?: Transports;
 	metering?: MeteringPort; tenancy?: TenancyPort; membership?: MembershipPort;
 };
 

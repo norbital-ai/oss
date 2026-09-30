@@ -1,14 +1,15 @@
 /// <reference types="node" />
 // `bolt check` (rule 7): stage order, every error in one run, isolate evaluation (rule 2), guest walls (rule 6) and the
 // build checks of §3.3.9 (model/range, model/seq, automation/cron, approval/steps, automation/event-input,
-// access/ip-limit, access/limit, access/visitor-grant, access/visitor-ref, access/masked-search, access/write-many, access/internal-unreachable).
+// model/label, model/instant-date, access/ip-limit, access/limit, access/visitor-grant, access/visitor-ref, access/masked-search, access/write-many, access/internal-unreachable).
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { check } from '../src/compiler/check/index.ts';
-import { cronValid } from '../src/compiler/check/rules.ts';
+import { buildChecks, cronValid } from '../src/compiler/check/rules.ts';
+import type { EngineManifest } from '../src/engine/contracts.ts';
 
 const made: string[] = [];
 afterAll(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
@@ -133,6 +134,43 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };` }));
 	it('checks from the published build, where bolt is index.js', async () => {
 		const built = await import(new URL('../build/compiler/check/index.js', import.meta.url).href) as { check: typeof check };
 		expect((await built.check(workspace(GOOD))).errors.filter((e) => e.code === 'bundle/failed')).toEqual([]);
+	});
+
+	it('refuses a label naming an id or a foreign key, and an instant named as a calendar day (model/label, model/instant-date)', () => {
+		const m = { workspace: {}, models: {
+			lines: { label: ['order', 'title'], fields: { title: { kind: 'text' }, shipped_on: { kind: 'instant' }, due_date: { kind: 'instant' }, paid_at: { kind: 'instant' }, born_on: { kind: 'date' } } },
+			orders: { label: 'id', fields: {} }, notes: { label: 'code', fields: {}, computed: { code: { kind: 'text', expr: { field: 'id' } } } } },
+			relationships: { 'lines.order': { to: 'orders' } }, automations: {}, apps: {}, policies: {}, collections: {} } as unknown as EngineManifest;
+		const found = buildChecks(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`);
+		expect(found).toEqual([
+			"model/instant-date lines: shipped_on: a field named *_on or *_date is a calendar day; declare it { kind: 'date' }",
+			"model/instant-date lines: due_date: a field named *_on or *_date is a calendar day; declare it { kind: 'date' }",
+			expect.stringContaining("model/label lines: label 'order' is a foreign key"),
+			expect.stringContaining("model/label orders: label 'id' is the row id"),
+		]);
+	});
+
+	it('refuses a custom channel without its connect page or its send connection, and send on a provider channel (channel/*)', () => {
+		const m = { workspace: {}, models: {}, relationships: {}, automations: {}, apps: {}, policies: {}, collections: {},
+			connections: { partner_api: { baseUrl: 'PARTNER_URL' } },
+			channels: { partner: { transport: 'custom', send: 'partner_api' }, bare: { transport: 'custom' }, desk: { transport: 'slack', send: 'partner_api' } } } as unknown as EngineManifest;
+		const found = buildChecks(m, { automations: [], connects: ['partner'] }, (_r, n) => n).map((f) => f.code + ' ' + f.path);
+		expect(found).toEqual(['channel/custom-send bare', 'channel/custom-connect bare', 'channel/send desk']);
+		expect(buildChecks(m, { automations: [], connects: ['partner', 'bare'] }, (_r, n) => n).map((f) => f.code)).not.toContain('channel/custom-connect');
+	});
+
+	it('checks a custom channel\'s inbound webhook and poll; a provider channel declares neither (channel/*)', () => {
+		const m = { workspace: {}, models: {}, relationships: {}, automations: {}, apps: {}, policies: {}, collections: {},
+			connections: { api: { baseUrl: 'API_URL' } },
+			channels: {
+				good: { transport: 'custom', send: 'api', inbound: { verify: { scheme: 'hmac-sha256', secret: 'signingSecret' }, messages: true },
+					poll: { connection: 'api', cron: '*/5 * * * *', path: '/messages', messages: true } },
+				bad: { transport: 'custom', send: 'api', inbound: { verify: { scheme: 'md5', secret: '' } }, poll: { connection: 'nope', cron: 'often' } },
+				desk: { transport: 'slack', inbound: { verify: { scheme: 'slack', secret: 's' }, messages: true } },
+			} } as unknown as EngineManifest;
+		const found = buildChecks(m, { automations: [], connects: ['good', 'bad'] }, (_r, n) => n).map((f) => f.code + ' ' + f.path);
+		expect(found).toEqual(['channel/inbound-verify bad', 'channel/inbound-messages bad', 'channel/poll-connection bad', 'channel/poll-cron bad',
+			'channel/poll-path bad', 'channel/poll-messages bad', 'channel/custom-inbound desk']);
 	});
 
 	it('parses cron strings at build (rule 52)', () => {

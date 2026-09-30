@@ -28,6 +28,8 @@
 	onDestroy(getContext<SheetGuard | undefined>(SHEET_GUARD)?.(() => !controls.readonly && form.dirty && !form.pending) ?? (() => {}));
 	const update = $derived(spec.target.of === 'collection' && spec.target.mode === 'update');
 	const visible = $derived((fields ?? spec.fields.map((f) => f.name)).filter((f) => spec.fields.some((x) => x.name === f)));
+	// an update whose every field the row's state locks (a final state, `edit: 'none'`) has nothing to save
+	const settled = $derived(update && visible.every((f) => form.locked(f)));
 
 	async function send(e: SubmitEvent) {
 		e.preventDefault();
@@ -50,10 +52,10 @@
 	{/if}
 	{#if update && record !== null}<RecordInfo row={record} />{/if}
 	<!-- the action footer (staging's): a hairline above, unsaved changes said beside the buttons; none on a readonly form without actions -->
-	{#if !readonly || actions}<footer class="flex flex-wrap items-center justify-end gap-2 border-t pt-3" data-form-footer>
+	{#if (!readonly && !settled) || actions}<footer class="flex flex-wrap items-center justify-end gap-2 border-t pt-3" data-form-footer>
 		{#if !readonly && update && form.dirty && !form.pending}<span class="text-meta mr-auto" role="status">{t('unsaved')}</span>{/if}
 		{@render actions?.(form)}
-		{#if !readonly}<Button type="submit" disabled={form.pending || controls.disabled || (update && !form.dirty)}>
+		{#if !readonly && !settled}<Button type="submit" disabled={form.pending || controls.disabled || (update && !form.dirty)}>
 			{#if form.pending}<Spinner class="size-4" />{t('saving')}{:else}{submit ?? (spec.target.of === 'collection' && !update ? t('create') : t('save'))}{/if}
 		</Button>{/if}
 	</footer>{/if}

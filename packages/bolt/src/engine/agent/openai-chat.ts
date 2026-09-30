@@ -5,6 +5,7 @@
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
 import type { Json } from '../../decl/values.ts';
 import type { AiPort, AiRequest, AiResponse } from '../contracts.ts';
+import { csvOf, xlsxCells, xlsxSheets } from './xlsx.ts';
 
 export type OpenAiChatConfig = {
 	/** The API base, e.g. `https://openrouter.ai/api/v1`. */
@@ -23,6 +24,8 @@ export type OpenAiChatConfig = {
 type Wire = { [k: string]: unknown };
 const isObj = (v: unknown): v is Wire => v !== null && typeof v === 'object' && !Array.isArray(v);
 const textOf = (c: Json): string => typeof c === 'string' ? c : isObj(c) && typeof c['text'] === 'string' ? c['text'] : JSON.stringify(c);
+const TEXT = /^(text\/|application\/(json|csv|xml|[\w.-]+\+(json|xml))$)/;
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const dataUrl = (f: { mime: string; bytes: Uint8Array }) => `data:${f.mime};base64,${Buffer.from(f.bytes).toString('base64')}`;
 
 /** Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages; files ride the last user message. */
@@ -41,9 +44,15 @@ function messagesOf(r: AiRequest): Wire[] {
 	}
 	const files = r.files ?? [];
 	if (files.length > 0) {
-		// images as image parts, anything else (a PDF) as a file part
-		const parts = files.map((f, n) => f.mime.startsWith('image/') ? { type: 'image_url', image_url: { url: dataUrl(f) } }
-			: { type: 'file', file: { filename: `attachment-${n + 1}`, file_data: dataUrl(f) } });
+		// images as image parts, a PDF as a file part, text and an xlsx's sheets (as CSV) as text: providers refuse other file parts
+		const parts = files.map((f, n) => {
+			const name = `attachment-${n + 1}`;
+			if (f.mime.startsWith('image/')) return { type: 'image_url', image_url: { url: dataUrl(f) } };
+			if (f.mime === 'application/pdf') return { type: 'file', file: { filename: name, file_data: dataUrl(f) } };
+			if (TEXT.test(f.mime)) return { type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` };
+			if (f.mime === XLSX) return { type: 'text', text: xlsxSheets(f.bytes).map((sheet, i) => `${name} sheet ${i} "${sheet}" (CSV):\n${csvOf(xlsxCells(f.bytes, i))}`).join('\n') };
+			throw new Error(`${name}: a file of type ${f.mime} cannot be sent to the model; attach an image, a PDF, text or an xlsx workbook`);
+		});
 		const last = out.findLast((m) => m['role'] === 'user');
 		if (last === undefined) out.push({ role: 'user', content: parts });
 		else last['content'] = [{ type: 'text', text: last['content'] }, ...parts];

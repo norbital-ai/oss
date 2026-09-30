@@ -12,7 +12,7 @@ import { unmount } from 'svelte';
 import type { Authority, TransportPort } from '../engine/contracts.ts';
 import { RateWindows } from '../engine/access/rate.ts';
 import { Authorities } from '../engine/identity/actor.ts';
-import { loadKeys, mint, signupOf, type IdentityHost } from '../engine/identity/session.ts';
+import { loadKeys, loggedPhone, mint, signupOf, type IdentityHost } from '../engine/identity/session.ts';
 import { boltHandler } from '../protocol/http.ts';
 import { PATHS, type Frame, type LiveReply } from '../protocol/wire.ts';
 import { devTurnstile, shellHost } from '../shell/host.ts';
@@ -70,6 +70,7 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 	];
 	const mail: TransportPort = { send: async () => ({ providerId: 'sweep' }), subscribe: () => () => {} };
 	const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, sms: mail, devSink: true, publicUrl: ORIGIN,
+		phone: loggedPhone(() => {}, true), // the dev code for a mobile number too
 		...(signupOf(m) === undefined ? {} : { signup: signupOf(m)! }) };
 	const authorities = new Authorities(m, 'sweep');
 	const shell = shellHost({ manifest: m, identity, authorities, workspace: { name: 'Sweep', handle: 'sweep' }, ip: () => '203.0.113.50', turnstile: devTurnstile,

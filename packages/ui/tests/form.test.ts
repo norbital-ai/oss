@@ -88,7 +88,8 @@ test('a state lock makes fields read-only as advice', () => {
 	assert.equal(lock('total'), true);
 	assert.equal(d.locked(exposure.fields, null)('total'), false);
 	assert.equal(d.locked(exposure.fields, { status: 'draft' })('total'), false);
-	assert.equal(lock('status'), false, 'the state field still moves along `to`');
+	assert.equal(d.locked(exposure.fields, { status: 'draft' })('status'), false, 'the state field still moves along `to`');
+	assert.equal(lock('status'), true, 'a state with no move left is final');
 });
 
 test('a hidden field has no editor, so the advisory check leaves it to the host', () => {

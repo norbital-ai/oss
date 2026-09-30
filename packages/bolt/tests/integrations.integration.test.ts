@@ -54,7 +54,7 @@ describe('one_way: serial-pcn supplier mail (the reference)', () => {
 
 	it('a mail on another channel, or a delivery event, runs nothing', async () => {
 		expect(await sync.deliver({ kind: 'inbound', channel: 'support', message: mail() }, 'r')).toEqual([]);
-		expect(await sync.deliver({ kind: 'delivery', channel: 'supplier_inbox', providerId: 'p', event: 'sent', at: NOW }, 'r')).toEqual([]);
+		expect(await sync.deliver({ kind: 'delivery', channel: 'supplier_inbox', providerId: 'p', report: { kind: 'sent', at: NOW, provider: 'fake' } }, 'r')).toEqual([]);
 	});
 });
 

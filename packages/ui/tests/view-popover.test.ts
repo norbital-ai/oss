@@ -315,7 +315,7 @@ test('Table: a related-records row is built in the popover: relation ▸ quantif
 	v.done();
 });
 
-test('Table: a header never sorts; its menu moves and hides the column, kept per table; a row opens only by its open button', async () => {
+test('Table: a header never sorts; its menu moves and hides the column, kept per table', async () => {
 	const s = scripted();
 	localStorage.removeItem('ui.table.jobs');
 	const v = await show('table', { of: 'jobs', columns: ['title', 'hours'], orderBy: { title: 'asc' } }, s.bolt);
@@ -374,12 +374,12 @@ test('Board: the viewer sort orders the cards within each lane and the lanes kee
 	v.done();
 });
 
-test('record sheet: one header, titled with the collection label', async () => {
+test('record sheet: one header, titled with the record label', async () => {
 	const s = scripted();
 	const v = await show('record', { of: 'jobs', id: 'j1' }, s.bolt);
 	const dialog = document.querySelector('[role=dialog]');
 	assert.equal(dialog.querySelectorAll('h2').length, 1);
-	assert.equal(dialog.querySelector('h2').textContent, 'Jobs');
+	assert.equal(dialog.querySelector('h2').textContent, 'One');
 	assert.ok(dialog.querySelector('header [data-record-head]'), 'the record head is the sheet header');
 	v.done();
 });

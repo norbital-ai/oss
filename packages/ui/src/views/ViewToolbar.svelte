@@ -67,11 +67,11 @@
 	import type { Json } from './bolt.js';
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
-	import { initial, problems } from '../kinds/kind.js';
+	import { enumText, initial, likeWhere, problems } from '../kinds/kind.js';
 	import { uiText } from '../primitives/utils.js';
 	import { offerContexts, openRecord, useBolt, type Outcome } from './bolt.js';
 	import { nodeText, pathLabel, pathOf, sortText } from './filter.js';
-	import { filesOf, humanize, label, msg, refOf, rowsOf, searchIndexes, SEMANTIC_SEARCH, show, SLASH, unref, valueAt, type SearchIndex } from './model.js';
+	import { CSV_BOM, csvCell, filesOf, humanize, label, msg, rowsOf, searchIndexes, SEMANTIC_SEARCH, SLASH, unref, type SearchIndex } from './model.js';
 	import type { ViewState } from './view-state.svelte.js';
 	import Glyph, { type GlyphName } from './Glyph.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
@@ -116,14 +116,16 @@
 	// keeps the box as its text (`/semantic <text>`, rule 16); a typed similarity swaps the box for its input's editors and
 	// hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the lexical search.
 	const t = uiText();
-	const lexical = $derived(collection === '' || (x?.search?.length ?? 0) > 0);
+	// the collection's declared search fields, else its label's text fields (the Table searches those by `like`)
+	const lexicalFields = $derived((x?.search?.length ?? 0) > 0 ? x!.search! : (x?.label ?? []).filter((f) => likeWhere(x, [f], 'x') !== undefined));
+	const lexical = $derived(collection === '' || lexicalFields.length > 0);
 	const indexes = $derived(offered ? searchIndexes(x, onProbe !== undefined, { meaning: t('searchMeaning'), raw: t('searchRaw'), view: t('searchView') }) : []);
 	// the search icon exists only over something searchable: the collection's search fields or a declared index
 	const canSearch = $derived(offered && (lexical || indexes.length > 0));
 	// a collection's declared search fields; a local array searches the columns it shows (the roster's people)
 	const fieldsSearched = $derived(collection === ''
 		? Object.keys(catalog[source]?.fields ?? {}).map((f) => pathLabel(catalog, source, f, humanize))
-		: (x?.search ?? []).map((s) => pathLabel(catalog, collection, s, humanize)));
+		: lexicalFields.map((s) => pathLabel(catalog, collection, s, humanize)));
 	let index = $state<string | null>(untrack(() => SEMANTIC_SEARCH.test(q) ? 'semantic' : null));
 	let text = $state(untrack(() => q.replace(SEMANTIC_SEARCH, '')));
 	let values = $state<{ [f: string]: Json }>({});
@@ -261,14 +263,17 @@
 		menuOpen = false;
 		say(await bolt.act(`${collection}.delete`, { target: [...picked] }), msg(bolt, 'outcome.deleted', 'Deleted'));
 	}
-	// a download the browser builds (§3.6): the rows in view, the view's columns, labels as shown
+	// a download the browser builds (§3.6): the rows in view, the view's columns; enums in their words, dates as ISO text,
+	// behind a BOM so Excel reads UTF-8 (Chinese included)
 	async function exportCsv() {
 		if (exporter === undefined) return;
 		busy = true;
 		try {
 			const rows = unref(kinds.catalog, collection, exporter.fields, rowsOf(await exporter.read()), bolt.locale);
 			const cell = (s: string) => /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
-			const text = [exporter.labels, ...rows.map((r) => exporter.fields.map((f) => refOf(r, f)?.text ?? show(valueAt(r, f), bolt.locale)))]
+			const kindOf = (f: string) => (kinds.catalog?.[collection] ?? catalog[source])?.fields[f];
+			const words = (f: string) => (v: string) => enumText(v, { t: (k) => bolt.t(k), collection, field: f });
+			const text = CSV_BOM + [exporter.labels, ...rows.map((r) => exporter.fields.map((f) => csvCell(r, f, kindOf(f), words(f), bolt.locale)))]
 				.map((line) => line.map(cell).join(',')).join('\r\n');
 			const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'text/csv' })), download: `${collection || 'rows'}.csv` });
 			a.click();

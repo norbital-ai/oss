@@ -10,7 +10,7 @@
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
-	import { Button, Checkbox, Combobox, Dialog, Input, PhoneInput, Table, Tabs } from '@norbital-ai/ui';
+	import { Button, Checkbox, Combobox, Dialog, format, formatHandle, Input, PhoneInput, StateBadge, Table, Tabs } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
 	import type { ChannelConnection } from '../engine/channels/connection.ts';
 	import type { ChannelMessage, Settings } from './data.ts';
@@ -19,7 +19,8 @@
 	import type { Act } from './Acts.svelte';
 	import Acts from './Acts.svelte';
 	import Connection from './channels/Connection.svelte';
-	import { connectionLabel, type ConnectLoader } from './channels/connect.ts';
+	import { chosenLocale } from './i18n.ts';
+	import { channelLabel, connectionLabel, transportLabel, type ConnectLoader } from './channels/connect.ts';
 	import DetailSheet from './DetailSheet.svelte';
 	import Runs from './Runs.svelte';
 	import SystemPage from './SystemPage.svelte';
@@ -66,13 +67,13 @@
 	}
 
 	const str = (v: Json | undefined) => v === null || v === undefined ? '' : String(v);
-	const when = (v: Json | undefined) => typeof v === 'string' && v !== '' ? new Date(v).toLocaleString(bolt.locale) : '—';
+	const when = (v: Json | undefined) => typeof v === 'string' && v !== '' ? format({ kind: 'instant' }, v, { locale: bolt.locale }) : '—';
 	const named = (rows: readonly { readonly [k: string]: Json }[]) => rows.map((r) => ({ value: str(r['id']), label: str(r['name']) || str(r['email']) || str(r['phone']) }));
 	const TABLES: { readonly [table: string]: string } = { sys_user: 'member', sys_team: 'team', sys_assignment: 'assignment', sys_invitation: 'invitation' };
 
 	// ── rows: the settings read projected per table (staging's in-memory collections) ──
 	const teamName = (id: Json | undefined) => str(s?.teams.find((x) => x['id'] === id)?.['name']);
-	const members = $derived((s?.members ?? []).map((u) => ({ id: str(u['id']), name: str(u['name']), email: str(u['email']), phone: str(u['phone']), kind: t(str(u['kind'])), external: u['kind'] === 'external',
+	const members = $derived((s?.members ?? []).map((u) => ({ id: str(u['id']), name: str(u['name']), email: str(u['email']), phone: str(u['phone']), telegram: str(u['telegram']), kind: u['kind'] === 'external' ? t('External') : t('Staff'), external: u['kind'] === 'external',
 		team: teamName(u['team']), team_id: str(u['team']) || null, admin: u['admin'] === true, active: u['active'] === true, last_seen: str(u['last_seen']) || null })));
 	const teams = $derived((s?.teams ?? []).map((x) => ({ id: str(x['id']), name: str(x['name']), parent: str(x['parent']) || null })));
 	const invitations = $derived((s?.invitations ?? []).map((i) => ({ id: str(i['id']), email: str(i['email']) || str(i['phone']), team: teamName(i['team']), external: i['external'] === true,
@@ -121,9 +122,11 @@
 	}
 	const pair = (name: string, input?: Json) => transportOp(name, () => api.transport.pair(name, input ?? {}));
 	const unpair = (name: string) => transportOp(name, () => api.transport.unpair(name));
+	const test = (name: string, to?: string) => transportOp(name, () => api.transport.test(name, to));
 
-	const channels = $derived((s?.channels ?? []).map((c) => ({ id: c.name, name: c.name, transport: str(c.transport), address: str(c.address), sent: c.delivery.sent,
-		queued: c.delivery.pending, retrying: c.delivery.retrying, failed: c.delivery.failed, next_retry: c.delivery.nextRetry, last_error: c.delivery.lastError,
+	// the catalog's `channels.<name>.label`, else the name humanized with brand casing (`site_whatsapp` → `Site WhatsApp`)
+	const channels = $derived((s?.channels ?? []).map((c) => ({ id: c.name, name: c.name, label: channelLabel(c.name, t), transport: str(c.transport), via: transportLabel(str(c.transport)), sent: c.delivery.sent,
+		queued: c.delivery.pending, retrying: c.delivery.retrying, failed: c.delivery.failed, skipped: c.delivery.skipped, next_retry: c.delivery.nextRetry, last_error: c.delivery.lastError,
 		connection: connectionLabel(connections[c.name] ?? null, t) })));
 	const remotes = $derived(s === null ? [] : [
 		...s.integrations.map((i) => ({ id: `integration:${i.name}`, name: i.name, kind: t('Integration'), detail: str(i.direction), status: i.paused ? t('paused') : t('active'), paused: i.paused })),
@@ -168,7 +171,12 @@
 		channelLog = null;
 		if (name !== undefined) void readChannel(name);
 	});
-	const show = (kind: Open['kind']) => (row: { id: string }) => (open = { kind, id: row.id });
+	const show = (kind: Open['kind']) => (row: { id: string }) => { open = { kind, id: row.id }; handles = {}; };
+	/** The open member's unsaved channel handles (rule 57: what a private envoy knows them by); a key left out is unchanged. */
+	let handles = $state<{ phone?: string | null; telegram?: string }>({});
+	async function saveHandles(id: string): Promise<void> {
+		if ((await op('setHandles', { id, ...handles })) !== undefined) handles = {};
+	}
 	let peopleTab = $state('members');
 	type Creating = 'invite' | 'assign' | 'team' | 'key';
 	let creating = $state<Creating | null>(null);
@@ -317,9 +325,9 @@
 		</Table>
 	{:else if tab === 'channels'}
 		<Table of={channels} key="channels" onOpen={show('channel')} toolbar={{ description: t('Open a channel to pair it with its provider and to see its outbound deliveries; an automatic retry is progress, only a settled failure is terminal.'), export: true }}
-			columns={[{ field: 'name', label: t('Name') }, { field: 'transport', label: t('Transport') }, { field: 'address', label: t('Address') },
-				{ field: 'connection', label: t('Connection') }, { field: 'sent', label: t('sent') },
-				{ field: 'queued', label: t('queued') }, { field: 'retrying', label: t('retrying') }, { field: 'failed', label: t('failed') }, { field: 'last_error', label: t('Error') }]}>
+			columns={[{ field: 'label', label: t('Name') }, { field: 'via', label: t('Transport') },
+				{ field: 'connection', label: t('Connection') }, { field: 'sent', label: t('Sent') },
+				{ field: 'queued', label: t('Queued') }, { field: 'retrying', label: t('Retrying') }, { field: 'failed', label: t('Failed') }, { field: 'skipped', label: t('Skipped') }, { field: 'last_error', label: t('Error') }]}>
 			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('The workspace declares no channels.')}</p>{/snippet}
 		</Table>
 	{:else if tab === 'integrations'}
@@ -358,6 +366,11 @@
 						<Combobox size="sm" clearable placeholder={t('No team')} options={named(s.teams)} value={u.team_id} onChange={(team) => op('assignTeam', { id: u.id, team })} aria-label={t('Team')} /></label>
 					<label class="flex items-center gap-2"><Checkbox checked={u.admin} disabled={u.external} onCheckedChange={(admin) => op('setAdmin', { id: u.id, admin })} /> {t('Admin')}</label>
 					<label class="flex items-center gap-2"><Checkbox checked={u.active} onCheckedChange={(on) => op(on ? 'reactivate' : 'deactivate', { id: u.id })} /> {t('Active')}</label>
+					<label class="flex flex-col gap-1"><span class="text-meta">{t('Mobile number')}</span>
+						<PhoneInput value={handles.phone !== undefined ? handles.phone : u.phone || null} onChange={(v) => (handles.phone = typeof v === 'string' ? v : null)} /></label>
+					<label class="flex flex-col gap-1"><span class="text-meta">{t('Telegram')}</span>
+						<Input class="h-8" placeholder="@handle" aria-label={t('Telegram')} value={handles.telegram ?? u.telegram} oninput={(e) => (handles.telegram = e.currentTarget.value)} /></label>
+					<Cluster><Button size="sm" disabled={Object.keys(handles).length === 0} onclick={() => saveHandles(u.id)}>{t('Save')}</Button></Cluster>
 				</div>
 			</DetailSheet>
 		{/if}
@@ -418,13 +431,14 @@
 	{:else if open.kind === 'channel'}
 		{@const c = channels.find((x) => x.id === open?.id)}
 		{#if c !== undefined}
-			<DetailSheet title={c.name} onClose={close} fields={[{ label: t('Transport'), value: c.transport }, { label: t('Address'), value: c.address },
-				{ label: t('sent'), value: c.sent }, { label: t('queued'), value: c.queued }, { label: t('retrying'), value: c.retrying }, { label: t('failed'), value: c.failed },
-				{ label: t('next'), value: c.next_retry === null ? undefined : when(c.next_retry) }, { label: t('Error'), value: c.last_error ?? undefined }]}>
+			<DetailSheet title={c.label} onClose={close} fields={[{ label: t('Transport'), value: c.via },
+				{ label: t('Sent'), value: c.sent }, { label: t('Queued'), value: c.queued }, { label: t('Retrying'), value: c.retrying }, { label: t('Failed'), value: c.failed }, { label: t('Skipped'), value: c.skipped },
+				{ label: t('Next retry'), value: c.next_retry === null ? undefined : when(c.next_retry) }, { label: t('Error'), value: c.last_error ?? undefined }]}>
 				<div class="border-t pt-3">
 				{#snippet connectionTab()}
 					<Connection channel={c.name} transport={c.transport} connection={connections[c.name] ?? null} error={connectionErrors[c.name] ?? null}
-						busy={pairing[c.name] === true} pair={(input) => pair(c.name, input)} unpair={() => unpair(c.name)} {t} workspace={connects} />
+						busy={pairing[c.name] === true} pair={(input) => pair(c.name, input)} unpair={() => unpair(c.name)} test={(to) => test(c.name, to)} {t}
+						locale={chosenLocale(workspace.locale)} workspace={connects} />
 				{/snippet}
 				{#snippet messagesTab()}
 					<!-- the channel's raw traffic as stored: what came in and what went out, newest first -->
@@ -443,14 +457,31 @@
 								{#each channelLog.rows as x (x.id)}
 									<li class="rounded-md border border-border/70 px-2.5 py-1.5" data-direction={x.direction} data-channel-message={x.id}>
 										<p class="flex items-center gap-2 text-xs text-muted-foreground">
-											<span class="font-medium text-foreground">{x.direction === 'inbound' ? '←' : '→'} {x.direction === 'inbound' ? (x.sender_name ?? x.sender ?? '') : t('sent')}</span>
-											<span class="min-w-0 truncate">{x.kind === 'group' ? (x.title ?? x.thread) : x.thread}</span>
+											<span class="font-medium text-foreground">{x.direction === 'inbound' ? '←' : '→'} {x.direction === 'inbound' ? formatHandle(c.transport, x.sender ?? '', x.sender_name) : t('sent')}</span>
+											<span class="min-w-0 truncate">{x.kind === 'group' ? (x.title ?? x.thread) : formatHandle(c.transport, x.thread ?? '')}</span>
 											<span class="flex-1"></span>
-											{#if x.direction === 'outbound' && x.status !== null}<span class:text-destructive={x.status === 'failed'}>{x.status}</span>{/if}
+											{#if x.direction === 'outbound' && x.status !== null}<StateBadge state={x.status} label={t(x.status)} />{/if}
 											<time class="tabular-nums">{when(x.at)}</time>
 										</p>
 										<p class="whitespace-pre-wrap">{x.text ?? ''}{#if x.files > 0} <span class="text-xs text-muted-foreground">· {x.files} {t(x.files === 1 ? 'file' : 'files')}</span>{/if}</p>
-										{#if x.error}<p class="text-xs text-destructive">{x.error}</p>{/if}
+										{#if x.error}<p class="text-xs {x.status === 'skipped' ? 'text-muted-foreground' : 'text-destructive'}">{x.error}</p>{/if}
+										{#if x.delivery.length > 0}
+											<!-- every report the provider (or bolt) made, oldest first (§5.9) -->
+											<details class="text-xs" data-delivery-timeline>
+												<summary class="cursor-pointer text-muted-foreground">{t('Delivery')}</summary>
+												<ol class="mt-1 flex flex-col gap-0.5 border-l border-border/70 pl-2">
+													{#each x.delivery as e, i (i)}
+														<li data-delivery-kind={e.kind}>
+															<span class="font-medium">{t(e.kind === 'auto_replied' ? 'auto-replied' : e.kind)}</span>{#if e.presumed} <span class="text-muted-foreground">({t('presumed')})</span>{/if}{#if e.approximate} <span class="text-muted-foreground">({t('approximate')})</span>{/if}
+															<time class="tabular-nums text-muted-foreground">{when(e.at)}</time>
+															{#if e.provider !== 'bolt'}<span class="text-muted-foreground">· {e.provider}</span>{/if}
+															{#if e.code}<code class="text-muted-foreground">{e.code}</code>{/if}
+															{#if e.reason}<span class="text-muted-foreground">— {e.reason}</span>{/if}
+														</li>
+													{/each}
+												</ol>
+											</details>
+										{/if}
 									</li>
 								{/each}
 							</ol>

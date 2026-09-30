@@ -1,3 +1,7 @@
+<!--
+@component
+A view's empty, no-access or failed state: an icon, a title, a hint and the way forward.
+-->
 <script lang="ts">
 	// A view's empty, no-access or failed state, staging's two shapes: `page` (staging's `Empty`: a round icon well, a
 	// section title, a hint, the way forward) and the grid's compact one — `inset` fills the view's own card (a table, a

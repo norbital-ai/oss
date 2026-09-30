@@ -111,7 +111,7 @@ describe('shell host (§5.10)', () => {
 		expect(mailbox.at(-1)).toMatchObject({ to: 'boss@acme.example' });
 		const { status, boot: b } = await boot(admin);
 		expect(status).toBe(200);
-		expect(b).toMatchObject({ admin: true, name: 'boss', surfaces: { inbox: true, runs: true, settings: true, agent: true, studio: true }, visitor: null });
+		expect(b).toMatchObject({ admin: true, name: 'Boss', surfaces: { inbox: true, runs: true, settings: true, agent: true, studio: true }, visitor: null });
 		expect(b.nav.map((n) => n.name)).toEqual(['sales', 'careers']);
 		expect(b.aiUnconfigured).toBe(true); // the host binds no AI: the agent panel says so
 		// ui's forms read the caller's exposure from the boot
@@ -280,7 +280,6 @@ describe('shell host (§5.10)', () => {
 			workspace: { name: 'Acme', handle: 'acme' }, ip: () => '203.0.113.9', ai: false });
 		expect(await (await under.handle(new Request(`${ORIGIN}/manifest.webmanifest`)))!.json()).toMatchObject({ scope: `${ORIGIN}/acme/`, start_url: `${ORIGIN}/acme/` });
 		expect((await under.handle(new Request(`${ORIGIN}/__bolt/session/signout`, { method: 'POST' })))!.headers.get('set-cookie')).toContain('; Path=/acme;');
-		expect((await under.handle(new Request(`${ORIGIN}/__bolt/envoys/register?claim=c1`)))!.headers.get('location')).toBe(`${ORIGIN}/acme/register/c1`);
 	});
 
 	it('signs out: the session row goes and the cookie is cleared', async () => {

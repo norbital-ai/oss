@@ -37,6 +37,8 @@ The editor of one value by its field kind: every kind's input in one component (
 
 <script lang="ts">
 	import CodeEditor from '../editors/code-editor.svelte';
+	import MarkdownEditor from '../editors/markdown-editor.svelte';
+	import { useEnumText } from '../views/bolt.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Textarea from '../primitives/textarea/textarea.svelte';
@@ -60,6 +62,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	const controls = provideControls(() => ({ readonly, disabled: ownDisabled }));
 	const disabled = $derived(controls.disabled);
 	const t = uiText();
+	const words = useEnumText();
 	const v = $derived(untag(value));
 	const invalid = $derived(errors?.has(name) ?? false);
 	const str = (x: Json) => (typeof x === 'string' ? x : null);
@@ -98,6 +101,8 @@ The editor of one value by its field kind: every kind's input in one component (
 	<TagsInput value={Array.isArray(v) ? v.map(String) : []} {onChange} {id} {disabled} {invalid} />
 {:else if kind.kind === 'text' && kind.format === 'zone'}
 	<Combobox {id} options={zones} value={str(v)} onChange={(z) => onChange(z)} clearable={kind.optional === true} {disabled} {invalid} />
+{:else if kind.kind === 'text' && kind.format === 'markdown'}
+	<MarkdownEditor {id} value={str(v) ?? ''} onChange={(next) => onChange(next === '' ? null : next)} {disabled} {invalid} />
 {:else if kind.kind === 'text' && (kind.max ?? 0) > 200}
 	<Textarea {id} value={str(v) ?? ''} oninput={(e) => onChange(e.currentTarget.value === '' ? null : e.currentTarget.value)} maxlength={kind.max} {disabled} aria-invalid={invalid ? 'true' : undefined} />
 {:else if ['text', 'int', 'number', 'decimal', 'duration'].includes(kind.kind)}
@@ -114,12 +119,12 @@ The editor of one value by its field kind: every kind's input in one component (
 			{@const list = Array.isArray(v) ? v.map(String) : []}
 			<label class="inline-flex items-center gap-1.5 text-sm">
 				<Checkbox checked={list.includes(option)} onCheckedChange={(c) => onChange(c ? [...list, option] : list.filter((x) => x !== option))} {disabled} />
-				{option.replace(/_/g, ' ')}
+				{words(option, name)}
 			</label>
 		{/each}
 	</div>
 {:else if kind.kind === 'enum'}
-	<Combobox {id} options={kind.values.map((o) => ({ value: o, label: o.replace(/_/g, ' ') }))} value={str(v)} onChange={(o) => onChange(o)} clearable={kind.optional === true} {disabled} {invalid} />
+	<Combobox {id} options={kind.values.map((o) => ({ value: o, label: words(o, name) }))} value={str(v)} onChange={(o) => onChange(o)} clearable={kind.optional === true} {disabled} {invalid} />
 {:else if kind.kind === 'id'}
 	<Picker of={kind.of} value={str(v)} {onChange} where={kind.where as { readonly [key: string]: Json } | undefined} {id} {disabled} {invalid} />
 {:else if kind.kind === 'custom' && custom}

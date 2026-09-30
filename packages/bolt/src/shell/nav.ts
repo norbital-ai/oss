@@ -129,6 +129,19 @@ function pipelineOf(m: EngineManifest, a: Authority, c: string, reads: boolean):
 		...(p?.export !== undefined && a.actor.kind === 'member' && reads ? { export: p.export.description } : {}) };
 	return Object.keys(feeds).length === 0 ? {} : { pipeline: feeds };
 }
+/**
+ * A roll-up `sum` over a money field keeps its money: `money: { currency? }`, the child's literal code, or the child's currency
+ * field when the parent has one of that name (the document's currency its lines copy); else the workspace default.
+ */
+function sumOf(m: EngineManifest, c: string, k: EngineManifest['models'][string]['fields'][string]): unknown {
+	if (k.kind !== 'sum') return k;
+	const [rel, f] = k.of.split('.') as [string, string];
+	const child = Object.entries(m.relationships).find(([, r]) => r.inverse === rel && [r.to].flat().includes(c))?.[0].split('.')[0];
+	const of = child === undefined ? undefined : m.models[child]?.fields[f];
+	if (of?.kind !== 'money') return k;
+	const cur = of.currency;
+	return { ...k, money: cur !== undefined && (/^[A-Z]{3}$/.test(cur) || m.models[c]?.fields[cur]?.kind === 'currency') ? { currency: cur } : {} };
+}
 export function exposure(m: EngineManifest, a: Authority): ShellBoot['catalog'] {
 	const out: { [c: string]: Exposure } = {};
 	for (const [c, spec] of Object.entries(m.collections)) {
@@ -146,7 +159,9 @@ export function exposure(m: EngineManifest, a: Authority): ShellBoot['catalog'] 
 		const columns = (v: 'create' | 'update') => spec[v]!.input.columns.filter((f) => a.admin || ca![v].some((x) => x.fields === 'all' || x.fields.includes(f)));
 		// a create-only caller (a visitor's application form) still sees the fields it writes
 		const written = new Set(writes.flatMap(columns));
-		const fields = Object.entries(model.fields).filter(([f]) => readable(f) || written.has(f));
+		// a computed field reads like a stored one (a model `label` may name one), its kind the expression's
+		const fields = [...Object.entries(model.fields).map(([f, k]) => [f, sumOf(m, c, k)] as const), ...Object.entries(model.computed ?? {}).map(([f, x]) => [f, { kind: x.kind }] as const)]
+			.filter(([f]) => readable(f) || written.has(f));
 		const relations = Object.entries(m.relationships).flatMap(([key, r]) => {
 			const [from, fk] = key.split('.') as [string, string];
 			return from === c && ((reads && relExposed(fk) && armed(fk)) || written.has(fk))
@@ -273,7 +288,7 @@ export type Route =
 	| { kind: 'home' } | { kind: 'inbox' } | { kind: 'settings'; tab: SettingsTab } | { kind: 'studio'; tab?: StudioTab }
 	/** A moved page (`/runs` is Settings' Automations, `/logs` Studio's runtime log): the shell replaces the URL. */
 	| { kind: 'redirect'; to: string }
-	| { kind: 'signIn'; next?: string } | { kind: 'invite'; id: string } | { kind: 'register'; claim: string }
+	| { kind: 'signIn'; next?: string } | { kind: 'invite'; id: string }
 	| { kind: 'notFound' };
 /** Settings proper (people, organization, audit, automation runs), then the System pages (channels, integrations, environment secrets). */
 export const SETTINGS_TABS = ['people', 'organization', 'audit', 'automations', 'channels', 'integrations', 'secrets'] as const;
@@ -296,7 +311,6 @@ export function route(m: ShellManifest, url: URL): Route {
 			: seg.length === 2 && STUDIO_TABS.includes(seg[1] as never) ? { kind: 'studio', tab: seg[1] as StudioTab } : { kind: 'notFound' };
 		case 'sign-in': { const next = url.searchParams.get('next'); return { kind: 'signIn', ...(next?.startsWith('/') && !next.startsWith('//') ? { next } : {}) }; }
 		case 'invite': return seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'notFound' };
-		case 'register': return seg[1] ? { kind: 'register', claim: seg[1] } : { kind: 'notFound' };
 		case 'app': break;
 		default: return { kind: 'notFound' };
 	}
@@ -331,7 +345,7 @@ export function withRecords(url: URL, depth: number): URL {
 	return next;
 }
 
-/** What a signed-out viewer may open: public app pages, sign-in, invitation and registration. */
+/** What a signed-out viewer may open: public app pages, sign-in and invitation. */
 export function isOpenRoute(m: ShellManifest, r: Route): boolean {
-	return r.kind === 'signIn' || r.kind === 'invite' || r.kind === 'register' || (r.kind === 'page' && audienceOf(appOf(m, r.app)) === 'public');
+	return r.kind === 'signIn' || r.kind === 'invite' || (r.kind === 'page' && audienceOf(appOf(m, r.app)) === 'public');
 }

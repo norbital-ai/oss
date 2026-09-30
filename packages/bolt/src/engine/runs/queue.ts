@@ -15,6 +15,8 @@ export const REPLACE_QUEUED = `ON CONFLICT (key) DO UPDATE SET input = excluded.
 	WHERE sys_run.automation = excluded.automation AND sys_run.state = 'queued' AND sys_run.attempts = 0`;
 
 export const BUCKET_MS = 300_000;
+/** A custom channel's poll run: `channels.poll:<channel>` (a platform run, `engine/channels`). */
+export const POLL = 'channels.poll:';
 /** Rule 52a: exact when less than 5 minutes ahead, else rounded up to the 5-minute bucket. */
 export const dueAt = (now: number, at: number): number => at - now < BUCKET_MS ? at : Math.ceil(at / BUCKET_MS) * BUCKET_MS;
 export const iso = (ms: number): string => new Date(ms).toISOString();
@@ -51,6 +53,13 @@ export function triggersOf(m: EngineManifest): Triggers {
 				...(Array.isArray(x['fields']) ? { fields: x['fields'] as string[] } : {}),
 				...(typeof x['delay'] === 'string' ? { delayMs: durationMs(x['delay']) } : {}) });
 		}
+	}
+	// a custom channel's `poll` is a cron slot of its platform run (`channels.poll:<channel>`)
+	for (const [channel, spec] of Object.entries(m.channels)) {
+		const p = spec['poll'] as Data | undefined;
+		if (typeof p?.['cron'] !== 'string') continue;
+		const cron = parseCron(p['cron']), tz = typeof p['tz'] === 'string' ? p['tz'] : m.workspace.tz;
+		crons.push({ automation: `${POLL}${channel}`, key: `poll:${channel}:${p['cron']}@${tz}`, cron, tz, bucket: periodAtLeast5Min(cron) });
 	}
 	cache.set(m, t = { events, crons, webhooks });
 	return t;

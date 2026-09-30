@@ -7,7 +7,6 @@ import type { CollectionName, CustomFieldName, CustomShape, Row as RowOf } from 
 import { createBolt, type BoltConfig } from '../client/bolt.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
 import { decodeConnection, type ChannelConnection } from '../engine/channels/connection.ts';
-import type { Claim, Redemption } from '../engine/envoys/registration.ts';
 import { BOLT, HEADERS, PATHS, uuidv7, type AgentRow, type PushBody } from '../protocol/wire.ts';
 import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
@@ -46,7 +45,7 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 	return {
 		boot: (app?: string) => call<ShellBoot>('GET', app === undefined ? SHELL : `${SHELL}${q('app', app)}`),
 		methods: () => call<import('./host.ts').SignInMethods>('GET', PATHS.session.methods),
-		sendCode: (address: string) => call<null>('POST', PATHS.session.code, { address }),
+		sendCode: (address: string, via: 'sms' | 'whatsapp' = 'sms') => call<null>('POST', PATHS.session.code, { address, via }),
 		verify: (address: string, code: string) => call<{ user: string }>('POST', PATHS.session.verify, { address, code }),
 		signOut: () => call<null>('POST', PATHS.session.signout),
 		invitation: (id: string) => call<{ email: string | null; phone: string | null; team: string | null; external: boolean; status: 'open' | 'accepted' | 'revoked' | 'expired' }>(
@@ -68,9 +67,11 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		transport: {
 			path: (channel: string) => `${BOLT}/transports/${encodeURIComponent(channel)}`,
 			state: (channel: string) => call<ChannelConnection>('GET', `${BOLT}/transports/${encodeURIComponent(channel)}`),
-			/** `credential` for a token-shaped provider, `phone` for a code the provider texts. Both optional; the host refuses a malformed one. */
+			/** The provider's setup fields as one object, plus `provider: '<id>'` when the transport has several. The host refuses a malformed one. */
 			pair: (channel: string, input: Json = {}) => call<ChannelConnection>('POST', `${BOLT}/transports/${encodeURIComponent(channel)}/pair`, input),
 			unpair: (channel: string) => call<ChannelConnection>('POST', `${BOLT}/transports/${encodeURIComponent(channel)}/logout`),
+			/** A short test message through the connected channel: to `to`, or to its own account when its provider names no target (`connection.test`). */
+			test: (channel: string, to?: string) => call<ChannelConnection>('POST', `${BOLT}/transports/${encodeURIComponent(channel)}/test`, to === undefined ? {} : { to }),
 			/**
 			 * The host's state stream, so a pairing that takes a while (a rotating QR, a bot webhook registering) reports
 			 * progress instead of a spinner: every state change arrives, and a dropped stream reconnects on its own.
@@ -99,8 +100,6 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		preview: (target: string | { team: string } | null) => call<null>('POST', `${SHELL}/preview`, typeof target === 'object' && target !== null ? target : { user: target }),
 		/** `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's. */
 		explain: (target?: { user: string } | { team: string }) => call<Json>('GET', `${SHELL}/explain${target === undefined ? '' : `?${new URLSearchParams(target)}`}`),
-		registration: (claim: string) => call<Claim>('GET', `${SHELL}/register${q('claim', claim)}`),
-		register: (claim: string, replay: boolean) => call<Redemption>('POST', `${SHELL}/register`, { claim, replay }),
 		push: (body: PushBody) => call<null>('POST', PATHS.push, body as Json),
 		agent: {
 			start: (title?: string, model?: string) => act('sys_conversation.start', { ...(title === undefined ? {} : { title }), ...(model === undefined ? {} : { model }) }),
@@ -125,7 +124,6 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 			// hook:agent-ui — §5.9's remaining generated actions
 			setAgent: (conversation: string, agent: string) => act('sys_conversation.setAgent', { conversation, agent }),
 			file: (message: string, about: { collection: string; id: string } | null) => act('sys_message.file', { message, about }),
-			linkHandle: (claim: string, replay: boolean) => act('sys_user.linkHandle', { claim, replay }),
 			stop: (conversation: string) => act('sys_conversation.stop', { conversation }),
 			setModel: (conversation: string, model: string) => act('sys_conversation.setModel', { conversation, model }),
 			revise: (message: string, text: string) => act('sys_message.revise', { message, text }),

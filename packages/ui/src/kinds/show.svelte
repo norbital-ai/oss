@@ -20,18 +20,24 @@ Shows any stored or input value read-only, formatted by its field kind.
 </script>
 
 <script lang="ts">
+	import { useEnumText } from '../views/bolt.js';
 	import { humanize } from '../views/model.js';
+	import Badge from '../primitives/badge/badge.svelte';
+	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
 	import Icon from '@iconify/svelte';
 	import { cn, uiText } from '../primitives/utils.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { currencyOf, format, isMasked, NUMERIC, untag } from './kind.js';
+	import { currencyOf, format, isMasked, NUMERIC, shownKind, untag } from './kind.js';
 	import Self from './show.svelte';
 	import StateBadge from './state-badge.svelte';
 
-	let { kind, value, name = '', row = {}, class: className }: ShowProps = $props();
+	let { kind: declared, value, name = '', row = {}, class: className }: ShowProps = $props();
 	const host = useKinds();
 	const t = uiText();
+	const words = useEnumText();
+	// a sum of a money field reads as that money
+	const kind = $derived(shownKind(declared));
 	const v = $derived(untag(value));
 	const text = $derived(format(kind, value, {
 		locale: host.locale, zone: host.zone,
@@ -46,11 +52,14 @@ Shows any stored or input value read-only, formatted by its field kind.
 {#if v === null || isMasked(value)}
 	<span class={cn('text-muted-foreground', className)}>{isMasked(value) ? '•••' : t('none')}</span>
 {:else if kind.kind === 'state' && typeof v === 'string'}
-	<StateBadge state={v} class={className} />
-{:else if kind.kind === 'enum' && kind.many && Array.isArray(v)}
-	<span class={cn('inline-flex flex-wrap gap-1', className)}>
-		{#each v as item (item)}<StateBadge state={String(item)} />{/each}
+	<StateBadge state={v} label={words(v, name)} class={className} />
+{:else if kind.kind === 'enum' && (typeof v === 'string' || Array.isArray(v))}
+	<!-- a plain enum or tag is a neutral chip; only a state is coloured -->
+	<span class={cn('inline-flex flex-wrap gap-1', className)} data-enum-list>
+		{#each Array.isArray(v) ? v.map(String) : [v] as item (item)}<Badge variant="outline" class="font-medium" data-enum-value={item}>{words(item, name)}</Badge>{/each}
 	</span>
+{:else if kind.kind === 'text' && kind.format === 'markdown' && typeof v === 'string'}
+	<ReadonlyMarkdown value={v} class={className} />
 {:else if kind.kind === 'bool'}
 	<Icon icon={v ? 'lucide:check' : 'lucide:x'} class={cn('size-4', v ? 'text-success' : 'text-muted-foreground', className)} aria-label={v ? t('yes') : t('no')} />
 {:else if field?.entry.renderer}

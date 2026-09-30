@@ -2,7 +2,7 @@
 // to start (a thrown `ConfigError`); what depends on the workspace (mail, files, secrets, turnstile, AI models) is
 // checked at activation, against the manifest, by `server.ts`.
 import { isIP } from 'node:net';
-import { parseSms } from './sms.ts';
+import { SINCH_REGIONS, type SinchRegion, type TransactionalConfig } from '@norbital-ai/providers';
 
 export class ConfigError extends Error {
 	constructor(message: string) { super(message); this.name = 'ConfigError'; }
@@ -10,13 +10,16 @@ export class ConfigError extends Error {
 
 /** One optional facility's selection: a provider name from the host's registered factories (L-BOLT-908). */
 export type Provider = { provider: string; endpoint?: string; credential?: string };
-export const FACILITIES = ['AI_SYS_1', 'AI_SYS_2', 'AI_EMBED', 'GEO', 'CONVERT', 'WEB', 'WHATSAPP', 'TELEGRAM', 'EMAIL_IN'] as const;
+export const FACILITIES = ['AI_SYS_1', 'AI_SYS_2', 'AI_EMBED', 'AI_SPEECH', 'GEO', 'CONVERT', 'WEB'] as const;
 export type Facility = (typeof FACILITIES)[number];
 /** Each facility's registered factories; any other name refuses to start. */
 export const REGISTERED: { readonly [F in Facility]: readonly string[] } = {
 	AI_SYS_1: ['openai', 'decisions'], AI_SYS_2: ['openai'], AI_EMBED: ['openai'], GEO: ['nominatim'],
+	// `ctx.ai.transcribe` / `ctx.ai.speak`: OpenRouter (ENDPOINT default its API), a model per capability
+	AI_SPEECH: ['openrouter'],
 	// `ctx.convert.document`: Norbital Convert (oss/services/convert), ENDPOINT its URL and CREDENTIAL an API key it accepts
-	CONVERT: ['norbital'], WEB: ['public'], WHATSAPP: ['baileys'], TELEGRAM: ['bot'], EMAIL_IN: ['resend'],
+	// channels are not facilities: a channel's provider and credentials are an administrator's choice at setup, never env
+	CONVERT: ['norbital'], WEB: ['public'],
 };
 export type AiModel = string | { model: string; inputs?: number; tokens?: number };
 export type Modality = 'text' | 'image' | 'file';
@@ -28,9 +31,13 @@ export type Config = {
 	publicUrl: string;
 	files: { provider: 'local'; root: string } | { provider: 's3'; endpoint: string; credential: string } | null;
 	masterKey: Buffer | null; opsKey: Buffer | null;
-	mail: string | null;
-	/** `BOLT_SMS`: texted sign-in codes and invitations (`sms.ts`); `null` when mobile numbers cannot sign in. */
-	sms: string | null;
+	/**
+	 * `BOLT_TRANSACTIONAL_EMAIL` (`resend` or `sinch`) and `BOLT_TRANSACTIONAL_PHONE` (`twilio`, `sinch` or `none`) with
+	 * their providers' keys: the host's own messaging (sign-in codes, invitations; `mail.ts`). `null` when neither is set;
+	 * `local` is a loopback origin outside production, where a host without it prints every message to its log.
+	 */
+	transactional: TransactionalConfig | null;
+	local: boolean;
 	providers: { readonly [F in Facility]?: Provider };
 	/**
 	 * The AI facility (P35, P39): `sys1` the `BOLT_AI_SYS_1_MODEL` id (`BOLT_AI_SYS_1_PROVIDER=openai`: a structured-output
@@ -40,6 +47,11 @@ export type Config = {
 	 */
 	ai: { sys1: string | null; sys2: { readonly [modelClass: string]: string }; embed: { readonly [embedding: string]: AiModel };
 		modalities: { sys2: readonly Modality[] | null; embed: readonly Modality[] | null } };
+	/**
+	 * `ctx.ai.transcribe` and `ctx.ai.speak` (`BOLT_AI_SPEECH_*`): the endpoint and key, `BOLT_AI_TRANSCRIBE_MODEL` (an
+	 * audio-input chat model), `BOLT_AI_SPEAK_MODEL` (an `/audio/speech` model) and `BOLT_AI_SPEAK_VOICE`; null when unset.
+	 */
+	speech: { endpoint: string; credential: string; transcribe: string | null; speak: string | null; voice: string | null } | null;
 	vapid: { publicKey: string; privateKey: string } | null;
 	turnstile: { siteKey: string; secret: string } | null;
 	telemetryRetainHours: number;
@@ -57,9 +69,11 @@ export type Config = {
 
 const KNOWN = new Set([
 	'BOLT_ARTIFACT', 'BOLT_HOST', 'BOLT_PORT', 'BOLT_DATABASE_URL', 'BOLT_PGLITE_DIR', 'BOLT_PUBLIC_URL',
-	'BOLT_FILES_PROVIDER', 'BOLT_FILES_ENDPOINT', 'BOLT_FILES_CREDENTIAL', 'BOLT_MASTER_KEY', 'BOLT_OPS_KEY', 'BOLT_MAIL', 'BOLT_SMS',
+	'BOLT_FILES_PROVIDER', 'BOLT_FILES_ENDPOINT', 'BOLT_FILES_CREDENTIAL', 'BOLT_MASTER_KEY', 'BOLT_OPS_KEY',
+	'BOLT_TRANSACTIONAL_EMAIL', 'BOLT_TRANSACTIONAL_PHONE', 'BOLT_RESEND_API_KEY', 'BOLT_RESEND_FROM', 'BOLT_TWILIO_ACC_SID', 'BOLT_TWILIO_AUTH_TOKEN', 'BOLT_SINCH_MAILGUN_KEY',
+	'BOLT_SINCH_MAILGUN_DOMAIN', 'BOLT_SINCH_SMS_PLAN_ID', 'BOLT_SINCH_SMS_TOKEN', 'BOLT_SINCH_SMS_FROM', 'BOLT_SINCH_VERIFICATION_KEY', 'BOLT_SINCH_VERIFICATION_SECRET', 'BOLT_SINCH_REGION',
 	...FACILITIES.flatMap((f) => [`BOLT_${f}_PROVIDER`, `BOLT_${f}_ENDPOINT`, `BOLT_${f}_CREDENTIAL`]),
-	'BOLT_AI_SYS_1_MODEL', 'BOLT_AI_SYS_2_MODELS', 'BOLT_AI_EMBED_MODELS', 'BOLT_AI_SYS_2_MODALITIES', 'BOLT_AI_EMBED_MODALITIES', 'BOLT_VAPID_PUBLIC_KEY', 'BOLT_VAPID_PRIVATE_KEY', 'BOLT_TURNSTILE_SITE_KEY', 'BOLT_TURNSTILE_SECRET',
+	'BOLT_AI_SYS_1_MODEL', 'BOLT_AI_TRANSCRIBE_MODEL', 'BOLT_AI_SPEAK_MODEL', 'BOLT_AI_SPEAK_VOICE', 'BOLT_AI_SYS_2_MODELS', 'BOLT_AI_EMBED_MODELS', 'BOLT_AI_SYS_2_MODALITIES', 'BOLT_AI_EMBED_MODALITIES', 'BOLT_VAPID_PUBLIC_KEY', 'BOLT_VAPID_PRIVATE_KEY', 'BOLT_TURNSTILE_SITE_KEY', 'BOLT_TURNSTILE_SECRET',
 	'BOLT_TELEMETRY_RETAIN_HOURS', 'BOLT_ENVIRONMENT', 'BOLT_DEV',
 ]);
 
@@ -83,11 +97,56 @@ function cidrs(list: string): string[] {
 	});
 }
 
-/** `BOLT_SMS`, checked at start: a malformed one is a configuration error, not a failed sign-in. */
-function sms(spec: string | undefined): string | null {
-	if (spec === undefined) return null;
-	try { parseSms(spec); } catch (x) { throw new ConfigError(x instanceof Error ? x.message : String(x)); }
-	return spec;
+/** Each provider key and the selections it serves (`email.resend`, `phone.twilio`, …): any other selection makes it a mistake. */
+const OWNERS: readonly [RegExp, readonly string[]][] = [
+	[/^BOLT_RESEND_/, ['email.resend']], [/^BOLT_TWILIO_/, ['phone.twilio']], [/^BOLT_SINCH_MAILGUN_/, ['email.sinch']],
+	[/^BOLT_SINCH_(SMS|VERIFICATION)_/, ['phone.sinch']], [/^BOLT_SINCH_REGION$/, ['email.sinch', 'phone.sinch']],
+];
+
+/**
+ * `BOLT_TRANSACTIONAL_EMAIL` / `BOLT_TRANSACTIONAL_PHONE` and their keys, checked at start: a selected provider needs its
+ * keys (optional parts whole or not at all), and a key no selection uses is a mistake, not a fallback.
+ */
+function transactional(get: (k: string) => string | undefined, host: string): TransactionalConfig | null {
+	const email = get('BOLT_TRANSACTIONAL_EMAIL'), phone = get('BOLT_TRANSACTIONAL_PHONE') ?? 'none';
+	if (email !== undefined && email !== 'resend' && email !== 'sinch') throw new ConfigError(`BOLT_TRANSACTIONAL_EMAIL is resend or sinch, not '${email}'`);
+	if (phone !== 'twilio' && phone !== 'sinch' && phone !== 'none') throw new ConfigError(`BOLT_TRANSACTIONAL_PHONE is twilio, sinch or none, not '${phone}'`);
+	const chosen = [`email.${email}`, `phone.${phone}`];
+	for (const k of KNOWN) {
+		const owners = OWNERS.find(([re]) => re.test(k))?.[1];
+		if (owners !== undefined && get(k) !== undefined && !owners.some((o) => chosen.includes(o)))
+			throw new ConfigError(`${k} is set but no selection uses it (${owners.map((o) => `BOLT_TRANSACTIONAL_${o.split('.')[0]!.toUpperCase()}=${o.split('.')[1]}`).join(' or ')})`);
+	}
+	const whole = (names: readonly string[], what: string) => {
+		const given = names.filter((n) => get(n) !== undefined);
+		if (given.length !== 0 && given.length !== names.length) throw new ConfigError(`${what} needs ${names.join(', ')} together`);
+		return given.length === names.length ? names.map((n) => get(n)!) : null;
+	};
+	const needs = (names: readonly string[], what: string) => {
+		const v = whole(names, what);
+		if (v === null) throw new ConfigError(`${what} needs ${names.join(' and ')}`);
+		return v;
+	};
+	const region = get('BOLT_SINCH_REGION') ?? 'us';
+	if (!SINCH_REGIONS.includes(region as SinchRegion)) throw new ConfigError(`BOLT_SINCH_REGION is one of ${SINCH_REGIONS.join(', ')}, not '${region}'`);
+	const c: TransactionalConfig = {};
+	if (email === 'resend') c.email = { provider: 'resend', key: needs(['BOLT_RESEND_API_KEY'], 'BOLT_TRANSACTIONAL_EMAIL=resend')[0]!, from: get('BOLT_RESEND_FROM') ?? `noreply@${host}` };
+	if (email === 'sinch') {
+		const [key, domain] = needs(['BOLT_SINCH_MAILGUN_KEY', 'BOLT_SINCH_MAILGUN_DOMAIN'], 'BOLT_TRANSACTIONAL_EMAIL=sinch');
+		c.email = { provider: 'sinch', key: key!, domain: domain!, region: region as SinchRegion };
+	}
+	if (phone === 'twilio') {
+		const [accountSid, authToken] = needs(['BOLT_TWILIO_ACC_SID', 'BOLT_TWILIO_AUTH_TOKEN'], 'BOLT_TRANSACTIONAL_PHONE=twilio');
+		if (!/^AC\w+$/.test(accountSid!)) throw new ConfigError('BOLT_TWILIO_ACC_SID is a Twilio account SID (AC…)');
+		c.phone = { provider: 'twilio', accountSid: accountSid!, authToken: authToken! };
+	}
+	if (phone === 'sinch') {
+		const [key, secret] = needs(['BOLT_SINCH_VERIFICATION_KEY', 'BOLT_SINCH_VERIFICATION_SECRET'], 'BOLT_TRANSACTIONAL_PHONE=sinch');
+		const sms = whole(['BOLT_SINCH_SMS_PLAN_ID', 'BOLT_SINCH_SMS_TOKEN', 'BOLT_SINCH_SMS_FROM'], 'Sinch SMS');
+		c.phone = { provider: 'sinch', region: region as SinchRegion, verification: { key: key!, secret: secret! },
+			...(sms === null ? {} : { sms: { planId: sms[0]!, token: sms[1]!, from: sms[2]! } }) };
+	}
+	return c.email === undefined && c.phone === undefined ? null : c;
 }
 
 export function decodeConfig(env: { readonly [name: string]: string | undefined }, argv: readonly string[] = []): Config {
@@ -183,6 +242,12 @@ export function decodeConfig(env: { readonly [name: string]: string | undefined 
 		return list as Modality[];
 	};
 
+	const transcribe = get('BOLT_AI_TRANSCRIBE_MODEL') ?? null, speak = get('BOLT_AI_SPEAK_MODEL') ?? null, voice = get('BOLT_AI_SPEAK_VOICE') ?? null;
+	const sp = providers.AI_SPEECH;
+	if (sp === undefined && (transcribe ?? speak ?? voice) !== null) throw new ConfigError('BOLT_AI_TRANSCRIBE_MODEL, BOLT_AI_SPEAK_MODEL and BOLT_AI_SPEAK_VOICE need BOLT_AI_SPEECH_PROVIDER=openrouter');
+	if (sp !== undefined && sp.credential === undefined) throw new ConfigError('BOLT_AI_SPEECH_PROVIDER needs BOLT_AI_SPEECH_CREDENTIAL, the API key');
+	if (sp !== undefined && transcribe === null && speak === null) throw new ConfigError('BOLT_AI_SPEECH_PROVIDER needs BOLT_AI_TRANSCRIBE_MODEL or BOLT_AI_SPEAK_MODEL');
+
 	const vpub = get('BOLT_VAPID_PUBLIC_KEY'), vpriv = get('BOLT_VAPID_PRIVATE_KEY');
 	if ((vpub === undefined) !== (vpriv === undefined)) throw new ConfigError('set both BOLT_VAPID_PUBLIC_KEY and BOLT_VAPID_PRIVATE_KEY, or neither');
 	const tsite = get('BOLT_TURNSTILE_SITE_KEY'), tsecret = get('BOLT_TURNSTILE_SECRET');
@@ -195,8 +260,10 @@ export function decodeConfig(env: { readonly [name: string]: string | undefined 
 		database: url !== undefined ? { url } : { pglite: pglite! },
 		publicUrl: pub.origin, files,
 		masterKey: key32('BOLT_MASTER_KEY', get('BOLT_MASTER_KEY')), opsKey: key32('BOLT_OPS_KEY', get('BOLT_OPS_KEY')),
-		mail: get('BOLT_MAIL') ?? null, sms: sms(get('BOLT_SMS')), providers,
+		transactional: transactional(get, pub.hostname),
+		local: LOOPBACK(pub.hostname) && get('BOLT_ENVIRONMENT') !== 'production', providers,
 		ai: { sys1, sys2, embed, modalities: { sys2: modalities('BOLT_AI_SYS_2_MODALITIES'), embed: modalities('BOLT_AI_EMBED_MODALITIES') } },
+		speech: sp === undefined ? null : { endpoint: sp.endpoint ?? 'https://openrouter.ai/api/v1', credential: sp.credential!, transcribe, speak, voice },
 		vapid: vpub === undefined ? null : { publicKey: vpub, privateKey: vpriv! },
 		turnstile: tsite === undefined ? null : { siteKey: tsite, secret: tsecret! },
 		telemetryRetainHours: retain, environment: get('BOLT_ENVIRONMENT') ?? null, ...flags,

@@ -39,9 +39,9 @@
 	// painted optimistically and rolled back by a refusal, which shows on the board.
 	import { useKinds } from '../kinds/context.js';
 	import { tone } from '../kinds/kind.js';
-	import { useBolt } from './bolt.js';
+	import { provideCollection, useBolt, useEnumText } from './bolt.js';
 	import { orderOf, sortable } from './filter.js';
-	import { and, compact, failed, flat, isRow, label, listSelect, msg, rowsOf, show, type ReadState } from './model.js';
+	import { and, compact, failed, flat, isRow, label, listSelect, lowerLead, msg, rowsOf, show, type ReadState } from './model.js';
 	import { notify } from './notify.js';
 	import { viewState } from './view-state.svelte.js';
 	import ViewToolbar from './ViewToolbar.svelte';
@@ -52,6 +52,10 @@
 	let { of, by, card, lanes, columns, where, initialFilter, orderBy, pageSize = 25, toolbar = {}, key }: BoardProps = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
+	provideCollection(() => of);
+	const words = useEnumText();
+	// a lane of an enum or state value is named in its words
+	const laneText = (v: Json) => typeof v === 'string' && ['enum', 'state'].includes(kinds.catalog?.[of]?.fields[by]?.kind ?? '') ? words(v, by) : show(v, bolt.locale);
 	const catalog = $derived(kinds.catalog ?? {});
 	const view = viewState(bolt, { key: () => key ?? of, collection: () => of, catalog: () => catalog, initialFilter: () => initialFilter });
 	const scope = $derived(and(where, view.where));
@@ -73,7 +77,7 @@
 			const list = given === undefined
 				? [...counts.keys()].map((k) => ({ value: JSON.parse(k) as Json, label: '' }))
 				: given.map((l) => isRow(l) && 'value' in l && typeof l['label'] === 'string' ? { value: l['value'] as Json, label: l['label'], ...(l['where'] === undefined ? {} : { where: l['where'] }) } : { value: l, label: '' });
-			found = { kind: 'ready', value: list.map((l) => ({ ...l, label: l.label || show(l.value, bolt.locale) || msg(bolt, 'board.none', 'None'), count: counts.get(JSON.stringify(l.value)) ?? 0 })) };
+			found = { kind: 'ready', value: list.map((l) => ({ ...l, label: l.label || laneText(l.value) || msg(bolt, 'board.none', 'None'), count: counts.get(JSON.stringify(l.value)) ?? 0 })) };
 		}, (e) => (found = failed(e)));
 	});
 
@@ -117,7 +121,7 @@
 		{/snippet}
 		{#snippet children(list)}
 			{#if list.length === 0}
-				<EmptyState variant="card" title={msg(bolt, 'table.empty', 'No {what} yet', { what: label(bolt, of).toLowerCase() })} />
+				<EmptyState variant="card" title={msg(bolt, 'table.empty', 'No {what} yet', { what: lowerLead(label(bolt, of)) })} />
 			{:else}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div

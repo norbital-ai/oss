@@ -18,7 +18,7 @@ import { HEADERS, PATHS, redact, statusOf, uuidv7Within, type ActBody, type ActR
 
 export type BoltHttp = {
 	/** The engine's `live` hub carries the streams; `act` has already published its commit (rule 66). */
-	engine: Pick<Engine, 'manifest' | 'db' | 'act' | 'calls' | 'read' | 'live' | 'approvals' | 'agents'> & Partial<Pick<Engine, 'triage' | 'filters' | 'envoys'>>; // hook:triage, hook:decisions, hook:agent-ui (envoys)
+	engine: Pick<Engine, 'manifest' | 'db' | 'act' | 'calls' | 'read' | 'live' | 'approvals' | 'agents'> & Partial<Pick<Engine, 'triage' | 'filters'>>; // hook:triage, hook:decisions
 	/** The caller's compiled authority, or `null` (401). */
 	session(request: Request): Promise<Authority | null>;
 	bindings(): Bindings;
@@ -345,15 +345,6 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 				RETURNING id, to_jsonb(sys_notification) AS n`, params: [authority.actor.id, JSON.stringify(ids)] });
 			h.engine.live.publish(read.rows.map((r) => ({ collection: 'sys_notification', id: String(r['id']), op: 'update', revision: 0, old: null, new: r['n'] as RowData, cause: 'direct' })));
 			return committed({ ids });
-		},
-		/** The caller's own registration claim (rule 38c's exception); the real member, never a previewed one (rule 39). */
-		async 'sys_user.linkHandle'(authority, input, b) {
-			const x = obj(input), envoys = h.engine.envoys;
-			if (typeof x['claim'] !== 'string') throw new BoltError('invalid', 'decode', 'sys_user.linkHandle takes { claim, replay? }');
-			if (authority.actor.kind !== 'member' || authority.key.startsWith('preview:')) return refusal('forbidden', 'Only the signed-in member links their own handle.');
-			if (envoys === undefined) return gone;
-			const r = await envoys.redeem(x['claim'], authority, { replay: x['replay'] === true });
-			return r.state === 'registered' || r.state === 'already_registered' ? committed(r as unknown as Json) : refusal('invalidInput', `The claim is ${r.state}.`);
 		},
 		async 'sys_message.confirm'(authority, input) {
 			const x = obj(input), message = x['message'];

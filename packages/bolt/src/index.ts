@@ -44,7 +44,7 @@ export type { AutomationCtx, Trigger } from './decl/runtime/automation.ts';
 export type { DeliveryEvent, OutboundFor } from './decl/runtime/channel.ts';
 export type {
 	ConvertOptions, ConvertSource, ConvertTarget, ConvertTargets, DecisionAnswers, DecisionQuestion, DecisionState, FileMeta, GeoHit,
-	ImageFacts, Notice, RunHandle, RunRow, Unavailable
+	ImageFacts, Notice, RunHandle, RunRow, SpeakOptions, SpeechFormat, TranscribeOptions, Transcript, TranscriptSegment, Unavailable
 } from './decl/runtime/facilities.ts';
 export type { ConflictRule, IntegrationCtx, IntegrationSource, Remote, RemoteKey } from './decl/runtime/integration.ts';
 export type { AiModelClass, ChildName, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, EnvName, PageName, Transport } from './decl/runtime/names.ts';

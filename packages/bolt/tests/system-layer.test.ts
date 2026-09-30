@@ -114,7 +114,7 @@ const TODAY: { [table: string]: Shape } = {
 			version: 'text', sender: 'text', sender_name: 'text', sent_at: 'timestamptz', invocation: 'text', addressed: 'boolean', refused: 'text', email: 'jsonb',
 			files: 'jsonb not null default []', reply_to: 'text', deleted_at: 'timestamptz', edited_at: 'timestamptz', status: 'text', attempts: 'int not null default 0',
 			next_attempt_at: 'timestamptz', claimed_at: 'timestamptz', error: 'text', record: 'jsonb', rule: 'text', message: 'jsonb', thread: 'text', epoch: 'text',
-			delivery: 'jsonb not null default {}' },
+			delivery: 'jsonb not null default []', presume_at: 'timestamptz' },
 		indexes: ["(conversation) where (state = 'pending'::text)", "(conversation) where (state = 'queued'::text)", '(conversation, seq)', '(channel, provider_id)',
 			"(seq) where (status in ('queued'::text, 'sending'::text))"] },
 	approval_request: { key: 'id uuid primary key',

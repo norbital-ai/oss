@@ -5,17 +5,19 @@ The live status of one automation run: queued, running with its progress, or its
 <script lang="ts" module>
 	import type { RunRow } from './bolt.js';
 	/** `run` is a run id, a `RunHandle`, or a row already read (RunsFor), which is shown without a second read. */
-	export type RunStatusProps = { automation: string; run: string | { readonly id: string } | RunRow };
+	export type RunStatusProps = { automation: string; run: string | { readonly id: string } | RunRow;
+		/** The automation's name; else its catalog label (`automations.<key>.label`), else its name in words (`jobs.send_pdf` → `Send pdf`). */
+		title?: string };
 </script>
 
 <script lang="ts">
 	// One run, live (rule 56): status, progress, the error code, and download links for the files it returned.
 	import { useBolt } from './bolt.js';
 	import { watch } from './live.svelte.js';
-	import { msg, progressOf, runFiles } from './model.js';
+	import { humanize, msg, progressOf, runFiles } from './model.js';
 	import ReadGate from './ReadGate.svelte';
 
-	let { automation, run }: RunStatusProps = $props();
+	let { automation, run, title }: RunStatusProps = $props();
 	const bolt = useBolt();
 	const id = $derived(typeof run === 'string' ? run : run.id);
 	const runs = bolt.runs;
@@ -36,7 +38,7 @@ The live status of one automation run: queued, running with its progress, or its
 				{@const p = progressOf(r)}
 				<div class="flex flex-col gap-1 text-sm" data-run={r.id} data-status={r.status}>
 					<div class="flex items-center gap-2">
-						<span class="font-medium">{bolt.t(`automations.${automation}.label`) === `automations.${automation}.label` ? automation : bolt.t(`automations.${automation}.label`)}</span>
+						<span class="font-medium">{title ?? (bolt.t(`automations.${automation}.label`) === `automations.${automation}.label` ? humanize(automation.slice(automation.lastIndexOf('.') + 1)) : bolt.t(`automations.${automation}.label`))}</span>
 						<span class="text-muted-foreground">{msg(bolt, `run.status.${r.status}`, r.status)}</span>
 						{#if (r.attempt_count ?? 0) > 1}<span class="text-muted-foreground text-xs">{msg(bolt, 'run.attempt', 'attempt {n}', { n: r.attempt_count ?? 0 })}</span>{/if}
 					</div>

@@ -2,7 +2,7 @@
 // read engine, compiled authorities, the act pipeline, and the guest runner behind the transform's workspace reads.
 // Hosts (bolt-server, the test kit) build one per activation; nothing here names a host (P18).
 import type { Json } from '../decl/values.ts';
-import type { AiPort, Authority, Bindings, Bridge, Captured, CrossAnswer, ConvertPort, DeadlinesPort, EngineManifest, FilesPort, GuestPort, Invocation, MeteringPort, ReadEngine, ReadIR, RowData, TenantDb, TransportPort } from './contracts.ts'; // hook:triage (MeteringPort)
+import type { AiPort, Authority, Bindings, Bridge, Captured, CrossAnswer, ConvertPort, SpeechPort, DeadlinesPort, EngineManifest, FilesPort, GuestPort, Invocation, MeteringPort, ReadEngine, ReadIR, RowData, TenantDb, TransportPort } from './contracts.ts'; // hook:triage (MeteringPort)
 import { BoltError, callPort, LIMITS } from './contracts.ts';
 import { compileAuthority, type Holder } from './access/authority.ts';
 import { catalogOf } from './access/pred.ts';
@@ -48,6 +48,8 @@ export type EngineConfig = {
 	http?: HttpPort; files?: FilesPort;
 	/** `ctx.convert.document`'s converter (optional; `documentConverter`, the client for Norbital Convert, is the open-source one). */
 	convert?: ConvertPort;
+	/** `ctx.ai.transcribe` and `ctx.ai.speak` (optional; each member absent → `unavailable`). */
+	speech?: SpeechPort;
 	/** The host's side of the declared connections (§5.11.4): secrets, public origin, fetch. Builds `http` unless given, and `Engine.connections`. */
 	connections?: ConnectionsHost;
 	/** Run facilities, webhook secrets, the seed `start` list, extra platform runs. */
@@ -59,7 +61,7 @@ export type EngineConfig = {
 	/** Rule 61: this environment's epoch; queued rows of another are skipped. */
 	epoch?: string;
 	agent?: Omit<AgentConfig, 'engine' | 'ai' | 'bindings'>; // hook:agent — geocoder, web, host skills and tools reach the agent
-	envoys?: Pick<EnvoysConfig, 'registrationLink' | 'workspace'>;
+	envoys?: Pick<EnvoysConfig, 'workspace'>;
 	/** P33: the meter each `sys_1` decision (`ai.sys_1`) reports to. */ // hook:decisions
 	metering?: MeteringPort;
 	/** Rule 71a (hook:drains): the generation scope; aborting it interrupts every guest invocation and its in-flight crossing. */
@@ -80,6 +82,8 @@ export type Engine = {
 	files?: FilesPort;
 	/** The host's document converter, when it binds one. */
 	convert?: ConvertPort;
+	/** The host's speech, when it binds one. */
+	speech?: SpeechPort;
 	/** The cell's live lane: every commit through `act` and `calls.action` is routed here. */
 	live: LiveHub;
 	/** Collection queries, actions and run starts (rules 31, 33, 33a); an action's commit is announced and published too. */
@@ -250,7 +254,7 @@ export function engine(config: EngineConfig): Engine {
 	}
 	const e: Engine = {
 		manifest: m, db, live, read, ...(guest === undefined ? {} : { guest }), ...(config.files === undefined ? {} : { files: config.files }),
-		...(config.convert === undefined ? {} : { convert: config.convert }),
+		...(config.convert === undefined ? {} : { convert: config.convert }), ...(config.speech === undefined ? {} : { speech: config.speech }),
 		async migrate(options = {}) {
 			await applyPlan(db, plan(await readApplied(db), m), options);
 		},
@@ -293,7 +297,7 @@ export function engine(config: EngineConfig): Engine {
 		} });
 	({ channels: e.channels, envoys: e.envoys } = messaging({ engine: e, agents: e.agents, clock, ...config.envoys, scope: config.scope ?? '', triage: e.triage,
 		...(config.transports === undefined ? {} : { transports: config.transports }), ...(config.files === undefined ? {} : { files: config.files }),
-		...(guest === undefined ? {} : { guest }), ...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }), ...(config.epoch === undefined ? {} : { epoch: config.epoch }) }));
+		...(http === undefined ? {} : { http }), ...(guest === undefined ? {} : { guest }), ...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }), ...(config.epoch === undefined ? {} : { epoch: config.epoch }) }));
 	if (config.deadlines !== undefined) e.runs = runs({ engine: e, deadlines: config.deadlines, scope: config.scope ?? '', ...(guest === undefined ? {} : { guest }),
 		clock: () => Date.parse(clock()), ...(http === undefined ? {} : { http }), /* hook:decisions */ decide: { db, files: config.files, ai: config.ai, metering: config.metering, clock }, ...(config.agent?.hostTools === undefined ? {} : { hostTools: config.agent.hostTools }), ...config.runs, platform: { ...e.integrations.handlers(), ...e.pipelines.handlers(), ...flows.handlers(), ...e.channels.handlers(), [EMBED]: embedRun(m, db, config.ai?.embed === undefined ? undefined : config.ai as Required<AiPort> /* hook:ai */, { now: clock, announce: (at) => wakeAt(at) }, config.files /* hook:runtime */),
 		[NOTICE_PUSH]: noticePush(db, config.transports?.push), ...e.triage.handlers(),
@@ -315,12 +319,12 @@ export { fileAttachments } from '../shell/data.ts'; // hook:wiring — `read_att
 export { TRIAGE_DEBOUNCE, TRIAGE_DEBOUNCE_MAX, TRIAGE_MAX_WAITS } from './agent/triage.ts'; // hook:triage
 export { decisionsSystem1, encodeFiles, refusalOf, structuredSystem1, type DecisionAnswer, type DecisionsApiConfig, type DecisionFile, type DecisionQuestion, type DecisionRequest, type DecisionResult, type DecisionState, type System1Port, type System1Request } from './decisions/index.ts'; // hook:decisions
 export type { Json } from '../decl/values.ts';
-export type { GeoHit } from '../decl/runtime/facilities.ts';
+export type { GeoHit, SpeechFormat, TranscribeOptions, Transcript, TranscriptSegment } from '../decl/runtime/facilities.ts';
 export { decodeSeed, seed, type SeedPack } from './write/seed.ts';
 export { loadPack, readPack, type Pack, type PackJson } from './write/pack.ts';
 export { Authorities } from './identity/actor.ts';
 export { RateWindows, chargesFor, clientAddress } from './access/rate.ts';
-export { founderBootstrap, loadKeys, mint, signupOf, type IdentityHost, type Session, type Signup } from './identity/session.ts';
+export { founderBootstrap, loadKeys, loggedPhone, mint, signupOf, type IdentityHost, type PhoneVerifier, type Session, type Signup, type TransactionalProvider } from './identity/session.ts';
 export { membershipRun } from './identity/members.ts'; // §5.11.3 — a host binding `membership` passes it as `runs.platform['bolt.membership']`
 export { MEMBERSHIP } from './identity/session.ts';
 export { connections, oauth, tokenName, type ConnectionsHost, type OAuth } from './connections.ts'; // hook:hosting — every host's connections (§5.11.4)
@@ -336,8 +340,9 @@ export { applyPlan, plan, readApplied } from './schema/plan.ts'; // hook:hosting
 // hook:server-cli — what bolt start (bolt-server) reaches through the package instead of source paths
 export { catalogOf } from './access/pred.ts';
 export { upload } from './callables/upload.ts';
-export { resendEvent, telegramUpdate, telegramVerified, whatsappMessage } from './channels/transports.ts';
-export { connection, decodeConnection, type ChannelConnection, type ConnectionState, type Pairing } from './channels/connection.ts'; // hook:channels — one contract for every provider
+export { channelLinks, type ChannelLinks, type LinkHost } from './channels/links.ts'; // hook:channels — every host's per-channel provider links
+export { connection, decodeConnection, localText, OAUTH_CALLBACK, type LocalText, type TestSend, type ChannelConnection, type ChannelLink, type ChannelOpen, type ChannelProvider, type ConnectionState, type Pairing, type ProviderChoice, type SetupDescription, type SetupField, type SetupStep } from './channels/connection.ts'; // hook:channels — one contract for every provider
+export { isAutoReply, isReported, SendRefused, statusAfter, type DeliveryEntry, type DeliveryKind, type DeliveryReport } from './channels/status.ts'; // hook:channels — the delivery status model (§5.9)
 export type { HttpPort } from './integrations/runner.ts';
 export * as ir from '../protocol/ir.ts';
 export { statusOf } from '../protocol/wire.ts';

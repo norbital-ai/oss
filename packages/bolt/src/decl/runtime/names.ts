@@ -21,8 +21,13 @@ export type PageName<A> = A extends keyof NamesPart<'pages'> ? NamesPart<'pages'
 /** The app and group folders directly in group `G`. */
 export type ChildName<G> = G extends keyof NamesPart<'groups'> ? NamesPart<'groups'>[G] & string : never;
 
-/** A channel transport: `email`, `whatsapp`, `telegram`, or the built-in in-app `inbox`. */
-export type Transport = 'email' | 'whatsapp' | 'telegram' | 'inbox';
+/**
+ * A channel transport: `email`, a chat transport, `custom` (the workspace's own, sent through a declared connection),
+ * or the built-in in-app `inbox`. The provider behind a transport is the host's, chosen at setup, never declared.
+ */
+export type Transport = 'email' | ChatTransport | 'custom' | 'inbox';
+/** The transports that carry chats: one `InboundChat` and one chat outbound shape for all of them. */
+export type ChatTransport = 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'wechat';
 /** The transport a channel declares (`inbox` is the built-in in-app channel). */
 export type TransportOf<N> = N extends 'inbox' ? 'inbox'
 	: N extends keyof NamesPart<'channels'> ? NamesPart<'channels'>[N] extends { transport: infer T } ? T : never : never;

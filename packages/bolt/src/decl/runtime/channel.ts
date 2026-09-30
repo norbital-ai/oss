@@ -3,8 +3,9 @@
 import type { Handle } from '../access/actor.ts';
 import type { Patch } from '../ctx.ts';
 import type { CollectionName, PolicyName, Row } from '../names.ts';
-import type { FileRef, Id, Instant, RecordRef } from '../values.ts';
-import type { Transport } from './names.ts';
+import type { FileRef, IanaZone, Id, Instant, Json, RecordRef } from '../values.ts';
+import type { WebhookScheme } from './automation.ts';
+import type { ChatTransport, ConnectionName, Transport } from './names.ts';
 
 export type Attachment = { readonly file: FileRef; readonly fileName: string; readonly mimeType: string; readonly byteLength: number };
 type Address = { readonly address: string; readonly name: string | null };
@@ -14,12 +15,15 @@ export type InboundMail = {
 	readonly to: readonly Address[]; readonly cc: readonly Address[]; readonly subject: string; readonly text: string;
 	readonly html: string | null; readonly headers: { readonly [name: string]: string }; readonly attachments: readonly Attachment[];
 };
-/** An inbound WhatsApp or Telegram message. `thread` is the chat; `replyTo` the message it answers. */
+/** An inbound chat message (WhatsApp, Telegram, Slack, Discord, WeChat, a custom channel). `thread` is the chat; `replyTo` the message it answers. */
 export type InboundChat = {
 	readonly id: string; readonly thread: string; readonly sentAt: Instant; readonly from: { readonly handle: Handle; readonly name: string | null };
 	readonly replyTo: string | null; readonly text: string; readonly attachments: readonly Attachment[];
 };
-export type Inbound<T> = T extends 'email' ? InboundMail : T extends 'whatsapp' | 'telegram' ? InboundChat : never;
+/** One inbound message of a custom channel, as its `inbound` or `poll` mapping produces it. `id` deduplicates (a redelivery is one row); `thread` is the chat. */
+export type ReceivedMessage = { id: string; thread: string; sentAt: Instant; from: { handle: string; name?: string | null }; text: string;
+	replyTo?: string | null; group?: boolean };
+export type Inbound<T> = T extends 'email' ? InboundMail : T extends ChatTransport | 'custom' ? InboundChat : never;
 
 type Common = { replyTo?: string; about?: RecordRef };
 /** What `ctx.send` and an `outbound.message` produce for a transport. `inbox` takes notices (`ctx.notify`), not messages. */
@@ -28,26 +32,75 @@ export type OutboundFor<T> = T extends 'email'
 		/** The correlation id replies are matched back to. */ thread?: string;
 		/** Stored files only: a message row keeps references, never bytes (store them first with `ctx.files.put` or `bolt.upload`). */
 		attachments?: readonly FileRef[] }
-	: T extends 'whatsapp' | 'telegram' ? Common & { to: Handle | Id<'sys_conversation'>; text: string; attachments?: readonly FileRef[] }
+	// the handle is the provider's own: a Twilio `whatsapp:+65…` or a WhatsApp Web JID, a Slack channel, a Discord channel, a WeChat openid
+	: T extends ChatTransport | 'custom' ? Common & { to: Handle | Id<'sys_conversation'>; text: string; attachments?: readonly FileRef[] }
 	: never;
 
-export type DeliveryKind = 'sent' | 'delivered' | 'opened' | 'bounced' | 'failed' | 'replied';
 /**
- * What a channel's delivery handler receives for event `E`: when, which message, and a bounce reason or the reply.
+ * Where an outbound message stands (§5.9 "delivery status"). Every provider maps its own reports to these; bolt keeps
+ * every report on the message's timeline, mapped or not.
  */
-export type DeliveryEvent<E, T = 'email'> = { readonly at: Instant; readonly message: Id<'sys_message'> }
-	& (E extends 'bounced' | 'failed' ? { readonly reason: string }
-		: E extends 'replied' ? T extends 'email' ? { readonly mail: InboundMail } : { readonly reply: Inbound<T> } : {});
+export type DeliveryKind =
+	| 'queued' // accepted by bolt, not yet handed to the provider
+	| 'sent' // the provider or server accepted it (SMTP 250, an API 2xx)
+	| 'deferred' // a temporary failure the provider (or bolt) retries: SMTP 4xx, a DSN "delayed"
+	| 'delivered' // confirmed at the recipient; `presumed` when inferred from a quiet window without a bounce
+	| 'read' // a chat read receipt
+	| 'opened' // an email open (tracking pixel); always `approximate`
+	| 'bounced' // permanent non-delivery (DSN 5.x.x, an NDR); `permanent` false for a soft bounce
+	| 'failed' // refused before or at sending (SMTP 5xx on submit, an API 4xx, a bad handle, an auth failure)
+	| 'complained' // the recipient marked it spam (only providers that report it)
+	| 'auto_replied' // an out-of-office or auto-responder (RFC 3834): recorded, never a status, never a reply
+	| 'replied'; // a human reply in the thread
+/** What a channel's `events.<E>` handler receives: the report as the provider gave it, the message it is about, and the reply. */
+export type DeliveryEvent<E extends DeliveryKind = DeliveryKind, T = 'email'> = {
+	readonly kind: E; readonly at: Instant; readonly message: Id<'sys_message'>;
+	/** The provider that reported it (`bolt` for bolt's own `queued`, `failed` and presumed events). */
+	readonly provider: string;
+	/** The server's or provider's code: SMTP basic + enhanced (`550 5.1.1`), a provider error code (`63016`). */
+	readonly code?: string;
+	/** The reason as the server or provider gave it. */
+	readonly reason?: string;
+	/** bounced / failed / deferred: whether retrying can never help (a hard bounce). */
+	readonly permanent?: boolean;
+	/** delivered by inference, not confirmation. */
+	readonly presumed?: boolean;
+	/** opened: a pixel is prefetched or blocked, so an open is a hint. */
+	readonly approximate?: boolean;
+	/** The provider's own payload, bounded (≤ 4 KB), for support. */
+	readonly raw?: Json;
+} & (E extends 'replied' | 'auto_replied' ? { readonly reply: Inbound<T> }
+	// bolt fills a failure's reason from its code when the provider gave none
+	: E extends 'bounced' | 'failed' ? { readonly reason: string } : {});
 
 // Callbacks sit inside this literal, so it is typed by inference sites (the transport `T`, each outbound's `from`
 // collection in `O`), never by a `Checked` wrapper: a wrapper would hide the contextual type from the callbacks.
-type Outbound<T, O> = { [N in keyof O]: { from: O[N]; on: 'create'; message: (x: { record: Row<O[N]> }) => OutboundFor<T> } };
+// `message` answers `null` for a row that sends nothing on this channel (a customer with no email address): skipped, not failed
+type Outbound<T, O> = { [N in keyof O]: { from: O[N]; on: 'create'; message: (x: { record: Row<O[N]> }) => OutboundFor<T> | null } };
 type Events<T, C> = [C] extends [never] ? 'error: events are mapped onto rows `outbound` sends; declare outbound'
 	: { [E in DeliveryKind]?: (e: DeliveryEvent<E, T>) => Patch<C> };
 export type ChannelSpec<T = Transport, O = {}> = {
 	transport: T;
-	/** email: the local part on the workspace domain. */
-	address?: string;
+	/**
+	 * custom: the connection outbound messages are POSTed to (`src/connection/+<name>.connection.ts`). A custom channel
+	 * also ships `src/channel/+<channel>.connect.svelte`; what that page pairs with is sealed as the channel's credential.
+	 */
+	send?: ConnectionName;
+	/**
+	 * custom: the channel's own webhook (`/hooks/bolt.custom/<channel>`, shown on its setup screen). The host checks the
+	 * signature by `verify.scheme` with the credential's `verify.secret` field before anything is read; `messages` maps
+	 * the verified JSON body to the messages it carries. They enter the channel as any provider's inbound does (envoys
+	 * answer them, integrations mirror them), deduplicated by `id`.
+	 */
+	inbound?: T extends 'custom' ? {
+		verify: { scheme: WebhookScheme; secret: string };
+		messages: (request: { body: Json; headers: { readonly [lowercase: string]: string } }) => readonly ReceivedMessage[];
+	} : 'error: only a custom channel declares inbound; a provider channel receives through its provider';
+	/** custom: on `cron`, a GET of `path` through the named connection; `messages` maps its answer (deduplicated by `id`). */
+	poll?: T extends 'custom' ? {
+		connection: ConnectionName; cron: string; tz?: IanaZone; path: string; query?: { readonly [name: string]: string };
+		messages: (response: { body: Json }) => readonly ReceivedMessage[];
+	} : 'error: only a custom channel polls';
 	/** The authority of the channel's own writes (delivery events, inbound rows). */
 	policies?: readonly PolicyName[];
 	outbound?: Outbound<T, O>;
@@ -56,7 +109,8 @@ export type ChannelSpec<T = Transport, O = {}> = {
 };
 
 /**
- * `src/channel/+<c>.channel.ts`: a messaging channel on a transport (`email`, `whatsapp`, `telegram`), with optional
+ * `src/channel/+<c>.channel.ts`: a messaging channel on a transport (`email`, `whatsapp`, `telegram`, `slack`, `discord`,
+ * `wechat`, or `custom` with `send` and its own `inbound` webhook or `poll`), with optional
  * collection-backed `outbound` messages and delivery `events`. Envoys answer on it; notifications may be sent through it.
  * @example
  * export default channel({ transport: 'telegram' });

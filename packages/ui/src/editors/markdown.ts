@@ -12,6 +12,7 @@ const marked = new Marked({
 		if ((token.type === 'link' || token.type === 'image') && !/^(https?:|mailto:|[#/.])/i.test(token.href)) token.href = '#';
 	}
 });
+/** Markdown to HTML with `ReadonlyMarkdown`'s settings: raw HTML shown as text, links only to http(s), mailto or relative. */
 export const markdownHtml = (text: string): string => marked.parse(text) as string;
 
 /** The default `/` blocks of `MarkdownEditor`, each the Markdown that starts it (typed at a line's start). */

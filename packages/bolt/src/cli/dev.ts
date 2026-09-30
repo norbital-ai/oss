@@ -13,7 +13,7 @@ import type { Blob, FilesPort, TenantDb, TransportPort } from '../engine/contrac
 import { RateWindows } from '../engine/access/rate.ts';
 import { openPglite } from '../engine/db/pglite.ts';
 import { Authorities } from '../engine/identity/actor.ts';
-import { founderBootstrap, loadKeys, signupOf, type IdentityHost } from '../engine/identity/session.ts';
+import { founderBootstrap, loadKeys, loggedPhone, signupOf, type IdentityHost } from '../engine/identity/session.ts';
 import { engine, type Engine } from '../engine/index.ts';
 import { inProcessDeadlines } from '../engine/runs/scheduler.ts';
 import { boltHandler } from '../protocol/http.ts';
@@ -95,7 +95,7 @@ export async function devHost(a: Artifact, db: TenantDb, o: { port: number; pack
 			transports: { email: mail }, agent: { attachments: fileAttachments(db, o.files) }, console: (level, ...args) => o.log(`guest ${level}: ${args.map(String).join(' ')}`),
 			...(pack === undefined || pack.meta.start.length === 0 ? {} : { runs: { start: pack.meta.start } }) } as Parameters<typeof engine>[0]);
 		await e.migrate({ accept: true });
-		identity ??= { db, now: () => new Date(), windows: new RateWindows(), keys: await loadKeys(db), mail, sms: mail, devSink: true, publicUrl: origin };
+		identity ??= { db, now: () => new Date(), windows: new RateWindows(), keys: await loadKeys(db), mail, sms: mail, phone: loggedPhone(o.log, true), devSink: true, publicUrl: origin };
 		// a reload may change the declared sign-up
 		const signup = signupOf(m);
 		if (signup === undefined) delete identity.signup;

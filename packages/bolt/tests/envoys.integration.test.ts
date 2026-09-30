@@ -1,15 +1,19 @@
 // engine/envoys on PGlite with the agent area's real turn loop and a scripted model (P22, P32, rules 57–61; G12 (4), (5)):
 // a DM holds the envoy's policies joined by the linked sender's own authority (an administrator's DM update commits
 // where the envoy's policies would refuse it; a contractor's DM does what the contractor's team grants), a group turn
-// holds the envoy's policies alone whoever sends, an unlinked sender gets one private registration notice per 15
-// minutes and no turn, a public desk resolves its senders, chat replies leave while the turn works, and `envoys.receive`
-// bounds admission.
+// holds the envoy's policies alone whoever sends, a private desk admits only senders whose handle is registered on a
+// member (phone on WhatsApp, email on email) and answers anyone else once per 15 minutes with a fixed line, no link and
+// no turn; an administrator's handle edit admits the next message; a public desk admits anyone; chat replies leave
+// while the turn works, and `envoys.receive` bounds admission.
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import { agents } from '../src/engine/agent/index.ts';
 import { fakeTransport, type FakeTransport } from '../src/engine/channels/transports.ts';
 import type { AiPort, AiRequest, EngineManifest } from '../src/engine/contracts.ts';
 import { messaging, NOTICES } from '../src/engine/envoys/index.ts';
+import { RateWindows } from '../src/engine/access/rate.ts';
+import { loadKeys } from '../src/engine/identity/session.ts';
+import { settingsOp } from '../src/shell/data.ts';
 import { testWorkspace, type TestWorkspace, respondSystem1 } from '../src/test/index.ts'; // hook:decisions
 
 const manifest = {
@@ -24,12 +28,12 @@ const manifest = {
 	},
 	teams: { Contractors: ['contractor'] },
 	automations: {},
-	channels: { field_wa: { transport: 'whatsapp' }, sales_tg: { transport: 'telegram' }, ops_mail: { transport: 'email', address: 'ops' } },
+	channels: { field_wa: { transport: 'whatsapp' }, sales_tg: { transport: 'telegram' }, ops_mail: { transport: 'email' } },
 	connections: {},
 	envoys: {
-		field_ops: { channel: 'field_wa', audience: 'authenticated', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
+		field_ops: { channel: 'field_wa', audience: 'private', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep jobs up to date.' },
 		sales_desk: { channel: 'sales_tg', audience: 'public', name: 'Norbius', policies: ['desk'], triage: false, groupMessages: 'disabled', delegation: 'enabled', task: 'Answer about jobs.' },
-		ops_desk: { channel: 'ops_mail', audience: 'authenticated', name: 'Norbius', policies: ['desk'], triage: false, delegation: 'disabled', task: 'Answer mail.' },
+		ops_desk: { channel: 'ops_mail', audience: 'private', name: 'Norbius', policies: ['desk'], triage: false, delegation: 'disabled', task: 'Answer mail.' },
 	},
 	mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
 } as unknown as EngineManifest;
@@ -107,34 +111,38 @@ describe('direct messages (rule 57)', () => {
 		expect((await rows(`close ${id}`))[0]!['as']).toEqual({ envoy: { name: 'field_ops', channel: 'field_wa', sender: '6598765432@s.whatsapp.net', member: CAL, dm: true } });
 	});
 
-	it('an unlinked sender gets one host-authored registration notice at a time and no turn; a repeat moments later is answered, not swallowed; redeeming links the number and replays only when ticked', async () => {
-		await say('field_wa', '6590000003@s.whatsapp.net', 'someone else');
+	it('a private desk admits a registered phone and refuses an unregistered one: one fixed notice per window, no link, no turn', async () => {
+		await say('field_wa', '6598765432@s.whatsapp.net', 'registered');
+		expect((await rows('registered'))[0]).toMatchObject({ as: { envoy: { member: CAL, dm: true } }, refused: null });
+		const turns = ai.requests.length, sent = wa.sent.length;
 		await say('field_wa', '6590000001@s.whatsapp.net', 'hello?');
 		await say('field_wa', '6590000001@s.whatsapp.net', 'anyone?');
-		expect(ai.requests).toHaveLength(0);
-		expect(texts(wa)).toHaveLength(2);
-		expect(texts(wa)[1]).toContain('Register this whatsapp account with Acme Field to continue.');
+		expect(ai.requests).toHaveLength(turns);
 		expect((await rows('anyone?'))[0]).toMatchObject({ refused: 'unregistered', role: null });
-		const claim = /claim=([\w-]+)/.exec(texts(wa)[1]!)![1]!;
-		expect(await desk.envoys.inspect(claim)).toEqual({ state: 'ready', envoy: 'field_ops', transport: 'whatsapp', handle: '6590000001' });
-		const dana = await t.signIn('dana@ws.example');
-		expect(await desk.envoys.redeem(claim, dana, { replay: true })).toMatchObject({ state: 'registered', envoy: 'field_ops' });
-		await desk.envoys.settled();
-		const [u] = await t.db.read([{ text: `SELECT phone FROM sys_user WHERE id = $1`, params: [DANA] }]);
-		expect(u!.rows[0]!['phone']).toBe('6590000001');
-		expect((await rows('anyone?'))[0]).toMatchObject({ as: { envoy: { member: DANA, dm: true } }, refused: null });
-		expect((await rows('someone else'))[0]).toMatchObject({ refused: 'unregistered', role: null });
-		expect(await desk.envoys.inspect(claim)).toEqual({ state: 'registered' });
-		expect(await desk.envoys.redeem(claim, await t.signIn('cal@ws.example'))).toEqual({ state: 'used' });
-		// the window is a flood guard, not a lockout: a sender who lost the link may ask again at once, and the claim
-		// they already hold is what they are sent — a window as long as the link's own fifteen minutes was the one value
-		// that could never work, because the retry it refused was the retry that was needed
-		t.clock.advance('2s');
-		await say('field_wa', '6590000002@s.whatsapp.net', 'hi');
-		expect(texts(wa).filter((x) => x.startsWith('Register'))).toHaveLength(3);
+		const notices = wa.sent.slice(sent);
+		expect(notices).toHaveLength(1); // the repeat inside the window is refused silently
+		expect(notices[0]!.message).toMatchObject({ to: '6590000001@s.whatsapp.net', text: NOTICES.unrecognised('whatsapp', 'Acme Field') });
+		expect(JSON.stringify(notices)).not.toMatch(/https?:|claim|regist/i);
+		t.clock.advance('15min');
+		await say('field_wa', '6590000001@s.whatsapp.net', 'still there?');
+		expect(wa.sent.slice(sent)).toHaveLength(2);
+		expect(ai.requests).toHaveLength(turns);
 	});
 
-	it('a public desk resolves its senders: an unlinked one\'s turn holds exactly its policies, never admin; group messages are ignored', async () => {
+	it('an administrator sets a member\'s phone in Settings → People; that number\'s next message is admitted as the member', async () => {
+		await say('field_wa', '6590000001@s.whatsapp.net', 'before');
+		expect((await rows('before'))[0]).toMatchObject({ refused: 'unregistered' });
+		const identity = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), publicUrl: 'https://acme.example' };
+		const ada = await t.signIn('ada@ws.example'), cal = await t.signIn('cal@ws.example');
+		expect(await settingsOp(identity, manifest, cal, 'setHandles', { id: DANA, phone: '+65 9000 0001' })).toMatchObject({ ok: false, code: 'forbidden' });
+		expect(await settingsOp(identity, manifest, ada, 'setHandles', { id: DANA, phone: '90000001' })).toMatchObject({ ok: false, code: 'check' });
+		expect(await settingsOp(identity, manifest, ada, 'setHandles', { id: DANA, phone: '+65 9000 0001' })).toEqual({ ok: true, value: null });
+		await say('field_wa', '6590000001:3@s.whatsapp.net', 'after');
+		expect((await rows('after'))[0]).toMatchObject({ as: { envoy: { member: DANA, dm: true } }, refused: null, role: 'user' });
+		expect((await rows('before'))[0]).toMatchObject({ refused: 'unregistered' }); // nothing earlier is replayed
+	});
+
+	it('a public desk admits anyone: an unknown sender\'s turn holds exactly its policies, never admin; group messages are ignored', async () => {
 		const id = await job();
 		await say('sales_tg', '777', `close ${id}`);
 		expect(await status(id)).toBe('open');
@@ -145,17 +153,16 @@ describe('direct messages (rule 57)', () => {
 		expect((await rows('group chatter'))[0]).toMatchObject({ role: null, addressed: null });
 	});
 
-	it('any member may verify an additional email address through registration; the envoy then knows them by it (P32, as today)', async () => {
-		const mailFrom = (id: string, text: string) => mail.emit({ kind: 'inbound', channel: 'ops_mail', message: { id, thread: null, sentAt: t.clock.now(),
-			from: { address: 'Dana.Home@else.example', name: 'Dana' }, replyTo: null, to: [], cc: [], subject: 'Hi', text, html: null, headers: {}, attachments: [] } });
-		await mailFrom('<d1@x>', 'from home');
+	it('a private email desk admits a member\'s registered address and refuses any other, with the fixed notice in the thread', async () => {
+		const mailFrom = (id: string, from: string, text: string) => mail.emit({ kind: 'inbound', channel: 'ops_mail', message: { id, thread: null, sentAt: t.clock.now(),
+			from: { address: from, name: 'Dana' }, replyTo: null, to: [], cc: [], subject: 'Hi', text, html: null, headers: {}, attachments: [] } });
+		await mailFrom('<d1@x>', 'Dana.Home@else.example', 'from home');
 		await desk.envoys.settled();
-		const claim = /claim=([\w-]+)/.exec((mail.sent.at(-1)!.message as { text: string }).text)![1]!;
-		expect(mail.sent.at(-1)!.message).toMatchObject({ to: ['dana.home@else.example'] });
-		expect(await desk.envoys.redeem(claim, await t.signIn('dana@ws.example'))).toMatchObject({ state: 'registered' });
-		await mailFrom('<d2@x>', 'again from home');
+		expect((await rows('from home'))[0]).toMatchObject({ refused: 'unregistered', role: null });
+		expect(mail.sent.at(-1)!.message).toMatchObject({ to: ['dana.home@else.example'], subject: 'Re: Hi', text: NOTICES.unrecognised('email', 'Acme Field') });
+		await mailFrom('<d2@x>', 'DANA@ws.example', 'from work');
 		await desk.envoys.settled();
-		expect((await rows('again from home'))[0]).toMatchObject({ as: { envoy: { member: DANA, dm: true } }, refused: null });
+		expect((await rows('from work'))[0]).toMatchObject({ as: { envoy: { member: DANA, dm: true } }, refused: null });
 	});
 
 	it('an email envoy treats every message as addressed and answers in the thread', async () => {
@@ -204,11 +211,11 @@ describe('groups (rule 60)', () => {
 		expect(seen).toContain('linked member u-ada');
 	});
 
-	it('an unlinked member who mentions the bot gets the registration link privately, never in the group, and no turn', async () => {
+	it('an unknown sender who mentions the bot gets the fixed notice privately, never in the group, and no turn', async () => {
 		await say('field_wa', '6590000009@s.whatsapp.net', '@bot hi', { ...group, invocation: 'mention' });
 		expect(ai.requests).toHaveLength(0);
 		expect(wa.sent).toHaveLength(1);
-		expect(wa.sent[0]!.message).toMatchObject({ to: '6590000009@s.whatsapp.net', text: expect.stringContaining('Register') });
+		expect(wa.sent[0]!.message).toMatchObject({ to: '6590000009@s.whatsapp.net', text: NOTICES.unrecognised('whatsapp', 'Acme Field') });
 		expect(wa.sent.some((s) => (s.message as { to: string }).to === '1203@g.us')).toBe(false);
 	});
 });

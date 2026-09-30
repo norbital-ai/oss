@@ -1,10 +1,9 @@
-// A channel's connection (rule 61): the host's answer decoded at the trust boundary, the one place a connect component
-// is chosen, and the state wording every provider's frame shares. The pairing itself is the host's; what is testable here
-// is that the shell cannot be misled by a malformed answer, cannot tell a system provider from a workspace's own, and
-// never words a retry as a failure.
+// A channel's connection (rule 61): the host's answer decoded at the trust boundary and the state wording every
+// provider's frame shares. The pairing itself is the host's; what is testable here is that the shell cannot be misled
+// by a malformed answer and never words a retry as a failure.
 import { describe, expect, it } from 'vitest';
 import { connection, decodeConnection } from '../src/engine/channels/connection.ts';
-import { connectOf, connectionLabel, type ConnectLoader } from '../src/shell/channels/connect.ts';
+import { channelLabel, connectionLabel, transportLabel } from '../src/shell/channels/connect.ts';
 
 const t = (k: string) => k;
 
@@ -35,30 +34,6 @@ describe('a host answer, decoded', () => {
 	});
 });
 
-describe('which connect component a channel gets', () => {
-	const own = (async () => ({ default: (() => {}) as never })) as unknown as ConnectLoader;
-
-	it('prefers the workspace\'s own file for its channel', async () => {
-		expect(connectOf('field_ops_whatsapp', 'whatsapp', { field_ops_whatsapp: own })).toBe(own);
-	});
-
-	it("falls back to bolt's own for the channel's transport", () => {
-		// a Slack or a WeChat channel nobody has written a component for yet
-		expect(connectOf('field_ops_slack', 'slack', {})).toBeNull();
-		expect(connectOf('c', 'whatsapp', {})).not.toBeNull();
-		expect(connectOf('c', 'telegram', {})).not.toBeNull();
-		expect(connectOf('c', 'email', {})).not.toBeNull();
-	});
-
-	it('answers a loader for every provider bolt ships, so none of them renders blank', async () => {
-		for (const transport of ['whatsapp', 'telegram', 'email']) {
-			const loader = connectOf('c', transport, {});
-			expect(loader).not.toBeNull();
-			expect(typeof (await loader!()).default).toBe('function');
-		}
-	});
-});
-
 describe('how a state reads', () => {
 	it('presents an automatic retry as progress, not a failure', () => {
 		expect(connectionLabel({ channel: 'c', transport: 'whatsapp', state: 'reconnecting', stored: true }, t)).toBe('Reconnecting');
@@ -75,5 +50,17 @@ describe('how a state reads', () => {
 		expect(connectionLabel({ channel: 'c', transport: 'whatsapp', state: 'unpaired', stored: true }, t)).toBe('Paired, not connected');
 		expect(connectionLabel({ channel: 'c', transport: 'whatsapp', state: 'connected', stored: true, pairedAs: '+65abc' }, t))
 			.toBe('Connected as +65abc');
+	});
+});
+
+describe('a channel and its transport, named', () => {
+	it('uses the catalog label, else the name humanized with brand casing; a transport is its brand', () => {
+		const catalog = (k: string) => k === 'channels.customer_mail.label' ? 'Customer email' : k;
+		expect(channelLabel('customer_mail', catalog)).toBe('Customer email');
+		expect(channelLabel('site_whatsapp', t)).toBe('Site WhatsApp');
+		expect(channelLabel('whatsapp', t)).toBe('WhatsApp');
+		expect(channelLabel('field-ops_imap', t)).toBe('Field ops IMAP');
+		expect(transportLabel('whatsapp')).toBe('WhatsApp');
+		expect(transportLabel('custom')).toBe('Custom');
 	});
 });

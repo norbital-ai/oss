@@ -10,7 +10,7 @@ import { Authorities } from '../src/engine/identity/actor.ts';
 import { parseAddress } from '../src/engine/identity/address.ts';
 import { acceptInvitation, invite, setSignup } from '../src/engine/identity/members.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
-import { founderBootstrap, loadKeys, sendCode, SIGNUP_TEXTS, verifyCode, type IdentityHost } from '../src/engine/identity/session.ts';
+import { founderBootstrap, loadKeys, loggedPhone, sendCode, SIGNUP_TEXTS, verifyCode, type IdentityHost, type PhoneVerifier } from '../src/engine/identity/session.ts';
 
 const json = (v: unknown): Json => v instanceof Date ? v.toISOString() : v as Json;
 const rows = (r: { rows: unknown[]; affectedRows?: number }): Rows =>
@@ -45,7 +45,7 @@ const mails: { to: string; text: string }[] = [];
 const port = (box: { to: string; text: string }[]): TransportPort =>
 	({ send: async (_c, msg) => { box.push(msg as { to: string; text: string }); return { providerId: 'x' }; }, subscribe: () => () => {} });
 let h: IdentityHost;
-const lastCode = () => /(\d{6})/.exec(texts.at(-1)!.text)![1]!;
+const lastCode = () => /code is (\d{6})/.exec(texts.at(-1)!.text)![1]!;
 const one = async (text: string, ...params: Json[]) => (await db.read([{ text, params }]))[0]!.rows;
 const authorities = new Authorities(m, 'r1');
 const as = async (user: string) => (await authorities.member(db, user))!;
@@ -59,6 +59,8 @@ beforeAll(async () => {
 	await pg.exec(`CREATE TABLE customers (id text PRIMARY KEY, phone text);
 		INSERT INTO customers VALUES ('c-ada', '+65 8123 4567'), ('c-twin1', '+6590000000'), ('c-twin2', '+65 9000 0000')`);
 	h = { db, now: () => new Date('2026-09-30T00:00:00Z'), windows: new RateWindows(), keys: await loadKeys(db), mail: port(mails), sms: port(texts),
+		// a local host's verifier: the code it prints lands where a text would
+		phone: loggedPhone((line) => texts.push({ to: /→ (\+\d+):/.exec(line)![1]!, text: line })),
 		publicUrl: 'https://acme.example', signup: { via: ['phone'], policies: ['customer'], party: { collection: 'customers', match: { phone: 'phone' } } } };
 });
 afterAll(() => pg.close());
@@ -200,5 +202,85 @@ describe('one number, one member', () => {
 		expect((await fdb.read([{ text: 'SELECT phone, admin FROM sys_user', params: [] }]))[0]!.rows).toEqual([{ phone: '+6560000001', admin: true }]);
 		await expect(fdb.write({ text: `INSERT INTO sys_user (id, name, phone) VALUES ('dup', 'Dup', '6560000001')`, params: [] })).rejects.toThrow();
 		await fresh.close();
+	});
+});
+
+describe('a host phone verifier (Twilio Verify): the provider sends and checks the code, our rules still gate it', () => {
+	/** A verifier that holds one code per number, as Verify does; `down` makes every call fail. */
+	const verifier = () => {
+		const started: { to: string; via: string }[] = [], checked: string[] = [];
+		let down = false;
+		const v: PhoneVerifier & { started: typeof started; checked: string[]; fail(on: boolean): void } = {
+			via: ['sms', 'whatsapp'], started, checked, fail: (on) => { down = on; },
+			async start(to, via) { if (down) throw new Error('verify is down'); started.push({ to, via }); },
+			async check(to, code) { if (down) throw new Error('verify is down'); checked.push(code); return code === '424242'; },
+		};
+		return v;
+	};
+	let vh: IdentityHost & { phone: ReturnType<typeof verifier> };
+	let at = Date.parse('2026-09-30T00:00:00Z');
+	beforeAll(async () => {
+		const fresh = new PGlite();
+		const vdb = tenantDb(fresh);
+		await applyPlan(vdb, plan(null, m), { accept: true });
+		await fresh.exec(`CREATE TABLE customers (id text PRIMARY KEY, phone text)`);
+		vh = { ...h, db: vdb, keys: await loadKeys(vdb), windows: new RateWindows(), now: () => new Date(at), phone: verifier(), sms: port([]) };
+	});
+
+	it('texts by default and uses WhatsApp when chosen; our own texts are never sent', async () => {
+		expect(await sendCode(vh, '+6581110000', ip)).toEqual({ ok: true, value: null });
+		expect(await sendCode(vh, '+6581110001', ip, 'whatsapp')).toEqual({ ok: true, value: null });
+		expect(vh.phone.started).toEqual([{ to: '+6581110000', via: 'sms' }, { to: '+6581110001', via: 'whatsapp' }]);
+	});
+
+	it('the provider\'s code signs a newcomer up; a wrong one is refused and counts, the third spends the challenge', async () => {
+		const s = await verifyCode(vh, '+6581110000', '424242', ip);
+		expect(s.ok).toBe(true);
+		expect(await vh.db.read([{ text: `SELECT via FROM sys_session WHERE "user" = $1`, params: [s.ok ? s.value.user : ''] }]).then((r) => r[0]!.rows)).toEqual([{ via: 'signup' }]);
+		expect(await verifyCode(vh, '+6581110001', '000000', ip)).toMatchObject({ ok: false, code: 'invalidCode' });
+		expect(await verifyCode(vh, '+6581110001', 'abc', ip)).toMatchObject({ ok: false, code: 'invalidCode' });   // never asked
+		expect(vh.phone.checked).toEqual(['424242', '000000']);
+		expect(await verifyCode(vh, '+6581110001', '111111', ip)).toMatchObject({ code: 'invalidCode' });
+		expect(await verifyCode(vh, '+6581110001', '424242', ip)).toMatchObject({ code: 'invalidCode' });   // out of attempts
+	});
+
+	it('a challenge past its ten minutes is refused without asking the provider', async () => {
+		await sendCode(vh, '+6581110002', ip);
+		at += 11 * 60_000;
+		const before = vh.phone.checked.length;
+		expect(await verifyCode(vh, '+6581110002', '424242', ip)).toMatchObject({ ok: false, code: 'invalidCode' });
+		expect(vh.phone.checked.length).toBe(before);
+	});
+
+	it('a stranger is sent nothing where sign-up is closed; the workspace cap holds for verifier codes too', async () => {
+		const { signup: _declared, ...closed } = vh;
+		const before = vh.phone.started.length;
+		expect(await sendCode(closed, '+6581110003', ip)).toEqual({ ok: true, value: null });
+		expect(vh.phone.started.length).toBe(before);
+		const capped = { ...vh, windows: new RateWindows() };
+		let refused: unknown = null;
+		for (let i = 0; i <= SIGNUP_TEXTS && refused === null; i++) {
+			const r = await sendCode(capped, `+6571000${String(i).padStart(3, '0')}`, `7.7.${i}.1`);
+			if (!r.ok) refused = r;
+		}
+		expect(refused).toMatchObject({ ok: false, code: 'rateLimited' });
+	});
+
+	it('a number signs in only where the host has a verifier, and by WhatsApp only where it sends by WhatsApp', async () => {
+		const { phone: _v, ...none } = vh;
+		expect(await sendCode(none, '+6581110000', ip)).toMatchObject({ ok: false, code: 'unavailable' });
+		expect(await verifyCode(none, '+6581110000', '424242', ip)).toMatchObject({ ok: false });
+		const smsOnly = { ...vh, phone: { ...vh.phone, via: ['sms'] as const } };
+		expect(await sendCode(smsOnly, '+6581110000', ip, 'whatsapp')).toMatchObject({ ok: false, code: 'unavailable', message: expect.stringContaining('WhatsApp') });
+	});
+
+	it('a provider failure is a failure, not a wrong code', async () => {
+		// a member's number: the sign-up cap above is spent
+		expect((await sendCode(vh, '+6581110000', ip)).ok).toBe(true);
+		vh.phone.fail(true);
+		expect(await sendCode(vh, '+6581110000', '6.6.6.6')).toMatchObject({ ok: false, code: 'upstream' });
+		expect(await verifyCode(vh, '+6581110000', '424242', ip)).toMatchObject({ ok: false, code: 'upstream' });
+		vh.phone.fail(false);
+		expect((await verifyCode(vh, '+6581110000', '424242', ip)).ok).toBe(true);   // the failure spent no attempt
 	});
 });

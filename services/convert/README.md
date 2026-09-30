@@ -28,7 +28,12 @@ replica is free converts it. If the stream drops, the job carries on: resume wit
 | `GET /healthz` | `{ ok, queued, running }`; `503` while the replica drains |
 
 `page` (`A4`, `A3`, `Letter`) and `landscape` are a PDF's. `reference` is base64 of a docx, pptx or odt whose styles,
-headers and footers the output takes (pandoc's `--reference-doc`). HTML is read for its structure; CSS does not carry.
+headers and footers the output takes (pandoc's `--reference-doc`); a docx without one is A4 portrait with the PDF's
+margins. HTML is read for its structure; CSS does not carry.
+
+`src/convert.lua` runs on every conversion: Chinese falls back to Noto Sans CJK SC (the image's one CJK family) in a PDF,
+a long table breaks across pages, a table cell starting `- `, `+ `, `1. `, `= ` or `/ ` stays text, and a data-URI image
+is not its own description in a docx, pptx or odt.
 
 ```bash
 curl -N -H 'authorization: Bearer my-key' -H 'content-type: application/json' \

@@ -10,7 +10,7 @@
 	import { based } from './nav.ts';
 	import type { ShellApi } from './runtime.ts';
 
-	/** `handle`: the tenant handle, named under "Signing in to" as staging did; the workspace name when absent. */
+	/** Named under "Signing in to": the workspace's display name; `handle`, the tenant handle, only when it has none. */
 	let { api, t, next, address: given = '', workspace, handle }: {
 		api: ShellApi; t: (key: string) => string; next: string; address?: string; workspace?: string | undefined; handle?: string | undefined;
 	} = $props();
@@ -25,6 +25,8 @@
 	let code = $state('');
 	let form = $state<HTMLFormElement>();
 	let sent = $state(false);
+	/** A mobile number's code: texted (the default) or sent over WhatsApp, the member's choice. */
+	let via = $state<'sms' | 'whatsapp'>('sms');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	const address = $derived(mode === 'phone' ? phone ?? '' : email);
@@ -33,7 +35,7 @@
 		event.preventDefault();
 		busy = true;
 		error = null;
-		const r = sent ? await api.verify(address, code) : await api.sendCode(address);
+		const r = sent ? await api.verify(address, code) : await api.sendCode(address, via);
 		busy = false;
 		if (!r.ok) return void (error = r.error.message);
 		if (sent) location.assign(based(next));
@@ -45,7 +47,7 @@
 	{#if handle || workspace}
 		<Stack as="header" gap="xs" class="min-w-0">
 			<p class="text-overline">{t('Signing in to')}</p>
-			<p class="text-subhead break-words text-foreground">{handle || workspace}</p>
+			<p class="text-subhead break-words text-foreground">{workspace || handle}</p>
 		</Stack>
 	{/if}
 	{#await methods}
@@ -85,12 +87,21 @@
 						</Stack>
 					{/if}
 					{#if error !== null}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
-					<Button type="submit" class="w-full" disabled={busy || (sent ? code.length !== 6 : current === 'phone' ? phone === null : email === '')}>
+					<Button type="submit" class="w-full" disabled={busy || (sent ? code.length !== 6 : current === 'phone' ? phone === null : email === '')}
+						onclick={() => (via = 'sms')}>
 						<Inline as="span" gap="sm" justify="center">
-							{#if busy}<Spinner class="h-4 w-4" />{/if}
-							{sent ? t('Verify and continue') : t('Send sign-in code')}
+							{#if busy && (sent || current !== 'phone' || via === 'sms')}<Spinner class="h-4 w-4" />{/if}
+							{sent ? t('Verify and continue') : current === 'phone' ? t('Text me') : t('Send sign-in code')}
 						</Inline>
 					</Button>
+					{#if !sent && current === 'phone' && m.ok && m.value.whatsapp}
+						<Button type="submit" variant="outline" class="w-full" disabled={busy || phone === null} onclick={() => (via = 'whatsapp')}>
+							<Inline as="span" gap="sm" justify="center">
+								{#if busy && via === 'whatsapp'}<Spinner class="h-4 w-4" />{/if}
+								{t('WhatsApp me')}
+							</Inline>
+						</Button>
+					{/if}
 					{#if !sent && byEmail && byPhone}
 						<button type="button" class="text-sm underline underline-offset-4 text-muted-foreground hover:text-foreground"
 							onclick={() => { mode = current === 'phone' ? 'email' : 'phone'; error = null; }}>
@@ -106,7 +117,7 @@
 						{current === 'phone' ? t('Change number') : t('Change email')}
 					</button>
 				{:else if current === 'phone'}
-					{joins ? t("We'll text you a six-digit code. New here? The same code creates your account.") : t("We'll text you a six-digit code. No password required.")}
+					{joins ? t("We'll send a six-digit code by text or WhatsApp. New here? The same code creates your account.") : t("We'll send a six-digit code by text or WhatsApp. No password required.")}
 				{:else}
 					{joins ? t("We'll email you a six-digit code. New here? The same code creates your account.") : t("We'll email you a six-digit code. No password required.")}
 				{/if}

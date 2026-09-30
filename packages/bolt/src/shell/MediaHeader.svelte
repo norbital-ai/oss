@@ -81,12 +81,14 @@
 							<h1 class="truncate text-base font-semibold tracking-tight text-white">{title}</h1>
 						{/if}
 						{#if description}
-							<p class="truncate text-xs leading-snug text-white/80">{description}</p>
+							<p class="line-clamp-2 text-xs leading-snug text-white/80 sm:line-clamp-1">{description}</p>
 						{/if}
 					</Stack>
 				{/if}
 				{#if actions}
-					<Cluster justify="end" shrink={false}>{@render actions()}</Cluster>
+					<!-- dark tokens: the actions sit on the scrim, never on the light page. `text-foreground` too: a control that sets
+					     no colour (a picker's value, an input's text) inherits the page's computed dark text, not the scope's token -->
+					<Cluster justify="end" shrink={false} class="dark text-foreground">{@render actions()}</Cluster>
 				{/if}
 			</Inline>
 		</Stack>

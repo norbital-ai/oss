@@ -22,17 +22,22 @@ their label, booleans as Yes/No, groups as a label/value grid, empty as an em da
 <script lang="ts">
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import { uiText } from '../primitives/utils.js';
+	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
+	import { useEnumText } from '../views/bolt.js';
 	import { humanize } from '../views/model.js';
 	import { useKinds } from './context.js';
 	import { fieldEntry } from './builtin/index.js';
-	import { currencyOf, format, isMasked, NUMERIC, untag, type Json } from './kind.js';
+	import { currencyOf, format, isMasked, NUMERIC, shownKind, untag, type Json } from './kind.js';
 	import Picker from './picker.svelte';
 	import Self from './read-value.svelte';
 	import Show from './show.svelte';
 
-	let { kind, value, name = '', row = {}, relation, address, id }: ReadValueProps = $props();
+	let { kind: declared, value, name = '', row = {}, relation, address, id }: ReadValueProps = $props();
 	const host = useKinds();
 	const t = uiText();
+	const words = useEnumText();
+	// a sum of a money field reads as that money
+	const kind = $derived(shownKind(declared));
 	const v = $derived(untag(value));
 	// money, file, point and phone read through their built-in custom field, a tenant's custom field through its own
 	const field = $derived(fieldEntry(kind, host));
@@ -54,7 +59,9 @@ their label, booleans as Yes/No, groups as a label/value grid, empty as an em da
 {:else if kind.kind === 'bool'}
 	<CopyText {id} text={v === true ? t('yes') : t('no')} />
 {:else if kind.kind === 'enum'}
-	<CopyText {id} text={(Array.isArray(v) ? v : [v]).map((x) => humanize(String(x))).join(', ')} />
+	<CopyText {id} text={(Array.isArray(v) ? v : [v]).map((x) => words(String(x), name)).join(', ')} />
+{:else if kind.kind === 'text' && kind.format === 'markdown' && typeof v === 'string'}
+	<ReadonlyMarkdown value={v} {id} />
 {:else if field?.entry.renderer}
 	{@const Renderer = field.entry.renderer}
 	{@const where = address === undefined ? null : untag(row[address] ?? null)}

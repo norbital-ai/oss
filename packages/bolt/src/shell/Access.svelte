@@ -1,5 +1,5 @@
 <!--
-	The access surfaces (sign-in, invitation, registration): ui's `AccessFrame` — the one access look a host's workspace
+	The access surfaces (sign-in, invitation): ui's `AccessFrame` — the one access look a host's workspace
 	picker shares — around one card, with staging's "Change workspace" below it. The workspace is the one the boot names,
 	even to a signed-out caller.
 -->

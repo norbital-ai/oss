@@ -46,7 +46,7 @@ export const salesRep = policy({
 	limits: {
 		act: '600/min', agent: { rate: '100/h', per: 'actor' }, read: [{ rate: '3000/min', per: 'actor' }, { rate: '600/min', per: 'ip' }],
 		'orders.submit': '10/min', 'customers.gold': { rate: '1/15min', per: 'actor' },
-		'envoys.receive': [{ rate: '8/min', per: 'sender' }, { rate: '300/min', per: 'subject' }], 'envoys.registration': '1/15min',
+		'envoys.receive': [{ rate: '8/min', per: 'sender' }, { rate: '300/min', per: 'subject' }], 'envoys.unrecognised': '1/15min',
 	},
 });
 // A visitor policy (rule 38d): the shape is ordinary; what a public policy may hold is the build's `access/visitor-grant`.

@@ -533,6 +533,8 @@ function kindCheck(C: string, k: FieldKind, wsCurrency: string | null, t: Table)
 			if (k.max !== undefined) parts.push(`${C} <= ${k.max}`);
 			break;
 		case 'money': {
+			// a declared scale (a unit price) replaces the minor-unit check
+			if (k.scale !== undefined) { parts.push(`round(${C}, ${k.scale}) = ${C}`); break; }
 			const cur = k.currency ?? wsCurrency;
 			if (cur === null) break;
 			parts.push(/^[A-Z]{3}$/.test(cur) ? `round(${C}, ${minorUnits(cur)}) = ${C}`

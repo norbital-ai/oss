@@ -375,7 +375,8 @@ function ctxFor(kind, c, invocationId) {
 			web: { read: withTry('web.read') },
 			files: Object.fromEntries(['meta', 'get', 'url', 'text', 'table', 'sheet', 'image', 'put'].map((m) => [m, withTry('files.' + m)])),
 			convert: { document: withTry('convert.document') },
-			ai: { sys_1: { decide: withTry('ai.sys_1.decide') }, sys_2: { infer: withTry('ai.sys_2.infer') }, embed: withTry('ai.embed') }, // hook:ai — P36, P39
+			ai: { sys_1: { decide: withTry('ai.sys_1.decide') }, sys_2: { infer: withTry('ai.sys_2.infer') }, embed: withTry('ai.embed'),
+				transcribe: withTry('ai.transcribe'), speak: withTry('ai.speak') }, // hook:ai — P36, P39
 			geo: { search: fn('geo.search', 'value'), reverse: fn('geo.reverse', 'value') } };
 		case 'mapping': return { ...clock, read: reads.read, get: reads.get, aggregate: reads.aggregate };
 		default: return undefined;

@@ -2,6 +2,8 @@
 // hands the page's `bolt` to every view once with `provideBolt` (hook:ui-shell); a view never takes a client prop.
 import { getContext, setContext, type Component } from 'svelte';
 import type { Offer, OrderBy } from './filter.js';
+import { enumText } from '../kinds/kind.js';
+import { label } from './model.js';
 
 export type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
 export type Row = { readonly [field: string]: Json };
@@ -129,6 +131,22 @@ export function useBolt(): ViewBolt {
 	const bolt = getContext<ViewBolt | undefined>(BOLT);
 	if (bolt === undefined) throw new Error('A view needs the shell: call provideBolt(bolt) above it.');
 	return bolt;
+}
+const COLLECTION = Symbol('ui.views.collection');
+/** The collection the values beneath belong to (a Table's, a record's, a Form's): their enum words read its catalog keys. */
+export const provideCollection = (of: () => string) => setContext(COLLECTION, of);
+/**
+ * An enum or state value's words beneath a view: `models.<c>.fields.<field>.<value>` through the page's `t` when a
+ * shell and a collection are above, else the value in words (`enumText`). Call it at a component's init.
+ */
+export function useEnumText(): (value: string, field?: string) => string {
+	const bolt = getContext<ViewBolt | undefined>(BOLT), of = getContext<(() => string) | undefined>(COLLECTION);
+	return (value, field) => enumText(value, { ...(bolt === undefined ? {} : { t: (k: string) => bolt.t(k) }), ...(of === undefined ? {} : { collection: of() }), ...(field === undefined ? {} : { field }) });
+}
+/** A field's label beneath a view: the catalog's `models.<c>.fields.<field>`, else `declared`, else the name in words. */
+export function useFieldLabel(): (field: string, declared?: string) => string {
+	const bolt = getContext<ViewBolt | undefined>(BOLT), of = getContext<(() => string) | undefined>(COLLECTION);
+	return (field, declared) => label(bolt ?? { t: (k) => k }, of?.() ?? '', field, declared);
 }
 /** A collection's `+representation.svelte`, loaded on first use (its module may import `$bolt`). */
 export type RepresentationLoader = () => Promise<{ default: Component<{ view: RecordView }> }>;

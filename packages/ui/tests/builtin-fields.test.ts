@@ -58,9 +58,25 @@ test('phone numbers are stored E.164 and read grouped with their calling code', 
 	assert.equal(phone.regionOf('en-SG'), 'SG');
 });
 
+test('a sender or recipient handle reads per transport: a WhatsApp number JID as its phone, the rest as given', () => {
+	assert.equal(phone.formatHandle('whatsapp', '6591234567@s.whatsapp.net'), '+65 9123 4567');
+	assert.equal(phone.formatHandle('whatsapp', '6591234567:14@s.whatsapp.net'), '+65 9123 4567');
+	assert.equal(phone.formatHandle(null, '6591234567@s.whatsapp.net'), '+65 9123 4567');
+	assert.equal(phone.formatHandle('whatsapp', '6591234567'), '+65 9123 4567');
+	assert.equal(phone.formatHandle(null, 'whatsapp:+6591234567'), '+65 9123 4567');
+	assert.equal(phone.formatHandle('whatsapp', '8881234567@s.whatsapp.net'), '+8881234567');
+	assert.equal(phone.formatHandle('whatsapp', '120363041234567890@g.us'), '120363041234567890@g.us');
+	assert.equal(phone.formatHandle('whatsapp', '123456789012345@lid'), '123456789012345@lid');
+	assert.equal(phone.formatHandle('whatsapp', '6591234567@s.whatsapp.net', 'Wei Jie'), 'Wei Jie');
+	assert.equal(phone.formatHandle('email', 'hello@riverstone.example.test'), 'hello@riverstone.example.test');
+	assert.equal(phone.formatHandle('telegram', '123456789'), '123456789');
+	assert.equal(phone.formatHandle('telegram', '123456789', 'Ana'), 'Ana');
+	assert.equal(phone.formatHandle('slack', 'U0123ABCD', ' '), 'U0123ABCD');
+});
+
 test('built-ins render by default in a cell: money in tabular figures, phone as a formatted tel: link, by kind or by reference', async () => {
 	const money = await show({ part: 'show', props: { kind: { kind: 'money', currency: 'SGD' }, value: '1234.5' } });
-	assert.equal(money.querySelector('.tabular-nums')?.textContent, 'SGD1,234.50');
+	assert.equal(money.querySelector('.tabular-nums')?.textContent, 'SGD 1,234.50');
 	for (const kind of [{ kind: 'text', format: 'phone' }, { kind: 'custom', of: 'phone' }]) {
 		const t = await show({ part: 'show', props: { kind, value: '+6591234567' } });
 		const a = t.querySelector('a[href^="tel:"]');

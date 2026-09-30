@@ -69,6 +69,9 @@ export { default as RunsFor, type RunsForProps } from './RunsFor.svelte';
 export { default as RunStatus, type RunStatusProps } from './RunStatus.svelte';
 export type { Col, ColumnsIn, RowAction, RowIn, TableProps, TableSource } from './Table.svelte';
 export type { Toolbar, ToolbarGroup, ToolbarItem } from './ViewToolbar.svelte';
-export { carriedContexts, onPageContexts, openRecord, pageContexts, provideBolt, useRecordView, provideRepresentations, type RecordView, type RepresentationLoader, type ViewBolt, type Workspace } from './bolt.js';
+export { carriedContexts, onPageContexts, openRecord, pageContexts, provideBolt, provideCollection, useEnumText, useRecordView, provideRepresentations, type RecordView, type RepresentationLoader, type ViewBolt, type Workspace } from './bolt.js';
 export { default as LogView, type LogViewProps } from './LogView.svelte';
+export { default as EmptyState } from './EmptyState.svelte';
+/** A collection's or field's label and a record's singular noun, from the catalog (`models.<c>.label|singular|fields.<f>`). */
+export { label, singular } from './model.js';
 export { LOG_LEVELS, filterLogs, type LogLevel, type LogLine } from './logs.js';

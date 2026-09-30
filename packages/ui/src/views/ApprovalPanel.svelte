@@ -92,11 +92,11 @@
 	{:else if sum !== null}
 		<details class="min-w-0" bind:open={open[key]}>
 			<summary class="w-fit cursor-pointer">{sum}</summary>
-			<div class="mt-1 min-w-0 overflow-x-auto"><Value value={v} kind={exposure?.fields[f]} /></div>
+			<div class="mt-1 min-w-0 overflow-x-auto"><Value value={v} kind={exposure?.fields[f]} name={f} /></div>
 		</details>
 	{:else}
 		{@const long = show(v, bolt.locale).length > LONG}
-		<div class={long && !open[key] ? 'line-clamp-3' : ''}><Value value={v} kind={exposure?.fields[f]} /></div>
+		<div class={long && !open[key] ? 'line-clamp-3' : ''}><Value value={v} kind={exposure?.fields[f]} name={f} /></div>
 		{#if long}
 			<button type="button" class="text-primary w-fit text-xs underline-offset-4 hover:underline" onclick={() => (open[key] = !open[key])}>
 				{open[key] ? msg(bolt, 'approval.showLess', 'Show less') : msg(bolt, 'approval.showMore', 'Show more')}

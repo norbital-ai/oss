@@ -43,7 +43,7 @@ export type QReply = { answers: readonly Json[] };
  * `{ conversation, text, mode? }` → `{ id }` (the turn runs after the reply); `sys_message.confirm` `{ message, approve }`;
  * `sys_conversation.setAgent` `{ conversation, agent }` (`'workspace'` or an envoy); `sys_message.file` `{ message, about }`
  * (`{ collection, id }` or `null`); `sys_message.markRead` `{ conversation }`; `sys_notification.markRead` `{ ids }` (the caller's own inbox
- * notices); `sys_user.linkHandle` `{ claim, replay? }`.
+ * notices).
  */
 export type ActBody = { callable: string; input: Json; issuedAt: string; observed?: { readonly [id: string]: number }; onConflict?: 'update' | 'keep' };
 /** `v`: the lane sequence of the act's last commit (rule 66). */

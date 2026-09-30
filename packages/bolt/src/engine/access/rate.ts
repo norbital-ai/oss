@@ -94,7 +94,7 @@ export function addressBucket(address: string): string {
 export const macKey = (ipMac: Uint8Array, value: string): string => createHmac('sha256', ipMac).update(value).digest('base64url');
 
 // ── the buckets of one request ──
-export type RateKind = 'act' | 'read' | 'upload' | 'agent' | 'register' | 'envoys.receive' | 'envoys.registration';
+export type RateKind = 'act' | 'read' | 'upload' | 'agent' | 'register' | 'envoys.receive' | 'envoys.unrecognised';
 /** Whom `per` counts: resolved by the host before decode (the IP already MAC'd, rule 38). */
 export type Who = { actor?: string; ip?: string; sender?: string; subject?: string };
 /** Every applicable bucket of a request: the kind key and, when named, the callable key (`<c>.<query|action>`). */

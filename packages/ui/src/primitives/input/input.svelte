@@ -1,6 +1,7 @@
 <!--
 @component
-A text input (every `<input>` type), bindable `value`. `readonly` (or an enclosing readonly form) shows the value as
+A text input (every `<input>` type), bindable `value`. `type="file"` binds `files` (or `onFiles`) instead: a file
+input's value is not writable. `readonly` (or an enclosing readonly form) shows the value as
 copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps the box, muted.
 -->
 <script lang="ts">
@@ -12,7 +13,7 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 
 	type Props = WithElementRef<
 		Omit<HTMLInputAttributes, 'type'> &
-			({ type: 'file'; files?: FileList } | { type?: InputType; files?: undefined })
+			({ type: 'file'; files?: FileList; onFiles?: (files: FileList | null) => void } | { type?: InputType; files?: undefined; onFiles?: undefined })
 	>;
 
 	let {
@@ -20,6 +21,7 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		value = $bindable(),
 		type,
 		files = $bindable(),
+		onFiles,
 		class: className,
 		'data-slot': dataSlot = 'input',
 		readonly,
@@ -54,10 +56,10 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		)}
 		type="file"
 		bind:files
-		bind:value
 		{readonly}
 		disabled={off}
 		{...restProps}
+		onchange={(e) => (onFiles?.(e.currentTarget.files), restProps.onchange?.(e))}
 	/>
 {:else}
 	<input

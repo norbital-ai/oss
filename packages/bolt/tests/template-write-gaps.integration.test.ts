@@ -85,6 +85,14 @@ describe('write gaps found by the template migration', () => {
 			{ recipient: { channel: 'inbox', recipients: [{ user: U }, { user: actor }] }, link: { collection: 'projects', id } }]);
 	});
 
+	it('a batch create answers its records in input order', async () => {
+		const { rows, A } = await setup();
+		const titles = ['A1', 'A5', 'A2', 'A3', 'A4', 'A0'];
+		const out = ok(await A.act('quotes.create', titles.map((title) => ({ title }))));
+		const byId = new Map((await rows(`SELECT id::text, title FROM quotes`)).map((r) => [r['id'], r['title']]));
+		expect(out.records.map((r) => byId.get(r.id))).toEqual(titles);
+	});
+
 	it('an action\'s recorded writes carry their notices into the action\'s statement', async () => {
 		const { rows, A } = await setup();
 		ok(await A.act('cases.raise', { title: 'x' }));

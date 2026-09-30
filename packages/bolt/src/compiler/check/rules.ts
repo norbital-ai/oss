@@ -1,5 +1,5 @@
 // The build checks tsc cannot carry (§3.3.9 "Where each literal is checked", rules 6, 14, 33a, 38, 38d, 50, 52): numeric
-// ranges, `seq` patterns, state names and reachability, cron strings, approval step counts, event inputs, rates, IP limits, visitor grants and
+// ranges, `seq` patterns, labels naming an id, calendar days declared as instants, state names and reachability, cron strings, approval step counts, event inputs, rates, IP limits, visitor grants and
 // refs, masked search fields, write grants over child rows and unreachable internal callables. Each finding names the declaring file.
 import { LIMITS, type EngineManifest } from '../../engine/contracts.ts';
 import { parseRate } from '../../engine/access/rate.ts';
@@ -14,6 +14,8 @@ const DATE_UNITS = ['year', 'month', 'week', 'day'];
 const MACROS = ['@yearly', '@annually', '@monthly', '@weekly', '@daily', '@hourly'];
 const RANGES = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]] as const;
 /** Five fields (minute hour day month weekday) of `*`, numbers, ranges, lists and steps, or a macro. ponytail: no month or day names. */
+/** The signature schemes a webhook is verified by (`engine/runs/webhook.ts`). */
+const WEBHOOK_SCHEMES: readonly string[] = ['bearer', 'hmac-sha256', 'svix', 'stripe', 'slack', 'meta'];
 export function cronValid(s: string): boolean {
 	if (MACROS.includes(s)) return true;
 	const fields = s.trim().split(/\s+/);
@@ -45,7 +47,7 @@ function manyIn(m: EngineManifest, c: string, w: unknown): string | undefined {
 	return undefined;
 }
 
-export function buildChecks(m: EngineManifest, bodies: { automations: readonly string[] }, path: (role: string, name: string) => string): Finding[] {
+export function buildChecks(m: EngineManifest, bodies: { automations: readonly string[]; connects?: readonly string[] }, path: (role: string, name: string) => string): Finding[] {
 	const out: Finding[] = [];
 	const at = (code: string, role: string, name: string, message: string) => out.push({ code, path: path(role, name), message: `${path(role, name)}: ${message}` });
 
@@ -90,11 +92,47 @@ export function buildChecks(m: EngineManifest, bodies: { automations: readonly s
 				for (const s of seen) for (const to of states[s]?.to ?? []) seen.add(to);
 				for (const s of Object.keys(states)) if (!seen.has(s)) at('model/state', 'model', model, `${f}: '${s}' is unreachable from '${String(k.initial)}'`);
 			}
+			// a calendar day named as one is a `date`: an instant shows a time and shifts a day across zones
+			if (k.kind === 'instant' && /_(on|date)$/.test(f)) at('model/instant-date', 'model', model, `${f}: a field named *_on or *_date is a calendar day; declare it { kind: 'date' }`);
 		}
+		// a label is what a person reads for the row: an id or a foreign key would show as a uuid
+		for (const l of list(spec.label as string | readonly string[] | undefined))
+			if (l === 'id' || m.relationships[`${model}.${l}`] !== undefined)
+				at('model/label', 'model', model, `label '${l}' is ${l === 'id' ? 'the row id' : 'a foreign key'}; label with the row's own text fields (a computed field may join them)`);
 		// the embedding column's width, stated: a guess would have to match the host's model class, which it cannot know
 		const sem = (spec.search as { semantic?: { dim?: unknown } } | undefined)?.semantic;
 		if (sem !== undefined && !(Number.isInteger(sem.dim) && Number(sem.dim) >= 1 && Number(sem.dim) <= 2000))
 			at('model/range', 'model', model, `search.semantic: dim is 1 to 2,000 (the embedding column's width, and the width every probe asks the model for)`);
+	}
+
+	// rule 61: a custom channel is the workspace's own provider — it names the connection it sends through and ships its setup page
+	for (const [name, ch] of Object.entries(m.channels ?? {})) {
+		const send = ch['send'];
+		const inbound = ch['inbound'], poll = ch['poll'];
+		if (ch['transport'] !== 'custom') {
+			if (send !== undefined) at('channel/send', 'channel', name, `only a custom channel names a send connection; a ${String(ch['transport'])} channel's provider is chosen at setup`);
+			if (inbound !== undefined || poll !== undefined) at('channel/custom-inbound', 'channel', name, `only a custom channel declares inbound or poll; a ${String(ch['transport'])} channel receives through its provider`);
+			continue;
+		}
+		if (typeof send !== 'string' || m.connections?.[send] === undefined)
+			at('channel/custom-send', 'channel', name, `a custom channel names the connection it sends through: send: '<connection>' (src/connection/+<connection>.connection.ts)`);
+		if (!(bodies.connects ?? []).includes(name))
+			at('channel/custom-connect', 'channel', name, `a custom channel ships its setup page: add src/channel/+${name}.connect.svelte`);
+		// its inbound is one path: the channel's own webhook, verified with the sealed credential, and/or a poll of a connection
+		if (inbound !== undefined) {
+			const v = isObj(inbound) ? inbound['verify'] : undefined;
+			if (!isObj(v) || !WEBHOOK_SCHEMES.includes(String(v['scheme'])) || typeof v['secret'] !== 'string' || v['secret'] === '')
+				at('channel/inbound-verify', 'channel', name, `inbound.verify names a scheme (${WEBHOOK_SCHEMES.join(', ')}) and the field of what the connect page pairs with that holds its secret`);
+			if (!isObj(inbound) || inbound['messages'] !== true) at('channel/inbound-messages', 'channel', name, 'inbound maps the verified body: messages: ({ body, headers }) => [...]');
+		}
+		if (poll !== undefined) {
+			const p = isObj(poll) ? poll : {};
+			if (typeof p['connection'] !== 'string' || m.connections?.[p['connection']] === undefined)
+				at('channel/poll-connection', 'channel', name, `poll names the connection it reads through: connection: '<connection>' (src/connection/+<connection>.connection.ts)`);
+			if (typeof p['cron'] !== 'string' || !cronValid(p['cron'])) at('channel/poll-cron', 'channel', name, `poll.cron '${String(p['cron'])}' is not 5 cron fields or a macro`);
+			if (typeof p['path'] !== 'string') at('channel/poll-path', 'channel', name, 'poll names the path it reads: path: \'/messages\'');
+			if (p['messages'] !== true) at('channel/poll-messages', 'channel', name, 'poll maps the answer: messages: ({ body }) => [...]');
+		}
 	}
 
 	for (const [name, a] of Object.entries(m.automations)) {

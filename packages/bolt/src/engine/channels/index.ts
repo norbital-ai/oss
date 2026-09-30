@@ -5,20 +5,24 @@
 // which per-state `edit` never refuses (rule 41). Staff never speak into a thread here: replies come only from the channel (rule 61).
 import type { Json } from '../../decl/values.ts';
 import { catalogOf } from '../access/pred.ts';
-import type { Authority, Bindings, DeadlinesPort, EngineActor, FilesPort, GuestPort, Outcome, TransportEvent, TransportPort } from '../contracts.ts';
+import type { Authority, Bindings, DeadlinesPort, EngineActor, FilesPort, GuestPort, OutboundAttachment, Outcome, TransportEvent, TransportPort, Transports } from '../contracts.ts';
 import { BoltError, callPort, LIMITS } from '../contracts.ts';
 import type { Engine } from '../index.ts';
-import { mappingBody } from '../integrations/runner.ts';
+import { mappingBody, type HttpPort } from '../integrations/runner.ts';
 import * as ir from '../../protocol/ir.ts';
+import { POLL } from '../runs/queue.ts';
 import { Chain } from '../write/sql.ts';
 import { checkOutbound, DELIVER, prepareSend, sendPiece, threadOf } from './outbound.ts';
 import { conversationId, isObj, messageId, NOTIFY, preview, sql, stableId, type Obj } from './store.ts';
+import { isAutoReply, isReported, RANK, SendRefused, sendRefusal, TERMINAL, type DeliveryEntry, type DeliveryKind, type DeliveryReport } from './status.ts';
 import { decodeInbound, type Inbound } from './transports.ts';
 
-export type Transports = { readonly email?: TransportPort; readonly whatsapp?: TransportPort; readonly telegram?: TransportPort; readonly push?: TransportPort };
+export type { Transports };
 export type ChannelsConfig = {
 	engine: Pick<Engine, 'manifest' | 'db' | 'act' | 'read' | 'authority'>;
 	transports?: Transports; files?: FilesPort; guest?: GuestPort;
+	/** The declared connections: a `custom` channel POSTs each outbound message to the connection its `send` names. */
+	http?: HttpPort;
 	/** Delivery retries wake the scope at their due time (rule 52a). */
 	deadlines?: DeadlinesPort; scope?: string;
 	clock?: () => string;
@@ -31,8 +35,20 @@ export type ChannelsConfig = {
 };
 /** One inbound row as the ingest wrote it. */
 export type Ingested = Inbound & { row: string; channel: string; conversation: string; inserted: boolean; files: readonly Json[] };
-export type DeliveryKind = 'sent' | 'delivered' | 'opened' | 'bounced' | 'failed' | 'replied';
-const KINDS = new Set(['sent', 'delivered', 'opened', 'bounced', 'failed', 'replied']);
+export type { DeliveryKind };
+/** A timeline entry as stored: `raw` bounded to 4 KB. */
+const entry = (e: DeliveryEntry): string => {
+	const raw = e.raw === undefined ? undefined : JSON.stringify(e.raw);
+	return JSON.stringify(raw === undefined || raw.length <= 4096 ? e : { ...e, raw: raw.slice(0, 4096) });
+};
+/**
+ * The status after kind `k` in SQL, the same rule as `statusAfter` (status.ts): terminal wins, `auto_replied` never moves
+ * it, otherwise the higher rank. `t` / `r` are TERMINAL and RANK as JSON parameters.
+ */
+const AFTER = (col: string, k: string, t: string, r: string) => `CASE WHEN ${k} = 'auto_replied' OR coalesce(${col}, '') IN (SELECT jsonb_array_elements_text(${t}::jsonb)) THEN ${col}
+	WHEN ${k} IN (SELECT jsonb_array_elements_text(${t}::jsonb)) THEN ${k}
+	WHEN (${r}::jsonb ->> ${k})::int > coalesce((${r}::jsonb ->> ${col})::int, 0) THEN ${k} ELSE ${col} END`;
+const TERMINALS = JSON.stringify([...TERMINAL]), RANKS = JSON.stringify(RANK);
 const MAX_ATTEMPTS = 8;
 /** An admitted row (`role` set) keeps its transcript content; only unadmitted history is rewritten by an edit or a revoke. */
 const KEEP = (col: string) => `CASE WHEN sys_message.role IS NULL THEN excluded.${col} ELSE sys_message.${col} END`;
@@ -118,36 +134,78 @@ export function channels(cfg: ChannelsConfig) {
 	/** Every transport event: inbound rows, then who reads them (envoys, integrations, email reply mapping); delivery events. */
 	async function receive(event: TransportEvent): Promise<void> {
 		if (event.kind === 'delivery') {
-			if (KINDS.has(event.event)) await delivered(event.channel, event.providerId, event.event as DeliveryKind, event.at, event.data ?? null);
+			if (isReported(event.report.kind)) await delivered(event.channel, event.providerId, event.report);
 			return;
 		}
+		// a custom channel's webhook hands over its verified request (`{ body, headers }`): the channel's own `inbound` maps it
+		if (transportOf(event.channel) === 'custom') {
+			for (const message of await mapped(event.channel, 'inbound', event.message)) await arrived({ kind: 'inbound', channel: event.channel, message });
+			return;
+		}
+		await arrived(event);
+	}
+	/** One decoded inbound message: its row, then who reads it (integrations, reply mapping, envoys). */
+	async function arrived(event: Extract<TransportEvent, { kind: 'inbound' }>): Promise<void> {
 		const got = await ingest(event.channel, event.message, event.bins);
 		if (got === null || !got.inserted || got.deleted) return;
 		if (!got.history) await cfg.integrations?.deliver(event, `channel:${event.channel}:${got.row}`);
-		if (got.email !== null && got.references.length > 0) await replied(got);
+		if (got.email !== null ? got.references.length > 0 : got.replyTo !== null) await replied(got);
 		if (!got.history) await cfg.admit?.(got);
 	}
 
-	// ── delivery events → the causing row ──
-	async function delivered(channel: string, providerId: string, kind: DeliveryKind, at: string, data: Json): Promise<Outcome | null> {
-		const reason = isObj(data) && typeof data['reason'] === 'string' ? data['reason'] : null;
-		const res = await db.write(sql(`UPDATE sys_message SET delivery = delivery || jsonb_build_object($3::text, $4::text),
-			status = CASE WHEN $3 IN ('bounced', 'failed') THEN 'failed' ELSE status END, error = coalesce($5, error)
-			WHERE channel = $1 AND provider_id = $2 AND direction = 'outbound' RETURNING id, record`, channel, providerId, kind, at, reason));
-		const row = res.rows[0];
-		if (row === undefined) return null;
-		return patch(channel, row['record'] as Obj | null, kind, { at, message: row['id']!, ...(reason === null ? {} : { reason }) });
+	/** A custom channel's own decode, its declared `inbound` or `poll` `messages`, run as the channel's actor. */
+	async function mapped(channel: string, from: 'inbound' | 'poll', payload: Json): Promise<readonly Json[]> {
+		const out = await body(channel)(`channel.${channel}.${from}.messages`, [payload]);
+		if (!Array.isArray(out)) throw new BoltError('invalidInput', 'decode', `the ${channel} channel's ${from} messages answered no list`);
+		return out as readonly Json[];
 	}
-	/** An email reply is matched to its sending row by the outbound message's provider id or `thread` (rule 61). */
-	async function replied(mail: Ingested): Promise<void> {
-		const refs = [...mail.references, mail.thread];
-		const [res] = await db.read([sql(`SELECT id, record FROM sys_message WHERE channel = $1 AND direction = 'outbound'
-			AND (provider_id IN (SELECT jsonb_array_elements_text($2::jsonb)) OR thread IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY seq DESC LIMIT 1`,
-		mail.channel, refs)]);
-		const row = res!.rows[0];
-		if (row === undefined) return;
-		await db.write(sql(`UPDATE sys_message SET delivery = delivery || jsonb_build_object('replied', $2::text) WHERE id = $1`, row['id']!, mail.sentAt));
-		await patch(mail.channel, row['record'] as Obj | null, 'replied', { at: mail.sentAt, message: row['id']!, mail: mail.email });
+	/** `channels.poll:<channel>` (its `poll.cron`): a GET through the named connection, its answer mapped and ingested like a webhook's. */
+	async function poll(channel: string): Promise<Json> {
+		const p = specOf(channel)['poll'] as Obj;
+		const res = await callPort('http', cfg.http, LIMITS.callMs.http, (h, signal) => h.request(String(p['connection']), { method: 'GET', path: String(p['path']),
+			...(isObj(p['query']) ? { query: p['query'] as { readonly [name: string]: string } } : {}) }, signal));
+		if ('kind' in res) throw new BoltError('upstream', 'facility', `the ${channel} poll: ${'message' in res ? res.message : res.reason}`);
+		if (res.status >= 400) throw new BoltError('upstream', 'facility', `the ${channel} poll: GET ${String(p['path'])} answered ${res.status}`);
+		const messages = await mapped(channel, 'poll', { body: res.body });
+		for (const message of messages) await arrived({ kind: 'inbound', channel, message });
+		return { received: messages.length };
+	}
+
+	// ── delivery events → the timeline, the status, the causing row ──
+	/**
+	 * Appends `e` to the message's timeline and advances its status (status.ts); a redelivered report (same kind, time and
+	 * code) moves nothing. The row's `events.<kind>` runs when the status moved, and for every reply and auto-reply.
+	 */
+	async function record(channel: string, where: string, params: readonly Json[], e: DeliveryEntry, extra: Obj = {}): Promise<Outcome | null> {
+		const n = params.length, $ = (i: number) => `$${n + i}`;
+		const same = JSON.stringify([{ kind: e.kind, at: e.at, ...(e.code === undefined ? {} : { code: e.code }) }]);
+		const res = await db.write(sql(`WITH cur AS (SELECT id, status FROM sys_message WHERE ${where} AND direction = 'outbound' AND NOT delivery @> ${$(2)}::jsonb
+				ORDER BY seq DESC LIMIT 1 FOR UPDATE)
+			UPDATE sys_message s SET delivery = s.delivery || jsonb_build_array(${$(1)}::jsonb), status = ${AFTER('s.status', `${$(3)}::text`, $(4), $(5))},
+				error = CASE WHEN ${$(3)} IN ('bounced', 'failed', 'complained', 'deferred') THEN coalesce(${$(6)}, s.error) ELSE s.error END,
+				presume_at = CASE WHEN ${$(3)} IN ('sent', 'deferred', 'auto_replied') THEN s.presume_at END
+			FROM cur WHERE s.id = cur.id RETURNING s.id, s.record, cur.status AS before, s.status`,
+		...params, entry(e), same, e.kind, TERMINALS, RANKS, e.reason ?? null));
+		const row = res.rows[0];
+		if (row === undefined || row['before'] === row['status'] && e.kind !== 'replied' && e.kind !== 'auto_replied') return null;
+		const { reply: _, ...fields } = e;
+		return patch(channel, row['record'] as Obj | null, e.kind, { ...fields, message: row['id']!, ...extra });
+	}
+	const delivered = (channel: string, providerId: string, report: DeliveryReport): Promise<Outcome | null> =>
+		record(channel, 'channel = $1 AND provider_id = $2', [channel, providerId],
+			report.reason === undefined && (report.kind === 'bounced' || report.kind === 'failed') ? { ...report, reason: report.code ?? report.kind } : report);
+	/**
+	 * A reply is matched to its sending row by the outbound message's provider id or `thread` (an email's references, a
+	 * chat's quoted message; rule 61). An automatic answer (RFC 3834) is `auto_replied`: recorded, never a reply.
+	 */
+	async function replied(got: Ingested): Promise<void> {
+		const refs = got.email !== null ? [...got.references, got.thread] : [got.replyTo!];
+		const mail = got.email;
+		const auto = mail !== null && isAutoReply(isObj(mail['headers']) ? mail['headers'] as { [k: string]: string } : {}, String(mail['subject'] ?? ''));
+		const reply: Json = mail ?? { id: got.id, thread: got.thread, sentAt: got.sentAt, from: { handle: got.sender, name: got.senderName }, replyTo: got.replyTo,
+			text: got.text, attachments: got.files };
+		await record(got.channel, `channel = $1 AND (provider_id IN (SELECT jsonb_array_elements_text($2::jsonb)) OR thread IN (SELECT jsonb_array_elements_text($2::jsonb)))`,
+			[got.channel, JSON.stringify(refs)], { kind: auto ? 'auto_replied' : 'replied', at: got.sentAt, provider: 'bolt', reply: got.row }, { reply });
 	}
 	/**
 	 * `events.<kind>(e) → Patch`, applied as the channel's actor through the collection's pipeline. Per-state `edit` never
@@ -192,8 +250,10 @@ export function channels(cfg: ChannelsConfig) {
 	async function build(r: Obj): Promise<boolean> {
 		const channel = String(r['channel']), record = r['record'] as Obj;
 		const fail = async (status: 'failed' | 'skipped', error: string) => {
-			await db.write(sql(`UPDATE sys_message SET status = $2, error = $3 WHERE id = $1 AND status = 'queued'`, r['id']!, status, error.slice(0, 2000)));
-			if (status === 'failed') await patch(channel, record, 'failed', { at: clock(), message: r['id']!, reason: error.slice(0, 500) });
+			const e: DeliveryEntry = { kind: 'failed', at: clock(), provider: 'bolt', reason: error.slice(0, 500), permanent: true };
+			await db.write(sql(`UPDATE sys_message SET status = $2, error = $3, delivery = delivery || CASE WHEN $2 = 'failed' THEN jsonb_build_array($4::jsonb) ELSE '[]'::jsonb END
+				WHERE id = $1 AND status = 'queued'`, r['id']!, status, error.slice(0, 2000), entry(e)));
+			if (status === 'failed') await patch(channel, record, 'failed', { ...e, message: r['id']! });
 			return false;
 		};
 		const [row] = await cfg.engine.read([ir.get(cat, String(record['collection']), String(record['id']))], { as: 'workspace' }, bindings()).catch(() => [null]);
@@ -206,6 +266,7 @@ export function channels(cfg: ChannelsConfig) {
 		} catch (e) {
 			return fail('failed', `the ${String(r['rule'])} message failed: ${(e as Error).message}`);
 		}
+		if (built === null) return fail('skipped', `the ${String(r['rule'])} message sends nothing for this record`);
 		const checked = checkOutbound(transportOf(channel), built);
 		if ('error' in checked) return fail('failed', `the message does not fit ${transportOf(channel)}: ${checked.error}`);
 		const thread = await threadOf(m, db, channel, checked.message, String(record['id']));
@@ -217,6 +278,42 @@ export function channels(cfg: ChannelsConfig) {
 		return true;
 	}
 
+	/** A custom channel's outbound: the wire message POSTed to its `send` connection; its `id` (or ours) is the provider id. */
+	const customPort = (connection: string): TransportPort | undefined => cfg.http === undefined ? undefined : {
+		async send(_channel, message, signal) {
+			const res = await cfg.http!.request(connection, { method: 'POST', path: '', body: message }, signal);
+			if (res.status < 200 || res.status >= 300) throw new Error(`connection '${connection}' answered ${res.status}`);
+			const id = isObj(res.body) ? res.body['id'] : undefined;
+			return { providerId: typeof id === 'string' && id !== '' ? id : String((message as Obj)['id']) };
+		},
+		subscribe: () => () => {},
+	};
+
+	/**
+	 * A message's `attachments` (stored FileRefs) read for its provider, in order, at most `LIMITS.messageAttachmentBytes`
+	 * together: a file no longer stored, or more than the cap, refuses the message for good; a failed read is retried.
+	 */
+	async function attachmentsOf(refs: readonly Json[], signal: AbortSignal): Promise<OutboundAttachment[]> {
+		const ids = refs.map((a) => String((a as Obj)['id']));
+		const [res] = await db.read([sql(`SELECT id, name, mime, size, key FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))`, JSON.stringify(ids))]);
+		const byId = new Map(res!.rows.map((f) => [String(f['id']), f]));
+		const gone = ids.find((id) => !byId.has(id));
+		if (gone !== undefined) throw new SendRefused(`attachment ${gone} is not a stored file`);
+		const total = ids.reduce((n, id) => n + Number(byId.get(id)!['size']), 0), cap = LIMITS.messageAttachmentBytes;
+		if (total > cap) throw new SendRefused(`the attachments are ${(total / 2 ** 20).toFixed(1)} MiB, over the ${cap / 2 ** 20} MiB a message carries`);
+		const files = cfg.files;
+		if (files === undefined) throw new SendRefused('this host stores no files to attach');
+		let left = cap;
+		const out: OutboundAttachment[] = [];
+		for (const id of ids) {
+			const f = byId.get(id)!, key = String(f['key']);
+			const bytes = await files.get(key, left, signal);
+			left -= bytes.byteLength;
+			out.push({ id, name: String(f['name']), mime: String(f['mime']), bytes, url: (expiresInS) => files.url(key, expiresInS, signal) });
+		}
+		return out;
+	}
+
 	/** One send attempt of a claimed head row, settled on the row. */
 	async function attempt(r: Obj): Promise<'sent' | 'retry' | 'failed' | 'uncertain'> {
 		const channel = String(r['channel']), transport = transportOf(channel), now = clock();
@@ -224,24 +321,36 @@ export function channels(cfg: ChannelsConfig) {
 		const [refs] = await db.read([sql(`SELECT provider_id FROM sys_message WHERE conversation = $1 AND provider_id IS NOT NULL AND id <> $2 ORDER BY seq DESC LIMIT 50`,
 			r['conversation']!, r['id']!)]);
 		const references = refs!.rows.map((x) => String(x['provider_id'])).reverse();
-		const address = specOf(channel)['address'];
 		const wire: Obj = { ...message, id: String(r['id']), ...(transport === 'email' ? {} : { to: String(r['conv_thread']) }),
-			...(typeof address === 'string' ? { from: address } : {}), ...(references.length === 0 ? {} : { inReplyTo: references.at(-1)!, references }) };
-		const got = await callPort('transport', (cfg.transports as { [t: string]: TransportPort } | undefined)?.[transport], LIMITS.callMs.http,
-			(p, signal) => p.send(channel, wire, signal), (x): x is { providerId: string } => isObj(x) && typeof x['providerId'] === 'string' && x['providerId'] !== '');
+			...(references.length === 0 ? {} : { inReplyTo: references.at(-1)!, references }) };
+		const port = transport === 'custom' ? customPort(String(specOf(channel)['send'])) : (cfg.transports as { [t: string]: TransportPort } | undefined)?.[transport];
+		let thrown: unknown;
+		const got = await callPort('transport', port, LIMITS.callMs.http, async (p, signal) => {
+			try {
+				const refs = Array.isArray(message['attachments']) ? message['attachments'] : [];
+				return await p.send(channel, wire, signal, refs.length === 0 ? undefined : await attachmentsOf(refs, signal));
+			} catch (e) { thrown = e; throw e; }
+		}, (x): x is { providerId: string; presumeAfterMs?: number } => isObj(x) && typeof x['providerId'] === 'string' && x['providerId'] !== '');
 		const attempts = Number(r['attempts']);
 		if (!('kind' in got)) {
-			await db.write(sql(`UPDATE sys_message SET status = 'sent', provider_id = $2, sent_at = $3::timestamptz, error = NULL,
-				delivery = delivery || jsonb_build_object('sent', $3::text) WHERE id = $1`, r['id']!, got.providerId, now));
-			if (r['record'] !== null) await patch(channel, r['record'] as Obj, 'sent', { at: now, message: r['id']! });
+			const presume = typeof got.presumeAfterMs === 'number' && got.presumeAfterMs > 0 ? new Date(Date.parse(now) + got.presumeAfterMs).toISOString() : null;
+			await db.write(sql(`UPDATE sys_message SET status = 'sent', provider_id = $2, sent_at = $3::timestamptz, error = NULL, presume_at = $4::timestamptz,
+				delivery = delivery || jsonb_build_array($5::jsonb) WHERE id = $1`, r['id']!, got.providerId, now, presume, entry({ kind: 'sent', at: now, provider: 'bolt' })));
+			if (r['record'] !== null) await patch(channel, r['record'] as Obj, 'sent', { kind: 'sent', at: now, provider: 'bolt', message: r['id']! });
 			return 'sent';
 		}
-		const error = 'message' in got ? got.message : got.reason;
-		const final = got.kind === 'invalid' || got.kind === 'unavailable' && cfg.transports === undefined || attempts >= MAX_ATTEMPTS;
+		const refusal = sendRefusal(thrown);
+		const error = refusal?.message ?? ('message' in got ? got.message : got.reason);
+		const final = refusal?.permanent === true || got.kind === 'invalid' || got.kind === 'unavailable' && cfg.transports === undefined || attempts >= MAX_ATTEMPTS;
 		const status = !final ? 'queued' : got.kind === 'timeout' ? 'uncertain' : 'failed';
 		const due = new Date(Date.parse(now) + Math.min(2 ** (attempts - 1) * 1000, 300_000)).toISOString();
-		await db.write(sql(`UPDATE sys_message SET status = $2, error = $3, next_attempt_at = $4::timestamptz WHERE id = $1`, r['id']!, status, error.slice(0, 2000), due));
-		if (status === 'failed' && r['record'] !== null) await patch(channel, r['record'] as Obj, 'failed', { at: now, message: r['id']!, reason: error.slice(0, 500) });
+		// a retry is `deferred` on the timeline while the queue keeps the row `queued`; a timeout may have sent, so it records nothing
+		const e: DeliveryEntry | null = status === 'uncertain' ? null : { kind: status === 'queued' ? 'deferred' : 'failed', at: now, provider: 'bolt', reason: error.slice(0, 500),
+			permanent: status === 'failed', ...(refusal?.code === undefined ? {} : { code: refusal.code }) };
+		await db.write(sql(`UPDATE sys_message SET status = $2, error = $3, next_attempt_at = $4::timestamptz, delivery = delivery || coalesce($5::jsonb, '[]'::jsonb) WHERE id = $1`,
+			r['id']!, status, error.slice(0, 2000), due, e === null ? null : `[${entry(e)}]`));
+		// the first retry and a final failure reach the row's `events` (a retry each time would re-patch the same state)
+		if (e !== null && r['record'] !== null && (status === 'failed' || attempts === 1)) await patch(channel, r['record'] as Obj, e.kind, { ...e, message: r['id']! });
 		return status === 'queued' ? 'retry' : status;
 	}
 
@@ -272,7 +381,14 @@ export function channels(cfg: ChannelsConfig) {
 				else if (x !== 'retry') failed++;
 			}
 		}
-		const [next] = await db.read([sql(`SELECT min(next_attempt_at)::text AS due FROM sys_message WHERE direction = 'outbound' AND status = 'queued'`)]);
+		// a quiet window passed with no delivered, bounced or failed report: delivered, presumed
+		// ponytail: unindexed scan of outbound rows with a presume_at; add a partial index when outbound volume makes it show
+		const now = clock();
+		const [quiet] = await db.read([sql(`SELECT id, channel FROM sys_message WHERE direction = 'outbound' AND presume_at <= $1::timestamptz
+			AND status IN ('sent', 'deferred') ORDER BY presume_at LIMIT 1000`, now)]);
+		for (const r of quiet!.rows) await record(String(r['channel']), 'id = $1', [r['id']!], { kind: 'delivered', at: now, provider: 'bolt', presumed: true });
+		const [next] = await db.read([sql(`SELECT least(min(next_attempt_at) FILTER (WHERE status = 'queued'), min(presume_at) FILTER (WHERE status IN ('sent', 'deferred')))::text AS due
+			FROM sys_message WHERE direction = 'outbound' AND (status = 'queued' OR presume_at IS NOT NULL)`)]);
 		const due = next!.rows[0]?.['due'];
 		if (typeof due === 'string' && Date.parse(due) > Date.parse(clock())) {
 			const at = new Date(due).toISOString();
@@ -332,7 +448,8 @@ export function channels(cfg: ChannelsConfig) {
 		},
 		/** The platform run the outbound pieces queue (rule 48): `runs.platform`. */
 		handlers(): { readonly [name: string]: (input: Json) => Promise<Json> } {
-			return { [DELIVER]: async () => await deliver(), [NOTIFY]: notify };
+			const polls = Object.keys(m.channels).filter((c) => isObj(m.channels[c]?.['poll'])).map((c) => [`${POLL}${c}`, async () => await poll(c)]);
+			return { [DELIVER]: async () => await deliver(), [NOTIFY]: notify, ...Object.fromEntries(polls) };
 		},
 	};
 }

@@ -238,10 +238,9 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 	events(c, x.events);
 	x.pieces?.(c); // hook:integrations
 
-	// the act's own record first (a create's new row), then the rest by collection and id: `records[0]` is what was written
-	const root = x.writes[0];
-	const first = root === undefined ? '' : `(c = ${c.p(root.collection)} AND id = ${c.p(root.id)}) DESC, `;
-	const records = `(SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'revision', revision) ORDER BY ${first}c, id), '[]'::jsonb) FROM allp WHERE cause IN ('direct', 'erased'))`;
+	// in the act's own order (the input's; `records[0]` is what was written), anything else after by collection and id
+	const at = c.p(Object.fromEntries(x.writes.map((w, i) => [`${w.collection}/${w.id}`, i])));
+	const records = `(SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'revision', revision) ORDER BY (${at}::jsonb ->> (c || '/' || id))::int NULLS LAST, c, id), '[]'::jsonb) FROM allp WHERE cause IN ('direct', 'erased'))`;
 	const outcome = x.approval === undefined
 		? `jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records})`
 		: `jsonb_build_object('kind', 'pendingApproval', 'requestId', ${c.p(x.approval.requestId)}::text, 'records', ${records})`;

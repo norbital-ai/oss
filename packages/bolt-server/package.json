@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.148",
+	"version": "0.0.149",
 	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
 	"type": "module",
 	"sideEffects": false,
@@ -23,14 +23,12 @@
 	},
 	"dependencies": {
 		"@norbital-ai/bolt": "workspace:*",
+		"@norbital-ai/providers": "workspace:*",
 		"exceljs": "4.4.0",
 		"mammoth": "1.12.2",
 		"pdfjs-dist": "6.3.289",
 		"pg": "^8.23.0",
 		"web-push": "^3.6.7"
-	},
-	"optionalDependencies": {
-		"@whiskeysockets/baileys": "7.0.0-rc14"
 	},
 	"devDependencies": {
 		"@types/node": "^26.2.0",

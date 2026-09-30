@@ -46,7 +46,7 @@
 	import Alert from '../primitives/alert/alert.svelte';
 	import { uiText } from '../primitives/utils.js';
 	import { useKinds } from '../kinds/context.js';
-	import { useBolt, useRecordView } from '../views/bolt.js';
+	import { provideCollection, useBolt, useRecordView } from '../views/bolt.js';
 	import { formSpec } from './draft.js';
 	import FormBody from './form-body.svelte';
 
@@ -56,6 +56,8 @@
 	const t = uiText();
 	const collection = $derived(typeof of === 'string' ? of : of.action.slice(0, of.action.lastIndexOf('.')));
 	const exposure = $derived(host.catalog?.[collection]);
+	// its fields' labels and enum words read this collection's catalog keys
+	provideCollection(() => collection);
 	const resolved = $derived(mode ?? (id !== undefined && typeof of === 'string' ? 'update' : 'create'));
 	const spec = $derived(formSpec(of, exposure, resolved, id));
 	const updating = $derived(typeof of === 'string' && resolved === 'update');
@@ -75,11 +77,32 @@
 		bolt.get<Row | null>(collection, want).then((row) => (loaded = { id: want, row }), () => (loaded = { id: want, row: null }));
 	});
 	const row = $derived(!updating ? null : record !== undefined ? record : shown !== undefined ? shown : loaded?.id === id ? loaded!.row : undefined);
+
+	// a create under its parent (a line's prefilled `quote_id`): a currency field both declare starts as the parent's, so
+	// the line's money reads in it before the host stamps the line's own copy
+	const parents = $derived.by(() => {
+		if (typeof of !== 'string' || resolved !== 'create' || exposure === undefined) return '[]';
+		const given = values as Row;
+		const own = Object.keys(exposure.fields).filter((f) => exposure.fields[f]?.kind === 'currency' && given[f] == null);
+		return JSON.stringify(Object.entries(exposure.relations ?? {}).flatMap(([fk, r]) => {
+			const parent = r.targets.length === 1 ? r.targets[0]! : '', shared = own.filter((f) => host.catalog?.[parent]?.fields[f]?.kind === 'currency');
+			return typeof given[fk] === 'string' && shared.length > 0 ? [{ of: parent, id: given[fk], fields: shared }] : [];
+		}));
+	});
+	let inherited = $state<{ key: string; row: Row } | null>(null);
+	$effect(() => {
+		const key = parents;
+		if (key === '[]' || inherited?.key === key) return;
+		const reads = (JSON.parse(key) as { of: string; id: string; fields: string[] }[]).map((p) => Promise.resolve(bolt.get<Row | null>(p.of, p.id))
+			.then((r) => Object.fromEntries(p.fields.map((f) => [f, r?.[f] ?? null])), () => ({})));
+		Promise.all(reads).then((rows) => (inherited = { key, row: Object.assign({}, ...rows) }));
+	});
+	const prefill = $derived(parents === '[]' ? {} : inherited?.key === parents ? inherited.row : undefined);
 </script>
 
 {#if spec === null}
 	<Alert variant="secondary">{t('noAccess')}</Alert>
-{:else if row === undefined}
+{:else if row === undefined || prefill === undefined}
 	<!-- the form's shape while its row loads (staging's skeleton): labels, fields and the submit -->
 	<div class="grid gap-4" role="status" aria-busy="true" data-form-loading>
 		{#each [0, 1, 2, 3] as i (i)}
@@ -91,6 +114,6 @@
 	<Alert variant="secondary">{t('notFound')}</Alert>
 {:else}
 	{#key `${spec.callable}:${id ?? ''}`}
-		<FormBody {spec} record={row} values={values as Row} modelFields={exposure?.fields ?? {}} {act} {fields} {submit} {readonly} {disabled} {onOutcome} {children} {actions} class={className} />
+		<FormBody {spec} record={row} values={{ ...prefill, ...values as Row }} modelFields={exposure?.fields ?? {}} {act} {fields} {submit} {readonly} {disabled} {onOutcome} {children} {actions} class={className} />
 	{/key}
 {/if}

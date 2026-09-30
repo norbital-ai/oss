@@ -63,7 +63,7 @@ test('values display by shape; masks are locked', () => {
 	const dec = new (class { toJSON() { return '1234.5'; } })() as never;
 	assert.equal(show(dec, 'en'), '1,234.5');
 	assert.equal(pivotGrid([{ key: { k: 'a' }, sum: { amount: dec } }], 'k', undefined, { sum: 'amount' }).total, 1234.5);
-	assert.equal(show('2026-01-02T03:04:05.000Z', 'en'), new Date('2026-01-02T03:04:05.000Z').toLocaleString('en'));
+	assert.equal(show('2026-01-02T03:04:05.000Z', 'en'), new Date('2026-01-02T03:04:05.000Z').toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' }));
 });
 
 test('Rows sends explicit ops; a delete is only what the viewer removed', () => {

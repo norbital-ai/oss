@@ -6,8 +6,8 @@ the currency's minor digits once the box loses focus. Kept as a decimal string, 
 <script lang="ts" module>
 	import type { Json } from './kind.js';
 
-	/** An exact amount (a decimal string, never a float) in `currency`, typed to at most its minor digits. */
-	export type MoneyInputProps = { value: Json; onChange(next: Json): void; currency?: string; id?: string; readonly?: boolean; disabled?: boolean; invalid?: boolean };
+	/** An exact amount (a decimal string, never a float) in `currency`, typed to at most its minor digits (or `scale`). */
+	export type MoneyInputProps = { value: Json; onChange(next: Json): void; currency?: string; scale?: number; id?: string; readonly?: boolean; disabled?: boolean; invalid?: boolean };
 </script>
 
 <script lang="ts">
@@ -18,12 +18,13 @@ the currency's minor digits once the box loses focus. Kept as a decimal string, 
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import { format, minorDigits, moneyProblem, untag } from './kind.js';
 
-	let { value, onChange, currency, id, readonly, disabled, invalid = false }: MoneyInputProps = $props();
+	let { value, onChange, currency, scale, id, readonly, disabled, invalid = false }: MoneyInputProps = $props();
 	const controls = useControls();
 	const host = useKinds();
 	const off = $derived(disabled ?? controls.disabled);
-	const digits = $derived(currency === undefined ? undefined : minorDigits(currency));
-	const problem = $derived(value === null ? null : moneyProblem(String(untag(value)), currency));
+	const minor = $derived(currency === undefined ? undefined : minorDigits(currency));
+	const digits = $derived(scale ?? minor);
+	const problem = $derived(value === null ? null : moneyProblem(String(untag(value)), currency, scale));
 	// ISO 4217 codes lead with their country's (EUR's is the EU's)
 	const flag = $derived(currency !== undefined && (COUNTRY_CODES.includes(currency.slice(0, 2)) || currency.startsWith('EU')) ? flagOf(currency.slice(0, 2)) : '');
 
@@ -66,7 +67,7 @@ the currency's minor digits once the box loses focus. Kept as a decimal string, 
 			inputmode="decimal"
 			autocomplete="off"
 			class="h-full min-w-0 flex-1 bg-transparent px-3 tabular-nums outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-			placeholder={digits === undefined || digits === 0 ? '0' : `0.${'0'.repeat(digits)}`}
+			placeholder={minor === undefined || minor === 0 ? '0' : `0.${'0'.repeat(minor)}`}
 			value={shown}
 			disabled={off}
 			aria-invalid={invalid || problem !== null ? 'true' : undefined}

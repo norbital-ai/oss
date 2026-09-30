@@ -20,7 +20,7 @@ import { BUCKET_MS, dueAt, iso, REPLACE_QUEUED, triggersOf, type NewRun } from '
 import { deliverWebhook, type WebhookRequest, type WebhookResponse } from './webhook.ts';
 import { authorDecide, authorEmbed, readableFile, storedFiles, type AuthorDecideConfig } from '../decisions/index.ts';
 import { prepareSend, sendPiece } from '../channels/outbound.ts'; // hook:envoys
-import { FILE_METHODS, runConvert, runFiles } from './files.ts';
+import { FILE_METHODS, runConvert, runSpeech, runFiles } from './files.ts';
 import { INFER_MS, inferFacility, type InferTool } from '../agent/ai.ts';
 import type { AgentConfig } from '../agent/index.ts';
 import { connectionCall } from '../connections.ts';
@@ -164,9 +164,10 @@ export function runs(cfg: RunsConfig): Runs {
 	/** Claims the due runs whose automation is not running (rule 51); `next` is the earliest queued run left. */
 	async function claim(now: number): Promise<{ claimed: Row[]; next: string | null }> {
 		const c = new Chain();
-		// a workspace run's key moves to `run_key` when it starts (rule 51: a started run is never replaced); platform runs keep theirs
+		// a workspace run's key moves to `run_key` when it starts (rule 51: a started run is never replaced); platform runs keep
+		// theirs, except a cron slot's (a custom channel's poll), whose next slot reuses the key
 		c.cte('claimed', `UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${c.p(iso(now))}::timestamptz,
-			run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.automation IN (SELECT jsonb_array_elements_text(${c.p(Object.keys(m.automations))}::jsonb)) THEN NULL ELSE s.key END
+			run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.cause = 'cron' OR s.automation IN (SELECT jsonb_array_elements_text(${c.p(Object.keys(m.automations))}::jsonb)) THEN NULL ELSE s.key END
 		WHERE s.id IN (SELECT r.id FROM sys_run r WHERE r.state = 'queued' AND r.due_at <= ${c.p(iso(now))}::timestamptz
 			AND NOT EXISTS (SELECT 1 FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running')
 			ORDER BY r.due_at LIMIT 1000 FOR UPDATE SKIP LOCKED) RETURNING s.*`);
@@ -389,6 +390,7 @@ export function runs(cfg: RunsConfig): Runs {
 			: authority.admin || field === run.automation || authority.automations.includes(field);
 		const fileFacility = e.files && runFiles({ manifest: m, db, files: e.files, automation: run.automation, now: b.now, readable });
 		const convertFacility = e.files && e.convert && runConvert({ manifest: m, db, files: e.files, convert: e.convert, now: b.now, readable });
+		const speechFacility = e.files && e.speech && runSpeech({ manifest: m, db, files: e.files, speech: e.speech, now: b.now, readable });
 		/**
 		 * `sys_2.infer` with `tools` (rule 58, L-BOLT-372): the engine runs the loop, offering only host tools the run's
 		 * `runAs` policies name (`capabilities.tools`) and the host binds; any other name is `unavailable` at call time.
@@ -415,6 +417,8 @@ export function runs(cfg: RunsConfig): Runs {
 			// conversion is the engine's over the host's optional port: it reads a reference file and stores its output
 			if (call.facility === 'convert') return convertFacility === undefined ? unavailable('convert')
 				: convertFacility(call, signal).catch((err: unknown): CrossAnswer => ({ ok: false, error: { kind: 'upstream', message: err instanceof Error ? err.message : String(err) } }));
+			if (call.facility === 'ai' && (call.method === 'transcribe' || call.method === 'speak')) return speechFacility === undefined ? unavailable(`ai.${call.method}`)
+				: speechFacility(call, signal);
 			if (call.facility === 'http' && cfg.http !== undefined) return connectionCall(cfg.http, call, signal, holder.actor.kind === 'member' ? holder.actor.id : undefined);
 			if (call.facility === 'ai' && call.method === 'sys_2.infer' && ((call.args[0] as { tools?: unknown } | null)?.tools as unknown[] | undefined)?.length) return inferWithTools(call, signal);
 			// the wall is the engine's: a host call that ignores its signal (a stalled stream) still ends at it (rule 72)
@@ -529,7 +533,8 @@ export function runs(cfg: RunsConfig): Runs {
 					if (!effecting(call)) return facility(call, AbortSignal.any([signal, AbortSignal.timeout(LIMITS.callMs.other)]));
 					const { key, digest } = await keyOf(`${call.facility}.${call.method}`, '', call.args);
 					if (journal.has(key)) return { ...hit(key) as unknown as CrossAnswer, journal: true }; // hook:runner
-					const got = await facility(call, AbortSignal.any([signal, AbortSignal.timeout(call.facility === 'ai' && call.method === 'sys_2.infer' ? INFER_MS : LIMITS.callMs.database)]));
+					const got = await facility(call, AbortSignal.any([signal, AbortSignal.timeout(call.facility !== 'ai' ? LIMITS.callMs.database
+						: call.method === 'sys_2.infer' ? INFER_MS : call.method === 'transcribe' || call.method === 'speak' ? LIMITS.callMs.speech : LIMITS.callMs.database)]));
 					// bytes are not journalled: a replay of a byte-returning effect answers its JSON only
 					const recorded: CrossAnswer = got.ok ? { ok: true, value: got.value } : got;
 					await journalled(key, digest, () => {}, (c) => `${c.p(recorded as unknown as Json)}::jsonb`);

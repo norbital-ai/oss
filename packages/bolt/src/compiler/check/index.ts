@@ -103,7 +103,7 @@ export async function check(dir: string, options: { bolt?: string } = {}): Promi
 
 	stage('rules');
 	const where = (role: string, name: string) => files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
-	errors.push(...buildChecks(m, bodies, where));
+	errors.push(...buildChecks(m, { ...bodies, connects: files.filter((f) => f.role === 'connect').map((f) => f.name) }, where));
 	return out;
 }
 
@@ -163,6 +163,7 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 	for (const [n, a] of Object.entries(d.automation ?? {})) if (typeof a?.body === 'function') bodies.automations.push(n);
 	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function') f.spec.check = true; // the write path calls an attached validate
 	for (const i of Object.values(d.integration ?? {})) { const s = i?.spec ?? i; if (typeof s?.resolve === 'function') s.resolve = true; } // hook:runtime — the runner calls a declared resolve
+	for (const c of Object.values(d.channel ?? {})) for (const k of ['inbound', 'poll']) if (typeof c?.[k]?.messages === 'function') c[k].messages = true; // a custom channel's mapping
 	return JSON.stringify({ roles: d, bodies }); })()`;
 
 async function evaluate({ source, assets }: GuestProgram): Promise<{ json: string; cpuMs: number }> {

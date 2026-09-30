@@ -19,6 +19,9 @@ export class FormState {
 	/** Fields the row's state lock leaves read-only (advice; the host enforces). */
 	locked: (field: string) => boolean;
 	readonly dirty = $derived(Object.keys(changed(this.base, this.values)).length > 0);
+	/** The draft over the row it starts from (the record, else the prefill): a money field reads its currency sibling here even when that is no input. */
+	#around: Row = {};
+	readonly row: Row = $derived({ ...this.#around, ...this.values });
 	/** The client-minted idempotency key of this draft's act: reused only to retry an `unknown` outcome (rule 31). */
 	#key: string;
 	#act: Act;
@@ -28,6 +31,7 @@ export class FormState {
 
 	constructor(spec: FormSpec, record: Row | null, prefill: Row, act: Act, text: NoticeText, locked: (field: string) => boolean = () => false) {
 		this.spec = spec;
+		this.#around = record ?? prefill;
 		this.base = startValues(spec, record, prefill);
 		this.values = { ...this.base };
 		this.#act = act;

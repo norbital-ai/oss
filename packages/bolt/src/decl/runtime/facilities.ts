@@ -164,7 +164,27 @@ export type Ai<Tools> = {
 	sys_2: { infer: Infer<Tools> };
 	/** `dimensions`: the length of the vector field it fills (the host asks the model for that length). */
 	embed: Call<[inputs: readonly (string | FileRef)[], options?: { model?: EmbeddingModelName; dimensions?: number }], readonly Vector[]>;
+	/** Speech to text (optional host capability, P19): long audio is transcribed in parts the host joins. */
+	transcribe: Call<[file: FileRef, options?: TranscribeOptions], Transcript>;
+	/** Text to speech (optional host capability, P19), stored like `files.put`'s output and owned by `for`. */
+	speak: Call<[text: string, options: SpeakOptions], FileRef>;
 };
+/**
+ * How `ctx.ai.transcribe` listens: `diarize` tells speakers apart (default true), `language` a BCP 47 hint, `speakers`
+ * how many there are when known, `prompt` context such as names and vocabulary.
+ */
+export type TranscribeOptions = { diarize?: boolean; language?: string; speakers?: number; prompt?: string };
+/** One stretch of speech: its speaker (`S1`, `S2`, … across the whole file), start and end in seconds, and the words. */
+export type TranscriptSegment = { readonly speaker: string; readonly start: number; readonly end: number; readonly text: string };
+/** `ctx.ai.transcribe`'s answer: segments in order, the language heard (BCP 47, or null) and the audio's length. */
+export type Transcript = { readonly segments: readonly TranscriptSegment[]; readonly language: string | null; readonly durationMs: number };
+/** An audio format `ctx.ai.speak` writes. */
+export type SpeechFormat = 'mp3' | 'wav' | 'ogg';
+/**
+ * `ctx.ai.speak`'s options: the owner `for` and file `name` (default `speech.<format>`), a provider `voice`, the `format`
+ * (default mp3) and a `language` hint that providers reading the language from the text ignore.
+ */
+export type SpeakOptions = { for: FileOwner; name?: string; voice?: string; format?: SpeechFormat; language?: string };
 /** A geocoding result: the point, a short label and the full address. */
 export type GeoHit = { readonly point: Point; readonly label: string; readonly address: string };
 /** Geocoding is optional (P19): an absent provider is an `Unavailable` value, not a throw. */

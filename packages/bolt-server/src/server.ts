@@ -9,30 +9,30 @@ import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { loadPackWithAssets, readArtifact, workspaceFiles, type Artifact } from '@norbital-ai/bolt/artifact';
-import { smsTransport } from './sms.ts';
-import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, documentConverter, engine, fileAttachments, filesHandler, founderBootstrap, framePolicy, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, signupOf, type Authority, type Bindings, type ChannelConnection, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
+import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, documentConverter, engine, fileAttachments, filesHandler, founderBootstrap, framePolicy, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, sealedSecrets, shellHost, signupOf, channelLinks, type Authority, type Bindings, type ChannelProvider, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
 import type { Config } from './config.ts';
-import { devSink, mailSender, mailTransport, type Sender } from './mail.ts';
+import { mailTransport, messaging, type Sender } from './mail.ts';
 import { aiModalityRefusals, facilities, localFiles, nominatim, openAi, publicWeb, s3Files, timekeeper } from './ports.ts';
 import { push } from './push.ts';
-import { telegram, TELEGRAM_HOOK } from './telegram.ts';
-import { whatsapp, type WaOpen, type WhatsApp } from './whatsapp.ts';
+import { baileys, discord, mailbox, openRouterSpeech, slack, telegram, twilioWhatsapp, wechat } from '@norbital-ai/providers';
 
 export type StartOptions = {
-	/** `bolt dev` / `--dev`: the dev mail sink and fixed code, destructive steps accepted, the dev Turnstile (rules 38a(f), 69), connections to `*.localhost` (L-BOLT-366). */
+	/** `bolt dev` / `--dev`: messaging printed to the log without `BOLT_TRANSACTIONAL_EMAIL` / `BOLT_TRANSACTIONAL_PHONE` and the fixed code, destructive steps accepted, the dev Turnstile (rules 38a(f), 69), connections to `*.localhost` (L-BOLT-366). */
 	dev?: boolean;
-	/** Replaces `BOLT_MAIL` (tests capture mail). */
+	/** Replaces the host's mail (tests capture it). */
 	mail?: Sender;
-	/** The WhatsApp socket opener (tests pass a fake). */
-	whatsappOpen?: WaOpen;
+	/** The channel providers an administrator may choose at setup (default: every one `@norbital-ai/providers` ships; tests pass fakes). */
+	channelProviders?: readonly ChannelProvider[];
 	/** Contract digests this host implements (default: the engine's own); an artifact naming another is refused (§2.3 decision 5). */
 	contracts?: readonly string[];
 	/** The environment's compute envelope (rule 71): concurrent tenant invocations, FIFO beyond. */
 	maxConcurrent?: number;
+	/** The workspace clock (ISO instant) automations, cron slots, deadlines, `ctx.now` / `ctx.today` and the seed load read; default the wall clock (tests fix it). */
+	clock?: () => string;
 	fetch?: typeof fetch;
 	log?: (line: string) => void;
 };
-export type Server = { url: string; engine: Engine; db: TenantDb; whatsapp: WhatsApp | null; warnings: readonly string[]; close(): Promise<void> };
+export type Server = { url: string; engine: Engine; db: TenantDb; warnings: readonly string[]; close(): Promise<void> };
 
 export class ActivationError extends Error {
 	constructor(message: string) { super(message); this.name = 'ActivationError'; }
@@ -55,10 +55,11 @@ function artifactOf(dir: string, contracts: readonly string[] | undefined): Arti
 export function requirements(c: Config, m: EngineManifest, o: StartOptions): { errors: string[]; warnings: string[] } {
 	const errors: string[] = [], warnings: string[] = [];
 	if (c.files === null) errors.push('files are required: set BOLT_FILES_PROVIDER (local or s3) and BOLT_FILES_ENDPOINT');
-	if (c.mail === null && o.mail === undefined && o.dev !== true) errors.push('mail is required for sign-in: set BOLT_MAIL');
-	const signup = signupOf(m);
-	if (signup?.via.includes('phone') === true && c.sms === null && o.dev !== true)
-		errors.push('this workspace lets people sign up by mobile number: set BOLT_SMS (twilio:… or log)');
+	// the host's messaging (sign-in codes, invitations): a local host without it prints to its log
+	const local = c.local || o.dev === true;
+	if (c.transactional?.email === undefined && o.mail === undefined && !local) errors.push('mail is required for sign-in: set BOLT_TRANSACTIONAL_EMAIL (resend or sinch) and its keys');
+	if (signupOf(m)?.via.includes('phone') === true && c.transactional?.phone === undefined && !local)
+		errors.push('this workspace lets people sign up by mobile number: set BOLT_TRANSACTIONAL_PHONE (twilio or sinch) and its keys');
 	const env = (m.workspace.env ?? {}) as { readonly [n: string]: { secret?: boolean } };
 	const oauth = Object.values(m.connections).some((x) => typeof x['auth'] === 'object' && x['auth'] !== null && 'oauth2' in x['auth']);
 	if (c.masterKey === null && (oauth || Object.values(env).some((d) => d.secret !== false))) errors.push('this workspace declares secrets: set BOLT_MASTER_KEY');
@@ -79,10 +80,11 @@ export function requirements(c: Config, m: EngineManifest, o: StartOptions): { e
 	const declaredTargets = ((m.workspace as { convert?: { to?: readonly string[] } }).convert?.to ?? []);
 	if (declaredTargets.length > 0 && c.providers.CONVERT === undefined)
 		warnings.push(`this workspace converts to ${declaredTargets.join(', ')} but no converter is configured (BOLT_CONVERT_PROVIDER=norbital): those calls answer Unavailable`);
-	const transports = new Set(Object.values(m.channels).map((x) => String(x['transport'])));
+	// a channel's credentials are sealed in the secrets store, entered by an administrator at setup
+	if (c.masterKey === null && Object.values(m.channels).some((x) => x['transport'] !== 'inbox'))
+		warnings.push('this workspace declares channels but BOLT_MASTER_KEY is not set: an administrator cannot connect them');
 	const optional: [boolean, string][] = [[c.providers.AI_SYS_2 === undefined && (ai?.models !== undefined || ai?.embeddings !== undefined || m.agent.internal !== undefined || m.agent.external !== undefined), 'AI'], [c.providers.GEO === undefined, 'geocoding'],
-		[c.vapid === null, 'web push'], [transports.has('whatsapp') && c.providers.WHATSAPP === undefined, 'WhatsApp'],
-		[transports.has('telegram') && c.providers.TELEGRAM === undefined, 'Telegram'], [transports.has('email') && c.providers.EMAIL_IN === undefined, 'inbound email']];
+		[c.vapid === null, 'web push']];
 	for (const [absent, name] of optional) if (absent) warnings.push(`${name} is not configured: its calls answer Unavailable${name === 'AI' ? '; messages start turns without triage and the AI filter is hidden' : ''}`);
 	return { errors, warnings };
 }
@@ -164,7 +166,8 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 	let e: Engine | undefined;
 	/** Rule 71a: the generation scope; SIGTERM aborts it after the grace, disposing every guest isolate. */
 	const generation = new AbortController();
-	const deadlines = timekeeper((scope) => admit(1, () => e!.runs!.tick()).then(() => log(`woke ${scope}`)));
+	const clock = o.clock ?? (() => new Date().toISOString());
+	const deadlines = timekeeper((scope) => admit(1, () => e!.runs!.tick()).then(() => log(`woke ${scope}`)), () => Date.parse(clock()));
 
 	// optional providers (P19): absent → the port is absent
 	const endpoint = (p: NonNullable<Config['providers']['AI_SYS_2']>) => ({ endpoint: p.endpoint ?? 'https://api.openai.com/v1', credential: p.credential });
@@ -182,16 +185,22 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 	// hook:convert — Norbital Convert, the open-source conversion service; unbound → no port
 	const convert = c.providers.CONVERT?.endpoint === undefined || c.providers.CONVERT.credential === undefined ? undefined
 		: documentConverter({ url: c.providers.CONVERT.endpoint, key: c.providers.CONVERT.credential });
+	// `ctx.ai.transcribe` / `ctx.ai.speak`: OpenRouter, each capability only with its model; ffmpeg on PATH splits long audio
+	const speech = c.speech === null ? undefined : openRouterSpeech({ apiKey: c.speech.credential, baseUrl: c.speech.endpoint,
+		...(c.speech.transcribe === null ? {} : { transcribeModel: c.speech.transcribe }), ...(c.speech.speak === null ? {} : { speakModel: c.speech.speak }),
+		...(c.speech.voice === null ? {} : { speakVoice: c.speech.voice }) }, f);
 	const workspace = workspaceFiles(art.dir); // the released source and its type index (`workspace_read`, `workspace_type`)
-	const channelOf = (t: string) => Object.entries(m.channels).find(([, x]) => x['transport'] === t)?.[0];
-	const sender = o.mail ?? (c.mail !== null ? mailSender(c.mail, c.publicUrl, f) : devSink());
-	const email = mailTransport(sender);
-	const tg = c.providers.TELEGRAM?.credential === undefined ? undefined : telegram(c.providers.TELEGRAM.credential, channelOf('telegram') ?? 'telegram', f);
-	const wa = c.providers.WHATSAPP === undefined ? null
-		: whatsapp(c.providers.WHATSAPP.endpoint ?? join(c.artifact, '.whatsapp'), channelOf('whatsapp') ?? 'whatsapp', o.whatsappOpen);
+	const hosted = messaging(c, log, f, c.local || o.dev === true, o.dev === true);
+	const email = mailTransport(o.mail ?? hosted.email!.send); // requirements refused a start without mail
+	// channels (rule 61): one link per declared channel, from the provider and credentials an administrator chose at setup,
+	// sealed in the secrets store (owner `transport`). No channel reads host env or rides on the host's mail.
+	const links = channelLinks({ manifest: m, providers: o.channelProviders ?? [baileys(), twilioWhatsapp(), telegram(), slack(), discord(), wechat(), ...mailbox()],
+		load: async (channel) => { const v = await secrets.use('transport', channel); return v === null ? null : JSON.parse(v) as Json; },
+		store: (channel, sealed) => sealed === null ? secrets.clear('transport', channel) : secrets.set('transport', channel, JSON.stringify(sealed)),
+		webhookUrl: (channel, transport) => new URL(`/hooks/bolt.${transport}/${encodeURIComponent(channel)}`, c.publicUrl).href,
+		fetch: f, log });
 	const pusher = c.vapid === null ? undefined : push(db, c.vapid, c.publicUrl);
-	const transports: { email: TransportPort; whatsapp?: TransportPort; telegram?: TransportPort; push?: TransportPort } =
-		{ email, ...(wa === null ? {} : { whatsapp: wa }), ...(tg === undefined ? {} : { telegram: tg }), ...(pusher === undefined ? {} : { push: pusher }) };
+	const transports: { readonly [t: string]: TransportPort } = { ...links.transports, ...(pusher === undefined ? {} : { push: pusher }) };
 
 	try {
 		// the channel epoch (rule 61): minted once per database, so a restart keeps sending what it queued
@@ -199,13 +208,13 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 		const engineOf = (epoch: string) => engine({
 			manifest: m, db, guest: art.guest, transforms: art.transforms, agent: { attachments: fileAttachments(db, files), ...(workspace === undefined ? {} : { workspace }), ...(geocoder === undefined ? {} : { geocoder }), ...(web === undefined ? {} : { web }) },
 			console: (level: string, ...args: unknown[]) => log(`guest ${level}: ${args.map((a) => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')}`),
-			deadlines, scope: handle, files, ...(convert === undefined ? {} : { convert }), connections: { secrets, publicUrl: c.publicUrl,
+			deadlines, clock, scope: handle, files, ...(convert === undefined ? {} : { convert }), ...(speech === undefined ? {} : { speech }), connections: { secrets, publicUrl: c.publicUrl,
 				// L-BOLT-366: a dev host's connections may reach a provider on this machine; any other host gets the engine's guard
 				...(o.fetch !== undefined ? { fetch: o.fetch } : o.dev === true ? { fetch: publicFetch({ allowLoopback: true }) } : {}) }, epoch, transports,
 			...(ai === undefined ? {} : { ai }), // hook:ai
 			runs: { facility: facilities({ ...(ai === undefined ? {} : { ai }), ...(geocoder === undefined ? {} : { geocoder }), ...(web === undefined ? {} : { web }), files, db }), env: secrets.env, eventRetainHours: c.telemetryRetainHours,
 				...(pack === null ? {} : { start: pack.meta.start }) },
-			envoys: { workspace: name, registrationLink: (claim) => new URL(`/__bolt/envoys/register?claim=${encodeURIComponent(claim)}`, c.publicUrl).href },
+			envoys: { workspace: name },
 			signal: generation.signal,
 		} as Parameters<typeof engine>[0]);
 		const probe = engineOf('');
@@ -222,13 +231,13 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 
 		const now = () => new Date();
 		const keys = await loadKeys(db);
-		const sms = c.sms !== null ? smsTransport(c.sms, log, f) : o.dev === true ? smsTransport('log', log) : undefined;
 		const signup = signupOf(m);
-		const identity: IdentityHost = { db, now, windows: new RateWindows(), keys, mail: email, ...(sms === undefined ? {} : { sms }), ...(signup === undefined ? {} : { signup }),
+		const identity: IdentityHost = { db, now, windows: new RateWindows(), keys, mail: email, ...(hosted.sms === undefined ? {} : { sms: hosted.sms }),
+			...(hosted.phone === undefined ? {} : { phone: hosted.phone }), ...(signup === undefined ? {} : { signup }),
 			devSink: o.dev === true, publicUrl: c.publicUrl };
 		const authorities = new Authorities(m, release);
 
-		if (pack !== null) log(await loadPackWithAssets(db, m, pack, files, now().toISOString()) ? `--seed: loaded pack ${pack.meta.name} (${pack.meta.hash.slice(0, 12)})`
+		if (pack !== null) log(await loadPackWithAssets(db, m, pack, files, clock()) ? `--seed: loaded pack ${pack.meta.name} (${pack.meta.hash.slice(0, 12)})`
 			: '--seed: the database has rows; nothing seeded');
 		if (c.founder !== null) {
 			const [admins] = await db.read([{ text: `SELECT 1 FROM sys_user WHERE admin LIMIT 1`, params: [] }]);
@@ -238,17 +247,13 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 			}
 		}
 		await e.runs!.boot();
-		if (tg !== undefined) await tg.activate(c.publicUrl).catch((x: unknown) => log(`warning: Telegram webhook not registered: ${String(x)}`));
-		if (wa !== null) {
-			wa.observe((s) => log(`whatsapp: ${s.state}${'detail' in s ? ` (${s.detail})` : ''}`));
-			await wa.start().catch((x: unknown) => log(`warning: WhatsApp did not resume: ${String(x)}`));
-		}
+		await links.resume();
 
 		const peers = new WeakMap<Request, string>();
 		const shell = shellHost({ manifest: m, identity, authorities, workspace: { name, handle }, ip: (r) => peers.get(r) ?? '0.0.0.0', runs: e.runs!,
 			secure: new URL(c.publicUrl).protocol === 'https:', ai: ai !== undefined, ...(c.environment === null ? {} : { environment: c.environment }),
 			turnstile: c.turnstile !== null ? cloudflareTurnstile(c.turnstile.siteKey, c.turnstile.secret, f) : devTurnstile,
-			secrets: { status: secrets.status, set: secrets.set, clear: secrets.clear }, envoys: e.envoys,
+			secrets: { status: secrets.status, set: secrets.set, clear: secrets.clear },
 			...(e.connections === undefined ? {} : { connections: e.connections }),
 			...(c.vapid === null ? {} : { push: { publicKey: c.vapid.publicKey } }) });
 		const bindings = (): Bindings => { const n = now().toISOString(); return { now: n, today: n.slice(0, 10), tz: m.workspace.tz, params: {} }; };
@@ -290,45 +295,13 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 		async function transportRoute(request: Request, auth: Authority | null, path: string): Promise<Response> {
 			if (auth === null || auth.actor.kind !== 'member' || !auth.admin) return err('forbidden', 'Only an administrator manages a channel link.', 403);
 			const [name = '', verb = ''] = path.slice(TRANSPORTS.length).split('/');
-			const spec = m.channels[name];
-			if (spec === undefined) return err('notFound', `this workspace declares no channel '${name}'`, 404);
-			if (wa === null) return err('unavailable', 'WhatsApp is not configured (BOLT_WHATSAPP_PROVIDER=baileys)', 503);
-			// a channel on a transport this host does not pair is not WhatsApp's to answer; say so rather than open its socket
-			if (String(spec['transport']) !== 'whatsapp') return err('unavailable', `this host does not pair a ${String(spec['transport'])} channel`, 503);
-			const live = wa.connection(name);
-			if (request.method === 'GET' && (request.headers.get('accept') ?? '').includes('text/event-stream')) {
-				let off = () => {};
-				const enc = new TextEncoder();
-				return new Response(new ReadableStream<Uint8Array>({
-					start(ctl) {
-						const send = (c: ChannelConnection) => { try { ctl.enqueue(enc.encode(`data: ${JSON.stringify(c)}\n\n`)); } catch { off(); } };
-						send(live);
-						off = wa.observe(() => send(wa.connection(name)));
-					},
-					cancel() { off(); },
-				}), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' } });
-			}
-			if (request.method === 'GET') return Response.json({ value: live });
-			if (request.method === 'POST' && verb === 'pair') {
-				const b = await request.json().catch(() => ({})) as { phone?: unknown };
-				try { await wa.pair(typeof b.phone === 'string' ? b.phone : undefined); } catch (x) { return err('invalid', x instanceof Error ? x.message : String(x), 400); }
-				return Response.json({ value: wa.connection(name) });
-			}
-			if (request.method === 'POST' && verb === 'logout') { await wa.logout(); return Response.json({ value: wa.connection(name) }); }
-			return err('notFound', 'no such route', 404);
+			return links.admin(request, decodeURIComponent(name), verb);
 		}
 
 		async function hooks(request: Request, path: string): Promise<Response> {
-			if (path === TELEGRAM_HOOK && tg !== undefined && request.method === 'POST') return tg.webhook(request);
-			const mail = /^\/hooks\/bolt\.email\/([\w-]+)$/.exec(path);
-			if (mail !== null && request.method === 'POST') {
-				const secret = c.providers.EMAIL_IN?.credential;
-				if (secret === undefined || m.channels[mail[1]!]?.['transport'] !== 'email') return new Response(null, { status: 404 });
-				const event = resendEvent(mail[1]!, Object.fromEntries(request.headers), new Uint8Array(await request.arrayBuffer()), secret, Date.now());
-				if (event === 'unverified') return new Response(null, { status: 401 });
-				if (event !== null) await email.deliver(event);
-				return new Response(null, { status: 200 });
-			}
+			// a channel's own webhook, `/hooks/bolt.<transport>/<channel>[/…]` (an OAuth callback, a tracking pixel under it): the link checks it
+			const hook = /^\/hooks\/bolt\.([a-z]+)\/([^/]+)(?:\/.*)?$/.exec(path);
+			if (hook !== null && m.channels[decodeURIComponent(hook[2]!)]?.['transport'] === hook[1]) return links.webhook(decodeURIComponent(hook[2]!), request);
 			const url = new URL(request.url);
 			const r = await engineRef.runs!.webhook(path.slice('/hooks'.length), { method: request.method, headers: Object.fromEntries(request.headers),
 				body: new Uint8Array(await request.arrayBuffer()), query: Object.fromEntries(url.searchParams) } as Parameters<NonNullable<Engine['runs']>['webhook']>[1]);
@@ -427,7 +400,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 
 		let closing: Promise<void> | undefined;
 		return {
-			url, engine: e, db, whatsapp: wa, warnings,
+			url, engine: e, db, warnings,
 			// rule 71a: SIGTERM stops admission (the listener, the timekeeper, the envelope), waits at most DRAIN_MS for
 			// what runs, then interrupts the rest (isolates disposed, facility calls aborted; an interrupted run is re-queued
 			// as a lost lease on the next start); every later wait is bounded
@@ -443,7 +416,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 				if (!drained) server.closeAllConnections();
 				if (!idle) log('drain: the grace passed with work running; interrupting it');
 				generation.abort();
-				wa?.stop();
+				await within(500, links.close());
 				for (const off of unsubscribe) off();
 				await within(500, engineRef.envoys.settled());
 				await within(500, store.close());
@@ -453,7 +426,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 	} catch (x) {
 		generation.abort();
 		deadlines.stop();
-		wa?.stop();
+		await links.close();
 		await store.close().catch(() => undefined);
 		throw x;
 	}

@@ -5,7 +5,7 @@
 import './setup-happy-dom.js';
 import { randomUUID } from 'node:crypto';
 import { flushSync, unmount, type Component } from 'svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EngineManifest } from '../src/engine/contracts.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -19,6 +19,7 @@ import { sweep } from '../src/test/browser.ts';
 import { testWorkspace, type TestWorkspace } from '../src/test/index.ts';
 import Hero from './support/shell-hero.svelte';
 import Upload from './support/shell-upload.svelte';
+import PageTabs from './support/shell-tabs.svelte';
 import Rep from './support/shell-rep.svelte';
 import NoisyRep from './support/shell-rep-noisy.svelte';
 import BadRead from './support/shell-bad-read.svelte';
@@ -83,7 +84,18 @@ describe('the shell renders a page (§5.10)', () => {
 		expect(hero.textContent).toContain('Dispatch board');
 		expect(hero.textContent).toContain('Every job due today');
 		expect(hero.querySelector('[data-export]')).not.toBeNull();
+		// the actions read the dark tokens on the scrim (A7); a phone shows two lines of description (A15)
+		expect(hero.querySelector('[data-export]')!.closest('.dark')).not.toBeNull();
+		expect([...hero.querySelectorAll('p')].find((p) => p.textContent?.includes('Every job due today'))!.classList).toContain('line-clamp-2');
 		expect(hero.querySelector('[data-layout=frame]')).not.toBeNull(); // the icon chip
+	});
+
+	it('a page\'s own Tabs render at level 2 under the app pages strip (A8)', async () => {
+		const t = await testWorkspace({ manifest });
+		const { target } = await open(t, '/app/desk/upload', { 'desk/upload': page(PageTabs) });
+		await until(() => target.querySelector('[data-body]') !== null);
+		expect(target.querySelector('nav[aria-label=Pages]')).not.toBeNull();
+		expect(target.querySelector('[data-tabs-variant]')!.getAttribute('data-tabs-variant')).toBe('underline');
 	});
 
 	it('a generated form uploads a file to <collection>.<field>, and its submit waits for the upload', async () => {
@@ -240,6 +252,35 @@ describe('system collections render in ui\'s Table (Settings, Automations, Inbox
 		await until(() => [...target.querySelectorAll('[data-view=table]')].some((x) => x.textContent?.includes('CI')));
 		const [key] = (await t.db.read([{ text: `SELECT name, revoked_at FROM sys_api_key`, params: [] }]))[0]!.rows;
 		expect(key).toMatchObject({ name: 'CI', revoked_at: null });
+	});
+
+	it('Settings → People reads a role by its label and a last-seen instant without seconds', async () => {
+		const t = await testWorkspace({ manifest });
+		await t.db.write({ text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('u2', 'bo@x.test', 'Bo', 'external')`, params: [] });
+		const { target } = await open(t, '/settings/people', {});
+		await until(() => (target.querySelector('[data-view=table]')?.textContent ?? '').includes('Bo'));
+		const text = target.querySelector('[data-view=table]')!.textContent!;
+		expect(text).toContain('Staff');
+		expect(text).toContain('External');
+		expect(text).not.toMatch(/\bstaff\b|\bexternal\b/);
+		expect(text).toContain(String(new Date().getFullYear())); // Ada's session: her last-seen time is drawn
+		expect(text).not.toMatch(/\d:\d\d:\d\d/);
+	});
+
+	it('Settings → Channels names a channel humanized, its transport by brand, and labels its counters', async () => {
+		const t = await testWorkspace({ manifest: { ...manifest, channels: { field_ops: { transport: 'telegram' } } } as unknown as EngineManifest });
+		// the connection stream is the browser's own `EventSource` (runtime.ts), which happy-dom lacks: a silent one
+		vi.stubGlobal('EventSource', class { onmessage = null; onerror = null; addEventListener() {} close() {} });
+		const { target } = await open(t, '/settings/channels', {});
+		await until(() => (target.querySelector('[data-view=table]')?.textContent ?? '').includes('Field ops'));
+		expect(target.querySelector('[data-view=table] tbody tr')?.textContent).toContain('Telegram');
+		target.querySelector<HTMLElement>('[data-view=table] tbody tr')!.click();
+		await until(() => document.body.querySelector('[role=dialog]') !== null);
+		const sheet = document.body.querySelector('[role=dialog]')!;
+		expect(sheet.querySelector('h2')?.textContent?.trim()).toBe('Field ops');
+		const terms = [...sheet.querySelectorAll('dt')].map((x) => x.textContent?.trim());
+		expect(terms).toEqual(expect.arrayContaining(['Sent', 'Queued', 'Retrying', 'Failed', 'Skipped']));
+		vi.unstubAllGlobals();
 	});
 
 	it('Settings → People → Teams draws the hierarchy with Svelte Flow; a node opens the team', async () => {

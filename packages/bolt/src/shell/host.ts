@@ -11,7 +11,6 @@ import { admitVisitor } from '../engine/callables/index.ts';
 import { Authorities, previewAs } from '../engine/identity/actor.ts';
 import { acceptInvitation, authenticateKey, inspectInvitation } from '../engine/identity/members.ts';
 import { authenticate, forget, sendCode, sha256, SIGNUP_KEY, verifyCode, type IdentityHost, type Result } from '../engine/identity/session.ts';
-import type { Envoys } from '../engine/envoys/index.ts';
 import type { Runs } from '../engine/runs/index.ts';
 import { basePath, BOLT, HEADERS, PATHS, SW, under } from '../protocol/wire.ts';
 import { sse } from '../protocol/http.ts';
@@ -35,7 +34,8 @@ self.addEventListener('notificationclick', (e) => {
 
 /** Host-side Turnstile verification (§5.10): `devTurnstile` in `bolt dev` and the test kit, Cloudflare's elsewhere. */
 /** How a workspace signs people in (`GET /__bolt/session/methods`): by email, by mobile number, and who may sign up by which. */
-export type SignInMethods = { email: boolean; phone: boolean; signup: readonly ('email' | 'phone')[];
+/** `whatsapp`: a number's code may also be sent over WhatsApp. */
+export type SignInMethods = { email: boolean; phone: boolean; whatsapp: boolean; signup: readonly ('email' | 'phone')[];
 	/** The workspace's locale: a mobile number's country defaults to its region. */
 	locale: string };
 export type Turnstile = { siteKey: string; verify(token: string, ip: string): Promise<boolean> };
@@ -61,8 +61,6 @@ export type ShellHostConfig = {
 	/** Required when an app declares `challenge: 'turnstile'`. */
 	turnstile?: Turnstile;
 	secrets?: SecretsPort;
-	/** Envoy registration (§3.9): the page shows the handle a claim names; the signed-in member redeems it. */
-	envoys?: Pick<Envoys, 'inspect' | 'redeem'>;
 	/** Web push (§5.7): the VAPID public key browsers subscribe with; absent → no push offered. */
 	push?: { publicKey: string };
 	/** Workspace Studio (§5.10): absent → no Studio surface. */
@@ -255,13 +253,14 @@ export function shellHost(c: ShellHostConfig) {
 		if (request.method === 'GET' && path === PATHS.session.methods) {
 			const [config] = await h.db.read([{ text: `SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`, params: [] }]);
 			const open = h.signup !== undefined && config!.rows[0]?.value !== 'closed';
-			const methods: SignInMethods = { email: h.mail !== undefined, phone: h.sms !== undefined, locale: String(m.workspace.locale),
-				signup: open ? h.signup!.via.filter((v) => v === 'email' ? h.mail !== undefined : h.sms !== undefined) : [] };
+			const phone = h.phone !== undefined;
+			const methods: SignInMethods = { email: h.mail !== undefined, phone, whatsapp: h.phone?.via.includes('whatsapp') === true, locale: String(m.workspace.locale),
+				signup: open ? h.signup!.via.filter((v) => v === 'email' ? h.mail !== undefined : phone) : [] };
 			return json({ value: methods });
 		}
 		if (request.method === 'POST' && path === PATHS.session.code) {
 			const b = await body(request);
-			return answer(await sendCode(h, text(b, 'address'), ip));
+			return answer(await sendCode(h, text(b, 'address'), ip, text(b, 'via') === 'whatsapp' ? 'whatsapp' : 'sms'));
 		}
 		if (request.method === 'POST' && path === PATHS.session.verify) {
 			const b = await body(request);
@@ -374,18 +373,6 @@ export function shellHost(c: ShellHostConfig) {
 				const { key: _key, ...explained } = a;
 				return json({ value: explained });
 			}
-			case 'GET /register': {
-				// read-only: safe for mail scanners and link previews; the page shows the handle before anything links
-				if (c.envoys === undefined) return refused('unavailable', 'This host links no channel handles.', 503);
-				return json({ value: await c.envoys.inspect(url.searchParams.get('claim') ?? '') });
-			}
-			case 'POST /register': {
-				// the real member claims the handle, never a previewed one (rule 39); replay only when ticked
-				if (c.envoys === undefined) return refused('unavailable', 'This host links no channel handles.', 503);
-				if (x.real?.actor.kind !== 'member') return refused('unauthenticated', 'Sign in first.', 401);
-				const b = await body(request);
-				return json({ value: await c.envoys.redeem(text(b, 'claim'), x.real, { replay: b['replay'] === true }) });
-			}
 		}
 		return null;
 	}
@@ -424,9 +411,6 @@ export function shellHost(c: ShellHostConfig) {
 			try {
 				if (path === '/manifest.webmanifest' && request.method === 'GET') return webmanifest();
 				if (path === SW && request.method === 'GET') return new Response(WORKER, { headers: { 'content-type': 'text/javascript', 'service-worker-allowed': '/', 'cache-control': 'no-cache' } });
-				// the engine's default registration link: the shell's page for it
-				if (path === `${BOLT}/envoys/register` && request.method === 'GET')
-					return new Response(null, { status: 303, headers: { location: under(h.publicUrl, `/register/${encodeURIComponent(new URL(request.url).searchParams.get('claim') ?? '')}`) } });
 				let memo: Promise<Caller> | undefined;
 				const x = () => memo ??= caller(request);
 				if (path.startsWith(`${BOLT}/session/`)) return await session(request, path, x);

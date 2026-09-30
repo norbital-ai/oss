@@ -170,6 +170,31 @@ ${historyOf(s, 'sys_user', 'u', h.now(), by(auth))}${projection(h, s, 'u')} SELE
 		(r) => r === undefined ? refuse('notFound', 'No such member.') : ok(null));
 }
 
+/**
+ * Sets a member's channel handles (rule 57): the mobile number a private envoy knows them by on WhatsApp (international
+ * form, stored as `+` and its digits) and their Telegram handle. A key left out keeps its value; `null` or `''` clears it.
+ * A number another member holds is refused.
+ */
+export async function setHandles(h: IdentityHost, auth: Authority, user: string, input: { phone?: string | null; telegram?: string | null }): Promise<Result<null>> {
+	const denied = requireAdmin(auth);
+	if (denied) return denied;
+	const typed = input.phone?.trim() ?? '';
+	const phone = typed === '' ? null : parseAddress(typed);
+	if (typed !== '' && phone?.kind !== 'phone') return refuse('check', 'Enter a mobile number with its country code (+65 8123 4567).');
+	const telegram = input.telegram?.trim().replace(/^@/, '') || null;
+	const s = stmt();
+	const set = [...input.phone === undefined ? [] : [`phone = ${s.p(phone?.value ?? null)}`], ...input.telegram === undefined ? [] : [`telegram = ${s.p(telegram)}`]];
+	if (set.length === 0) return refuse('check', 'Nothing to change.');
+	try {
+		return await write(h, s, `WITH u AS (UPDATE sys_user SET ${set.join(', ')}, revision = revision + 1 WHERE id = ${s.p(user)} ${IMAGES}),
+${historyOf(s, 'sys_user', 'u', h.now(), by(auth))}${projection(h, s, 'u')} SELECT id FROM u`, undefined,
+			(r) => r === undefined ? refuse('notFound', 'No such member.') : ok(null));
+	} catch (e) {
+		if (e instanceof DbError && e.sqlstate === '23505') return refuse('check', 'Another member has this mobile number.');
+		throw e;
+	}
+}
+
 export async function createTeam(h: IdentityHost, auth: Authority, name: string, parent: string | null = null): Promise<Result<{ id: string }>> {
 	const denied = requireAdmin(auth);
 	if (denied) return denied;
