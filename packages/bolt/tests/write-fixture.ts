@@ -41,7 +41,7 @@ export const manifest: EngineManifest = {
 };
 
 export const TRUE: Pred = { t: 'const', value: true };
-export const member: EngineActor = { kind: 'member', id: '0199a000-0000-7000-8000-00000000000a', email: 'a@example.com', external: false,
+export const member: EngineActor = { kind: 'member', id: '0199a000-0000-7000-8000-00000000000a', email: 'a@example.com', phone: null, external: false,
 	teams: [], teamPath: [], admin: false, party: null };
 const arm = (where: Pred = TRUE, fields: readonly string[] | 'all' = 'all') => ({ policy: 'p', where, fields, approval: [] as never[] });
 export const grants = (over: Partial<CollectionAuthority> = {}): CollectionAuthority => ({

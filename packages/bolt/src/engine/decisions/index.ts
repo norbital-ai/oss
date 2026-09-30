@@ -72,14 +72,33 @@ export async function storedFiles(db: TenantDb, value: unknown): Promise<Map<str
 }
 /**
  * Whether `authority` may read a stored file, as `GET /__bolt/files/<id>` checks: an administrator, or a row holding it in
- * its collection's file field that the caller reads with that field unmasked. ponytail: ≤ 20 holders are tried.
+ * its collection's file field that the caller reads with that field unmasked.
  * A message attachment (`sys_message.files`) is its uploader's, and then the conversation's: its owner, a member who
- * posted in it (in the app or as a linked channel sender), and staff for a channel conversation.
+ * posted in it (in the app or as a linked channel sender), and staff for a channel conversation. Filed into a record (an
+ * envoy's photo, a sandbox output), it is also that record's: whoever reads it there, as for any file field.
  */
 export async function readableFile(o: { manifest: EngineManifest; db: TenantDb; read: ReadEngine['run']; authority: Authority; bindings: Bindings }, id: string, owner: string): Promise<boolean> {
+	/** A row of `collection` holding the file in `field` that the caller reads with that field unmasked. ponytail: ≤ 20 holders are tried. */
+	const held = async (collection: string, field: string): Promise<boolean> => {
+		if (o.authority.collections[collection] === undefined) return false;
+		const [holders] = await o.db.read([{ text: `SELECT id::text AS id FROM "${collection}" WHERE "${field}" @> $1::jsonb OR "${field}" @> $2::jsonb LIMIT 20`,
+			params: [JSON.stringify({ id }), JSON.stringify([{ id }])] }]);
+		const cat = catalogOf(o.manifest);
+		for (const h of holders!.rows) {
+			const [got] = await o.read([ir.get(cat, collection, String(h['id']), { select: { [field]: true } })], { as: 'caller', authority: o.authority }, o.bindings);
+			if (JSON.stringify((got as { readonly [k: string]: Json } | null)?.[field] ?? null).includes(id)) return true;
+		}
+		return false;
+	};
 	if (owner === 'sys_message.files') {
 		const a = o.authority.actor;
-		if (a.kind !== 'member') return false;
+		// ponytail: every file field is scanned for a holder; a file-field index if this read gets hot
+		const filed = async () => {
+			for (const [c, model] of Object.entries(o.manifest.models))
+				for (const [f, def] of Object.entries(model.fields)) if ((def as { kind?: string }).kind === 'file' && await held(c, f)) return true;
+			return false;
+		};
+		if (a.kind !== 'member') return filed();
 		const [r] = await o.db.read([{ text: `SELECT 1 FROM sys_file WHERE id = $1 AND field = 'sys_message.files' AND created_by = $2
 			UNION ALL SELECT 1 FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation WHERE (m.files @> $3::jsonb OR m.files @> $4::jsonb)
 				AND (c.owner = $2 OR ($7 AND c.channel IS NULL) OR ($5 AND c.channel IS NOT NULL AND c.envoy IN (SELECT jsonb_array_elements_text($6::jsonb))) OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id
@@ -89,7 +108,7 @@ export async function readableFile(o: { manifest: EngineManifest; db: TenantDb; 
 				JSON.stringify(Object.entries(o.manifest.envoys).filter(([, e]) => (e as { audience?: unknown }).audience === 'public').map(([name]) => name)),
 				// admins read in-app files; an envoy thread's only through the rule above (owner 2026-09-26)
 				o.authority.admin] }]);
-		return r!.rows.length > 0;
+		return r!.rows.length > 0 || filed();
 	}
 	if (o.authority.admin) return true;
 	const [collection, field] = owner.split('.') as [string, string | undefined];
@@ -99,15 +118,8 @@ export async function readableFile(o: { manifest: EngineManifest; db: TenantDb; 
 		const [r] = await o.db.read([{ text: `SELECT 1 FROM sys_file WHERE id = $1 AND field = $2 AND created_by = $3`, params: [id, owner, o.authority.actor.id] }]);
 		return r!.rows.length > 0;
 	}
-	if (field === undefined || (o.manifest.models[collection]?.fields[field] as { kind?: string } | undefined)?.kind !== 'file' || o.authority.collections[collection] === undefined) return false;
-	const [holders] = await o.db.read([{ text: `SELECT id::text AS id FROM "${collection}" WHERE "${field}" @> $1::jsonb OR "${field}" @> $2::jsonb LIMIT 20`,
-		params: [JSON.stringify({ id }), JSON.stringify([{ id }])] }]);
-	const cat = catalogOf(o.manifest);
-	for (const h of holders!.rows) {
-		const [got] = await o.read([ir.get(cat, collection, String(h['id']), { select: { [field]: true } })], { as: 'caller', authority: o.authority }, o.bindings);
-		if (JSON.stringify((got as { readonly [k: string]: Json } | null)?.[field] ?? null).includes(id)) return true;
-	}
-	return false;
+	if (field === undefined || (o.manifest.models[collection]?.fields[field] as { kind?: string } | undefined)?.kind !== 'file') return false;
+	return held(collection, field);
 }
 
 const TYPED = new Set(['invalid', 'tooLarge', 'unsupported', 'rateLimited', 'upstream', 'timeout']);

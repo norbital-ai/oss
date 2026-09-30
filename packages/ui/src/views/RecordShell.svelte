@@ -37,6 +37,9 @@
 		children?: Snippet<[RecordView]>;
 		onDone?: (outcome: Outcome) => void;
 	};
+	// the tab each record was last on, for this page's life: reopening a record after a child record closes (a trial
+	// opened from its project's Trials tab) lands where the person left it, not back on the first tab
+	const lastTab = new Map<string, string>();
 </script>
 
 <script lang="ts">
@@ -295,7 +298,7 @@
 		{#if toSheet === undefined}<header>{@render head()}</header>{/if}
 		{#if mode === 'create' || tabItems.length === 1}{@render body()}
 		{:else if nested}{@render body()}{#if heldBy !== null && inside !== of}{@render approval()}{/if}
-		{:else}<Tabs tabs={tabItems} />{/if}
+		{:else}<Tabs tabs={tabItems} value={lastTab.get(`${of}/${id}`)} onValueChange={(v) => lastTab.set(`${of}/${id}`, v)} />{/if}
 	</article>
 {/if}
 {/snippet}

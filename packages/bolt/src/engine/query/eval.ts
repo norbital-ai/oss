@@ -76,6 +76,7 @@ export function operand(o: Operand, bindings: Bindings, authority: Authority | n
 		if (k === 'teams') return a === null ? [] : [...a.teams];
 		if (k === 'id') return a?.id ?? null;
 		if (k === 'email') return a?.email ?? null;
+		if (k === 'phone') return a?.phone ?? null;
 		return a?.party?.id ?? null;
 	}
 	throw invalid('a field operand has no value of its own');

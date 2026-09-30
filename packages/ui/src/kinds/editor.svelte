@@ -13,6 +13,8 @@ The editor of one value by its field kind: every kind's input in one component (
 		/** The field's name (file uploads, custom renderers) and the dotted path errors are keyed by. */
 		name: string;
 		id?: string;
+		/** The label naming a control that has no single input to point at (a group of boxes). */
+		labelledby?: string;
 		/** Shows the value as copyable text (`ReadValue`); an enclosing readonly `Form`, `Fieldset` or `Field` sets it. */
 		readonly?: boolean;
 		/** The editor stays, muted and inert; an enclosing disabled `Form`, `Fieldset` or `Field` sets it. */
@@ -52,7 +54,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import TagsInput from './tags-input.svelte';
 	import TypedInput from './typed-input.svelte';
 
-	let { kind, value, onChange, name, id, readonly, disabled: ownDisabled, errors, row = {}, address, onAddress, relation }: EditorProps = $props();
+	let { kind, value, onChange, name, id, labelledby, readonly, disabled: ownDisabled, errors, row = {}, address, onAddress, relation }: EditorProps = $props();
 	const host = useKinds();
 	// an explicit mode here reaches every control of a structured value too
 	const controls = provideControls(() => ({ readonly, disabled: ownDisabled }));
@@ -107,7 +109,7 @@ The editor of one value by its field kind: every kind's input in one component (
 {:else if kind.kind === 'period'}
 	<PeriodInput of={kind.of} precision={kind.precision} {value} {onChange} {id} {disabled} {invalid} />
 {:else if kind.kind === 'enum' && kind.many}
-	<div class="flex flex-wrap gap-3" role="group">
+	<div class="flex flex-wrap gap-3" role="group" {id} aria-labelledby={labelledby}>
 		{#each kind.values as option (option)}
 			{@const list = Array.isArray(v) ? v.map(String) : []}
 			<label class="inline-flex items-center gap-1.5 text-sm">

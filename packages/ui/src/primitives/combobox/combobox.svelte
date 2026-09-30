@@ -51,15 +51,17 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	import { CONTROL } from '../../kinds/classes.js';
 	import CopyText from '../copy-text/copy-text.svelte';
 	import * as Popover from '../popover/index.js';
-	import { cn, uiText, useControls } from '../utils.js';
+	import { claimFieldControl, cn, uiText, useControls } from '../utils.js';
 	import { virtualList } from '../virtual/virtual.svelte.js';
 
 	const GHOST = 'h-7 min-w-0 rounded-md bg-transparent px-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive';
 
 	let {
 		options, value, onChange, clearable = false, placeholder, display, searchable, onSearch, onOpenChange, loading = false, failed = false,
-		size = 'default', variant = 'default', id, readonly: ownReadonly, disabled: ownDisabled, invalid = false, class: className, 'aria-label': ariaLabel
+		size = 'default', variant = 'default', id: ownId, readonly: ownReadonly, disabled: ownDisabled, invalid = false, class: className, 'aria-label': ariaLabel
 	}: ComboboxProps<V> = $props();
+	// svelte-ignore state_referenced_locally -- the id is fixed at mount
+	const id = ownId ?? claimFieldControl();
 	const t = uiText();
 	const controls = useControls();
 	const readonly = $derived(ownReadonly ?? controls.readonly);

@@ -20,7 +20,7 @@ import { BUCKET_MS, dueAt, iso, REPLACE_QUEUED, triggersOf, type NewRun } from '
 import { deliverWebhook, type WebhookRequest, type WebhookResponse } from './webhook.ts';
 import { authorDecide, authorEmbed, readableFile, storedFiles, type AuthorDecideConfig } from '../decisions/index.ts';
 import { prepareSend, sendPiece } from '../channels/outbound.ts'; // hook:envoys
-import { FILE_METHODS, runFiles } from './files.ts';
+import { FILE_METHODS, runConvert, runFiles } from './files.ts';
 import { inferFacility, inferWallMs, type InferTool } from '../agent/ai.ts';
 import type { AgentConfig } from '../agent/index.ts';
 import { connectionCall } from '../connections.ts';
@@ -106,7 +106,8 @@ const unavailable = (facility: string): CrossAnswer => ({ ok: false, error: { ki
 /** Rule 55: facility calls that effect something are journalled; the rest are reads. */
 const effecting = (c: Extract<CrossCall, { op: 'facility' }>): boolean => c.facility === 'ai'
 	|| (c.facility === 'http' && c.method !== 'get')
-	|| (c.facility === 'files' && (['put', 'pdf', 'render'].includes(c.method) || (c.method === 'image' && JSON.stringify(c.args).includes('"jpeg"'))));
+	|| c.facility === 'convert'
+	|| (c.facility === 'files' && (c.method === 'put' || (c.method === 'image' && JSON.stringify(c.args).includes('"jpeg"'))));
 
 export function runs(cfg: RunsConfig): Runs {
 	const { engine: e, deadlines, scope } = cfg;
@@ -384,9 +385,10 @@ export function runs(cfg: RunsConfig): Runs {
 			return row!['outcome']!;
 		};
 
-		const fileFacility = e.files && runFiles({ manifest: m, db, files: e.files, automation: run.automation, now: b.now,
-			readable: async (id, field) => field.includes('.') ? readableFile({ manifest: m, db, read: e.read, authority, bindings: b }, id, field)
-				: authority.admin || field === run.automation || authority.automations.includes(field) });
+		const readable = async (id: string, field: string) => field.includes('.') ? readableFile({ manifest: m, db, read: e.read, authority, bindings: b }, id, field)
+			: authority.admin || field === run.automation || authority.automations.includes(field);
+		const fileFacility = e.files && runFiles({ manifest: m, db, files: e.files, automation: run.automation, now: b.now, readable });
+		const convertFacility = e.files && e.convert && runConvert({ manifest: m, db, files: e.files, convert: e.convert, now: b.now, readable });
 		/**
 		 * `sys_2.infer` with `tools` (rule 58, L-BOLT-372): the engine runs the loop, offering only host tools the run's
 		 * `runAs` policies name (`capabilities.tools`) and the host binds; any other name is `unavailable` at call time.
@@ -410,6 +412,9 @@ export function runs(cfg: RunsConfig): Runs {
 		};
 		/** The host's facility; `files` reads and puts the host does not answer are the engine's (files.ts). */
 		const facility = async (call: Extract<CrossCall, { op: 'facility' }>, signal: AbortSignal): Promise<CrossAnswer> => {
+			// conversion is the engine's over the host's optional port: it reads a reference file and stores its output
+			if (call.facility === 'convert') return convertFacility === undefined ? unavailable('convert')
+				: convertFacility(call, signal).catch((err: unknown): CrossAnswer => ({ ok: false, error: { kind: 'upstream', message: err instanceof Error ? err.message : String(err) } }));
 			if (call.facility === 'http' && cfg.http !== undefined) return connectionCall(cfg.http, call, signal, holder.actor.kind === 'member' ? holder.actor.id : undefined);
 			if (call.facility === 'ai' && call.method === 'sys_2.infer' && ((call.args[0] as { tools?: unknown } | null)?.tools as unknown[] | undefined)?.length) return inferWithTools(call, signal);
 			// the wall is the engine's: a host call that ignores its signal (a stalled stream) still ends at it (rule 72)

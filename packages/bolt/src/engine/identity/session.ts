@@ -52,6 +52,8 @@ export const newId = () => crypto.randomUUID();
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 export const SESSION_MS = 7 * DAY;
 const CODE_MS = 10 * 60_000, ATTEMPTS = 3;
+/** Texts to numbers that are not yet members, per workspace per hour: what open sign-up can cost at most. */
+export const SIGNUP_TEXTS = 50;
 export const requireAdmin = (auth: Authority): Result<never> | null =>
 	auth.admin && auth.actor.kind === 'member' ? null : refuse('forbidden', 'Only an administrator can do this.');
 
@@ -128,7 +130,14 @@ export async function sendCode(h: IdentityHost, typed: string, ip: string): Prom
 		const now = h.now();
 		const [users, invitations, config] = await h.db.read([
 			{ text: `SELECT 1 FROM sys_user WHERE ${memberColumn(a, '$1')} AND active`, params: [memberValue(a)] }, invitationsTo(a, now), SIGNUP_CONFIG]);
-		if (users!.rows.length === 0 && invitations!.rows.length === 0 && !signupOpen(h, a, config!.rows[0])) return ok(null);
+		if (users!.rows.length === 0 && invitations!.rows.length === 0) {
+			if (!signupOpen(h, a, config!.rows[0])) return ok(null);
+			// a text to a stranger is paid for: sign-up texts are capped for the whole workspace (SMS pumping)
+			const signup: Charge = { rule: 'session.signup', bucket: 'workspace', limit: SIGNUP_TEXTS, windowMs: HOUR };
+			const capped = admitMemory(h, [signup]);
+			if (capped) return capped;
+			charges.push(signup);
+		}
 	}
 	const code = h.devSink === true ? '123456' : sixDigits();
 	const now = h.now();
@@ -218,12 +227,12 @@ const sessionValues = (s: ReturnType<typeof stmt>, now: Date, via: string, hash:
 	`${s.p(newId())}, ${s.p(hash)}, ${s.p(via)}, ${s.p(now.toISOString())}::timestamptz, ${s.p(new Date(now.getTime() + SESSION_MS).toISOString())}::timestamptz, ${s.p(now.toISOString())}::timestamptz`;
 export const SESSION_COLUMNS = `(id, "user", token_hash, via, created_at, expires_at, refreshed_at)`;
 
-/** The one record `signup.party` names for `a` (its match field holds the address), or none. */
-const partyRow = (h: IdentityHost, a: Address) => {
-	const field = h.signup?.party?.match[a.kind];
-	if (h.signup?.party === undefined || field === undefined) return { text: 'SELECT NULL::text AS id WHERE false', params: [] };
-	const column = `"${h.signup.party.collection}"."${field}"`;
-	return { text: `SELECT id::text AS id FROM "${h.signup.party.collection}" WHERE ${a.kind === 'email' ? `lower(${column}) = $1` : `regexp_replace(${column}, '\\D', '', 'g') = $1`} LIMIT 2`,
+/** The records `signup.party` names for `a` (its match field holds the address); exactly one is the person. */
+export const partyRow = (signup: Signup | undefined, a: Address) => {
+	const field = signup?.party?.match[a.kind];
+	if (signup?.party === undefined || field === undefined) return { text: 'SELECT NULL::text AS id WHERE false', params: [] };
+	const column = `"${signup.party.collection}"."${field}"`;
+	return { text: `SELECT id::text AS id FROM "${signup.party.collection}" WHERE ${a.kind === 'email' ? `lower(${column}) = $1` : `regexp_replace(${column}, '\\D', '', 'g') = $1`} LIMIT 2`,
 		params: [memberValue(a)] };
 };
 
@@ -244,7 +253,7 @@ export async function verifyCode(h: IdentityHost, typed: string, code: string, i
 	const [challenges, users, invitations, config, parties] = await h.db.read([
 		{ text: 'SELECT code_mac, attempts, expires_at FROM sys_challenge WHERE address_mac = $1', params: [address] },
 		{ text: `SELECT id, active, kind, party FROM sys_user WHERE ${memberColumn(a, '$1')}`, params: [memberValue(a)] },
-		invitationsTo(a, now), SIGNUP_CONFIG, partyRow(h, a),
+		invitationsTo(a, now), SIGNUP_CONFIG, partyRow(h.signup, a),
 	]);
 	const ch = challenges!.rows[0] as { code_mac: string; attempts: number; expires_at: string } | undefined;
 	if (ch === undefined || Date.parse(ch.expires_at) <= now.getTime()) return refuse('invalidCode', 'The code is wrong or has expired.');

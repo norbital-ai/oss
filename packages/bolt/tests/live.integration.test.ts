@@ -33,7 +33,7 @@ async function cell(base: TenantDb): Promise<void> {
 }
 beforeEach(async () => {
 	await cell((await openPglite()).db);
-	rep = e.authority({ actor: { kind: 'member', id: randomUUID(), email: null, external: false, teams: [], teamPath: [], admin: false, party: null }, policies: ['rep'], admin: false });
+	rep = e.authority({ actor: { kind: 'member', id: randomUUID(), email: null, phone: null, external: false, teams: [], teamPath: [], admin: false, party: null }, policies: ['rep'], admin: false });
 	const handle = boltHandler({ engine: e, session: async () => rep, bindings, uuid: randomUUID });
 	const fetch = async (url: string | URL | Request, init?: RequestInit) => await handle(new Request(`http://cell${String(url)}`, init)) ?? new Response(null, { status: 404 });
 	bolt = createBolt({ actor: null, locale: 'en', now: () => NOW, fetch: fetch as typeof globalThis.fetch, openStream: (url) => sse(fetch, url) });

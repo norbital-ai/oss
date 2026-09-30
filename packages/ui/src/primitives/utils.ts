@@ -42,10 +42,12 @@ export const UI_TEXT = {
 	required: 'Required', invalid: 'Invalid value', noAccess: 'No access', notFound: 'Not found or no access', field: 'Field', kind: 'Kind', optional: 'Optional', fields: 'Fields',
 	today: 'Today', previous: 'Previous', next: 'Next', more: '+{n} more', day: 'Day', week: 'Week', month: 'Month', notifications: 'Notifications',
 	fullScreen: 'Full screen', exitFullScreen: 'Exit full screen', createdAt: 'Created {when} by {who}', updatedAt: 'Updated {when} by {who}',
-	unsaved: 'Unsaved changes', discard: 'Discard', copy: 'Copy', copied: 'Copied',
+	unsaved: 'Unsaved changes', discard: 'Discard', discardDraft: 'Discard your unsaved changes?', copy: 'Copy', copied: 'Copied',
 	dropFiles: 'Drop files here or click to browse', dropFile: 'Drop a file here or click to browse', upToFiles: 'Up to {n} files',
 	sizeEach: '{size} each', fileCount: '{n} files', download: 'Download', preview: 'Preview', retry: 'Retry', uploadFailed: 'Upload failed',
 	countryCode: 'Country code', invalidPhone: 'Enter a valid phone number', currency: 'Currency',
+	mobileNumber: 'Mobile number', sendCode: 'Send code', resendCode: 'Resend code', verify: 'Verify', code: 'Six-digit code', codeSent: 'We texted a code to {phone}.',
+	enterCode: 'Enter code', changeNumber: 'Change number',
 	searchMeaning: 'Search by meaning', searchPick: 'Type / to choose a search', searchClear: 'Back to plain search', searchRun: 'Search',
 	searchRaw: '{field} is a raw vector: run this search from a page', searchView: 'This view cannot show ranked rows: open it in a table', searchNone: 'No search indexes here',
 	searchFields: 'Searches {fields}', searchCommands: 'Type / for a command'
@@ -60,6 +62,18 @@ export function uiText(): (key: UiTextKey) => string {
 	const text = getContext<Partial<Record<UiTextKey, string>> | undefined>(TEXT);
 	return (key) => text?.[key] ?? UI_TEXT[key];
 }
+
+const FIELD_CONTROL = Symbol.for('norbital.ui.field.control');
+/**
+ * A `Field` rendering an `editor` snippet: the id its label points at, taken by the first control beneath that has no id
+ * of its own, so a snippet's picker is named by the field's label without the snippet wiring it.
+ */
+export function provideFieldControl(id: () => string): void {
+	let taken = false;
+	setContext(FIELD_CONTROL, () => (taken ? undefined : ((taken = true), id())));
+}
+/** The enclosing `Field`'s control id, once; `undefined` outside a snippet field or when a control already took it. */
+export const claimFieldControl = (): string | undefined => getContext<(() => string | undefined) | undefined>(FIELD_CONTROL)?.();
 
 /** How the controls beneath render: `readonly` shows each value as copyable text (no field chrome); `disabled` keeps the
  * field, muted and unfocusable. Readonly wins when both hold. */

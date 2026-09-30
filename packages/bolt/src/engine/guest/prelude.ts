@@ -373,7 +373,8 @@ function ctxFor(kind, c, invocationId) {
 				Object.assign((path, request) => call('http.' + m, [connection, path, request], 'throw'),
 					{ try: (path, request) => call('http.' + m, [connection, path, request], 'try') })])),
 			web: { read: withTry('web.read') },
-			files: Object.fromEntries(['meta', 'get', 'url', 'text', 'table', 'sheet', 'image', 'put', 'pdf', 'render'].map((m) => [m, withTry('files.' + m)])),
+			files: Object.fromEntries(['meta', 'get', 'url', 'text', 'table', 'sheet', 'image', 'put'].map((m) => [m, withTry('files.' + m)])),
+			convert: { document: withTry('convert.document') },
 			ai: { sys_1: { decide: withTry('ai.sys_1.decide') }, sys_2: { infer: withTry('ai.sys_2.infer') }, embed: withTry('ai.embed') }, // hook:ai — P36, P39
 			geo: { search: fn('geo.search', 'value'), reverse: fn('geo.reverse', 'value') } };
 		case 'mapping': return { ...clock, read: reads.read, get: reads.get, aggregate: reads.aggregate };

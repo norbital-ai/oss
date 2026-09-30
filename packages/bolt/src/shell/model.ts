@@ -2,7 +2,7 @@
 // by `NORBIUS` or ⌘K; Approvals) above Applications, one row per app (or a group of apps); an app's pages
 // are the tab strip under its banner (`pages`), not sidebar rows. Everything else sits in the account row's ellipsis
 // popover: Settings (People, Organization, Audit, Automations), System (Channels, Integrations, Environment secrets,
-// Workspace Studio, whose runtime log is the workspace log) and Kiosks (every `kiosk: true` page the viewer may open — device surfaces, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
+// Workspace Studio, whose runtime log is the workspace log), Sites (every `site: true` page the viewer may open — kiosks and customer-facing pages, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
 import { based, type NavNode, type NavPage, type ShellBoot, type WorkspaceLink } from './nav.ts';
 
@@ -38,17 +38,17 @@ function item(n: NavNode, path: string, t: Translate): NavItem {
 		active: n.kind === 'app' ? under(path, `/app/${n.name}`) : children.some((c) => c.active),
 		...(children.length === 0 ? {} : { children }), ...(pages.length === 0 ? {} : { pages }) };
 }
-/** The tree without its kiosk pages: an app left with none drops, and a group left with no child. */
+/** The tree without its site pages: an app left with none drops, and a group left with no child. */
 function ordinary(n: NavNode): NavNode | null {
 	if (n.kind === 'app') {
-		const pages = n.pages.filter((p) => p.kiosk !== true);
+		const pages = n.pages.filter((p) => p.site !== true);
 		return pages.length === 0 ? null : { ...n, pages, href: pages[0]!.href };
 	}
 	const children = n.children.map(ordinary).filter((c) => c !== null);
 	return children.length === 0 ? null : { ...n, children, href: children.some((c) => c.href === n.href) ? n.href : children[0]!.href };
 }
-const kioskPages = (n: NavNode): (NavPage & { app: string })[] =>
-	n.kind === 'app' ? n.pages.filter((p) => p.kiosk === true).map((p) => ({ ...p, app: n.name })) : n.children.flatMap(kioskPages);
+const sitePages = (n: NavNode): (NavPage & { app: string })[] =>
+	n.kind === 'app' ? n.pages.filter((p) => p.site === true).map((p) => ({ ...p, app: n.name })) : n.children.flatMap(sitePages);
 
 /** The open app's row (in a group or not): its banner and page tabs sit above the page. */
 export function activeApp(model: NavModel): NavItem | null {
@@ -81,7 +81,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 				leaf('secrets', 'Environment secrets', 'lucide:key-round', '/settings/secrets')] : []),
 			...(s.studio ? [leaf('studio', 'Workspace Studio', 'lucide:code-xml', '/studio')] : []),
 		]),
-		...group('kiosks', 'Kiosks', boot.nav.flatMap(kioskPages).map((p) => leaf(`${p.app}/${p.name}`, p.title, p.icon ?? 'lucide:scan-face', p.href))),
+		...group('sites', 'Sites', boot.nav.flatMap(sitePages).map((p) => leaf(`${p.app}/${p.name}`, p.title, p.icon ?? 'lucide:app-window', p.href))),
 	];
 	return {
 		workspace: { name: boot.workspace.name, logo: boot.workspace.logo ?? null, others: boot.workspaces ?? [] },

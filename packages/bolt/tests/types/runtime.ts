@@ -120,7 +120,17 @@ trig.run(async (_, ctx) => {
 	// @ts-expect-error B8 an unknown connection
 	await ctx.http('billing').get('/x', { output: { kind: 'text' } });
 	// @ts-expect-error B9 a file owner that is not a file field
-	await ctx.files.pdf({ blocks: [] }, { name: 'x.pdf', for: 'orders.note' });
+	await ctx.convert.document({ markdown: '' }, { to: 'pdf', name: 'x.pdf', for: 'orders.note' });
+	// a declared target with its own options: a docx takes a styling reference, a pdf its paper
+	await ctx.convert.document({ html: '<p>x</p>' }, { to: 'docx', reference: {} as FileRef, name: 'x.docx', for: 'render' });
+	// @ts-expect-error B9a a target the workspace does not declare under convert.to
+	await ctx.convert.document({ markdown: '' }, { to: 'pptx', name: 'x.pptx', for: 'render' });
+	// @ts-expect-error B9b a pdf takes no reference document
+	await ctx.convert.document({ markdown: '' }, { to: 'pdf', reference: {} as FileRef, name: 'x.pdf', for: 'render' });
+	// @ts-expect-error B9c a docx has no paper size
+	await ctx.convert.document({ markdown: '' }, { to: 'docx', page: 'A4', name: 'x.docx', for: 'render' });
+	// @ts-expect-error B9d the source is Markdown or HTML, nothing else
+	await ctx.convert.document({ text: '' }, { to: 'pdf', name: 'x.pdf', for: 'render' });
 	// @ts-expect-error B10 an automation ctx has no refuse (§3.4: a run fails by throwing)
 	ctx.refuse('no');
 	// @ts-expect-error B11 an http output of an unknown kind
@@ -279,7 +289,7 @@ workspace({ tz: 'UTC', locale: 'en', currency: 'SGD', seats: 5 });
 app('sales', { title: 'Sales', description: 'Orders', icon: 'lucide:store', banner: 'assets/sales.png',
 	pages: { overview: { title: 'Overview' }, orders: { title: 'Orders', section: 'Work' } } });
 app('portal', { title: 'Portal', description: 'x', icon: 'lucide:life-buoy', audience: { public: ['sales_rep'], challenge: 'turnstile' },
-	pages: { tickets: { title: 'Tickets', kiosk: true } } });
+	pages: { tickets: { title: 'Tickets', site: true } } });
 // @ts-expect-error AP1 a page with no page file in the app's folder
 app('sales', { title: 'x', description: 'x', icon: 'x', pages: { dashboard: { title: 'x' } } });
 // @ts-expect-error AP2 an unknown public policy

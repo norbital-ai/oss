@@ -12,7 +12,7 @@ export type StartOf = { startOf: CalendarUnit; shift?: number };
 /** A typed operand literal; which ones a position admits depends on the value's kind. */
 export type Operand =
 	| { field: string } | { param: string } | { now: Offset } | { today: Offset } | StartOf
-	| { actor: 'id' | 'email' | 'teams' | 'teamTree' | 'party' | { scopes: PolicyName } };
+	| { actor: 'id' | 'email' | 'phone' | 'teams' | 'teamTree' | 'party' | { scopes: PolicyName } };
 /** Rule 11a caps: `and`/`or`/`not` and relation nesting together, and each list's items. */
 export const WHERE_MAX_DEPTH = 16, WHERE_MAX_LIST = 1_000, ORDER_MAX_KEYS = 4;
 /** A geographic area a `point` filter tests: a polygon, or a bounding box of two corners. */
@@ -32,6 +32,7 @@ type Dyn<K, S> = S extends true ? never
 	| (K extends { kind: 'date' } ? { today: Offset } | StartOf : never)
 	| (K extends { kind: 'instant' } ? { now: Offset } | StartOf : never)
 	| (K extends { kind: 'text'; format: 'email' } ? { actor: 'email' } : never)
+	| (K extends { kind: 'text'; format: 'phone' } ? { actor: 'phone' } : never)
 	| (K extends { kind: 'id'; of: 'sys_user' } ? { actor: 'id' } : never)
 	| (K extends { kind: 'id' } ? { actor: 'party' } : never);
 type DynList<K, S> = S extends true ? never

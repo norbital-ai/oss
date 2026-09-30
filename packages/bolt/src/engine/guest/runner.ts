@@ -80,7 +80,7 @@ export function lower(member: string, args: readonly Json[], bins: readonly Uint
 		case 'notify': return { op: 'notify', notices: args[0] ?? null };
 		case 'send': return { op: 'send', channel: String(args[0]), message: args[1] ?? null };
 		case 'progress': return { op: 'progress', progress: args[0] ?? null }; // hook:runtime
-		case 'http': case 'web': case 'files': case 'ai': case 'geo':
+		case 'http': case 'web': case 'files': case 'ai': case 'geo': case 'convert':
 			return { op: 'facility', facility: head, method, args, ...(bins.length > 0 ? { bins } : {}) };
 	}
 	throw new Error(`the guest called an unknown ctx member '${member}'`);

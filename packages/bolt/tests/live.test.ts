@@ -14,7 +14,7 @@ import { manifest } from './engine-fixture.ts';
 const cat = catalogOf(manifest);
 const NOW = '2026-09-25T10:00:00.000Z';
 const bindings = () => ({ now: NOW, today: '2026-09-25', tz: 'UTC', params: {} });
-const member = (id: string): EngineActor => ({ kind: 'member', id, email: null, external: false, teams: [], teamPath: [], admin: false, party: null });
+const member = (id: string): EngineActor => ({ kind: 'member', id, email: null, phone: null, external: false, teams: [], teamPath: [], admin: false, party: null });
 const admin = compileAuthority(manifest, { actor: member('root'), policies: [], admin: true }, 'admin');
 const rep = compileAuthority(manifest, { actor: member('u1'), policies: ['rep'], admin: false }, 'rep');
 const order = (over: { [k: string]: Json } = {}) => ({ id: 'o1', title: 'desk', region: 'north', status: 'draft', created_by: 'u1', revision: 1, ...over });

@@ -85,7 +85,7 @@ const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 
 const ALL: CollectionAuthority = { read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }], history: [], create: [], update: [], delete: [],
 	queries: [], actions: [], moves: {}, masks: {} };
 const who = (over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}, admin = false): Authority => ({
-	key: 'k', admin, policies: ['p'], actor: { kind: 'member', id: 'u1', email: 'owner@example.test', external: false, teams: [], teamPath: ['Ops'], admin, party: null, ...over },
+	key: 'k', admin, policies: ['p'], actor: { kind: 'member', id: 'u1', email: 'owner@example.test', phone: null, external: false, teams: [], teamPath: ['Ops'], admin, party: null, ...over },
 	collections: Object.fromEntries(Object.keys(models).map((c) => [c, ALL])), automations: [], capabilities: { apps: [], tools: [], mcp: [], skills: [] },
 	limits: [], teamTree: [], scopes: {},
 });

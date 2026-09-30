@@ -61,7 +61,7 @@ const arm = (where: Pred, masks: CollectionAuthority['masks'] = {}): CollectionA
 /** A rep: sees northern accounts and their orders; an order's `total` only while it is open; never an account's `secret`. */
 export const rep: Authority = {
 	key: 'rep', admin: false, policies: ['rep'],
-	actor: { kind: 'member', id: 'u1', email: 'A@X.io', external: false, teams: ['t1'], teamPath: ['t1'], admin: false, party: null },
+	actor: { kind: 'member', id: 'u1', email: 'A@X.io', phone: null, external: false, teams: ['t1'], teamPath: ['t1'], admin: false, party: null },
 	collections: {
 		accounts: arm(eq('region', 'north'), { secret: { t: 'const', value: false } }),
 		orders: arm({ t: 'one', rel: 'account', target: 'accounts', pred: eq('region', 'north') }, { total: eq('status', 'open') }),

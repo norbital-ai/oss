@@ -13,7 +13,7 @@ import { SYSTEM } from '../system/index.ts';
 
 export type FieldInfo = {
 	name: string; kind: string; column: string; pg: string;
-	many?: true; email?: true; periodOf?: 'date' | 'instant'; metric?: 'l2' | 'cosine' | 'ip'; dim?: number;
+	many?: true; email?: true; phone?: true; periodOf?: 'date' | 'instant'; metric?: 'l2' | 'cosine' | 'ip'; dim?: number;
 	/** Declared enum values or state names (rule 11a membership); the model an id points at. */
 	values?: readonly string[]; of?: string;
 	/** An exclusive arc: the arm models; its value is a `RecordRef`. */
@@ -53,7 +53,7 @@ type KindSpec = { kind: string; many?: true; format?: string; of?: string; metri
 function field(name: string, k: KindSpec, extra: Partial<FieldInfo> = {}): FieldInfo {
 	const kind = k.kind === 'seq' ? (k.pattern === undefined ? 'int' : 'text') : k.kind;
 	const pg = kind === 'period' ? (k.of === 'date' ? 'daterange' : 'tstzrange') : k.many ? 'text[]' : PG[kind] ?? 'text';
-	return { name, kind, column: name, pg, ...(k.many ? { many: true } : {}), ...(k.format === 'email' ? { email: true } : {}),
+	return { name, kind, column: name, pg, ...(k.many ? { many: true } : {}), ...(k.format === 'email' ? { email: true } : {}), ...(k.format === 'phone' ? { phone: true } : {}),
 		...(kind === 'period' ? { periodOf: k.of === 'date' ? 'date' : 'instant' } : {}),
 		...(kind === 'vector' ? { metric: k.metric ?? 'l2', ...(k.dim === undefined ? {} : { dim: k.dim }) } : {}),
 		...(k.kind === 'seq' || k.kind === 'sum' || k.kind === 'count' ? { derived: true } : {}),

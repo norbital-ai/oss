@@ -5,8 +5,9 @@ import { createHash } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
 import { compileAuthority, type Holder } from '../access/authority.ts';
 import { BoltError, type Authority, type EngineActor, type EngineManifest, type TenantDb } from '../contracts.ts';
+import { historyOf, IMAGES, partyRow, signupOf, stmt } from './session.ts';
 
-type UserRow = { id: string; email: string | null; kind: string; active: boolean; admin: boolean; team: string | null; party: Json; revision: number };
+type UserRow = { id: string; email: string | null; phone: string | null; kind: string; active: boolean; admin: boolean; team: string | null; party: Json; revision: number };
 type TeamRow = { id: string; name: string; parent: string | null; revision: number };
 type AssignmentRow = { id: string; policy: string; scope: { collection: string; id: string } | null; revision: number };
 
@@ -33,18 +34,43 @@ export class Authorities {
 	}
 
 	/**
+	 * A member who signed up before the record that is them existed is bound to it as soon as exactly one record holds their
+	 * number (or email) — the booking that files a newcomer's customer record shows them that booking at once.
+	 */
+	private async bind(db: TenantDb, u: UserRow): Promise<UserRow> {
+		const signup = signupOf(this.m);
+		if (u.kind !== 'external' || u.party !== null || signup?.party === undefined) return u;
+		// ponytail: one read per request while a member stays unbound; bounded by how long they have no record
+		const address = u.phone !== null && signup.party.match.phone !== undefined ? { kind: 'phone' as const, value: u.phone }
+			: u.email !== null && signup.party.match.email !== undefined ? { kind: 'email' as const, value: u.email } : null;
+		if (address === null) return u;
+		const [rows] = await db.read([partyRow(signup, address)]);
+		if (rows!.rows.length !== 1) return u;
+		const party = { collection: signup.party.collection, id: String(rows!.rows[0]!['id']) };
+		const s = stmt();
+		const out = await db.write({ params: s.params, text: `WITH bound AS (UPDATE sys_user SET party = ${s.p(party)}::jsonb, revision = revision + 1
+	WHERE id = ${s.p(u.id)} AND party IS NULL ${IMAGES}),
+${historyOf(s, 'sys_user', 'bound', new Date(), `member:${u.id}`)}
+SELECT (SELECT (n->>'revision')::int FROM bound) AS revision` });
+		const revision = out.rows[0]?.['revision'];
+		// a concurrent request bound them first: its revision is not this one's, so the next request re-reads it
+		return typeof revision === 'number' ? { ...u, party, revision } : u;
+	}
+
+	/**
 	 * A member's authority, or `null` for an unknown or deactivated user. One pipelined read. `preview` (rule 39) clears
 	 * the administrator flag, so the previewed member's grants and approval eligibility apply.
 	 */
 	async member(db: TenantDb, userId: string, preview = false): Promise<Authority | null> {
 		const [users, teams, assignments] = await db.read([
-			q('SELECT id, email, kind, active, admin, team, party, revision FROM sys_user WHERE id = $1', userId),
+			q('SELECT id, email, phone, kind, active, admin, team, party, revision FROM sys_user WHERE id = $1', userId),
 			q('SELECT id, name, parent, revision FROM sys_team ORDER BY id'),
 			q(`SELECT id, policy, scope, revision FROM sys_assignment WHERE (principal_type = 'sys_user' AND principal = $1)
 				OR (principal_type = 'sys_team' AND principal = (SELECT team FROM sys_user WHERE id = $1)) ORDER BY id`, userId),
 		]);
-		const u = users!.rows[0] as UserRow | undefined;
-		if (u === undefined || !u.active) return null;
+		const found = users!.rows[0] as UserRow | undefined;
+		if (found === undefined || !found.active) return null;
+		const u = await this.bind(db, found);
 		const graph = teams!.rows as unknown as TeamRow[];
 		const byId = new Map(graph.map((t) => [t.id, t]));
 		const teamPath: string[] = [];
@@ -56,7 +82,7 @@ export class Authorities {
 		const rows = assignments!.rows as unknown as AssignmentRow[];
 		const scopes: { [policy: string]: string[] } = {};
 		for (const r of rows) if (r.scope !== null) (scopes[r.policy] ??= []).push(r.scope.id);
-		const actor: EngineActor = { kind: 'member', id: u.id, email: u.email, external: u.kind === 'external', teams: u.team === null ? [] : [u.team],
+		const actor: EngineActor = { kind: 'member', id: u.id, email: u.email, phone: u.phone, external: u.kind === 'external', teams: u.team === null ? [] : [u.team],
 			teamPath, admin: u.admin && u.kind === 'staff' && !preview, party: u.party as { collection: string; id: string } | null };
 		const key = `${preview ? 'preview' : 'member'}:${u.id}:${u.revision}:${digest(rows)}:${digest(graph)}`;
 		return this.compile({ actor, admin: actor.admin, policies: [...new Set([...teamPolicies, ...rows.map((r) => r.policy)])], teamTree, scopes }, key);

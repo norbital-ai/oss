@@ -10,7 +10,7 @@
 	import ReadGate from './ReadGate.svelte';
 	import Value from './Value.svelte';
 
-	let { of, card, lane: laneLabel, where, orderBy, search, pageSize, index, after, onNext }: Pick<BoardProps, 'of' | 'card'> & { lane: string;
+	let { of, card, where, orderBy, search, pageSize, index, after, onNext }: Pick<BoardProps, 'of' | 'card'> & { lane: string;
 		where: Json | undefined; orderBy: Json | undefined; search?: string; pageSize: number; index: number; after: string | null; onNext: (next: string | null) => void } = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
@@ -38,7 +38,7 @@
 			<!-- an empty lane is still a drop target: the placeholder keeps a card's height so one can land here -->
 			<div class="border-border bg-background/50 flex min-h-28 flex-col items-center justify-center gap-1 rounded-sm border border-dashed p-4 text-center" data-lane-empty>
 				<Glyph name="inbox" class="text-muted-foreground size-5" />
-				<p class="text-sm font-medium">{msg(bolt, 'board.laneEmpty', 'No {lane}', { lane: laneLabel.toLowerCase() })}</p>
+				<p class="text-sm font-medium">{msg(bolt, 'board.laneEmpty', 'Nothing here')}</p>
 				<p class="text-meta">{msg(bolt, 'board.laneClear', 'Lane clear')}</p>
 			</div>
 		{/if}

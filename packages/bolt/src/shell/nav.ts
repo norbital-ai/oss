@@ -4,14 +4,14 @@ import type { Authority, EngineActor, EngineManifest } from '../engine/contracts
 import { SYSTEM } from '../system/index.ts';
 import { BOLT } from '../protocol/wire.ts';
 
-export type PageSpec = { title: string; icon?: string; section?: string; kiosk?: true };
+export type PageSpec = { title: string; icon?: string; section?: string; site?: true };
 export type Audience = 'members' | 'external' | 'all' | { public: readonly string[]; challenge?: 'turnstile' };
 export type AppSpec = { title: string; description: string; icon: string; banner?: string; audience?: Audience; pages: { readonly [page: string]: PageSpec } };
 export type GroupSpec = { label: string; description?: string; icon: string; defaultChild: string };
 /** What the shell reads of the manifest; `groups` are the `+group.ts` literals. */
 export type ShellManifest = Pick<EngineManifest, 'workspace' | 'agent'> & Partial<Pick<EngineManifest, 'envoys'>> & { apps: { readonly [app: string]: unknown }; groups?: { readonly [group: string]: unknown } };
 
-export type NavPage = { name: string; title: string; icon?: string; section?: string; kiosk?: true; href: string };
+export type NavPage = { name: string; title: string; icon?: string; section?: string; site?: true; href: string };
 export type NavNode =
 	| { kind: 'app'; name: string; title: string; description: string; icon: string; banner?: string; href: string; pages: NavPage[] }
 	| { kind: 'group'; name: string; title: string; description?: string; icon: string; href: string; children: NavNode[] };
@@ -19,6 +19,23 @@ export type NavNode =
 export const APP_PREFIX = '/app/';
 /** The session cookie (§5.11.2), the admin's preview-as target (rule 39) and the visitor's idempotency id (§5.10). */
 export const COOKIES = { session: 'nb_s', preview: 'nb_p', visitor: '__bolt_v' } as const;
+/**
+ * The cookies' site attributes: over https, partitioned and sent in frames, so a portal page embedded in another site keeps
+ * its own sign-in (kept apart from the top-level one: a framing site never borrows a member's session); over plain http
+ * (`bolt dev`), `Lax`. Cross-site writes are refused by `crossSite`, not by `SameSite`.
+ */
+export const cookieSite = (secure: boolean): string => secure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
+/**
+ * A browser write another site started (a forged form post or fetch): refused before it reaches a handler. A request from
+ * a page of this workspace, framed or not, is `same-origin`; a server calling a webhook sends neither header.
+ */
+export function crossSite(request: Request, publicUrl: string): boolean {
+	if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return false;
+	const site = request.headers.get('sec-fetch-site');
+	if (site !== null) return site === 'cross-site' || site === 'same-site';
+	const origin = request.headers.get('origin');
+	return origin !== null && origin !== new URL(publicUrl).origin;
+}
 /** The public app a visitor page's requests run under; it only ever narrows the caller to that app's visitor. */
 export const VISITOR_APP = 'Bolt-App';
 export const SHELL = `${BOLT}/shell`;
@@ -174,8 +191,8 @@ export const challengeOf = (m: ShellManifest, app: string): 'turnstile' | undefi
 };
 
 /**
- * Whether `auth` may open `app`. A visitor sees only its own public app; a member sees an app whose audience admits
- * their kind and that a held policy's `capabilities.apps` admits (a name, `*`, or a `<group>/` prefix); an administrator
+ * Whether `auth` may open `app`. A visitor sees only its own public app, as does a member whose policy names it; a
+ * member sees an app whose audience admits their kind and that a held policy's `capabilities.apps` admits (a name, `*`, or a `<group>/` prefix); an administrator
  * sees every app, public ones included, so they can try a form.
  */
 export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean {
@@ -185,10 +202,25 @@ export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean
 	if (actor.kind === 'visitor') return actor.app === app;
 	if (actor.kind !== 'member') return false;
 	if (auth.admin) return true;
-	if (audience === 'public') return false;
+	if (audience === 'public') return holdsPublic(auth, app);
 	if (audience !== 'all' && audience !== (actor.external ? 'external' : 'members')) return false;
 	return auth.capabilities.apps.some((c) => c === '*' || c === app || app.startsWith(`${c}/`));
 }
+
+/**
+ * The `Content-Security-Policy` a document is served with: a `site: true` page may be framed by any website (made to be
+ * embedded); every other page only by the workspace itself, so no other site can overlay it (clickjacking). `path` is the
+ * workspace path (`/app/portal/book`), without a base.
+ */
+export function framePolicy(m: ShellManifest, path: string): string {
+	const r = route(m, new URL(path, 'http://x'));
+	const site = r.kind === 'page' && appOf(m, r.app)?.pages[r.page]?.site === true;
+	return `frame-ancestors ${site ? '*' : "'self'"}`;
+}
+
+/** A member whose policy names a public app by name (never `*` or a group) opens it as themselves, not as its visitor. */
+export const holdsPublic = (auth: Authority, app: string): boolean =>
+	auth.actor.kind === 'member' && !auth.admin && auth.capabilities.apps.includes(app);
 
 /** `bolt.href(app, page?, record?)`: `/app/<app>[/<page>][?record=<collection>/<id>]`. */
 export function href(app: string, page?: string, record?: { collection: string; id: string }): string {

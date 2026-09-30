@@ -1,6 +1,13 @@
 // The one sheet behaviour (owner rule): non-modal, no backdrop, the page stays usable; dismissed only by Esc (the
 // topmost open sheet) or its close button. A drawer also closes once its user navigates.
 
+/**
+ * A sheet's close guard: a form inside registers whether it holds unsaved changes (`register(dirty)` returns the
+ * unregister). Closing a sheet with any registered form dirty asks first, so one Esc never drops a draft.
+ */
+export const SHEET_GUARD = Symbol.for('ui.sheet.guard');
+export type SheetGuard = (dirty: () => boolean) => () => void;
+
 /** Open sheets, innermost last; Esc closes only the last. */
 export const openSheets: object[] = [];
 

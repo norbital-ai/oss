@@ -382,7 +382,7 @@ export function agents(config: AgentConfig) {
 					compact: () => compactions < AGENT_LIMITS.compactions ? (asked = true) : false,
 					messages: async (o) => o.unread
 						? rowsOf((await db.write(q(`UPDATE sys_message m SET read_by = $2 WHERE id IN (SELECT id FROM sys_message WHERE conversation = $1
-							AND (addressed = false OR meta->>'tag' = 'ambient') AND deleted_at IS NULL AND (read_by IS NULL OR read_by = $2) ORDER BY seq LIMIT $3) RETURNING ${MSG}`, id, o.key, o.limit))).rows)
+							AND (addressed = false OR meta->>'tag' = 'ambient' OR ambient) AND deleted_at IS NULL AND (read_by IS NULL OR read_by = $2) ORDER BY seq LIMIT $3) RETURNING ${MSG}`, id, o.key, o.limit))).rows)
 							.sort((x, y) => x.seq - y.seq)
 						: rowsOf((await db.read([q(`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND deleted_at IS NULL AND refused IS NULL
 							AND coalesce(role, 'user') IN ('user', 'assistant') AND ($2::bigint IS NULL OR seq < $2) ORDER BY seq DESC LIMIT $3`, id, o.before ?? null, o.limit)]))[0]!.rows),
@@ -420,11 +420,12 @@ export function agents(config: AgentConfig) {
 					conv.channel === null ? 0 : rows.filter((r) => isAmbient(r) && r.seq > lastReply && (r.read_by ?? null) === null && (r.deleted_at ?? null) === null).length,
 					turnFacts(e, authority, b, ctx.tz));
 				// the note closes the context, before a reply cut at the wall that this step continues (rule 63)
-				const history = messages(projection(rows, conv));
+				const history = messages(projection(rows, conv), rows);
 				if (note !== undefined) history.splice(history.at(-1)?.role === 'assistant' ? -1 : history.length, 0, { role: 'user', content: note });
 				const request: AiRequest = {
 					model: conv.model,
-					system: system({ envoy: envoySpec === undefined ? undefined : envoyName(envoySpec.name), brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf() }),
+					system: system({ envoy: envoySpec === undefined ? undefined : envoyName(envoySpec.name), brief, task: envoySpec?.task, skills: m.agent.skills, outline: outward(conv, authority) ? undefined : await outlineOf(),
+						source: tools.some((t) => t.name === 'workspace_search') }),
 					messages: history,
 					tools: tools.map(({ name, description, input }) => ({ name, description, input })),
 					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),

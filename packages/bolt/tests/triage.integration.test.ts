@@ -34,6 +34,10 @@ const ai: AiPort['sys_2'] & { requests: string[][]; raw: string[][] } = { models
 		ai.raw.push(request.messages.filter((m) => m.role === 'user' && !String(typeof m.content === 'string' ? m.content : '').startsWith('[conversation state]')).map((m) => JSON.stringify(m.content)));
 		const asked = new Set([...JSON.stringify(request.messages).matchAll(/\\?"target\\?":\\?"([\w-]+)/g)].map((x) => x[1]));
 		const open = request.messages.filter((m) => m.role === 'user' && !String(typeof m.content === 'string' ? m.content : '').startsWith('[conversation state]')).flatMap((m) => [.../close ([\w-]+)/g.exec(text(m.content)) ?? []].slice(1)).find((id) => !asked.has(id));
+		// "check the chatter" reads it once, as the unread note asks
+		const read = request.messages.some((m) => m.role === 'assistant' && JSON.stringify(m.content).includes('read_messages'));
+		if (!read && request.messages.some((m) => m.role === 'user' && JSON.stringify(m.content).includes('check the chatter')))
+			return { content: '', toolCalls: [{ id: `c${ai.requests.length}`, name: 'read_messages', input: {} }], finish: 'tool', usage };
 		if (open !== undefined) return { content: '', toolCalls: [{ id: `c${ai.requests.length}`, name: 'act', input: { callable: 'jobs.update', input: { target: open, set: { status: 'done' } } } }], finish: 'tool', usage };
 		return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 	} };
@@ -209,6 +213,23 @@ describe('envoy triage (G12 (10))', () => {
 		await debounce(); // the decision the chatter queued was flushed
 		expect(port.inputs).toHaveLength(calls);
 		await neverTwice();
+	});
+
+	it('an ignored photo is what read_messages reads, and a mention quoting it carries its text and file into the turn', async () => {
+		port.script = ['ignore'];
+		await t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'field_wa', bins: [new Uint8Array([9, 9])], message: { id: 'photo1', ...GROUP, sentAt: t.clock.now(),
+			from: { handle: DM, name: 'Dion' }, text: 'Put this in to kismi', attachments: [{ fileName: 'p.jpg', mimeType: 'image/jpeg', byteLength: 2, bin: 0 }] } });
+		await t.settled();
+		await debounce();
+		expect(await row('Put this in to kismi')).toMatchObject({ state: null, ambient: true });
+
+		await say(DM, '@bot check the chatter', { ...GROUP, invocation: 'mention', replyTo: 'photo1' });
+		const turn = ai.raw[0]!.join('\n');
+		expect(turn).toContain('[replying to Dion');
+		expect(turn).toContain('Put this in to kismi');
+		expect(turn).toMatch(/attachment seq \d+ file 0: p\.jpg/);
+		const [read] = await q(`SELECT content FROM sys_message WHERE role = 'tool' AND content->>'name' = 'read_messages'`);
+		expect(JSON.stringify(read!['content'])).toContain('Put this in to kismi');
 	});
 
 	it('triaged group chatter is charged like an addressed message: over envoys.receive it stays unaddressed, unanswered and never decided', async () => {

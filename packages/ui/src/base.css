@@ -1086,7 +1086,13 @@ textarea,
 	[contenteditable='true'] {
 		font-size: max(1rem, 1em);
 	}
+	/* a field beside its button stands as tall as the button */
+	input:not([type='checkbox']):not([type='radio']):not([type='range']),
+	select {
+		min-block-size: var(--hit-target);
+	}
 	button,
+	a[data-button],
 	[role='button'],
 	[role='menuitem'],
 	[role='option'],

@@ -15,7 +15,7 @@ export type PlatformAutomation = 'collections.resume' | 'collections.discard' | 
  * a public `visitor` of an app, an `apiKey`, or the `system` running an automation, integration or platform run.
  */
 export type Actor =
-	| { kind: 'member'; id: Id<'sys_user'>; email: string | null; external: boolean; teams: readonly Id<'sys_team'>[];
+	| { kind: 'member'; id: Id<'sys_user'>; email: string | null; phone: string | null; external: boolean; teams: readonly Id<'sys_team'>[];
 		teamPath: readonly TeamName[]; admin: boolean; party: RecordRef | null }
 	| { kind: 'envoy'; envoy: EnvoyName; channel: ChannelName; sender: Handle; member: Id<'sys_user'> | null } // P32: the linked sender, either audience
 	| { kind: 'visitor'; app: AppName; visitor: string }

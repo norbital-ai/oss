@@ -11,6 +11,7 @@ import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { lowerRead, type Engine } from '../engine/index.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import type { Verb } from '../engine/write/act.ts';
+import { actorRef } from '../engine/write/commit.ts';
 import { subscribe } from './push.ts';
 import { HEADERS, PATHS, redact, statusOf, uuidv7Within, type ActBody, type ActReply, type AgentRow, type Frame, type LiveBody, type LiveReply,
 	type PushBody, type QBody, type WireRead } from './wire.ts';
@@ -481,10 +482,12 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 		return { kind: 'inbox', collection: 'sys_notification', member: authority.actor.id };
 	}
 	async function register(authority: Authority, body: LiveBody): Promise<Response> {
-		// a connection answers only the session that opened it
+		// a connection answers only the one who opened it; when their authority changed since (a policy, a team, the record
+		// they were just bound to), it re-answers under the new one (rule 66)
 		const owner = h.engine.live.authorityOf(body.conn);
-		if (owner !== undefined && JSON.stringify(owner.actor) !== JSON.stringify(authority.actor))
+		if (owner !== undefined && actorRef(owner.actor) !== actorRef(authority.actor))
 			throw new BoltError('forbidden', 'admission', 'the live connection belongs to another session');
+		if (owner !== undefined && owner.key !== authority.key) await h.engine.live.authorize(body.conn, authority);
 		for (const view of body.drop ?? []) h.engine.live.drop(body.conn, view);
 		const errors: { view: string; code: string; message: string }[] = [];
 		await Promise.all((body.add ?? []).map(async (x) => {

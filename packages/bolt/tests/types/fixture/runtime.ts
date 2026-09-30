@@ -11,6 +11,7 @@ export const ws = workspace({
 		HOOK_SECRET: { label: 'Webhook signing secret', secret: true },
 	},
 	ai: { models: ['default', 'fast', 'strong'], default: 'default', embeddings: ['text_small'] },
+	convert: { to: ['pdf', 'docx'] },
 	csp: { connect: ['https://huggingface.co'] },
 });
 
@@ -53,7 +54,7 @@ export const render = automation({ description: 'Render an order confirmation', 
 	input: { order: { kind: 'id', of: 'orders' } }, output: { kind: 'file', accept: ['application/pdf'], max: '5MiB' } });
 render.run(async ({ order }, ctx) => {
 	const o = await ctx.get('orders', order, { select: { number: true } });
-	return ctx.files.pdf({ page: 'A4', blocks: [{ text: `Order ${o?.number ?? ''}`, bold: true }] }, { name: 'order.pdf', for: 'render' });
+	return ctx.convert.document({ markdown: `# Order ${o?.number ?? ''}` }, { to: 'pdf', page: 'A4', name: 'order.pdf', for: 'render' });
 });
 
 export const inbound_hook = automation({ description: 'Payment provider callback', runAs: ['sales_rep'],

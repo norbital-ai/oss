@@ -120,8 +120,8 @@
 	const current = $derived(route(config.manifest, url));
 	// the record-sheet stack (rule 10): every `?record=`, the last on top
 	const records = $derived(recordsOf(url));
-	// a `kiosk: true` page renders alone, as staging's kiosk: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
-	const kiosk = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.kiosk === true);
+	// a `site: true` page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
+	const site = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.site === true);
 	const publicApp = $derived(current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined);
 	watch(() => failure !== null || boot !== null || current.kind === 'signIn' || current.kind === 'invite' || current.kind === 'register', (ready) => {
 		if (ready) void tick().then(() => document.getElementById('bolt-loading')?.remove());
@@ -260,12 +260,12 @@
 				<Center><p>{t('Loading…')}</p></Center>
 			{:then Page}
 				<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
-				{#if !kiosk && (identity.current !== null || (app !== null && boot?.visitor === null))}
+				{#if !site && (identity.current !== null || (app !== null && boot?.visitor === null))}
 					<MediaHeader src={identity.current?.banner === undefined || identity.current.banner === null ? app?.thumbnail ?? null : media(identity.current.banner)} icon={identity.current?.icon ?? app?.icon ?? null}
 						title={identity.current?.title ?? app?.label ?? null} description={identity.current?.description ?? app?.description ?? null}
 						{...identity.current?.actions === undefined ? {} : { actions: identity.current.actions }} />
 				{/if}
-				{#if !kiosk && app?.pages !== undefined && boot?.visitor === null}
+				{#if !site && app?.pages !== undefined && boot?.visitor === null}
 					<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
 						<Inline gap="none" class="w-fit max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]">
 							{#each app.pages as p (p.key)}
@@ -304,7 +304,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <!-- hook:view-ui — the sidebar's width, the left bound of a maximised or widened right sheet (0 where no sidebar shows) -->
-<div class="contents" onclick={intercept} style="--shell-sidebar-width: {boot !== null && boot.visitor === null && !kiosk && !narrow.current && failure === null ? (expanded.current ? '16rem' : '3rem') : '0px'}; --shell-header-height: {narrow.current && headerHeight > 0 ? `${headerHeight}px` : 'env(safe-area-inset-top)'}">
+<div class="contents" onclick={intercept} style="--shell-sidebar-width: {boot !== null && boot.visitor === null && !site && !narrow.current && failure === null ? (expanded.current ? '16rem' : '3rem') : '0px'}; --shell-header-height: {narrow.current && headerHeight > 0 ? `${headerHeight}px` : 'env(safe-area-inset-top)'}">
 	{#if failure !== null}
 		<Center><p role="alert">{failure}</p></Center>
 	{:else if current.kind === 'signIn' || current.kind === 'invite' || current.kind === 'register'}
@@ -330,7 +330,7 @@
 				<Turnstile siteKey={boot.visitor.siteKey} queue={challenge} />
 			{/if}
 		</Cover>
-	{:else if kiosk}
+	{:else if site}
 		<Toaster />
 		<div class="h-dvh min-h-0 overflow-clip">{@render content()}</div>
 	{:else}

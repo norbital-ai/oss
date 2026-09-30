@@ -44,8 +44,8 @@ const press = async (b: HTMLElement) => {
 };
 const reply = (content: string): AiResponse => ({ content, toolCalls: [], finish: 'stop', usage: { input: 1_500, output: 20 } });
 
-async function setup(infer: () => Promise<AiResponse>, m: EngineManifest = manifest) {
-	const ai: AiPort = { sys_1: respondSystem1, sys_2: { models: ['default'], infer } };
+async function setup(infer: () => Promise<AiResponse>, m: EngineManifest = manifest, sys1: AiPort['sys_1'] = respondSystem1) {
+	const ai: AiPort = { sys_1: sys1, sys_2: { models: ['default'], infer } };
 	const t = await testWorkspace({ manifest: m, ai });
 	for (const id of ['ann', 'bob']) await t.db.write({ text: `INSERT INTO sys_user (id, email, name) VALUES ($1, $2, $1)`, params: [id, `${id}@x.test`] });
 	const authorities = new Authorities(m, 'test');
@@ -277,6 +277,38 @@ describe('the agent panel restored', () => {
 			await until(() => target.querySelector('[data-role="decision"][data-awaiting] [data-reply-pending]') !== null);
 			release(reply('On my way.'));
 			await until(() => target.querySelector('[data-role="assistant"]') !== null && target.querySelector('[data-reply-pending]') === null);
+		} finally { void unmount(v); target.remove(); }
+	});
+
+	it('messages the decider left fold into one "not for the assistant" block that carries their decision; an empty message is not drawn', async () => {
+		const no: AiPort['sys_1'] = { async ask(r) {
+			return { costUsd: 0, provider: 'test', answers: Object.fromEntries(Object.entries(r.questions).map(([id, q]) => [id, q.type === 'choice'
+				? { type: 'choice', choice: 'no', confidence: 1, probabilities: {} } : { type: 'score', score: 0, level: 0, confidence: 1, probabilities: {}, legend: {} }])) } as never;
+		} };
+		const group = { ...envoyManifest, envoys: { field_ops: { ...(envoyManifest.envoys['field_ops'] as object), groupMessages: 'mention_or_reply' } } } as unknown as EngineManifest;
+		const s = await setup(async () => reply('Done.'), group, no);
+		const handle = '6590000001@s.whatsapp.net', thread = '1203@g.us';
+		for (const [id, text] of [['w1', 'lunch?'], ['w2', ''], ['w3', 'the usual place']] as const)
+			await s.t.fakes.transports.whatsapp.emit({ kind: 'inbound', channel: 'whatsapp', message: { id, thread, group: true, sentAt: s.t.clock.now(),
+				from: { handle, name: 'Kim' }, text, attachments: [] } });
+		await s.t.settled();
+		s.t.clock.advance('2s');
+		await s.t.runDue();
+		await s.t.settled();
+		await s.t.db.write({ text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`, params: [] });
+		try { sessionStorage.clear(); } catch { /* none */ }
+		const target = document.createElement('div');
+		document.body.append(target);
+		const v = mount(Agent as Component<Record<string, unknown>>, { target, props: { api: s.api, bolt: liveBolt(s.fetch), t: (k: string) => k, request: { conversation: conversationId('whatsapp', thread) }, onClose: () => {}, admin: true } });
+		try {
+			await until(() => target.querySelector('[data-role="ignored"] [data-decision-toggle]') !== null);
+			const block = target.querySelector('[data-role="ignored"]')!;
+			expect([...block.querySelectorAll('[data-text]')].map((x) => x.textContent)).toEqual(['lunch?', 'the usual place']);
+			expect(block.getAttribute('data-action')).toBe('ignore');
+			expect(target.querySelectorAll('[data-role="ignored"]')).toHaveLength(1);
+			expect(target.querySelector('[data-role="decision"]')).toBeNull(); // no divider of its own
+			await press(block.querySelector<HTMLElement>('[data-decision-toggle]')!);
+			await until(() => block.querySelector('[data-decision-matrix]') !== null);
 		} finally { void unmount(v); target.remove(); }
 	});
 

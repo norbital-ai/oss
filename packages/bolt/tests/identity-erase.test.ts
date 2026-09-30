@@ -18,7 +18,7 @@ const m = {
 	integrations: {}, pipelines: {}, policies: {}, teams: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {},
 	apps: {}, customFields: {}, agent: { skills: {} },
 } as unknown as EngineManifest;
-const member = { kind: 'member', id: 'u', email: null, external: false, teams: [], teamPath: [], admin: true, party: null } as const;
+const member = { kind: 'member', id: 'u', email: null, phone: null, external: false, teams: [], teamPath: [], admin: true, party: null } as const;
 const admin = compileAuthority(m, { actor: member, admin: true, policies: [] }, 'a');
 const rep = compileAuthority(m, { actor: { ...member, admin: false }, admin: false, policies: [] }, 'r');
 

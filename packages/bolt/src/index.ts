@@ -43,10 +43,10 @@ export type { Operand, OrderBy, Shape, StaticWhere, Where } from './decl/where.t
 export type { AutomationCtx, Trigger } from './decl/runtime/automation.ts';
 export type { DeliveryEvent, OutboundFor } from './decl/runtime/channel.ts';
 export type {
-	DecisionAnswers, DecisionQuestion, DecisionState, FileMeta, GeoHit, ImageFacts, Notice, PdfDoc, RunHandle, RunRow,
-	Unavailable
+	ConvertOptions, ConvertSource, ConvertTarget, ConvertTargets, DecisionAnswers, DecisionQuestion, DecisionState, FileMeta, GeoHit,
+	ImageFacts, Notice, RunHandle, RunRow, Unavailable
 } from './decl/runtime/facilities.ts';
 export type { ConflictRule, IntegrationCtx, IntegrationSource, Remote, RemoteKey } from './decl/runtime/integration.ts';
-export type { AiModelClass, ChildName, ConnectionName, EmbeddingModelName, EnvName, PageName, Transport } from './decl/runtime/names.ts';
+export type { AiModelClass, ChildName, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, EnvName, PageName, Transport } from './decl/runtime/names.ts';
 export type { BankReader, SeedSource } from './compiler/artifact/seed.ts'; // hook:cli — X-15's seed reader types (§3.3.10)
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props

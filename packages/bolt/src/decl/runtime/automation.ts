@@ -7,7 +7,7 @@ import type { Checked, Exact, InputFields, InputKind, InputOf, Simplify, ValidIn
 import type { CollectionName, PolicyName, ReadField, ReadableName, Row, SystemColumns } from '../names.ts';
 import type { Where } from '../where.ts';
 import type { Duration, IanaZone, Id, NonEmpty } from '../values.ts';
-import type { Ai, Files, Geo, Http, Notify, RunCause, Schedule, Send, Web } from './facilities.ts';
+import type { Ai, Convert, Files, Geo, Http, Notify, RunCause, Schedule, Send, Web } from './facilities.ts';
 import type { EnvName } from './names.ts';
 
 type Macro = '@yearly' | '@annually' | '@monthly' | '@weekly' | '@daily' | '@hourly';
@@ -90,6 +90,8 @@ export type AutomationCtx<S = AutomationSpec> = Omit<QueryCtx, 'actor' | 'refuse
 	act: Act; schedule: Schedule; notify: Notify; send: Send; http: Http;
 	web: Web;
 	files: Files;
+	/** Markdown or HTML to a declared document format (optional host capability; absent → `unavailable`). */
+	convert: Convert;
 	ai: Ai<S extends { runAs: 'trigger' } ? false : true>;
 	geo: Geo;
 };

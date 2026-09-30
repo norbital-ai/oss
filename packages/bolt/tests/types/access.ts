@@ -147,13 +147,13 @@ policy({ description: 'x', grants: {}, limits: { 'envoys.receive': { rate: '1/s'
 policy({ description: 'x', grants: {}, limits: { read: { rate: '1/s', per: 'surface' } } });
 
 // ── Actor (§3.9) ──
-const member: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, external: false, teams: [], teamPath: ['Sales'],
+const member: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], teamPath: ['Sales'],
 	admin: false, party: null };
 const envoy: Actor = { kind: 'envoy', envoy: 'desk', channel: 'whatsapp', sender: '+6590000000', member: null };
 const run: Actor = { kind: 'system', run: '' as Id<'sys_run'>, by: { platform: 'collections.resume' } };
 void member; void envoy; void run;
 // @ts-expect-error A41 a teamPath naming an unknown team
-const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, external: false, teams: [], teamPath: ['Sails'], admin: false, party: null };
+const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], teamPath: ['Sails'], admin: false, party: null };
 // @ts-expect-error A42 an envoy actor of an unknown envoy
 const a2: Actor = { kind: 'envoy', envoy: 'dsk', channel: 'whatsapp', sender: 'x', member: null };
 // @ts-expect-error A43 a visitor of an unknown app

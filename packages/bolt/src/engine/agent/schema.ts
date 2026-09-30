@@ -49,7 +49,7 @@ export type MessageRow = {
 	/** The channels area's columns, read when present: an unaddressed group message is ambient (rule 60). */
 	addressed?: boolean | null; sender?: string | null; sender_name?: string | null; files?: Json;
 	delivered_turn?: string | null; ambient?: boolean; // hook:triage
-	provider_id?: string | null; sent_at?: string | null; created_at?: string; invocation?: string | null; email?: Json; deleted_at?: string | null; read_by?: string | null;
+	provider_id?: string | null; /** the provider id of the message this one quotes */ reply_to?: string | null; sent_at?: string | null; created_at?: string; invocation?: string | null; email?: Json; deleted_at?: string | null; read_by?: string | null;
 	about?: Json; // hook:agent-ui — `sys_message.file`
 };
 export const ambient = (r: MessageRow): boolean => r.meta?.tag === 'ambient' || r.addressed === false || r.ambient === true; // hook:triage

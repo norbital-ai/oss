@@ -107,6 +107,8 @@ export function whatsapp(authDir: string, channel: string, open: WaOpen = bailey
 				const title = found['group'] === true ? await subjectOf(String(found['thread'])) : null;
 				const message = title === null ? found : { ...found, title };
 				const media = history ? null : await opened.download(raw).catch(() => null);
+				// a key distribution or a context stub rides beside a real message with nothing to say: no row for it
+				if (found['text'] === '' && media === null && found['deleted'] !== true) continue;
 				const bins = media !== null && media.bytes.byteLength <= MEDIA_MAX ? [media.bytes] : [];
 				await emit({ kind: 'inbound', channel, message: (bins.length === 0 ? message
 					: { ...message, attachments: [{ fileName: media!.name, mimeType: media!.mime, byteLength: media!.bytes.byteLength, bin: 0 }] }) as Json,

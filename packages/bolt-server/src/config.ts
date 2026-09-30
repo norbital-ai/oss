@@ -10,11 +10,13 @@ export class ConfigError extends Error {
 
 /** One optional facility's selection: a provider name from the host's registered factories (L-BOLT-908). */
 export type Provider = { provider: string; endpoint?: string; credential?: string };
-export const FACILITIES = ['AI_SYS_1', 'AI_SYS_2', 'AI_EMBED', 'GEO', 'RENDER', 'WEB', 'WHATSAPP', 'TELEGRAM', 'EMAIL_IN'] as const;
+export const FACILITIES = ['AI_SYS_1', 'AI_SYS_2', 'AI_EMBED', 'GEO', 'CONVERT', 'WEB', 'WHATSAPP', 'TELEGRAM', 'EMAIL_IN'] as const;
 export type Facility = (typeof FACILITIES)[number];
 /** Each facility's registered factories; any other name refuses to start. */
 export const REGISTERED: { readonly [F in Facility]: readonly string[] } = {
-	AI_SYS_1: ['openai', 'decisions'], AI_SYS_2: ['openai'], AI_EMBED: ['openai'], GEO: ['nominatim'], RENDER: [], WEB: ['public'], WHATSAPP: ['baileys'], TELEGRAM: ['bot'], EMAIL_IN: ['resend'],
+	AI_SYS_1: ['openai', 'decisions'], AI_SYS_2: ['openai'], AI_EMBED: ['openai'], GEO: ['nominatim'],
+	// `ctx.convert.document`: Norbital Convert (oss/services/convert), ENDPOINT its URL and CREDENTIAL an API key it accepts
+	CONVERT: ['norbital'], WEB: ['public'], WHATSAPP: ['baileys'], TELEGRAM: ['bot'], EMAIL_IN: ['resend'],
 };
 export type AiModel = string | { model: string; inputs?: number; tokens?: number };
 export type Modality = 'text' | 'image' | 'file';
@@ -151,6 +153,8 @@ export function decodeConfig(env: { readonly [name: string]: string | undefined 
 		providers[f] = { provider, ...(endpoint === undefined ? {} : { endpoint }), ...(credential === undefined ? {} : { credential }) };
 	}
 
+	if (providers.CONVERT !== undefined && (providers.CONVERT.endpoint === undefined || providers.CONVERT.credential === undefined))
+		throw new ConfigError("BOLT_CONVERT_PROVIDER needs BOLT_CONVERT_ENDPOINT, the service's URL, and BOLT_CONVERT_CREDENTIAL, its API key");
 	// both systems or neither (P35); embeddings only beside them
 	if ((providers.AI_SYS_1 === undefined) !== (providers.AI_SYS_2 === undefined))
 		throw new ConfigError('the AI facility needs both BOLT_AI_SYS_1_PROVIDER (sys_1) and BOLT_AI_SYS_2_PROVIDER (sys_2), or neither');

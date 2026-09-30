@@ -19,6 +19,7 @@ import { inProcessDeadlines } from '../engine/runs/scheduler.ts';
 import { boltHandler } from '../protocol/http.ts';
 import { filesHandler } from '../protocol/files.ts';
 import { devTurnstile, shellHost } from '../shell/host.ts';
+import { framePolicy, type ShellManifest } from '../shell/nav.ts';
 import { fileAttachments } from '../shell/data.ts';
 import { AuthorErrors, buildWorkspace, type Log } from './build.ts';
 
@@ -70,12 +71,13 @@ async function send(res: ServerResponse, r: Response): Promise<void> {
 	Readable.fromWeb(r.body as never).on('error', () => res.destroy()).pipe(res);
 }
 /** The client build, then the artifact's own `assets/**` at `/assets/*` (the workspace assets), then the document. */
-function staticFile(dir: string, artifact: string, path: string): Response {
+function staticFile(dir: string, artifact: string, path: string, m: ShellManifest): Response {
 	const at = (base: string, rel: string) => { const f = normalize(join(base, decodeURIComponent(rel))); return f.startsWith(base + sep) && existsSync(f) && statSync(f).isFile() ? f : undefined; };
 	const hit = at(dir, path) ?? (path.startsWith('/assets/') ? at(artifact, path) : undefined) ?? join(dir, 'index.html');
 	const immutable = hit !== join(dir, 'index.html') && path.startsWith('/assets/');
+	const doc = hit === join(dir, 'index.html');
 	return new Response(readFileSync(hit), { headers: { 'content-type': TYPES[extname(hit)] ?? 'application/octet-stream',
-		'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache' } });
+		'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache', ...(doc ? { 'content-security-policy': framePolicy(m, path) } : {}) } });
 }
 
 /** Activates `a` on `db` and serves it on `port`; `swap` re-activates the same database with another build. */
@@ -125,7 +127,7 @@ export async function devHost(a: Artifact, db: TenantDb, o: { port: number; pack
 			const path = new URL(request.url).pathname;
 			const answer = await current!.handle(request)
 				?? (path.startsWith('/__bolt/') ? new Response(JSON.stringify({ error: { code: 'notFound', message: 'No such route.' } }), { status: 404, headers: { 'content-type': 'application/json' } })
-					: staticFile(current!.client, current!.dir, path));
+					: staticFile(current!.client, current!.dir, path, current!.e.manifest));
 			await send(res, answer);
 		})().catch((e: unknown) => {
 			o.log(`request failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);

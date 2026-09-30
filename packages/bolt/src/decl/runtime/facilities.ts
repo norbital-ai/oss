@@ -5,7 +5,7 @@ import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '..
 import type { ChannelName, CollectionName, Columns, HostToolName, Is, NamesPart, PolicyName, TeamName } from '../names.ts';
 import type { FileRef, Id, Instant, Json, Msg, Offset, Point, RecordRef, Size, Vector } from '../values.ts';
 import type { OutboundFor } from './channel.ts';
-import type { AiModelClass, AutomationSpecOf, ConnectionName, EmbeddingModelName, IsUnion, TransportOf } from './names.ts';
+import type { AiModelClass, AutomationSpecOf, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, IsUnion, TransportOf } from './names.ts';
 
 // ── runs (rules 48–56) ──
 /** A started run: its id and the automation it runs. */
@@ -74,10 +74,6 @@ export type ImageFacts = {
 	readonly format: string; readonly width: number; readonly height: number; readonly sha256: string; readonly pdq: string;
 	readonly exif: { readonly takenAt?: Instant; readonly gps?: Point; readonly software?: string; readonly make?: string; readonly model?: string };
 };
-type PdfBlock = { text: string; size?: number; bold?: true; italic?: true; align?: 'left' | 'center' | 'right' }
-	| { table: readonly (readonly string[])[]; header?: true } | { image: FileRef; width?: number } | { spacer: number } | { pageBreak: true };
-/** A document as data (`std/pdf`'s block literal); the host renders it and splices images, so no bytes enter the guest. */
-export type PdfDoc = { page?: 'A4' | 'A5' | 'Letter'; font?: FileRef; blocks: readonly PdfBlock[] };
 type FileFieldOf<C> = { [P in keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'file' } ? P : never }[keyof Columns<C> & string];
 /** Where a stored file belongs: a collection's file field, or an automation's run (collected with it). */
 export type FileOwner = { [C in CollectionName]: `${C}.${FileFieldOf<C>}` }[CollectionName] | StartableName;
@@ -92,10 +88,36 @@ export type Files = {
 	sheet: Call<[ref: FileRef], readonly Sheet[]>;
 	image: Call<[ref: FileRef], ImageFacts> & Call<[ref: FileRef, derive: { jpeg: { maxEdge: number } }], FileRef>;
 	put: Call<[bytes: Uint8Array, options: { name: string; mime: string; for: FileOwner }], FileRef>;
-	pdf: Call<[doc: PdfDoc, options: { name: string; for: FileOwner }], FileRef>;
-	/** An optional host capability: a component rendered to a file. */
-	render: Call<[component: string, props: Json, options: { name: string; for: FileOwner }], FileRef>;
 };
+
+// ── convert: markdown or HTML to a document the workspace declares (`workspace({ convert: { to } })`) ──
+/**
+ * What each conversion target takes beyond `to`, `name` and `for`: a `reference` document styles a Word, PowerPoint or
+ * OpenDocument output (its fonts, headers, footers and page setup, as pandoc's reference-doc); a PDF sets its paper.
+ */
+export type ConvertTargets = {
+	pdf: { page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean };
+	docx: { reference?: FileRef };
+	pptx: { reference?: FileRef };
+	odt: { reference?: FileRef };
+	epub: {};
+	html: {};
+};
+/** A document format `ctx.convert.document` can produce. */
+export type ConvertTarget = keyof ConvertTargets;
+/**
+ * The source of a conversion: Markdown (pandoc's dialect, with pipe tables and front matter) or an HTML document. HTML is
+ * read for its structure (headings, tables, images, emphasis); its CSS does not carry into the output, and a PDF is typeset
+ * by Typst.
+ */
+export type ConvertSource = { readonly markdown: string } | { readonly html: string };
+/** One declared target's options, discriminated by `to`: `reference` only where the format takes one, `page` only for PDF. */
+export type ConvertOptions = { [T in DeclaredConvertTarget]: { to: T; name: string; for: FileOwner } & ConvertTargets[T] }[DeclaredConvertTarget];
+/**
+ * `ctx.convert` (optional host capability): only the targets `+workspace.ts` declares under `convert.to` type-check, and
+ * the host confirms at start that it serves them. The output is stored like `files.put`'s, owned by `for`.
+ */
+export type Convert = { document: Call<[source: ConvertSource, options: ConvertOptions], FileRef> };
 
 // ── ai, geo ──
 /** `steps`: model calls it may take (continuing a cut answer, calling tools), 8 by default, at most 64; each is bounded on its own. */

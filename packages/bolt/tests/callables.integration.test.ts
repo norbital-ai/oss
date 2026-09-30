@@ -198,7 +198,7 @@ describe('refusal messages by actor (rule 32)', () => {
 		const no: Outcome = { kind: 'refused', code: 'refused', message: 'Shady is blocked', field: 'customer' };
 		expect(forActor(no, { kind: 'apiKey', key: 'k' })).toEqual({ kind: 'refused', code: 'refused', message: 'refused' });
 		expect(forActor(no, { kind: 'envoy', envoy: 'e', channel: 'c', sender: 's', member: null })).toEqual({ kind: 'refused', code: 'refused', message: 'refused' });
-		expect(forActor(no, { kind: 'member', id: 'u', email: null, external: false, teams: [], teamPath: [], admin: false, party: null })).toEqual(no);
+		expect(forActor(no, { kind: 'member', id: 'u', email: null, phone: null, external: false, teams: [], teamPath: [], admin: false, party: null })).toEqual(no);
 	});
 });
 

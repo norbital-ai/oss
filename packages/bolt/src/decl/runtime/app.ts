@@ -5,6 +5,7 @@ import type { Checked, Exact } from '../fields.ts';
 import type { AppName, CollectionName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
 import type { AiModelClass, ChildName, GroupName, PageName } from './names.ts';
+import type { ConvertTarget } from './facilities.ts';
 
 type EnvDecl = { label: string; description?: string; secret?: boolean; default?: string };
 // secret unless `secret: false`; only a non-secret carries a default
@@ -23,6 +24,8 @@ type WorkspaceBase = {
 	env?: { readonly [name: string]: EnvDecl };
 	/** The model classes agents may use, the default one, and the embedding models. */
 	ai?: { models: readonly AiModelClass[]; default: AiModelClass; embeddings?: readonly string[] };
+	/** The document formats automations convert Markdown or HTML to (`ctx.convert.document`); the host must serve each. */
+	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may connect to beyond the workspace. */
 	csp?: { connect?: readonly `https://${string}`[] };
 	/** `triage: false` turns off System 1 triage of the in-app agent. */
@@ -55,6 +58,8 @@ type WorkspaceFor<S> = {
 	env?: { [N in keyof Part<S, 'env'>]: N extends Uppercase<N & string> ? EnvFor<Part<S, 'env'>[N]> : 'error: env names are UPPER_SNAKE' };
 	ai?: { models: readonly AiModelClass[]; default: Part<Part<S, 'ai'>, 'models'> extends readonly (infer M)[] ? M : AiModelClass;
 		embeddings?: readonly string[] };
+	/** The document formats `ctx.convert.document` produces; each is a type-checked target with its own options. */
+	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may fetch (model weights); scripts stay same-origin. */
 	csp?: { connect?: readonly `https://${string}`[] };
 	/** Rule 60a (hook:triage): the in-app agent is triaged where the host binds the port; `false` opts out. */
@@ -75,7 +80,12 @@ export function workspace<const S extends WorkspaceBase>(spec: S & Checked<Works
 }
 
 type Audience = 'members' | 'external' | 'all' | { public: NonEmpty<string>; challenge?: 'turnstile' };
-type Page = { title: Msg; icon?: IconName; section?: Msg; kiosk?: true };
+/**
+ * `site`: the page renders alone — no sidebar, banner, tabs or agent — and another website may embed it in a frame. A
+ * device kiosk in a members app, or a customer-facing page in an external or public app; the app's audience decides who
+ * opens it. Sites are listed under the account menu's Sites, never as sidebar rows or tabs.
+ */
+type Page = { title: Msg; icon?: IconName; section?: Msg; site?: true };
 type AppBase = {
 	title: Msg; description: Msg; icon: IconName;
 	/** The app card image, an asset path. */

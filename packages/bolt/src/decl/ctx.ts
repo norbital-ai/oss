@@ -294,6 +294,15 @@ export interface PageBolt {
 	fileUrl(ref: FileRef): string;
 	/** A message of `+messages.ts` in the page's locale, `{name}` placeholders filled from `vars`. */
 	t(key: MessageKey, vars?: { readonly [name: string]: string | number }): string;
+	/**
+	 * On-page sign-in (§5.11.2): `sendCode` texts or emails a six-digit code, `verify` proves it, signs the viewer in — a
+	 * newcomer joins where the workspace declares `signup` — and reloads the page as them. A refusal is `message`. ui's
+	 * `<PhoneVerify session={bolt.session} />` is the whole control.
+	 */
+	session: {
+		sendCode(address: string): Promise<{ ok: true } | { ok: false; message: string }>;
+		verify(address: string, code: string): Promise<{ ok: true } | { ok: false; message: string }>;
+	};
 	/** Who the page runs as; `null` before a visitor page has one. */
 	actor: Actor | null;
 }

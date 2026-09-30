@@ -2,5 +2,5 @@
 export { cloudflareTurnstile, devTurnstile, shellHost, type ShellHost, type ShellHostConfig, type Turnstile } from './host.ts';
 export type { SecretsPort } from './data.ts';
 export type { StudioChange, StudioComment, StudioDecision, StudioFrame, StudioLogLine, StudioMergeRequest, StudioOp, StudioPort, StudioRelease, StudioState } from './studio.ts';
-export { COOKIES, href, VISITOR_APP, type ShellBoot, type ShellManifest } from './nav.ts';
+export { COOKIES, cookieSite, crossSite, href, VISITOR_APP, type ShellBoot, type ShellManifest } from './nav.ts';
 export { currentBolt, shellBolt, type ShellBolt } from './runtime.ts';

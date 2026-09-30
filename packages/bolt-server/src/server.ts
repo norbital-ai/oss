@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, resolve, sep } from 'node:path';
 import { loadPackWithAssets, readArtifact, workspaceFiles, type Artifact } from '@norbital-ai/bolt/artifact';
 import { smsTransport } from './sms.ts';
-import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, engine, fileAttachments, filesHandler, founderBootstrap, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, signupOf, type Authority, type Bindings, type ChannelConnection, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
+import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, documentConverter, engine, fileAttachments, filesHandler, founderBootstrap, framePolicy, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, signupOf, type Authority, type Bindings, type ChannelConnection, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
 import type { Config } from './config.ts';
 import { devSink, mailSender, mailTransport, type Sender } from './mail.ts';
 import { aiModalityRefusals, facilities, localFiles, nominatim, openAi, publicWeb, s3Files, timekeeper } from './ports.ts';
@@ -75,6 +75,10 @@ export function requirements(c: Config, m: EngineManifest, o: StartOptions): { e
 		const unmapped = (ai?.embeddings ?? []).filter((n) => c.ai.embed[n] === undefined);
 		if (unmapped.length > 0) errors.push(`BOLT_AI_EMBED_MODELS maps no model to ${unmapped.join(', ')}`);
 	}
+	// `workspace.convert.to` (ctx.convert.document): the one converter serves every target, so only its absence warns
+	const declaredTargets = ((m.workspace as { convert?: { to?: readonly string[] } }).convert?.to ?? []);
+	if (declaredTargets.length > 0 && c.providers.CONVERT === undefined)
+		warnings.push(`this workspace converts to ${declaredTargets.join(', ')} but no converter is configured (BOLT_CONVERT_PROVIDER=norbital): those calls answer Unavailable`);
 	const transports = new Set(Object.values(m.channels).map((x) => String(x['transport'])));
 	const optional: [boolean, string][] = [[c.providers.AI_SYS_2 === undefined && (ai?.models !== undefined || ai?.embeddings !== undefined || m.agent.internal !== undefined || m.agent.external !== undefined), 'AI'], [c.providers.GEO === undefined, 'geocoding'],
 		[c.vapid === null, 'web push'], [transports.has('whatsapp') && c.providers.WHATSAPP === undefined, 'WhatsApp'],
@@ -175,6 +179,9 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 			c.ai, [...(m.workspace.ai as { models?: string[] } | undefined)?.models ?? ['default']], f);
 	const geocoder = c.providers.GEO === undefined ? undefined : nominatim(c.providers.GEO.endpoint ?? 'https://nominatim.openstreetmap.org', f);
 	const web = c.providers.WEB === undefined ? undefined : publicWeb();
+	// hook:convert — Norbital Convert, the open-source conversion service; unbound → no port
+	const convert = c.providers.CONVERT?.endpoint === undefined || c.providers.CONVERT.credential === undefined ? undefined
+		: documentConverter({ url: c.providers.CONVERT.endpoint, key: c.providers.CONVERT.credential });
 	const workspace = workspaceFiles(art.dir); // the released source and its type index (`workspace_read`, `workspace_type`)
 	const channelOf = (t: string) => Object.entries(m.channels).find(([, x]) => x['transport'] === t)?.[0];
 	const sender = o.mail ?? (c.mail !== null ? mailSender(c.mail, c.publicUrl, f) : devSink());
@@ -192,7 +199,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 		const engineOf = (epoch: string) => engine({
 			manifest: m, db, guest: art.guest, transforms: art.transforms, agent: { attachments: fileAttachments(db, files), ...(workspace === undefined ? {} : { workspace }), ...(geocoder === undefined ? {} : { geocoder }), ...(web === undefined ? {} : { web }) },
 			console: (level: string, ...args: unknown[]) => log(`guest ${level}: ${args.map((a) => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')}`),
-			deadlines, scope: handle, files, connections: { secrets, publicUrl: c.publicUrl,
+			deadlines, scope: handle, files, ...(convert === undefined ? {} : { convert }), connections: { secrets, publicUrl: c.publicUrl,
 				// L-BOLT-366: a dev host's connections may reach a provider on this machine; any other host gets the engine's guard
 				...(o.fetch !== undefined ? { fetch: o.fetch } : o.dev === true ? { fetch: publicFetch({ allowLoopback: true }) } : {}) }, epoch, transports,
 			...(ai === undefined ? {} : { ai }), // hook:ai
@@ -338,8 +345,9 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 		async function page(path: string): Promise<Response> {
 			const hit = await under(client, path) ?? (path.startsWith('/assets/') ? await under(artifactDir, path) : undefined) ?? join(client, 'index.html');
 			if (!existsSync(hit)) return new Response('This artifact carries no client pages.', { status: 404 });
+			const doc = hit.endsWith('index.html');
 			return new Response(await readFile(hit), { headers: { 'content-type': MIME[extname(hit)] ?? 'application/octet-stream',
-				'cache-control': hit.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable' } });
+				'cache-control': doc ? 'no-cache' : 'public, max-age=31536000, immutable', ...(doc ? { 'content-security-policy': framePolicy(m, path) } : {}) } });
 		}
 
 		async function route(request: Request): Promise<Response> {

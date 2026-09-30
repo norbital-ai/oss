@@ -44,7 +44,7 @@ describe('/runs', () => {
 		await run('export', 'member:u2');
 		await run('import', 'member:u9');
 		const who = (id: string, automations: string[], external: boolean): Authority => ({ key: id, admin: false, policies: [], collections: {}, automations, limits: [], teamTree: [], scopes: {},
-			actor: { kind: 'member', id, email: null, external, teams: [], teamPath: [], admin: false, party: null }, capabilities: { apps: [], tools: [], mcp: [], skills: [] } }) as never;
+			actor: { kind: 'member', id, email: null, phone: null, external, teams: [], teamPath: [], admin: false, party: null }, capabilities: { apps: [], tools: [], mcp: [], skills: [] } }) as never;
 		const holder = await runList(t.db, who('u1', ['export'], true), 10, 'export');
 		expect(holder.map((r) => [r.automation, r.error])).toEqual([['export', { code: 'invalid', message: 'bad row 3' }], ['export', { code: 'invalid', message: 'bad row 3' }]]);
 		expect(await runList(t.db, who('u2', [], false), 10)).toEqual([expect.objectContaining({ automation: 'export', status: 'failed', error: { code: 'invalid' } })]);

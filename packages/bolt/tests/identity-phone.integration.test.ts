@@ -10,7 +10,7 @@ import { Authorities } from '../src/engine/identity/actor.ts';
 import { parseAddress } from '../src/engine/identity/address.ts';
 import { acceptInvitation, invite, setSignup } from '../src/engine/identity/members.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
-import { founderBootstrap, loadKeys, sendCode, verifyCode, type IdentityHost } from '../src/engine/identity/session.ts';
+import { founderBootstrap, loadKeys, sendCode, SIGNUP_TEXTS, verifyCode, type IdentityHost } from '../src/engine/identity/session.ts';
 
 const json = (v: unknown): Json => v instanceof Date ? v.toISOString() : v as Json;
 const rows = (r: { rows: unknown[]; affectedRows?: number }): Rows =>
@@ -108,6 +108,17 @@ describe('sign-up by mobile number (a guest becomes a member)', () => {
 		expect(await one('SELECT party FROM sys_user WHERE id = $1', twin.ok ? twin.value.user : '')).toEqual([{ party: null }]);
 	});
 
+	it('a newcomer is bound to their record as soon as it exists, without signing in again', async () => {
+		await sendCode(h, '+6592223333', ip);
+		const s = await verifyCode(h, '+6592223333', lastCode(), ip);
+		const cid = s.ok ? s.value.user : '';
+		const declared = new Authorities({ ...m, workspace: { ...m.workspace, signup: h.signup } } as EngineManifest, 'r2');
+		expect((await declared.member(db, cid))!.actor).toMatchObject({ party: null });
+		await pg.exec(`INSERT INTO customers VALUES ('c-cy', '+65 9222 3333')`);   // the booking files them
+		expect((await declared.member(db, cid))!.actor).toMatchObject({ party: { collection: 'customers', id: 'c-cy' } });
+		expect(await one('SELECT party FROM sys_user WHERE id = $1', cid)).toEqual([{ party: { collection: 'customers', id: 'c-cy' } }]);
+	});
+
 	it('closed by an administrator, a stranger\'s number is texted nothing and cannot join; a member still signs in', async () => {
 		const boss = await founderBootstrap(h, 'boss@acme.example');
 		const admin = await as(boss.ok ? boss.value.user : '');
@@ -121,6 +132,22 @@ describe('sign-up by mobile number (a guest becomes a member)', () => {
 		expect(texts.length).toBe(before + 1);
 		expect((await verifyCode(h, '+6581234567', lastCode(), ip)).ok).toBe(true);
 		expect((await setSignup(h, admin, true)).ok).toBe(true);
+	});
+
+	it('texts to strangers are capped for the whole workspace, however many addresses they come from; members still get theirs', async () => {
+		const capped = { ...h, windows: new RateWindows() };
+		// sign-ups earlier in this file already counted; each stranger comes from its own address
+		let sent = 0, refused: unknown = null;
+		for (let i = 0; i <= SIGNUP_TEXTS && refused === null; i++) {
+			const r = await sendCode(capped, `+6570000${String(i).padStart(3, '0')}`, `9.9.${i}.1`);
+			if (r.ok) sent += 1;
+			else refused = r;
+		}
+		expect(refused).toMatchObject({ ok: false, code: 'rateLimited' });
+		expect(sent).toBeLessThan(SIGNUP_TEXTS);
+		const before = texts.length;
+		expect((await sendCode(capped, '+6581234567', '8.8.8.8')).ok).toBe(true);   // Ada is a member
+		expect(texts.length).toBe(before + 1);
 	});
 
 	it('a workspace that declares no sign-up texts no stranger, and only invited numbers join', async () => {

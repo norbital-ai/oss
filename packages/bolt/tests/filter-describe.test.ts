@@ -43,7 +43,7 @@ const grant = (masks: { [f: string]: Pred } = {}): CollectionAuthority =>
 const caller = (collections: { [c: string]: CollectionAuthority } = { jobs: grant({ notes: { t: 'const', value: false } }), members: grant({ rate: { t: 'const', value: false } }), job_lines: grant() }): Authority => ({
 	key: 'k', admin: false, policies: ['dispatch'], collections, automations: [], limits: [], teamTree: [], scopes: {},
 	capabilities: { apps: [], tools: [], mcp: [], skills: [] },
-	actor: { kind: 'member', id: 'u1', email: null, external: false, teams: [], teamPath: [], admin: false, party: null },
+	actor: { kind: 'member', id: 'u1', email: null, phone: null, external: false, teams: [], teamPath: [], admin: false, party: null },
 });
 const decode = (where: object, orderBy?: object | string, a = caller()) =>
 	() => decodeDescribed(cat, a, 'jobs', { where: where as never, ...(orderBy === undefined ? {} : { orderBy: orderBy as never }) });

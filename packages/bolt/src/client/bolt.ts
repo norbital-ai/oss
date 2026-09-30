@@ -111,6 +111,14 @@ export function createBolt(config: BoltConfig) {
 		const res = await f(`${base}${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 		return { status: res.status, body: await res.json() as T | WireError };
 	}
+	const said = async (path: string, body: unknown): Promise<{ ok: true } | { ok: false; message: string }> => {
+		try {
+			const r = await post<unknown>(path, body);
+			return r.status < 400 ? { ok: true } : { ok: false, message: (r.body as WireError).error?.message ?? 'The request failed.' };
+		} catch {
+			return { ok: false, message: 'The workspace could not be reached.' };
+		}
+	};
 	const fail = (e: WireError, status: number) => Object.assign(new Error(e.error.message), { code: e.error.code, status });
 	const track = (v: Json | undefined) => {
 		for (const r of Array.isArray(v) ? v : isRow(v) && Array.isArray(v['rows']) ? v['rows'] : [v ?? null])
@@ -356,6 +364,18 @@ export function createBolt(config: BoltConfig) {
 				const body = await res.json() as { value: ApprovalView[] } | WireError;
 				if ('error' in body) throw fail(body, res.status);
 				return body.value;
+			},
+		},
+		/**
+		 * On-page sign-in (§5.11.2): a six-digit code texted or emailed to `address`, then proved. A proven newcomer joins
+		 * where the workspace lets them sign up, and the page reloads as them. Never rejects: a refusal is `message`.
+		 */
+		session: {
+			sendCode: (address: string) => said(PATHS.session.code, { address }),
+			async verify(address: string, code: string) {
+				const r = await said(PATHS.session.verify, { address, code });
+				if (r.ok && typeof location !== 'undefined') location.reload();
+				return r;
 			},
 		},
 		actor: config.actor,

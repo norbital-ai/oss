@@ -140,7 +140,7 @@ A button (or a link, with `href`) in a variant and size.
 			},
 			props
 		)}
-		<a bind:this={ref} {...mergedProps} href={isInteractive ? href : undefined}>
+		<a bind:this={ref} data-button {...mergedProps} href={isInteractive ? href : undefined}>
 			{@render children?.()}
 		</a>
 	{:else}

@@ -84,6 +84,36 @@ test('sheet: the close button dismisses', () => {
 	v.done();
 });
 
+test('sheet: closing over an unsaved draft asks first; a clean sheet closes at once', () => {
+	const asked: string[] = [];
+	let answer = false;
+	const confirm = globalThis.confirm;
+	globalThis.confirm = (message?: string) => (asked.push(String(message)), answer);
+	try {
+		let dirty = true;
+		const v = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
+		window.dispatchEvent(key('Escape'));
+		flushSync();
+		assert.deepEqual(asked, ['Discard your unsaved changes?']);
+		assert.ok(document.querySelector('[role=dialog]'), 'kept: the person said no');
+		answer = true;
+		document.querySelector<HTMLButtonElement>('[data-sheet-close]')!.click();
+		flushSync();
+		assert.equal(document.querySelector('[role=dialog]'), null, 'closed once the person agreed');
+		v.done();
+		dirty = false;
+		asked.length = 0;
+		const clean = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
+		window.dispatchEvent(key('Escape'));
+		flushSync();
+		assert.deepEqual(asked, [], 'nothing unsaved: no question');
+		assert.equal(document.querySelector('[role=dialog]'), null);
+		clean.done();
+	} finally {
+		globalThis.confirm = confirm;
+	}
+});
+
 test('sheet: Esc closes only the topmost, never a handled or composing key', () => {
 	const a = {}, b = {};
 	assert.equal(escapes({ key: 'Escape', defaultPrevented: false, isComposing: false }, b, [a, b]), true);

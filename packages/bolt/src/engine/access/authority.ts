@@ -201,7 +201,7 @@ export function envFor(auth: Authority, b: Bindings, masks?: Env['masks']): Env 
 			if (typeof op === 'object') return auth.scopes[op.scopes] ?? [];
 			if (op === 'teamTree') return auth.teamTree;
 			if (a.kind !== 'member') return op === 'teams' ? [] : a.kind === 'apiKey' && op === 'id' ? a.key : null;
-			return op === 'id' ? a.id : op === 'email' ? a.email : op === 'teams' ? a.teams : a.party?.id ?? null;
+			return op === 'id' ? a.id : op === 'email' ? a.email : op === 'phone' ? a.phone : op === 'teams' ? a.teams : a.party?.id ?? null;
 		},
 	};
 }

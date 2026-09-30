@@ -32,7 +32,7 @@ const m = {
 } as unknown as EngineManifest;
 
 const member = (over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}): EngineActor =>
-	({ kind: 'member', id: 'u1', email: 'a@x.io', external: false, teams: [], teamPath: [], admin: false, party: null, ...over });
+	({ kind: 'member', id: 'u1', email: 'a@x.io', phone: null, external: false, teams: [], teamPath: [], admin: false, party: null, ...over });
 const auth = (policies: string[], over: Partial<Holder> = {}) => compileAuthority(m, { actor: member(), admin: false, policies, ...over }, 'k');
 const b: Bindings = { now: '2026-09-25T00:00:00Z', today: '2026-09-25', tz: 'UTC', params: {} };
 const order = (over = {}) => ({ id: 'o1', status: 'draft', region: 'north', amount: '10', note: null, ...over });

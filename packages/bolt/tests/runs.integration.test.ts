@@ -88,7 +88,7 @@ async function world(manifest: EngineManifest, bodies: { [name: string]: Body } 
 	await e.migrate({ accept: true });
 	const calls: Invocation[] = [];
 	const r = runs({ engine: e, deadlines, scope: 'ws', guest: fakeGuest(bodies, calls), clock: () => clock.ms, env: (n) => n === 'HOOK' ? 'tok' : undefined, ...extra });
-	const admin: Holder = { actor: { kind: 'member', id: randomUUID(), email: null, external: false, teams: [], teamPath: [], admin: true, party: null }, policies: [], admin: true };
+	const admin: Holder = { actor: { kind: 'member', id: randomUUID(), email: null, phone: null, external: false, teams: [], teamPath: [], admin: true, party: null }, policies: [], admin: true };
 	const wakes: number[] = [];
 	await r.boot();
 	statements.length = 0;
@@ -261,7 +261,7 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 
 	it('a run is readable in full by automations holders and admins; the causing actor sees status and error code only', async () => {
 		const w = await world(base, { sent: async () => { throw new Error('secret detail'); } });
-		const member: Holder = { actor: { kind: 'member', id: randomUUID(), email: null, external: false, teams: [], teamPath: [], admin: false, party: null },
+		const member: Holder = { actor: { kind: 'member', id: randomUUID(), email: null, phone: null, external: false, teams: [], teamPath: [], admin: false, party: null },
 			policies: ['ops'], admin: false };
 		const id = ((await w.e.act({ collection: 'quotes', verb: 'create', input: { title: 'x', status: 'draft' }, key: randomUUID(), issuedAt: iso(T0),
 			authority: w.e.authority(member), bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} }, invocationId: randomUUID() })).outcome as unknown as { records: { id: string }[] }).records[0]!.id;

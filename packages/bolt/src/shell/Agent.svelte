@@ -5,8 +5,8 @@
 	rows of the conversation's live transcript, patched in over the page's one live stream; the conversation list, each
 	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends, Shift+Enter is a
 	new line, Cmd/Ctrl+Enter sends now. With triage (rule 60a, P41) each triaged row carries its state: "waiting for
-	more…" while pending (with respond-now), "responding" once admitted and its turn runs, and, in a shared conversation
-	only, "not for Norbius" for an ambient row. Files are attached with the paperclip, by paste
+	more…" while pending (with respond-now), "responding" once admitted and its turn runs; messages not for the agent fold into one
+	quiet "Not for the assistant" block. Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_message.files` when the message is sent.
 	The selector switches between the member's own conversations and the envoy channel threads they may read, segmented by
 	source (newest first); a delegated sub-agent's steps and answer
@@ -217,12 +217,9 @@
 	const empty = $derived(draft.trim() === '' && attached.length === 0);
 	const lastPending = $derived(rows.findLast((r) => r.state === 'pending')?.id);
 	const lastReply = $derived(rows.findLastIndex((r) => r.role === 'assistant'));
-	/** P41: a shared conversation (more than one member posted) is a group view; only there is an ambient row labelled. */
-	const shared = $derived(new Set(rows.filter((r) => r.role === 'user').map((r) => r.author ?? '')).size > 1);
 	/** A triaged row's state (rule 60a), derived from the engine's markers and the turn's status; no label once it settles. */
 	function triageLabel(row: AgentRow, i: number): string | null {
 		if (row.state === 'pending') return t('waiting for more…');
-		if (row.tag === 'ambient') return shared ? t('not for Norbius') : null;
 		return status === 'running' && row.state === 'consumed' && i > lastReply ? t('responding') : null;
 	}
 	async function respondNow(): Promise<void> {
@@ -422,7 +419,7 @@
 	}
 	watch(() => [rows, status], () => { void tick().then(() => { if (pinned) latest(); }); });
 	/** A row shown on its own: a person's message, a confirmation card, a reply's text, a checkpoint or a verdict. */
-	const shown = (r: AgentRow) => (r.role === 'user' && (r.state !== 'queued' || thread)) || (r.state === 'confirm' && r.call !== undefined) || (r.role === 'assistant' && !!r.text)
+	const shown = (r: AgentRow) => (r.role === 'user' && (r.state !== 'queued' || thread) && (!!r.text || (r.files?.length ?? 0) > 0)) || (r.state === 'confirm' && r.call !== undefined) || (r.role === 'assistant' && !!r.text)
 		|| (r.role === 'system' && (r.tag === 'compact' || r.tag === 'verdict') && !!r.text);
 	// the work between two messages folds into one group, Codex-style: each tool call and each piece of reasoning (a
 	// reply's own reasoning included, ahead of its text) is a step; a message, a reply's text or a card ends the group.
@@ -431,7 +428,9 @@
 	// For an administrator, each triaged batch closes with its decision: the newest `decision.made` naming a message decides
 	// it, and the mark follows the batch's last message; `awaiting` is a decided reply not written yet.
 	type Decided = { event: LogRow; d: DecisionAttributes };
-	type Item = { row: AgentRow; index: number } | { steps: AgentRow[] } | { decision: Decided; awaiting: boolean };
+	// Messages not for the agent (triage's `ignore`, or chatter) fold into one quiet block that carries its decision, so the
+	// transcript stays message → work → reply, turn by turn.
+	type Item = { row: AgentRow; index: number } | { steps: AgentRow[] } | { decision: Decided; awaiting: boolean } | { ignored: AgentRow[]; decision?: Decided };
 	const decided = $derived.by(() => {
 		const by = new Map<string, Decided>();
 		for (const event of log) { const d = decisionOf(event.attributes); for (const p of d.state?.pending ?? []) if (p.id !== undefined && !by.has(p.id)) by.set(p.id, { event, d }); }
@@ -446,14 +445,18 @@
 			if (view.history.has(row.id)) return out;
 			if (row.tool?.child !== undefined) { out.push({ row, index }); return out; }
 			if (row.tool !== undefined || (row.role === 'assistant' && !!row.reasoning)) { if (last !== undefined && 'steps' in last) last.steps.push(row); else out.push({ steps: [row] }); }
-			if (row.tool === undefined && shown(row)) out.push({ row, index });
-			const x = decided.get(row.id);
-			if (x !== undefined && closes.get(x.event.id) === row.id) out.push({ decision: x, awaiting: x.d.action === 'respond' && index > replied });
+			const aside = row.role === 'user' && row.tag === 'ambient';
+			if (aside && shown(row)) { if (last !== undefined && 'ignored' in last) last.ignored.push(row); else out.push({ ignored: [row] }); }
+			else if (row.tool === undefined && shown(row)) out.push({ row, index });
+			const x = decided.get(row.id), block = out.at(-1);
+			if (x === undefined || closes.get(x.event.id) !== row.id) return out;
+			if (block !== undefined && 'ignored' in block && x.d.action !== 'respond') block.decision = x;
+			else out.push({ decision: x, awaiting: x.d.action === 'respond' && index > replied });
 			return out;
 		}, []);
 	});
 	// a long conversation windows its items (measured, keyed by their first row) inside the transcript's scroll port
-	const itemKey = (i: number) => { const it = items[i]!; return 'row' in it ? it.row.id : 'steps' in it ? `steps:${it.steps[0]!.id}` : `decision:${it.decision.event.id}`; };
+	const itemKey = (i: number) => { const it = items[i]!; return 'row' in it ? it.row.id : 'steps' in it ? `steps:${it.steps[0]!.id}` : 'ignored' in it ? `ignored:${it.ignored[0]!.id}` : `decision:${it.decision.event.id}`; };
 	const turns = virtualList({ count: () => items.length, key: itemKey, estimate: 56 });
 	/** A step still being written: a running call, or reasoning whose reply is still streaming. */
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
@@ -541,6 +544,44 @@
 </script>
 
 
+{#snippet decisionToggle({ event, d }: Decided, cls: string)}
+	{@const open = expanded.has(event.id)}
+	<button type="button" data-decision-toggle aria-expanded={open} aria-label={t('Decision')} title={when(event.at)}
+		class="{cls} flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {d.error === undefined ? '' : 'text-destructive'}"
+		onclick={() => (open ? expanded.delete(event.id) : expanded.add(event.id))}>
+		<Icon name="lucide:scale" class="size-3.5" /><span>{t(d.action ?? 'decided')}</span>
+	</button>
+{/snippet}
+{#snippet matrix({ event, d }: Decided)}
+		<div class="mt-2 rounded-md border border-border/70 bg-muted/20 p-2 text-xs" data-decision-matrix>
+			<table class="w-full">
+				<thead><tr class="text-left text-muted-foreground"><th class="pb-1 pr-2 font-medium">{t('Message')}</th><th class="pb-1 pr-2 font-medium">{t('Answer')}</th><th class="pb-1 font-medium">{t('Verdict')}</th></tr></thead>
+				<tbody>
+					{#each d.state?.pending ?? [] as p, i (i)}
+						<tr class="border-t border-border/60 align-top" data-decision-row={`m${i}`}>
+							<td class="py-1 pr-2 whitespace-pre-wrap"><span class="text-muted-foreground">{p.from ?? ''}:</span> {p.text ?? ''}</td>
+							<td class="py-1 pr-2 tabular-nums">{answerOf(d.answers?.[`m${i}`])}</td>
+							<td class="py-1">{d.verdicts?.[i] ?? '—'}</td>
+						</tr>
+					{/each}
+					<tr class="border-t border-border/60" data-decision-row="wait">
+						<td class="py-1 pr-2 text-muted-foreground">{t('Wait')}</td><td class="py-1 pr-2 tabular-nums">{answerOf(d.answers?.['wait'])}</td><td class="py-1">{d.action ?? '—'}</td>
+					</tr>
+				</tbody>
+			</table>
+			{#if d.error !== undefined}<p class="mt-1 text-destructive">{t('failed')}: {d.error}</p>{/if}
+			{#if d.state !== undefined}
+				<details class="mt-1 text-muted-foreground" data-decision-context>
+					<summary class="cursor-pointer">{t('Context')} · {when(event.at)}</summary>
+					<p class="mt-1"><span class="font-medium">{t('Directive')}</span>: {d.state.directive ?? ''}</p>
+					<p><span class="font-medium">{t('Assistant')}</span>: {d.state.assistant ?? ''}</p>
+					{#each d.state.earlier ?? [] as p, i (i)}<p class="whitespace-pre-wrap opacity-80"><span>{p.from ?? ''}:</span> {p.text ?? ''}</p>{/each}
+				</details>
+			{/if}
+		</div>
+{/snippet}
+{#snippet attachments(row: AgentRow)}{#each row.files ?? [] as f, i (i)}{@const href = f.id === undefined ? null : bolt.fileUrl({ id: f.id } as FileRef)}<span class="mt-1 block text-xs text-muted-foreground" data-attachment>
+	{#if href !== null && f.mime.startsWith('image/')}<img src={/^image\/hei[cf]$/.test(f.mime) ? `${href}?preview=jpeg` : href} alt={f.name} class="mb-1 max-h-32 rounded" />{/if}{t('Attached')}: {#if href !== null}<a {href} target="_blank" rel="noreferrer" class="underline">{f.name}</a>{:else}{f.name}{/if}</span>{/each}{/snippet}
 {#snippet summaryTab()}
 	<div class="h-full overflow-auto px-3 pb-3">
 		<div class="grid gap-4 rounded-md bg-muted/30 p-3 text-sm">
@@ -721,49 +762,31 @@
 						</ol>
 					</details>
 				</li>
-			{:else if 'decision' in item}
-				{@const { event, d } = item.decision}
-				{@const open = expanded.has(event.id)}
-				<!-- the decider's call on the batch above: its action, and when opened the matrix it answered -->
-				<li {@attach turns.measure(itemKey(at))} data-role="decision" data-decision={event.id} data-action={d.action} data-awaiting={item.awaiting || undefined}>
-					<div class="flex items-center gap-2 text-xs text-muted-foreground">
-						<span class="h-px flex-1 bg-border"></span>
-						<button type="button" data-decision-toggle aria-expanded={open} aria-label={t('Decision')} title={when(event.at)}
-							class="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {d.error === undefined ? '' : 'text-destructive'}"
-							onclick={() => (open ? expanded.delete(event.id) : expanded.add(event.id))}>
-							<Icon name="lucide:scale" class="size-3.5" /><span>{t(d.action ?? 'decided')}</span>
-						</button>
-						{#if item.awaiting}<span class="agent-shimmer" data-reply-pending>{t('reply pending')}</span>{/if}
-						<span class="h-px flex-1 bg-border"></span>
+			{:else if 'ignored' in item}
+				{@const dec = item.decision}
+				<!-- messages not for the agent: one quiet block, each sender and text, and the decision that left them -->
+				<li {@attach turns.measure(itemKey(at))} data-role="ignored" data-decision={dec?.event.id} data-action={dec?.d.action}
+					class="ml-auto w-fit max-w-[85%] rounded-xl border border-dashed border-border/80 px-3 py-2 text-xs text-muted-foreground">
+					<div class="flex items-center gap-1.5">
+						<Icon name="lucide:message-circle-off" class="size-3.5 shrink-0" /><span class="font-medium">{t('Not for the assistant')}</span>
+						{#if dec !== undefined}{@render decisionToggle(dec, 'ml-auto')}{/if}
 					</div>
-					{#if open}
-						<div class="mt-2 rounded-md border border-border/70 bg-muted/20 p-2 text-xs" data-decision-matrix>
-							<table class="w-full">
-								<thead><tr class="text-left text-muted-foreground"><th class="pb-1 pr-2 font-medium">{t('Message')}</th><th class="pb-1 pr-2 font-medium">{t('Answer')}</th><th class="pb-1 font-medium">{t('Verdict')}</th></tr></thead>
-								<tbody>
-									{#each d.state?.pending ?? [] as p, i (i)}
-										<tr class="border-t border-border/60 align-top" data-decision-row={`m${i}`}>
-											<td class="py-1 pr-2 whitespace-pre-wrap"><span class="text-muted-foreground">{p.from ?? ''}:</span> {p.text ?? ''}</td>
-											<td class="py-1 pr-2 tabular-nums">{answerOf(d.answers?.[`m${i}`])}</td>
-											<td class="py-1">{d.verdicts?.[i] ?? '—'}</td>
-										</tr>
-									{/each}
-									<tr class="border-t border-border/60" data-decision-row="wait">
-										<td class="py-1 pr-2 text-muted-foreground">{t('Wait')}</td><td class="py-1 pr-2 tabular-nums">{answerOf(d.answers?.['wait'])}</td><td class="py-1">{d.action ?? '—'}</td>
-									</tr>
-								</tbody>
-							</table>
-							{#if d.error !== undefined}<p class="mt-1 text-destructive">{t('failed')}: {d.error}</p>{/if}
-							{#if d.state !== undefined}
-								<details class="mt-1 text-muted-foreground" data-decision-context>
-									<summary class="cursor-pointer">{t('Context')} · {when(event.at)}</summary>
-									<p class="mt-1"><span class="font-medium">{t('Directive')}</span>: {d.state.directive ?? ''}</p>
-									<p><span class="font-medium">{t('Assistant')}</span>: {d.state.assistant ?? ''}</p>
-									{#each d.state.earlier ?? [] as p, i (i)}<p class="whitespace-pre-wrap opacity-80"><span>{p.from ?? ''}:</span> {p.text ?? ''}</p>{/each}
-								</details>
-							{/if}
-						</div>
-					{/if}
+					<ul class="mt-1 space-y-1">
+						{#each item.ignored as r (r.id)}
+							<li class="break-words whitespace-pre-wrap" data-role="user" data-triage="ambient"><span class="opacity-70">{r.author ?? ''}{r.author ? ': ' : ''}</span><span data-text>{r.text}</span>{@render attachments(r)}</li>
+						{/each}
+					</ul>
+					{#if dec !== undefined && expanded.has(dec.event.id)}{@render matrix(dec)}{/if}
+				</li>
+			{:else if 'decision' in item}
+				{@const { event } = item.decision}
+				<!-- the decider's call on the message above: a small mark under it, opening to the matrix it answered -->
+				<li {@attach turns.measure(itemKey(at))} data-role="decision" data-decision={event.id} data-action={item.decision.d.action} data-awaiting={item.awaiting || undefined}>
+					<div class="flex items-center justify-end gap-2 text-xs text-muted-foreground">
+						{#if item.awaiting}<span class="agent-shimmer" data-reply-pending>{t('reply pending')}</span>{/if}
+						{@render decisionToggle(item.decision, '')}
+					</div>
+					{#if expanded.has(event.id)}{@render matrix(item.decision)}{/if}
 				</li>
 			{:else}
 			{@const { row, index } = item}
@@ -771,11 +794,10 @@
 				<li {@attach turns.measure(itemKey(at))} data-role="subagent"><AgentChild {api} {bolt} {t} id={row.tool.child} /></li>
 			{:else if row.role === 'user'}
 				{@const label = triageLabel(row, index)}
-				<li {@attach turns.measure(itemKey(at))} class="ml-auto w-fit max-w-[85%] rounded-[1.25rem] bg-muted px-4 py-2.5 break-words whitespace-pre-wrap" class:opacity-60={row.state === 'pending' || row.tag === 'ambient'} data-role="user" data-pending={row.state === 'pending' || undefined}><span data-text>{row.text}</span>{#each row.files ?? [] as f, i (i)}{@const href = f.id === undefined ? null : bolt.fileUrl({ id: f.id } as FileRef)}<span class="mt-1 block text-xs text-muted-foreground" data-attachment>
-						{#if href !== null && f.mime.startsWith('image/')}<img src={/^image\/hei[cf]$/.test(f.mime) ? `${href}?preview=jpeg` : href} alt={f.name} class="mb-1 max-h-32 rounded" />{/if}{t('Attached')}: {#if href !== null}<a {href} target="_blank" rel="noreferrer" class="underline">{f.name}</a>{:else}{f.name}{/if}</span>{/each}
+				<li {@attach turns.measure(itemKey(at))} class="ml-auto w-fit max-w-[85%] rounded-[1.25rem] bg-muted px-4 py-2.5 break-words whitespace-pre-wrap" class:opacity-60={row.state === 'pending' || row.tag === 'ambient'} data-role="user" data-pending={row.state === 'pending' || undefined}><span data-text>{row.text}</span>{@render attachments(row)}
 					{#if !thread && row.state === 'consumed' && revisable(row)}<Button size="sm" variant="ghost" class="mt-1 h-6 px-1 text-xs" onclick={() => revise(row)}>{t('Revise')}</Button>{/if}
 					{#if label !== null}
-						<span class="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground" data-triage={row.state === 'pending' ? 'waiting' : row.tag === 'ambient' ? 'ambient' : 'responding'}
+						<span class="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground" data-triage={row.state === 'pending' ? 'waiting' : 'responding'}
 							data-role={row.id === lastPending ? 'waiting' : undefined}>
 							<span>{label}</span>
 							{#if !thread && row.id === lastPending}<Button size="sm" variant="ghost" onclick={respondNow}>{t('Respond now')}</Button>{/if}

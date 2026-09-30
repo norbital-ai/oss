@@ -19,7 +19,7 @@ import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import { channelMessages, events, inbox, runList, settings, settingsOp, type LogLevel, type SecretsPort } from './data.ts';
 import { studioOp, studioView, type StudioPort } from './studio.ts';
 import { CALLBACK, type OAuth } from '../engine/connections.ts';
-import { audienceOf, challengeOf, COOKIES, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type ShellBoot, type ShellNotice, type WorkspaceLink } from './nav.ts';
+import { audienceOf, challengeOf, holdsPublic, COOKIES, cookieSite, crossSite, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type ShellBoot, type ShellNotice, type WorkspaceLink } from './nav.ts';
 
 const SESSION_S = 7 * 86_400, VISITOR_S = 30 * 86_400;
 /** The service worker's source: it shows a pushed notice and opens its link. */
@@ -126,15 +126,24 @@ export function shellHost(c: ShellHostConfig) {
 	const uuid = c.uuid ?? (() => crypto.randomUUID());
 	const windows = new RateWindows();
 	const cookie = (name: string, value: string, maxAge: number | null) =>
-		`${name}=${encodeURIComponent(value)}; Path=${basePath(h.publicUrl) || '/'}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
+		`${name}=${encodeURIComponent(value)}; Path=${basePath(h.publicUrl) || '/'}; HttpOnly; ${cookieSite(secure)}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
 	const publicApp = (name: string | null): string | null =>
 		name !== null && audienceOf(m.apps[name] as AppSpec | undefined) === 'public' ? name : null;
 
-	/** Rule 38d: a visitor page's request runs as that app's visitor, signed in or not. */
+	/**
+	 * Rule 38d: a visitor page's request runs as that app's visitor, signed in or not — unless the member signed in holds a
+	 * policy naming that app (a customer who verified their number on the portal): they run as themselves.
+	 */
 	async function caller(request: Request): Promise<Caller> {
 		const jar = cookies(request);
 		const app = publicApp(request.headers.get(VISITOR_APP));
-		if (app !== null) return { authority: c.authorities.visitor(app, jar.get(COOKIES.visitor) ?? uuid()), real: null, token: null, preview: null };
+		if (app !== null) {
+			const token = jar.get(COOKIES.session) ?? null;
+			const s = token === null ? null : await authenticate(h, token);
+			const me = s === null ? null : await c.authorities.member(h.db, s.user);
+			if (me !== null && holdsPublic(me, app)) return { authority: me, real: me, token, preview: null, expiresAt: s!.expiresAt };
+			return { authority: c.authorities.visitor(app, jar.get(COOKIES.visitor) ?? uuid()), real: null, token: null, preview: null };
+		}
 		const bearer = /^Bearer (nbk_\S+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
 		if (bearer !== undefined) {
 			const key = await authenticateKey(h, bearer);
@@ -197,8 +206,8 @@ export function shellHost(c: ShellHostConfig) {
 		const env = environmentLabel(c.environment);
 		const ws: ShellBoot['workspace'] = { name: c.workspace.name, handle: c.workspace.handle, locale: m.workspace.locale, tz: m.workspace.tz, ...(logo === undefined ? {} : { logo }),
 			...(env === null ? {} : { environment: env }), ...(c.apex === undefined ? {} : { apex: c.apex }), ...(c.organization === undefined ? {} : { organization: true as const }) };
-		if (app !== null) {
-			// a visitor page: the visitor cookie is minted when absent, and the page sees only its own app
+		// a visitor page (unless the member signed in holds it): the visitor cookie is minted when absent, and the page sees only its own app
+		if (app !== null && !(x.authority !== null && holdsPublic(x.authority, app))) {
 			const jar = cookies(request), id = jar.get(COOKIES.visitor) ?? uuid();
 			const auth = c.authorities.visitor(app, id);
 			const siteKey = challengeOf(m, app) === undefined ? undefined : c.turnstile?.siteKey;
@@ -397,6 +406,7 @@ export function shellHost(c: ShellHostConfig) {
 		authority: async (request: Request) => (await caller(request)).authority,
 		async handle(request: Request): Promise<Response | null> {
 			const path = new URL(request.url).pathname;
+			if (crossSite(request, h.publicUrl)) return refused('forbidden', 'A write from another site is refused.', 403);
 			try {
 				if (path === '/manifest.webmanifest' && request.method === 'GET') return webmanifest();
 				if (path === SW && request.method === 'GET') return new Response(WORKER, { headers: { 'content-type': 'text/javascript', 'service-worker-allowed': '/', 'cache-control': 'no-cache' } });

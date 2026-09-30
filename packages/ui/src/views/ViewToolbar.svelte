@@ -322,7 +322,7 @@
 							</Button>
 						{/snippet}
 					</Popover.Trigger>
-					<Popover.Content align="end" class="flex w-[min(26rem,calc(100vw-1rem))] flex-col gap-2 p-2" data-search-panel
+					<Popover.Content align="end" class="flex {chosen?.input === undefined ? 'w-[min(26rem,calc(100vw-1rem))]' : 'w-[min(36rem,calc(100vw-1rem))]'} flex-col gap-2 p-2" data-search-panel
 						onOpenAutoFocus={(e) => { e.preventDefault(); box?.focus(); }}>
 						<div class="border-input bg-background focus-within:ring-ring/50 flex min-h-8 flex-wrap items-center gap-1 rounded-sm border px-2 shadow-xs focus-within:ring-[3px]">
 							<Glyph name="search" class="text-muted-foreground size-4 shrink-0" />
@@ -332,14 +332,15 @@
 								</span>
 							{/if}
 							{#if chosen?.input !== undefined}
-								<!-- a typed similarity: its input fields' own editors, run on submit through the view's similar read -->
-								<form class="flex flex-1 flex-wrap items-end gap-2 py-1.5" data-similar-input={index}
+								<!-- a typed similarity: its input fields' own editors under the chip, two to a row (a custom editor takes
+								     the row), run on submit through the view's similar read -->
+								<form class="grid basis-full grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] items-start gap-2 pt-1 pb-2" data-similar-input={index}
 									onsubmit={(e) => { e.preventDefault(); if (ready) onProbe?.({ name: index!, via: chosen?.via ?? 'similar', input: { ...values } }); }}>
 									{#each Object.entries(chosen.input) as [f, k] (f)}
-										<div class="grid min-w-24 gap-1 text-xs" data-similar-field={f}><span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
+										<div class="grid min-w-0 gap-1 text-xs {k.kind === 'custom' ? 'col-span-full' : ''}" data-similar-field={f}><span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
 											<Editor kind={k} value={values[f] ?? null} onChange={(v) => (values = { ...values, [f]: v })} name={f} /></div>
 									{/each}
-									<Button type="submit" size="sm" disabled={!ready} data-similar-run><Glyph name="search" />{t('searchRun')}</Button>
+									<Button type="submit" size="sm" class="col-span-full justify-self-end" disabled={!ready} data-similar-run><Glyph name="search" />{t('searchRun')}</Button>
 								</form>
 							{:else}
 								<input bind:this={box} class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm" type="search"

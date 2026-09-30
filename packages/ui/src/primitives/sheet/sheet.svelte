@@ -37,7 +37,7 @@ screen from its header.
 	import { resetInset } from '../../layout/inset.svelte.js';
 	import { TAB_LEVEL } from '../tabs/level.js';
 	import { cn, uiText } from '../utils.js';
-	import { escapes, openSheets } from './dismiss.js';
+	import { escapes, openSheets, SHEET_GUARD, type SheetGuard } from './dismiss.js';
 
 	let { open = $bindable(false), onOpenChange, side = 'right', title, header, actions, children, class: className }: SheetProps = $props();
 	const t = uiText();
@@ -53,7 +53,14 @@ screen from its header.
 	setContext(TAB_LEVEL, undefined);
 	setContext('ui.views.record', undefined);
 
+	// the forms inside: closing over an unsaved draft asks first (Esc, ×, and a phone's scrim alike)
+	const drafts = new Set<() => boolean>();
+	setContext<SheetGuard>(SHEET_GUARD, (dirty) => {
+		drafts.add(dirty);
+		return () => void drafts.delete(dirty);
+	});
 	const close = () => {
+		if ([...drafts].some((dirty) => dirty()) && !confirm(t('discardDraft'))) return;
 		open = false;
 		onOpenChange?.(false);
 	};

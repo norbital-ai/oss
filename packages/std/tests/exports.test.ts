@@ -6,7 +6,7 @@ test('std 0.0.1 entries point at the builds', async () => {
 	const want: { [entry: string]: string[] } = {
 		decimal: ['Decimal', 'dec', 'sum', 'currency', 'minorDigits'], date: ['PlainDate', 'datePeriod', 'formatPeriod', 'parseInstant'],
 		calendar: ['cycleOf', 'businessDays', 'WorkCalendar'], sheet: ['columns', 'decode', 'encode'], versioned: ['sealWrites', 'cloneNext'],
-		json: ['parseJson'], pdf: [], facts: ['facts', 'validateFacts'], label: ['label'], billing: ['LATEST_CATALOGUE'], zone: ['localOf', 'utcOf'],
+		json: ['parseJson'], facts: ['facts', 'validateFacts'], label: ['label'], billing: ['LATEST_CATALOGUE'], zone: ['localOf', 'utcOf'],
 	};
 	for (const [entry, names] of Object.entries(want)) {
 		const url = import.meta.resolve(`@norbital-ai/std/${entry}`);

@@ -41,6 +41,8 @@ export type TestOptions = {
 	approval?: EngineConfig['approval'];
 	/** Integration connections, and run facilities / webhook secrets / platform runs. */
 	http?: EngineConfig['http']; runs?: EngineConfig['runs'];
+	/** `ctx.convert.document`'s converter: a fake answering fixed bytes, or `documentConverter` over real services. */
+	convert?: EngineConfig['convert'];
 	/** The agent's model port (a scripted fake in tests), MCP/host tools, and the envoys' notice wording. */
 	ai?: EngineConfig['ai']; agent?: EngineConfig['agent']; envoys?: EngineConfig['envoys'];
 	/** P33: the meter System 1 decisions report to (System 1 itself is `ai.sys_1`). */ // hook:decisions
@@ -196,7 +198,7 @@ export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
 	let now = o.now ?? '2026-09-25T10:00:00.000Z';
 	const e = engine({ manifest: m, db, ...(guest === undefined ? {} : { guest }), ...(transforms === undefined ? {} : { transforms }),
 		...(o.approval === undefined ? {} : { approval: o.approval }), console: () => {}, deadlines: f.deadlines, scope: 'test', clock: () => now,
-		files: f.files, ...(o.http === undefined ? {} : { http: o.http }), ...(o.runs === undefined ? {} : { runs: o.runs }), transports: f.transports,
+		files: f.files, ...(o.http === undefined ? {} : { http: o.http }), ...(o.convert === undefined ? {} : { convert: o.convert }), ...(o.runs === undefined ? {} : { runs: o.runs }), transports: f.transports,
 		...(ai === undefined ? {} : { ai }), ...(o.agent === undefined ? {} : { agent: o.agent }), ...(o.envoys === undefined ? {} : { envoys: o.envoys }),
 		...(o.metering === undefined ? {} : { metering: o.metering }) }); // hook:decisions
 	await e.migrate({ accept: true });
@@ -215,10 +217,10 @@ export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
 	const windows = new RateWindows();
 	let admin: Holder | undefined;
 	const member = (policies: readonly string[], over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}): Holder & { id: string } => {
-		const actor = { kind: 'member' as const, id: randomUUID(), email: null, external: false, teams: [], teamPath: [], admin: false, party: null, ...over };
+		const actor = { kind: 'member' as const, id: randomUUID(), email: null, phone: null, external: false, teams: [], teamPath: [], admin: false, party: null, ...over };
 		// a seeded member of the same id or email keeps its row
-		const row = { text: `INSERT INTO sys_user (id, email, name, kind, admin, party) VALUES ($1, $2, $3, $4, $5, $6::jsonb) ON CONFLICT DO NOTHING`,
-			params: [actor.id, actor.email, actor.email ?? actor.id, actor.external ? 'external' : 'staff', actor.admin, actor.party === null ? null : JSON.stringify(actor.party)] };
+		const row = { text: `INSERT INTO sys_user (id, email, phone, name, kind, admin, party) VALUES ($1, $2, $7, $3, $4, $5, $6::jsonb) ON CONFLICT DO NOTHING`,
+			params: [actor.id, actor.email, actor.email ?? actor.phone ?? actor.id, actor.external ? 'external' : 'staff', actor.admin, actor.party === null ? null : JSON.stringify(actor.party), actor.phone] };
 		members = members.then(() => inner.write(row));
 		return { actor, id: actor.id, policies, admin: actor.admin };
 	};

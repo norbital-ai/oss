@@ -11,7 +11,6 @@ import { cloneNext, onlyShortens, sealWrites, voidOnce } from '../src/versioned.
 import { compile, context, evaluate, formula } from '../src/formula.ts';
 import { band, pricedLines } from '../src/pricing.ts';
 import { parseJson } from '../src/json.ts';
-import type { PdfDoc } from '../src/pdf.ts';
 
 const d = PlainDate;
 
@@ -243,13 +242,9 @@ describe('std/pricing (M2)', () => {
 	});
 });
 
-describe('std/json and std/pdf', () => {
+describe('std/json', () => {
 	it('parses or answers null', () => {
 		assert.deepEqual(parseJson('{"a":[1]}'), { a: [1] });
 		assert.equal(parseJson('{nope'), null);
-	});
-	it('describes a document as a literal', () => {
-		const doc = { page: 'A4', blocks: [{ text: 'Report', size: 18, bold: true }, { table: { columns: ['a', { label: 'b', align: 'right' }], rows: [['x', 1]] } }, { spacer: 12 }, { pageBreak: true }] } satisfies PdfDoc;
-		assert.equal(doc.blocks.length, 4);
 	});
 });

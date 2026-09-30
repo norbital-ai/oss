@@ -3,6 +3,7 @@
 	import { Tabs } from '../src/primitives/tabs/index.js';
 	import { Drawer, Sheet } from '../src/primitives/sheet/index.js';
 	import LogView from '../src/views/LogView.svelte';
+	import GuardProbe from './guard-probe.svelte';
 	import type { LogLine } from '../src/views/logs.js';
 	import type { TabLevel } from '../src/primitives/tabs/level.js';
 
@@ -14,9 +15,11 @@
 		path = '/a',
 		rows = [],
 		loadOlder,
-		hasOlder = false
+		hasOlder = false,
+		dirty = () => false
 	}: {
-		part: 'tabs' | 'sheet' | 'drawer' | 'logs';
+		part: 'tabs' | 'sheet' | 'drawer' | 'logs' | 'guarded';
+		dirty?: () => boolean;
 		innerLevel?: TabLevel;
 		sheetOpen?: boolean;
 		drawerOpen?: boolean;
@@ -37,7 +40,9 @@
 	<Sheet bind:open={sheetOpen} title="Record">{@render inSheet()}</Sheet>
 {/snippet}
 
-{#if part === 'tabs'}
+{#if part === 'guarded'}
+	<Sheet bind:open={sheetOpen} title="Draft"><GuardProbe {dirty} /></Sheet>
+{:else if part === 'tabs'}
 	<Tabs tabs={[{ name: 'a', title: 'A', body: second }]} />
 {:else if part === 'sheet'}
 	<Tabs tabs={[{ name: 'p', title: 'P', body: page }]} />

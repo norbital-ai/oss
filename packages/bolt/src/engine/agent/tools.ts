@@ -15,7 +15,7 @@ import { lowerRead } from '../index.ts';
 import { bound, bounded, filesOf, localTime, page, size } from './context.ts';
 import { isFacilityError, MODEL_FILES } from './ai.ts';
 import type { McpSessions, McpTool } from './mcp.ts';
-import { authorOf, type ConversationRow, type Goal, type MessageRow, type Receipt } from './schema.ts';
+import { ambient, authorOf, type ConversationRow, type Goal, type MessageRow, type Receipt } from './schema.ts';
 
 /** What a host tool learns of its call: the person (a Studio draft is theirs), the conversation (its attachments), the key. */
 export type HostToolContext = { actor: Authority['actor']; conversation: string; turn: string; callId: string;
@@ -503,7 +503,7 @@ export function catalogue(x: ToolContext): Tool[] {
 			const rows = await x.messages({ unread: i['all'] !== true, limit: Math.max(1, Math.min(Number(i['limit'] ?? 50), 50)),
 				...(i['before'] === undefined ? {} : { before: Number(i['before']) }), key: `${x.turn}:${id}` });
 			return ok({ messages: rows.map((r) => ({ seq: r.seq, from: r.role === 'assistant' ? 'you' : authorOf(r), sender: r.sender ?? null, message: r.provider_id ?? null,
-				sent: r.sent_at ?? r.created_at ?? null, text: r.text, files: [...filesOf(r)], addressed: r.addressed !== false && r.meta?.tag !== 'ambient' })) as Json,
+				sent: r.sent_at ?? r.created_at ?? null, text: r.text, files: [...filesOf(r)], addressed: !ambient(r) })) as Json,
 				note: 'Only messages since this channel was connected are here; senders may have edited or deleted some since.' });
 		});
 	if (x.attachments !== undefined) add('read_attachment', 'Read a file attached to a message (its seq and file index as the message lists them). For XLSX, choose a 0-based worksheet number; the response lists sheet names. A PDF can be attached to your next step as a document.',

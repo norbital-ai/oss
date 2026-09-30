@@ -63,3 +63,23 @@ it('message attachments download for the conversation, not for every member', as
 		params: [JSON.stringify({ envoy: { name: 'desk', channel: 'whatsapp', sender: '+65', member: 'eve', dm: true } })] });
 	expect(await status('eve', inbound.id)).toBe(200);
 }, 30_000);
+
+it('a message attachment filed into a record downloads for that record\'s readers, as any file field does', async () => {
+	const filed = { ...manifest, models: { photos: { description: 'A photo', label: 'name', fields: { name: { kind: 'text' }, photo: { kind: 'file' } } } },
+		collections: { photos: { read: { fields: 'all' }, create: { input: { columns: ['name', 'photo'] } } } } } as unknown as EngineManifest;
+	const t = await testWorkspace({ manifest: filed });
+	await t.db.write({ text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true), ('ann', 'a@x.test', 'Ann', 'staff', false),
+		('bob', 'b@x.test', 'Bob', 'staff', false)`, params: [] });
+	const who: { [id: string]: Authority } = {};
+	for (const id of ['root', 'ann', 'bob']) who[id] = (await new Authorities(filed, 'test').member(t.db, id))!;
+	const files = filesHandler({ engine: t.engine, session: async (r) => who[r.headers.get('x-as') ?? ''] ?? null,
+		bindings: () => ({ now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }) });
+	const call = async (as: string, method: string, rest: string, body?: Uint8Array<ArrayBuffer>) => (await files(new Request(`http://cell/__bolt/files/${rest}`, { method,
+		headers: { 'x-as': as, 'content-type': 'image/png', 'Idempotency-Key': randomUUID(), 'content-disposition': `attachment; filename*=UTF-8''pump.png` }, ...(body === undefined ? {} : { body }) })))!;
+	const photo = (await (await call('ann', 'PUT', 'sys_message.files', new Uint8Array([1, 2, 3]))).json()) as { id: string; name: string; mime: string };
+	expect((await call('root', 'GET', photo.id)).status).toBe(404); // Ann's, in no conversation the administrator reads
+	const o = await t.as(t.admin).act('photos.create', { name: 'pump', photo: { id: photo.id, name: photo.name, mime: photo.mime } });
+	expect(o.kind).toBe('committed');
+	expect((await call('root', 'GET', photo.id)).status).toBe(200); // the record's reader
+	expect((await call('bob', 'GET', photo.id)).status).toBe(404); // no grant on photos
+});

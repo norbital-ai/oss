@@ -31,7 +31,7 @@ export type TriageAction = 'respond' | 'wait' | 'ignore';
 /** One message's verdict: `delay` keeps the whole burst waiting, `no` leaves that message ambient for good. */
 type Verdict = 'yes' | 'no' | 'delay';
 const VERDICTS: { readonly [v in Verdict]: string } = {
-	yes: 'this one is for the assistant and it is done; answer it now',
+	yes: 'this one is for the assistant and it is done; answer it now. Unnamed, it still is when it asks for the work the directive describes (a photo or a report to file, a job to update) or follows up on what the assistant just said to this sender',
 	no: 'this one is not for the assistant; leave it',
 	delay: 'this one is for the assistant but more is likely coming',
 };

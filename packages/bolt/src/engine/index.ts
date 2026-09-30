@@ -2,7 +2,7 @@
 // read engine, compiled authorities, the act pipeline, and the guest runner behind the transform's workspace reads.
 // Hosts (bolt-server, the test kit) build one per activation; nothing here names a host (P18).
 import type { Json } from '../decl/values.ts';
-import type { AiPort, Authority, Bindings, Bridge, Captured, CrossAnswer, DeadlinesPort, EngineManifest, FilesPort, GuestPort, Invocation, MeteringPort, ReadEngine, ReadIR, RowData, TenantDb } from './contracts.ts'; // hook:triage (MeteringPort)
+import type { AiPort, Authority, Bindings, Bridge, Captured, CrossAnswer, ConvertPort, DeadlinesPort, EngineManifest, FilesPort, GuestPort, Invocation, MeteringPort, ReadEngine, ReadIR, RowData, TenantDb } from './contracts.ts'; // hook:triage (MeteringPort)
 import { BoltError, callPort, LIMITS } from './contracts.ts';
 import { compileAuthority, type Holder } from './access/authority.ts';
 import { catalogOf } from './access/pred.ts';
@@ -46,6 +46,8 @@ export type EngineConfig = {
 	clock?: () => string;
 	/** Integration connections (two_way pulls and pushes) and pipeline export files. */
 	http?: HttpPort; files?: FilesPort;
+	/** `ctx.convert.document`'s converter (optional; `documentConverter`, the client for Norbital Convert, is the open-source one). */
+	convert?: ConvertPort;
 	/** The host's side of the declared connections (§5.11.4): secrets, public origin, fetch. Builds `http` unless given, and `Engine.connections`. */
 	connections?: ConnectionsHost;
 	/** Run facilities, webhook secrets, the seed `start` list, extra platform runs. */
@@ -76,6 +78,8 @@ export type Engine = {
 	guest?: GuestPort;
 	/** The host's stored blobs (`/__bolt/files`, `filesHandler`). */
 	files?: FilesPort;
+	/** The host's document converter, when it binds one. */
+	convert?: ConvertPort;
 	/** The cell's live lane: every commit through `act` and `calls.action` is routed here. */
 	live: LiveHub;
 	/** Collection queries, actions and run starts (rules 31, 33, 33a); an action's commit is announced and published too. */
@@ -246,6 +250,7 @@ export function engine(config: EngineConfig): Engine {
 	}
 	const e: Engine = {
 		manifest: m, db, live, read, ...(guest === undefined ? {} : { guest }), ...(config.files === undefined ? {} : { files: config.files }),
+		...(config.convert === undefined ? {} : { convert: config.convert }),
 		async migrate(options = {}) {
 			await applyPlan(db, plan(await readApplied(db), m), options);
 		},
@@ -291,6 +296,7 @@ export function engine(config: EngineConfig): Engine {
 // hook:hosting — the host surface of `@norbital-ai/bolt/engine` until `activate` lands (§3.3.10, Appendix D.2):
 // the ports and budgets, the PGlite adapter, seed mode, the identity host operations, and the two fetch handlers.
 export * from './contracts.ts';
+export { documentConverter, type DocumentConverterConfig } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
 export { openPglite, pgliteDb } from './db/pglite.ts';
 export { postgresDb, type PgClient, type PgPool } from './db/postgres.ts';
 export { inferFacility } from './agent/ai.ts';
@@ -317,7 +323,7 @@ export { guestIsolates, warmLimits } from './guest/runner.ts'; // the host sizes
 export { boltHandler, needsGuest } from '../protocol/http.ts';
 export { filesHandler } from '../protocol/files.ts';
 export { cloudflareTurnstile, devTurnstile, shellHost, type ShellHost, type Turnstile } from '../shell/host.ts';
-export { COOKIES } from '../shell/nav.ts';
+export { COOKIES, cookieSite, framePolicy } from '../shell/nav.ts';
 export { applyPlan, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
 // hook:server-cli — what bolt start (bolt-server) reaches through the package instead of source paths
 export { catalogOf } from './access/pred.ts';

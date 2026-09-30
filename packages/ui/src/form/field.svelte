@@ -8,7 +8,11 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	import type { Json, Kind } from '../kinds/kind.js';
 
 	/** What a `Field editor` snippet receives: the field's value and kind, typed by context in the generated alias. */
-	export type FieldEditor = { value: Json; kind: Kind; name: string; disabled: boolean; error?: string; onChange(next: Json): void };
+	export type FieldEditor = {
+		value: Json; kind: Kind; name: string; disabled: boolean; error?: string; onChange(next: Json): void;
+		/** The id the field's label points at: give it to the control the snippet renders, so it is named by the label. */
+		id: string;
+	};
 	/**
 	 * One field of the enclosing `Form`, by its exposed name (§3.6). Without an `editor` it renders the kind's editor;
 	 * `address` names the text field a `point` field's geocoded address is written to.
@@ -23,7 +27,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 </script>
 
 <script lang="ts">
-	import { cn, provideControls, uiText } from '../primitives/utils.js';
+	import { cn, provideControls, provideFieldControl, uiText } from '../primitives/utils.js';
 	import Editor from '../kinds/editor.svelte';
 	import ReadValue from '../kinds/read-value.svelte';
 	import { useForm } from './form-state.svelte.js';
@@ -34,6 +38,8 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	const t = uiText();
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
 	const id = $props.id();
+	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
+	if (editor) provideFieldControl(() => `${id}-${name}`);
 	// what the engine knows the viewer cannot write is a floor no prop lifts; a save in flight holds every editor
 	const controls = provideControls(() => ({
 		readonly: form !== undefined && (form.spec.readonly === true || form.locked(name)) ? true : readonly,
@@ -57,12 +63,12 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	{@const disabled = controls.disabled}
 	{@const error = form.errors.get(name)}
 	<div class={cn('grid gap-1.5', className)} data-field={name}>
-		<label for={`${id}-${name}`} class="text-sm font-medium">
+		<label id={`${id}-${name}-label`} for={`${id}-${name}`} class="text-sm font-medium">
 			{label ?? field.kind.label ?? humanize(name)}
 			{#if !field.kind.optional && field.kind.default === undefined && field.kind.kind !== 'bool'}<span class="text-destructive" aria-label={t('required')}>*</span>{/if}
 		</label>
 		{#if editor}
-			{@render editor({ value: form.get(name), kind: field.kind, name, disabled, error, onChange: (v) => form.set(name, v) })}
+			{@render editor({ value: form.get(name), kind: field.kind, name, id: `${id}-${name}`, disabled, error, onChange: (v) => form.set(name, v) })}
 		{:else}
 			<Editor
 				kind={field.kind}
@@ -70,6 +76,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 				onChange={(v) => form.set(name, v)}
 				{name}
 				id={`${id}-${name}`}
+				labelledby={`${id}-${name}-label`}
 				{disabled}
 				errors={form.errors}
 				row={form.values}

@@ -18,7 +18,7 @@ import type { CollectionSpec } from '../decl/collection.ts';
 import type { Refused, Unknown } from '../decl/ctx.ts';
 import type { ModelSpec } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
-import type { FacilityError, GeoHit, PdfDoc, WebPage } from '../decl/runtime/facilities.ts';
+import type { ConvertTarget, FacilityError, GeoHit, WebPage } from '../decl/runtime/facilities.ts';
 import type { Json, Offset, Point, Rate } from '../decl/values.ts';
 import type { Operand, Shape } from '../decl/where.ts';
 
@@ -28,7 +28,7 @@ const MiB = 1024 * 1024;
 export const LIMITS = {
 	guestCpuMs: 2_000, guestMemoryMiB: 256,
 	/** Per facility call, never per invocation (X-28). */
-	callMs: { database: 60_000, ai: 60_000, render: 60_000, pdf: 60_000, tool: 60_000, http: 30_000, web: 30_000, image: 30_000, other: 5_000 },
+	callMs: { database: 60_000, ai: 60_000, tool: 60_000, http: 30_000, web: 30_000, image: 30_000, other: 5_000 },
 	crossings: { sync: 40, automation: 10_000 }, readBytes: 32 * MiB, crossingBytes: 4 * MiB, argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB, changesPerAct: 10_000, expandedRowsPerStatement: 100_000, writeDepth: 8,
 	page: { max: 10_000, all: 50_000, allBytes: 8 * MiB, relationArm: 10_000 },
@@ -232,7 +232,7 @@ export type Outcome = { kind: 'committed'; output: Json; records: Written } | { 
 
 // ── actors and authority (A6) ──
 /** The decl `Actor` with names erased: one engine serves any workspace. */
-export type MemberActor = { kind: 'member'; id: string; email: string | null; external: boolean; teams: readonly string[]; teamPath: readonly string[];
+export type MemberActor = { kind: 'member'; id: string; email: string | null; phone: string | null; external: boolean; teams: readonly string[]; teamPath: readonly string[];
 	admin: boolean; party: { collection: string; id: string } | null };
 export type EngineActor =
 	| MemberActor
@@ -283,8 +283,8 @@ export type CrossCall =
 	| { op: 'send'; channel: string; message: Json }
 	/** `ctx.progress` (automations only): onto the run's row; answers `stopped` once the run was stopped. */ // hook:runtime
 	| { op: 'progress'; progress: Json }
-	/** `ai.sys_2.infer`, `http(conn).post`, `files.pdf`, … Bytes ride `bins`, referenced as `{ "$bin": n }` (§5.8.1). */
-	| { op: 'facility'; facility: 'http' | 'web' | 'files' | 'ai' | 'geo'; method: string; args: readonly Json[]; bins?: readonly Uint8Array[] };
+	/** `ai.sys_2.infer`, `http(conn).post`, `convert.document`, … Bytes ride `bins`, referenced as `{ "$bin": n }` (§5.8.1). */
+	| { op: 'facility'; facility: 'http' | 'web' | 'files' | 'ai' | 'geo' | 'convert'; method: string; args: readonly Json[]; bins?: readonly Uint8Array[] };
 export type CrossAnswer = ({ ok: true; value: Json; bins?: readonly Uint8Array[] }
 	| { ok: false; error: FacilityError | { kind: 'refused'; code: string; message: string } | { kind: 'bolt'; code: string; message: string } })
 	& { /** hook:runner — a journal hit (rule 55): costs no crossing (rule 12). */ journal?: true };
@@ -315,9 +315,16 @@ export interface FilesPort {
 	url(key: string, expiresInS: number, signal: AbortSignal): Promise<string>;
 	remove(key: string, signal: AbortSignal): Promise<void>;
 }
-export interface PdfPort {
-	/** Images and fonts in `doc` are FileRefs; `load` reads each once host-side. */
-	render(doc: PdfDoc, load: (fileId: string) => Promise<Uint8Array>, signal: AbortSignal): Promise<Uint8Array>;
+/** Every conversion target, in the order hosts report them. */
+export const CONVERT_TARGETS: readonly ConvertTarget[] = ['pdf', 'docx', 'pptx', 'odt', 'epub', 'html'];
+/**
+ * The document converter behind `ctx.convert.document` (optional; absent → `unavailable`). `targets` is what this host
+ * serves, checked at start against `workspace.convert.to`. `reference` is the bytes of a styling document (docx, pptx, odt).
+ */
+export interface ConvertPort {
+	readonly targets: readonly ConvertTarget[];
+	convert(source: { markdown: string } | { html: string }, to: ConvertTarget,
+		options: { reference?: Uint8Array; page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean }, signal: AbortSignal): Promise<Uint8Array>;
 }
 export interface SecretsPort {
 	get(name: string, signal: AbortSignal): Promise<string | null>;
@@ -399,7 +406,7 @@ export interface DeadlinesPort {
 export type DatabasePort = TenantDb;
 export type HostPorts = {
 	database: DatabasePort; files: FilesPort; deadlines: DeadlinesPort;
-	secrets?: SecretsPort; pdf?: PdfPort; ai?: AiPort; geocoder?: GeocoderPort;
+	secrets?: SecretsPort; convert?: ConvertPort; ai?: AiPort; geocoder?: GeocoderPort;
 	web?: WebReadPort; transports?: { readonly email?: TransportPort; readonly whatsapp?: TransportPort; readonly telegram?: TransportPort; readonly push?: TransportPort };
 	metering?: MeteringPort; tenancy?: TenancyPort; membership?: MembershipPort;
 };

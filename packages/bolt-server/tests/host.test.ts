@@ -110,6 +110,15 @@ describe('activation requirements (rule 69)', () => {
 			.toMatch(/files are required[\s\S]*BOLT_MAIL/);
 	});
 
+	it('binds ctx.convert to Norbital Convert, and warns of declared targets when it is absent', () => {
+		const converts = manifest({ workspace: { tz: 'UTC', convert: { to: ['pdf', 'docx'] } } });
+		const warned = (c: ReturnType<typeof config>) => requirements(c, converts, {}).warnings.join('\n');
+		expect(warned(config())).toMatch(/converts to pdf, docx but no converter is configured \(BOLT_CONVERT_PROVIDER=norbital\)/);
+		expect(warned(config({ BOLT_CONVERT_PROVIDER: 'norbital', BOLT_CONVERT_ENDPOINT: 'http://convert:8080', BOLT_CONVERT_CREDENTIAL: 'k' }))).not.toMatch(/converts to/);
+		expect(() => config({ BOLT_CONVERT_PROVIDER: 'norbital', BOLT_CONVERT_ENDPOINT: 'http://convert:8080' })).toThrow(/BOLT_CONVERT_CREDENTIAL, its API key/);
+		expect(() => config({ BOLT_CONVERT_PROVIDER: 'pandoc', BOLT_CONVERT_ENDPOINT: 'http://x', BOLT_CONVERT_CREDENTIAL: 'k' })).toThrow(/not registered on this host \(norbital\)/);
+	});
+
 	it('decodes the s3 files provider and refuses it half-configured', () => {
 		expect(config({ BOLT_FILES_PROVIDER: 's3', BOLT_FILES_ENDPOINT: 'https://r2.example/bucket', BOLT_FILES_CREDENTIAL: 'ak:sk' }).files)
 			.toEqual({ provider: 's3', endpoint: 'https://r2.example/bucket', credential: 'ak:sk' });

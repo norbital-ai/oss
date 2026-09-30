@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The mounted draft: built once its row is known, and handed to every `Field` below by context.
-	import type { Snippet } from 'svelte';
+	import { getContext, onDestroy, type Snippet } from 'svelte';
+	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import Alert from '../primitives/alert/alert.svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';
@@ -23,6 +24,8 @@
 	// svelte-ignore state_referenced_locally -- a draft is built once per mount; a new row is a new form
 	const form = new FormState(spec, record, values, act, { pendingApproval: t('pendingApproval'), conflict: t('conflict'), unknown: t('unknown') }, locked(modelFields, record));
 	provideForm(form);
+	// the sheet this form sits in asks before closing over its unsaved draft
+	onDestroy(getContext<SheetGuard | undefined>(SHEET_GUARD)?.(() => !controls.readonly && form.dirty && !form.pending) ?? (() => {}));
 	const update = $derived(spec.target.of === 'collection' && spec.target.mode === 'update');
 	const visible = $derived((fields ?? spec.fields.map((f) => f.name)).filter((f) => spec.fields.some((x) => x.name === f)));
 

@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
-import { canOpen, exposure, href, isOpenRoute, nav, route, surfaces, type ShellManifest } from '../src/shell/nav.ts';
+import { canOpen, crossSite, framePolicy, holdsPublic, exposure, href, isOpenRoute, nav, route, surfaces, type ShellManifest } from '../src/shell/nav.ts';
 import { challengeQueue, visitorFetch } from '../src/shell/runtime.ts';
 import { activeApp, media, navigationModel, NORBIUS } from '../src/shell/model.ts';
 import { fileAttachments } from '../src/shell/data.ts';
@@ -15,7 +15,7 @@ const m: ShellManifest = {
 	agent: { internal: 'brief', skills: {} },
 	apps: {
 		sales: { title: 'Sales', description: 'd', icon: 'i', pages: { deals: { title: 'Deals' }, quotes: { title: 'Quotes' } } },
-		'hr/kiosk': { title: 'Kiosk', description: 'd', icon: 'i', pages: { clock: { title: 'Clock', kiosk: true } } },
+		'hr/kiosk': { title: 'Kiosk', description: 'd', icon: 'i', pages: { clock: { title: 'Clock', site: true } } },
 		'hr/people': { title: 'People', description: 'd', icon: 'i', pages: { list: { title: 'List' } } },
 		portal: { title: 'Portal', description: 'd', icon: 'i', audience: 'external', pages: { home: { title: 'Home' } } },
 		both: { title: 'Both', description: 'd', icon: 'i', audience: 'all', pages: { home: { title: 'Home' } } },
@@ -25,12 +25,19 @@ const m: ShellManifest = {
 };
 const member = (apps: string[], over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}, admin = false): Authority => ({
 	key: 'k', admin, policies: [], collections: {}, automations: [], limits: [], teamTree: [], scopes: {},
-	actor: { kind: 'member', id: 'u1', email: null, external: false, teams: [], teamPath: [], admin, party: null, ...over },
+	actor: { kind: 'member', id: 'u1', email: null, phone: null, external: false, teams: [], teamPath: [], admin, party: null, ...over },
 	capabilities: { apps, tools: [], mcp: [], skills: [] },
 });
 const names = (ns: ReturnType<typeof nav>): unknown[] => ns.map((n) => n.kind === 'group' ? { [n.name]: names(n.children) } : n.name);
 
 describe('app visibility (§3.9, capabilities.apps)', () => {
+	it('a member whose policy names a public app opens it as themselves; `*`, other staff and administrators stay its visitor', () => {
+		expect(canOpen(m, member(['careers'], { external: true }), 'careers')).toBe(true);
+		expect(holdsPublic(member(['careers'], { external: true }), 'careers')).toBe(true);
+		expect(holdsPublic(member(['*']), 'careers')).toBe(false);
+		expect(holdsPublic(member(['sales']), 'careers')).toBe(false);
+		expect(holdsPublic(member(['careers'], {}, true), 'careers')).toBe(false);
+	});
 	it('staff see members/all apps their policies admit, by name, * or group prefix', () => {
 		expect(canOpen(m, member(['sales']), 'sales')).toBe(true);
 		expect(canOpen(m, member(['sales']), 'hr/kiosk')).toBe(false);
@@ -166,19 +173,19 @@ describe('sidebar model', () => {
 		expect(sales.active).toBe(true);
 		expect(activeApp(model)?.key).toBe('sales');
 		expect(sales.pages?.map((c) => [c.key, c.active])).toEqual([['sales/deals', false], ['sales/quotes', true]]);
-		// a kiosk page is no sidebar row or tab: `hr/kiosk` has only its kiosk page, so the group keeps `hr/people` alone
+		// a site page is no sidebar row or tab: `hr/kiosk` has only its site page, so the group keeps `hr/people` alone
 		expect(tree(model.sections[1]!.items)).toContainEqual(['hr', ['hr/people']]);
 	});
-	it('kiosk pages sit in the ellipsis menu\'s Kiosks group, for the viewers who may open them', () => {
+	it('site pages sit in the ellipsis menu\'s Sites group, for the viewers who may open them', () => {
 		const model = navigationModel(bootOf(member(['hr'])), '/app/hr/kiosk/clock', (k) => k);
-		expect(tree(model.utilities)).toEqual([['kiosks', ['hr/kiosk/clock']]]);
+		expect(tree(model.utilities)).toEqual([['sites', ['hr/kiosk/clock']]]);
 		expect(model.utilities[0]!.children).toMatchObject([{ label: 'Clock', href: '/app/hr/kiosk/clock', active: true }]);
 		expect(activeApp(model)).toBeNull();
 		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([]);
 	});
 	it('the account popover: Settings (People, Organization, Audit, Automations) apart from System (no Logs: Studio holds the log); a member has neither', () => {
 		expect(tree(navigationModel(bootOf(member([], {}, true), true), '/', (k) => k).utilities)).toEqual([
-			['settings', ['people', 'organization', 'audit', 'automations']], ['system', ['channels', 'integrations', 'secrets', 'studio']], ['kiosks', ['hr/kiosk/clock']]]);
+			['settings', ['people', 'organization', 'audit', 'automations']], ['system', ['channels', 'integrations', 'secrets', 'studio']], ['sites', ['hr/kiosk/clock']]]);
 		const settings = navigationModel(bootOf(member([], {}, true)), '/settings/automations', (k) => k).utilities?.[0];
 		expect(settings).toMatchObject({ key: 'settings', active: true });
 		expect(settings?.children?.find((c) => c.key === 'automations')).toMatchObject({ href: '/settings/automations', active: true });
@@ -312,5 +319,24 @@ describe('workspace media', () => {
 		expect(media('/app-media/x.webp')).toBe('/app-media/x.webp');
 		expect(media('https://cdn.test/x.webp')).toBe('https://cdn.test/x.webp');
 		expect(media('data:image/png;base64,AA==')).toBe('data:image/png;base64,AA==');
+	});
+});
+
+describe('embedding', () => {
+	it('only a site page may be framed by another website; every other page, and a route that is none, by the workspace alone', () => {
+		expect(framePolicy(m, '/app/hr/kiosk/clock')).toBe('frame-ancestors *');
+		expect(framePolicy(m, '/app/sales/deals')).toBe("frame-ancestors 'self'");
+		expect(framePolicy(m, '/sign-in')).toBe("frame-ancestors 'self'");
+		expect(framePolicy(m, '/nowhere')).toBe("frame-ancestors 'self'");
+	});
+	const post = (headers: Record<string, string>) => new Request('https://acme.example/__bolt/q', { method: 'POST', headers });
+	it('refuses a browser write another site started, framed or not; a page of this workspace and a webhook pass', () => {
+		expect(crossSite(post({ 'sec-fetch-site': 'cross-site' }), 'https://acme.example')).toBe(true);
+		expect(crossSite(post({ 'sec-fetch-site': 'same-site' }), 'https://acme.example')).toBe(true);
+		expect(crossSite(post({ 'sec-fetch-site': 'same-origin' }), 'https://acme.example')).toBe(false);   // a portal in another site's frame
+		expect(crossSite(post({ origin: 'https://evil.example' }), 'https://acme.example')).toBe(true);    // a browser without Sec-Fetch
+		expect(crossSite(post({ origin: 'https://acme.example' }), 'https://acme.example/acme')).toBe(false);
+		expect(crossSite(post({}), 'https://acme.example')).toBe(false);                                   // a server's webhook
+		expect(crossSite(new Request('https://acme.example/app/x', { headers: { 'sec-fetch-site': 'cross-site' } }), 'https://acme.example')).toBe(false);
 	});
 });
