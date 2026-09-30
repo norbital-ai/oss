@@ -17,6 +17,7 @@ import { openPglite } from '../engine/db/pglite.ts';
 import { engine, type Engine, type EngineConfig } from '../engine/index.ts';
 import type { GuestProgram } from '../engine/guest/runner.ts';
 import { Authorities } from '../engine/identity/actor.ts';
+import { memberColumn, memberValue, parseAddress } from '../engine/identity/address.ts';
 import * as ir from '../protocol/ir.ts';
 import type { RateCharge } from '../engine/write/commit.ts';
 import { seed as restore, type SeedPack } from '../engine/write/seed.ts';
@@ -98,8 +99,8 @@ export type TestWorkspace = {
 	as(who: Holder | Authority): As;
 	/** A visitor on a page of public app `app` (rule 38d), counted per `ip`. */
 	visitor(app: string, options?: { ip?: string }): As;
-	/** The member whose `sys_user` row has this email, as a session would resolve them (§5.11.2). */
-	signIn(email: string): Promise<Authority>;
+	/** The member whose `sys_user` row has this email or mobile number, as a session would resolve them (§5.11.2). */
+	signIn(address: string): Promise<Authority>;
 	/** One deadline wake at the kit's clock: every run due by now runs (rules 48–56). */
 	runDue(): Promise<void>;
 	/**
@@ -282,11 +283,12 @@ export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
 		clock: { now: () => now, set(instant) { now = new Date(instant).toISOString(); }, advance(d) { now = new Date(Date.parse(now) + durationMs(d)).toISOString(); } },
 		as: (who) => asAuthority('collections' in who ? who : e.authority(who)),
 		visitor: (app, options = {}) => asAuthority(authorities.visitor(app, randomUUID()), options.ip ?? '203.0.113.7'),
-		async signIn(email) {
-			const [res] = await db.read([{ text: 'SELECT id FROM sys_user WHERE lower(email) = lower($1)', params: [email] }]);
+		async signIn(address) {
+			const a0 = parseAddress(address);
+			const [res] = a0 === null ? [{ rows: [] }] : await db.read([{ text: `SELECT id FROM sys_user WHERE ${memberColumn(a0, '$1')}`, params: [memberValue(a0)] }]);
 			const id = res!.rows[0]?.['id'];
 			const a = typeof id === 'string' ? await authorities.member(db, id) : null;
-			if (a === null) throw new Error(`no active member with email ${email}`);
+			if (a === null) throw new Error(`no active member with the address ${address}`);
 			return a;
 		},
 		runDue: () => e.runs!.tick(),

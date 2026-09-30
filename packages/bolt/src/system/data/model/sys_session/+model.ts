@@ -6,7 +6,7 @@ export default model({
 	label: 'via',
 	fields: {
 		token_hash: { kind: 'text', unique: true },
-		via: { kind: 'enum', values: ['code', 'invitation', 'host'] },
+		via: { kind: 'enum', values: ['code', 'invitation', 'signup', 'host'] },
 		created_at: { kind: 'instant' },
 		expires_at: { kind: 'instant' },
 		refreshed_at: { kind: 'instant' },

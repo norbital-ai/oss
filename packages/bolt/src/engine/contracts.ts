@@ -387,8 +387,8 @@ export interface TenancyPort {
 	resolve(host: string): Promise<string | null>;
 }
 export interface MembershipPort {
-	/** `email` and `team` are null for an erased member (rule 38e(e)); `team` is the `sys_team` id. */
-	project(member: { user: string; email: string | null; team: string | null; state: 'active' | 'inactive' | 'erased' }, signal: AbortSignal): Promise<void>;
+	/** `email`, `phone` and `team` are null for an erased member (rule 38e(e)); `team` is the `sys_team` id. */
+	project(member: { user: string; email: string | null; phone: string | null; team: string | null; state: 'active' | 'inactive' | 'erased' }, signal: AbortSignal): Promise<void>;
 }
 /** One next-due instant per scope, held in host memory; no polling (rule 52a). */
 export interface DeadlinesPort {

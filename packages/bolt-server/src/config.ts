@@ -2,6 +2,7 @@
 // to start (a thrown `ConfigError`); what depends on the workspace (mail, files, secrets, turnstile, AI models) is
 // checked at activation, against the manifest, by `server.ts`.
 import { isIP } from 'node:net';
+import { parseSms } from './sms.ts';
 
 export class ConfigError extends Error {
 	constructor(message: string) { super(message); this.name = 'ConfigError'; }
@@ -26,6 +27,8 @@ export type Config = {
 	files: { provider: 'local'; root: string } | { provider: 's3'; endpoint: string; credential: string } | null;
 	masterKey: Buffer | null; opsKey: Buffer | null;
 	mail: string | null;
+	/** `BOLT_SMS`: texted sign-in codes and invitations (`sms.ts`); `null` when mobile numbers cannot sign in. */
+	sms: string | null;
 	providers: { readonly [F in Facility]?: Provider };
 	/**
 	 * The AI facility (P35, P39): `sys1` the `BOLT_AI_SYS_1_MODEL` id (`BOLT_AI_SYS_1_PROVIDER=openai`: a structured-output
@@ -52,7 +55,7 @@ export type Config = {
 
 const KNOWN = new Set([
 	'BOLT_ARTIFACT', 'BOLT_HOST', 'BOLT_PORT', 'BOLT_DATABASE_URL', 'BOLT_PGLITE_DIR', 'BOLT_PUBLIC_URL',
-	'BOLT_FILES_PROVIDER', 'BOLT_FILES_ENDPOINT', 'BOLT_FILES_CREDENTIAL', 'BOLT_MASTER_KEY', 'BOLT_OPS_KEY', 'BOLT_MAIL',
+	'BOLT_FILES_PROVIDER', 'BOLT_FILES_ENDPOINT', 'BOLT_FILES_CREDENTIAL', 'BOLT_MASTER_KEY', 'BOLT_OPS_KEY', 'BOLT_MAIL', 'BOLT_SMS',
 	...FACILITIES.flatMap((f) => [`BOLT_${f}_PROVIDER`, `BOLT_${f}_ENDPOINT`, `BOLT_${f}_CREDENTIAL`]),
 	'BOLT_AI_SYS_1_MODEL', 'BOLT_AI_SYS_2_MODELS', 'BOLT_AI_EMBED_MODELS', 'BOLT_AI_SYS_2_MODALITIES', 'BOLT_AI_EMBED_MODALITIES', 'BOLT_VAPID_PUBLIC_KEY', 'BOLT_VAPID_PRIVATE_KEY', 'BOLT_TURNSTILE_SITE_KEY', 'BOLT_TURNSTILE_SECRET',
 	'BOLT_TELEMETRY_RETAIN_HOURS', 'BOLT_ENVIRONMENT', 'BOLT_DEV',
@@ -78,6 +81,13 @@ function cidrs(list: string): string[] {
 	});
 }
 
+/** `BOLT_SMS`, checked at start: a malformed one is a configuration error, not a failed sign-in. */
+function sms(spec: string | undefined): string | null {
+	if (spec === undefined) return null;
+	try { parseSms(spec); } catch (x) { throw new ConfigError(x instanceof Error ? x.message : String(x)); }
+	return spec;
+}
+
 export function decodeConfig(env: { readonly [name: string]: string | undefined }, argv: readonly string[] = []): Config {
 	const unknown = Object.keys(env).filter((k) => k.startsWith('BOLT_') && !KNOWN.has(k));
 	if (unknown.length > 0) throw new ConfigError(`unknown configuration: ${unknown.sort().join(', ')}`);
@@ -89,7 +99,7 @@ export function decodeConfig(env: { readonly [name: string]: string | undefined 
 		if (flag === '--accept' && value === undefined) flags.accept = true;
 		else if (flag === '--dev' && value === undefined) flags.dev = true;
 		else if (flag === '--trust-proxy' && value !== undefined) flags.trustProxy = cidrs(value);
-		else if (flag === '--founder' && value !== undefined && /^[^@\s]+@[^@\s]+$/.test(value)) flags.founder = value;
+		else if (flag === '--founder' && value !== undefined && (/^[^@\s]+@[^@\s]+$/.test(value) || /^\+[1-9]\d{7,14}$/.test(value))) flags.founder = value;
 		else if (flag === '--seed' && value !== undefined && value !== '') flags.seed = value;
 		else throw new ConfigError(`unknown or malformed flag '${a}'`);
 	}
@@ -181,7 +191,7 @@ export function decodeConfig(env: { readonly [name: string]: string | undefined 
 		database: url !== undefined ? { url } : { pglite: pglite! },
 		publicUrl: pub.origin, files,
 		masterKey: key32('BOLT_MASTER_KEY', get('BOLT_MASTER_KEY')), opsKey: key32('BOLT_OPS_KEY', get('BOLT_OPS_KEY')),
-		mail: get('BOLT_MAIL') ?? null, providers,
+		mail: get('BOLT_MAIL') ?? null, sms: sms(get('BOLT_SMS')), providers,
 		ai: { sys1, sys2, embed, modalities: { sys2: modalities('BOLT_AI_SYS_2_MODALITIES'), embed: modalities('BOLT_AI_EMBED_MODALITIES') } },
 		vapid: vpub === undefined ? null : { publicKey: vpub, privateKey: vpriv! },
 		turnstile: tsite === undefined ? null : { siteKey: tsite, secret: tsecret! },

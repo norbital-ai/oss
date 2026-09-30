@@ -198,6 +198,8 @@ export function channels(cfg: ChannelsConfig) {
 		};
 		const [row] = await cfg.engine.read([ir.get(cat, String(record['collection']), String(record['id']))], { as: 'workspace' }, bindings()).catch(() => [null]);
 		if (row === null || row === undefined) return fail('skipped', 'the record no longer exists');
+		// a row held for approval is not sent yet: the seal queues this delivery again, a rejection deletes the row
+		if ((row as Obj)['approval_id'] != null) return false;
 		let built: Json;
 		try {
 			built = await body(channel)(`channel.${channel}.outbound.${String(r['rule'])}.message`, [{ record: row }]);

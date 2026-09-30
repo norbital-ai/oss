@@ -58,6 +58,8 @@ export type ViewBolt = {
 		withdraw(requestId: string): Promise<Outcome>;
 		/** The approval view (§3.8): the request, its flow and decisions, and what the viewer may do; `null` when not visible. */
 		get?(requestId: string): Promise<ApprovalView | null>;
+		/** The approval views the caller may see, open ones unless `all`, by `collection`, `records` or request `ids`. */
+		list?(filter?: { collection?: string; records?: readonly string[]; ids?: readonly string[]; all?: boolean }): Promise<ApprovalView[]>;
 	};
 	actor: Json;
 	locale: string;

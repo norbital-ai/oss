@@ -1,6 +1,7 @@
 // Approvals as today (rules 44–47, §3.8, §5.5; `docs/access/approvals.md`): the write hook that routes an act and adds
 // the provisional commit's pieces (hold revisions, `bolt_approvals`, `approval_request`, `requestor`, notices), the
 // guarded decisions, the seal, the point-in-time restore and the participants' read branch (rule 13).
+import { DELIVER, outboundRules } from '../channels/outbound.ts';
 import type { NotificationEvent } from '../../decl/collection.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError, DbError, type Authority, type Captured, type EngineManifest, type NoticeRow, type Outcome, type Pred, type RowData, type TenantDb, type TenantTx } from '../contracts.ts';
@@ -29,6 +30,8 @@ export type ApprovalView = {
 	appliedAt: string | null; restoredAt: string | null;
 	mine: boolean; canDecide: boolean; canSupersede: boolean; participant: boolean;
 };
+/** Which requests `list` reads. */
+export type ApprovalFilter = { ids?: readonly string[]; collection?: string; records?: readonly string[]; all?: boolean };
 export type DecideInput = { requestId: string; status: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED'; reason?: string; authority: Authority; now: string };
 export type Approvals = {
 	hook: ApprovalHook;
@@ -42,6 +45,11 @@ export type Approvals = {
 	heldScope(auth: Authority): Promise<Pred>;
 	/** The approval view for a participant or a reader of the held record (`readable`); `null` for anyone else. */
 	view(requestId: string, auth: Authority, readable: (collection: string, id: string) => Promise<boolean>): Promise<ApprovalView | null>;
+	/**
+	 * The approval views `auth` may see (as `view`), newest first, at most 200: by request `ids`, else by the held
+	 * `collection` and `records`, open ones only unless `all`.
+	 */
+	list(filter: ApprovalFilter, auth: Authority, readable: (collection: string, id: string) => Promise<boolean>): Promise<ApprovalView[]>;
 	/** The platform runs a decision queues (rule 48): `collections.resume` and `collections.discard`, input `{ requestId }`. */
 	handlers(): { [name: string]: (input: Json) => Promise<Json> };
 };
@@ -50,6 +58,8 @@ export type ApprovalsOptions = {
 	publish?(captured: readonly Captured[]): void;
 	/** The clock a platform run seals or restores at; default the wall clock. */
 	clock?(): string;
+	/** A seal queued a run due `at` (a held row's outbound delivery): the host's deadline. */
+	wake?(at: string): void;
 };
 
 const refused = (code: Refusal['code'], message: string, field?: string): Refusal => ({ kind: 'refused', code, message, ...(field === undefined ? {} : { field }) });
@@ -194,7 +204,7 @@ export function approvals(m: EngineManifest, db: TenantDb, options: ApprovalsOpt
 		if (followup === 'collections.resume') {
 			const [held] = await db.read([{ text: `SELECT DISTINCT collection FROM bolt_history WHERE approval_id::text = $1`, params: [a.id] }]);
 			await decisionPieces(c, a, next, auth, reason, events, now, 'sealed_at');
-			const rows = sealPieces(c, a.id, held!.rows.map((r) => String(r['collection'])).filter((t) => m.models[t] !== undefined), 'up');
+			const rows = sealPieces(c, a.id, held!.rows.map((r) => String(r['collection'])).filter((t) => m.models[t] !== undefined), 'up', now);
 			const res = await db.write(c.sql(`(SELECT count(*) FROM up)::int AS n, ${rows} AS records, (SELECT count(*) FROM progress)::int AS p, ${noticeCaptures(c)} AS notices`));
 			if (res.rows[0]?.['n'] !== 1) return notPending(a.id);
 			publish([...captured((res.rows[0]?.['records'] ?? []) as unknown as Image[]), ...res.rows[0]!['notices'] as unknown as Captured[]]);
@@ -258,10 +268,11 @@ export function approvals(m: EngineManifest, db: TenantDb, options: ApprovalsOpt
 		const [held] = await db.read([{ text: `SELECT DISTINCT collection FROM bolt_history WHERE approval_id::text = $1`, params: [requestId] }]);
 		const c = new Chain();
 		c.cte('st', `UPDATE bolt_approvals SET sealed_at = ${c.p(now)}::timestamptz WHERE id::text = ${c.p(requestId)} AND state = 'Approved' AND sealed_at IS NULL RETURNING id`);
-		const rows = sealPieces(c, requestId, held!.rows.map((r) => String(r['collection'])).filter((t) => m.models[t] !== undefined), 'st');
+		const rows = sealPieces(c, requestId, held!.rows.map((r) => String(r['collection'])).filter((t) => m.models[t] !== undefined), 'st', now);
 		c.cte('pr', `UPDATE approval_request SET applied_at = ${c.p(now)}::timestamptz, revision = revision + 1 WHERE id IN (SELECT id FROM st)`);
 		noticePiece(c, await notices(a, [['committed', a.step], ['approvalCompleted', a.step]]), now, 'EXISTS (SELECT 1 FROM st)');
 		c.cte('rn', `UPDATE sys_run SET state = 'done' WHERE key = ${c.p(`${requestId}:collections.resume`)} AND EXISTS (SELECT 1 FROM st)`);
+		const sends = held!.rows.some((r) => outboundRules(m).some((o) => o.from === String(r['collection'])));
 		let res;
 		try {
 			res = await db.write(c.sql(`(SELECT count(*) FROM st)::int AS n, ${rows} AS records, (SELECT count(*) FROM progress)::int AS p, ${noticeCaptures(c)} AS notices`));
@@ -271,6 +282,7 @@ export function approvals(m: EngineManifest, db: TenantDb, options: ApprovalsOpt
 		}
 		const images = (res.rows[0]?.['records'] ?? []) as unknown as Image[];
 		publish([...captured(images), ...(res.rows[0]?.['notices'] ?? []) as unknown as Captured[]]);
+		if (sends && res.rows[0]?.['n'] === 1) options.wake?.(now);
 		return { sealed: res.rows[0]?.['n'] === 1, records: images.map((x) => ({ collection: x.c, id: x.id })) };
 	}
 
@@ -317,12 +329,16 @@ export function approvals(m: EngineManifest, db: TenantDb, options: ApprovalsOpt
 	 * nothing else (no revision, no edge or `edit` rule, no trigger). Rule 25a: stamped rows selected in this statement's
 	 * snapshot but none cleared fails it (`progress`, which the caller's select reads). Returns the images' expression.
 	 */
-	function sealPieces(c: Chain, requestId: string, tables: readonly string[], gate: string): string {
+	function sealPieces(c: Chain, requestId: string, tables: readonly string[], gate: string, now: string): string {
 		const cleared = tables.map((t, i) =>
 			c.cte(`s${i}`, `UPDATE ${q(t)} SET approval_id = NULL WHERE approval_id = (SELECT id FROM ${gate}) RETURNING ${c.p(t)}::text AS c, ${IMAGES}`));
 		const count = (xs: readonly string[]) => xs.length === 0 ? '0' : xs.map((x) => `(SELECT count(*) FROM ${x})`).join(' + ');
 		const selected = tables.map((t) => `(SELECT count(*) FROM ${q(t)} WHERE approval_id::text = ${c.p(requestId)})`);
 		c.cte('progress', `SELECT bolt_assert(NOT EXISTS (SELECT 1 FROM ${gate}) OR ${count(selected)} = 0 OR ${count(cleared)} > 0, 'noProgress', ${c.p(requestId)})`);
+		// the held rows' record-driven messages waited for the seal (rule 61): their delivery is due now
+		if (tables.some((t) => outboundRules(m).some((o) => o.from === t)))
+			c.cte('dl', `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) SELECT gen_random_uuid()::text, '${DELIVER}', '{}'::jsonb,
+				${c.p(now)}::timestamptz, 'schedule', 0 WHERE EXISTS (SELECT 1 FROM ${gate}) RETURNING id`);
 		return cleared.length === 0 ? `'[]'::jsonb` : `(SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) FROM (${cleared.map((x) => `SELECT c, id, revision, o, n FROM ${x}`).join(' UNION ALL ')}) x)`;
 	}
 	type Restoring = { tables: ReadonlyMap<string, readonly { readonly [c: string]: Json }[]>; rows: string };
@@ -379,6 +395,41 @@ export function approvals(m: EngineManifest, db: TenantDb, options: ApprovalsOpt
 		return out;
 	}
 
+	async function list(filter: ApprovalFilter, auth: Authority, readable: (collection: string, id: string) => Promise<boolean>): Promise<ApprovalView[]> {
+		const [r] = await db.read([{ text: `SELECT id::text AS id, *, to_json(at)#>>'{}' AS at_text, to_json(sealed_at)#>>'{}' AS sealed_text,
+			to_json(restored_at)#>>'{}' AS restored_text FROM bolt_approvals
+			WHERE ($1::jsonb IS NULL OR id::text IN (SELECT jsonb_array_elements_text($1::jsonb)))
+				AND ($2::text IS NULL OR collection = $2)
+				AND ($3::jsonb IS NULL OR record IN (SELECT jsonb_array_elements_text($3::jsonb)))
+				AND ($4 OR state = 'Pending')
+			ORDER BY at DESC LIMIT 200`, params: [filter.ids === undefined ? null : JSON.stringify(filter.ids), filter.collection ?? null,
+			filter.records === undefined ? null : JSON.stringify(filter.records), filter.all === true] }]);
+		const me = actorRef(auth.actor);
+		const seen: { row: { readonly [c: string]: Json }; a: Stored }[] = [];
+		for (const row of r!.rows) {
+			const a = toStored(row);
+			// ponytail: a non-participant's read check is one read per request; batch by collection when lists grow
+			if (participant(a, auth) || a.requestor === me || await readable(a.collection, a.record)) seen.push({ row, a });
+		}
+		const logOf = (row: { readonly [c: string]: Json }) =>
+			(Array.isArray(row['decisions']) ? row['decisions'] : []) as { step: number; status: string; by: string; reason: string | null; at: string }[];
+		const refs = [...new Set(seen.flatMap(({ row, a }) => [a.requestor, ...logOf(row).map((d) => d.by)]))]
+			.filter((x) => x.startsWith('member:')).map((x) => x.slice('member:'.length));
+		const [names] = refs.length === 0 ? [{ rows: [] }]
+			: await db.read([{ text: `SELECT id, name FROM sys_user WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))`, params: [JSON.stringify(refs)] }]);
+		const name = new Map(names!.rows.map((n) => [`member:${String(n['id'])}`, (n['name'] ?? null) as string | null]));
+		const who = (ref: string) => ({ ref, name: name.get(ref) ?? null });
+		const iso = (v: Json | undefined) => typeof v === 'string' ? new Date(v).toISOString() : null;
+		return seen.map(({ row, a }) => {
+			const pending = a.state === 'Pending';
+			return { id: a.id, collection: a.collection, record: a.record, action: a.action, at: iso(row['at_text'])!,
+				status: row['conflicted'] === true ? 'CONFLICTED' : STATUS[a.state], step: a.step, steps: a.route.steps, superceded_by: a.route.superceded_by,
+				requestor: who(a.requestor), decisions: logOf(row).map((d) => ({ step: d.step, status: d.status, by: who(d.by), reason: d.reason, at: d.at })),
+				appliedAt: iso(row['sealed_text']), restoredAt: iso(row['restored_text']),
+				mine: a.requestor === me, canDecide: pending && canApprove(a, auth.actor), canSupersede: pending && canSupersede(a, auth), participant: participant(a, auth) };
+		});
+	}
+
 	return {
 		hook, process, seal, restore,
 		handlers() {
@@ -397,26 +448,9 @@ export function approvals(m: EngineManifest, db: TenantDb, options: ApprovalsOpt
 			return transition(a, { state: 'Withdrawn', step: a.step }, authority, '', [['approvalWithdrawn', a.step]], now);
 		},
 		async view(requestId, auth, readable) {
-			const [r] = await db.read([{ text: `SELECT id::text AS id, *, to_json(at)#>>'{}' AS at_text, to_json(sealed_at)#>>'{}' AS sealed_text, to_json(restored_at)#>>'{}' AS restored_text
-				FROM bolt_approvals WHERE id::text = $1`, params: [requestId] }]);
-			const row = r!.rows[0];
-			if (row === undefined) return null;
-			const a = toStored(row), me = actorRef(auth.actor);
-			const pending = a.state === 'Pending';
-			const part = participant(a, auth) || a.requestor === me;
-			if (!part && !(await readable(a.collection, a.record))) return null;
-			const log = (Array.isArray(row['decisions']) ? row['decisions'] : []) as { step: number; status: string; by: string; reason: string | null; at: string }[];
-			const refs = [...new Set([a.requestor, ...log.map((d) => d.by)])].filter((x) => x.startsWith('member:')).map((x) => x.slice('member:'.length));
-			const [names] = await db.read([{ text: `SELECT id, name FROM sys_user WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))`, params: [JSON.stringify(refs)] }]);
-			const name = new Map(names!.rows.map((n) => [`member:${String(n['id'])}`, (n['name'] ?? null) as string | null]));
-			const who = (ref: string) => ({ ref, name: name.get(ref) ?? null });
-			const iso = (v: Json | undefined) => typeof v === 'string' ? new Date(v).toISOString() : null;
-			return { id: a.id, collection: a.collection, record: a.record, action: a.action, at: iso(row['at_text'])!,
-				status: row['conflicted'] === true ? 'CONFLICTED' : STATUS[a.state], step: a.step, steps: a.route.steps, superceded_by: a.route.superceded_by,
-				requestor: who(a.requestor), decisions: log.map((d) => ({ step: d.step, status: d.status, by: who(d.by), reason: d.reason, at: d.at })),
-				appliedAt: iso(row['sealed_text']), restoredAt: iso(row['restored_text']),
-				mine: a.requestor === me, canDecide: pending && canApprove(a, auth.actor), canSupersede: pending && canSupersede(a, auth), participant: participant(a, auth) };
+			return (await list({ ids: [requestId], all: true }, auth, readable))[0] ?? null;
 		},
+		list,
 		async heldScope(auth) {
 			const [r] = await db.read([{ text: `SELECT id::text AS id, * FROM bolt_approvals WHERE state = 'Pending'`, params: [] }]);
 			const ids = r!.rows.map(toStored).filter((a) => participant(a, auth)).map((a) => a.id);

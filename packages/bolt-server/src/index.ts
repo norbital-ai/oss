@@ -7,4 +7,5 @@ export { baileys as baileysSocket, whatsapp as whatsappTransport, type WaOpen, t
 export { telegram as telegramTransport, TELEGRAM_HOOK, type Telegram } from './telegram.ts';
 export { mailTransport as emailTransport, mailSender as mailPort } from './mail.ts';
 export { push as webPush } from './push.ts';
+export { smsTransport } from './sms.ts';
 export { readPublicPage, type PublicPage } from './web.ts';

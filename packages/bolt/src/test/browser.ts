@@ -2,7 +2,8 @@
 // (happy-dom or a browser) over the kit's workspace, once per policy as a staff member, once per policy as an external
 // member when an app admits externals, and once per public app as its visitor, and opens every page that actor's
 // navigation offers plus their shell surfaces. A page that logs a console error or throws, or a live view the host
-// refuses as over budget (rule 64: `subscriptionTooLarge`, `tooManySubscriptions`, `cellBudget`), is a finding;
+// refuses as over budget (rule 64: `subscriptionTooLarge`, `tooManySubscriptions`, `cellBudget`) or as malformed
+// (`invalid`: a read the page itself built wrong, which a browser only shows as a view's error text), is a finding;
 // any finding rejects the sweep with the list.
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -11,7 +12,7 @@ import { unmount } from 'svelte';
 import type { Authority, TransportPort } from '../engine/contracts.ts';
 import { RateWindows } from '../engine/access/rate.ts';
 import { Authorities } from '../engine/identity/actor.ts';
-import { loadKeys, mint, type IdentityHost } from '../engine/identity/session.ts';
+import { loadKeys, mint, signupOf, type IdentityHost } from '../engine/identity/session.ts';
 import { boltHandler } from '../protocol/http.ts';
 import { PATHS, type Frame, type LiveReply } from '../protocol/wire.ts';
 import { devTurnstile, shellHost } from '../shell/host.ts';
@@ -40,14 +41,18 @@ export type SweepOptions = {
 	quietMs?: number;
 };
 /**
- * One problem a sweep saw on a page: a console message, an uncaught error or a read budget refusal, with who saw it where.
+ * One problem a sweep saw on a page: a console message, an uncaught error, a read budget refusal or a malformed read,
+ * with who saw it where.
  */
-export type SweepFinding = { who: string; path: string; kind: 'console' | 'error' | 'budget'; message: string };
+export type SweepFinding = { who: string; path: string; kind: 'console' | 'error' | 'budget' | 'read'; message: string };
 /** Every page a sweep visited, by whom, and what it found. */
 export type SweepReport = { visited: { who: string; path: string }[]; findings: SweepFinding[] };
 
 const ORIGIN = 'http://localhost';
 const BUDGET = new Set(['subscriptionTooLarge', 'tooManySubscriptions', 'cellBudget']);
+/** A refusal that can only mean the page built its read wrong: never a matter of who is looking. */
+const MALFORMED = new Set(['invalid']);
+const refusal = (code: string) => BUDGET.has(code) ? 'budget' as const : MALFORMED.has(code) ? 'read' as const : null;
 const flat = (nodes: readonly NavNode[]): string[] => nodes.flatMap((n) => n.kind === 'group' ? flat(n.children) : n.pages.map((p) => p.href));
 const label = (a: SweepActor) => 'visitor' in a ? `visitor of ${a.visitor}` : 'admin' in a ? 'administrator' : `${a.external ? 'external' : 'member'} [${a.policies.join(', ')}]`;
 
@@ -64,7 +69,8 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 		...apps.filter(([, a]) => audienceOf(a) === 'public').map(([name]) => ({ visitor: name })),
 	];
 	const mail: TransportPort = { send: async () => ({ providerId: 'sweep' }), subscribe: () => () => {} };
-	const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, devSink: true, publicUrl: ORIGIN };
+	const identity: IdentityHost = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, sms: mail, devSink: true, publicUrl: ORIGIN,
+		...(signupOf(m) === undefined ? {} : { signup: signupOf(m)! }) };
 	const authorities = new Authorities(m, 'sweep');
 	const shell = shellHost({ manifest: m, identity, authorities, workspace: { name: 'Sweep', handle: 'sweep' }, ip: () => '203.0.113.50', turnstile: devTurnstile,
 		secure: false, ...(t.engine.runs === undefined ? {} : { runs: t.engine.runs }) });
@@ -116,7 +122,7 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 					const res = await shell.handle(request()) ?? await bolt(request()) ?? new Response(null, { status: 404 });
 					for (const c of res.headers.getSetCookie()) { const [pair] = c.split(';'); const at = pair!.indexOf('='); jar.set(pair!.slice(0, at), decodeURIComponent(pair!.slice(at + 1))); }
 					if (url.pathname === PATHS.live && init.method === 'POST' && res.ok)
-						for (const e of ((await res.clone().json()) as LiveReply).errors) if (BUDGET.has(e.code)) found('budget', `${e.view}: ${e.code}`);
+						for (const e of ((await res.clone().json()) as LiveReply).errors) { const k = refusal(e.code); if (k !== null) found(k, `${e.view}: ${e.code}${k === 'read' ? ` ${e.message}` : ''}`); }
 					return res;
 				} finally {
 					inflight--;
@@ -143,7 +149,7 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 								buffer = buffer.slice(i + 2);
 								if (data === '') continue;
 								const frame = JSON.parse(data) as Frame;
-								if (frame.t === 'error' && BUDGET.has(frame.code)) found('budget', `${frame.view}: ${frame.code}`);
+								if (frame.t === 'error' && refusal(frame.code) !== null) found(refusal(frame.code)!, `${frame.view}: ${frame.code}${refusal(frame.code) === 'read' ? ` ${frame.message}` : ''}`);
 								source.onmessage?.(new MessageEvent('message', { data }));
 							}
 						}

@@ -11,11 +11,17 @@ export const basePath = (publicUrl: string): string => new URL(publicUrl).pathna
 /** The C8 wire table's data endpoints; hooks, the manifest and host ops are routed by their own owners. */
 export const PATHS = {
 	q: `${BOLT}/q`, act: `${BOLT}/act`, live: `${BOLT}/live`, files: `${BOLT}/files/`,
-	session: { code: `${BOLT}/session/code`, verify: `${BOLT}/session/verify`, signout: `${BOLT}/session/signout`, invitation: `${BOLT}/session/invitation` },
+	session: { code: `${BOLT}/session/code`, verify: `${BOLT}/session/verify`, signout: `${BOLT}/session/signout`, invitation: `${BOLT}/session/invitation`,
+		/** `GET`: how this workspace signs people in — by email, by mobile number — and whether newcomers may sign up. */
+		methods: `${BOLT}/session/methods` },
 	push: `${BOLT}/push`, openapi: `${BOLT}/openapi.json`, ops: `${BOLT}/ops`,
 	/** The in-app agent panel: `GET ?conversation=` the transcript, `GET /models` the models the member may pick. Everything live rides `/live`. */
 	agent: `${BOLT}/agent`,
-	/** `GET ?id=` the approval view of one request (§3.8), for a participant or a reader of the held record. */
+	/**
+	 * `GET ?id=` the approval view of one request (§3.8), for a participant or a reader of the held record; without `id`,
+	 * the views the caller may see, filtered by `collection`, `record` and `request` (each repeated) and `all` (closed
+	 * ones too).
+	 */
 	approval: `${BOLT}/approval`,
 } as const;
 /** The service worker web push needs (§5.7), served by the shell host with `Service-Worker-Allowed: /`. */

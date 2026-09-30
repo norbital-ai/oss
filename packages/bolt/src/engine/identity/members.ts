@@ -4,8 +4,9 @@ import { timingSafeEqual } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
 import { under } from '../../protocol/wire.ts';
 import { BoltError, callPort, DbError, LIMITS, type Authority, type EngineManifest, type Lock, type MembershipPort } from '../contracts.ts';
+import { ADDRESS_HINT, digits, parseAddress, type Address } from './address.ts';
 import {
-	acceptPieces, announceMembership, by, MEMBERSHIP, historyOf, IMAGES, jsonb, newId, ok, projection, refuse, requireAdmin, sha256, stmt, type IdentityHost, type Invitation, type Result
+	acceptPieces, announceMembership, by, MEMBERSHIP, historyOf, IMAGES, jsonb, newId, ok, projection, refuse, requireAdmin, sha256, SIGNUP_KEY, stmt, type IdentityHost, type Invitation, type Result
 } from './session.ts';
 
 const INVITE_MS = 7 * 24 * 3_600_000;
@@ -25,52 +26,75 @@ async function write<T>(h: IdentityHost, s: ReturnType<typeof stmt>, text: strin
 const unknownPolicy = (m: EngineManifest, policies: readonly string[]) => policies.find((p) => m.policies[p] === undefined);
 
 // ── invitations (rule 38b) ──
-export type InviteInput = { email: string; team?: string; assignments?: { policy: string; scope?: { collection: string; id: string } }[];
+/** An invitation names its person by email, by mobile number (international form), or both; the link goes to each. */
+export type InviteInput = { email?: string; phone?: string; team?: string; assignments?: { policy: string; scope?: { collection: string; id: string } }[];
 	external?: boolean; party?: { collection: string; id: string } };
+
+/** Sends an invitation's link to each address it names: an email by the mail port, a number by the SMS port. */
+async function deliver(h: IdentityHost, to: readonly Address[], id: string): Promise<void> {
+	const link = under(h.publicUrl, `/invite/${id}`);
+	for (const a of to)
+		if (a.kind === 'email')
+			await callPort('email', h.mail, LIMITS.callMs.other, (mail, signal) =>
+				mail.send('email', { to: a.value, subject: 'You are invited to a workspace', text: `Accept your invitation: ${link}`, link }, signal));
+		else
+			await callPort('sms', h.sms, LIMITS.callMs.other, (sms, signal) =>
+				sms.send('sms', { to: a.value, text: `You are invited to a workspace. Accept your invitation: ${link}` }, signal));
+}
+/** The addresses an invitation names, parsed; `null` when one is malformed or there is none. */
+function addressesOf(input: { email?: string | null; phone?: string | null }): Address[] | null {
+	const typed = [input.email, input.phone].filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+	const parsed = typed.map(parseAddress);
+	return parsed.length === 0 || parsed.some((a) => a === null) || parsed.filter((a) => a!.kind === 'email').length > 1
+		|| parsed.filter((a) => a!.kind === 'phone').length > 1 ? null : parsed as Address[];
+}
 
 /** Admin-only; never sets `admin`. The notice's link is built from the host's public origin (§5.11.6). */
 export async function invite(h: IdentityHost, m: EngineManifest, auth: Authority, input: InviteInput): Promise<Result<{ id: string }>> {
 	const denied = requireAdmin(auth);
 	if (denied) return denied;
+	const to = addressesOf(input);
+	if (to === null) return refuse('check', ADDRESS_HINT);
+	const email = to.find((a) => a.kind === 'email')?.value ?? null, phone = to.find((a) => a.kind === 'phone')?.value ?? null;
 	const assignments = input.assignments ?? [];
 	const bad = unknownPolicy(m, assignments.map((a) => a.policy));
 	if (bad !== undefined) return refuse('notFound', `There is no policy '${bad}'.`);
 	const id = newId(), now = h.now(), s = stmt();
-	const r = await write(h, s, `WITH ins AS (INSERT INTO sys_invitation (id, email, team, assignments, external, party, invited_by, expires_at)
-VALUES (${s.p(id)}, ${s.p(input.email.trim())}, ${s.p(input.team ?? null)}, ${s.p(JSON.stringify(assignments))}::jsonb, ${s.p(input.external === true)},
+	const r = await write(h, s, `WITH ins AS (INSERT INTO sys_invitation (id, email, phone, team, assignments, external, party, invited_by, expires_at)
+VALUES (${s.p(id)}, ${s.p(email)}, ${s.p(phone)}, ${s.p(input.team ?? null)}, ${s.p(JSON.stringify(assignments))}::jsonb, ${s.p(input.external === true)},
 	${s.p(jsonb(input.party))}::jsonb, ${s.p(auth.actor.kind === 'member' ? auth.actor.id : null)}, ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz) ${IMAGES}),
 ${historyOf(s, 'sys_invitation', 'ins', now, by(auth))} SELECT 1`);
 	if (!r.ok) return r;
-	const link = under(h.publicUrl, `/invite/${id}`);
-	await callPort('email', h.mail, LIMITS.callMs.other, (mail, signal) =>
-		mail.send('email', { to: input.email, subject: 'You are invited to a workspace', text: `Accept your invitation: ${link}`, link }, signal));
+	await deliver(h, to, id);
 	return ok({ id });
 }
 
-export type InvitationView = { email: string; team: string | null; external: boolean; status: 'open' | 'accepted' | 'revoked' | 'expired' };
+export type InvitationView = { email: string | null; phone: string | null; team: string | null; external: boolean; status: 'open' | 'accepted' | 'revoked' | 'expired' };
 /** Inspecting the link never consumes or changes it. */
 export async function inspectInvitation(h: IdentityHost, id: string): Promise<InvitationView | null> {
-	const [rows] = await h.db.read([{ text: 'SELECT email, team, external, expires_at, accepted_at, revoked_at FROM sys_invitation WHERE id = $1', params: [id] }]);
-	const r = rows!.rows[0] as { email: string; team: string | null; external: boolean; expires_at: string; accepted_at: string | null; revoked_at: string | null } | undefined;
+	const [rows] = await h.db.read([{ text: 'SELECT email, phone, team, external, expires_at, accepted_at, revoked_at FROM sys_invitation WHERE id = $1', params: [id] }]);
+	const r = rows!.rows[0] as { email: string | null; phone: string | null; team: string | null; external: boolean; expires_at: string; accepted_at: string | null; revoked_at: string | null } | undefined;
 	if (r === undefined) return null;
 	const status = r.accepted_at !== null ? 'accepted' : r.revoked_at !== null ? 'revoked' : Date.parse(r.expires_at) <= h.now().getTime() ? 'expired' : 'open';
-	return { email: r.email, team: r.team, external: r.external, status };
+	return { email: r.email, phone: r.phone, team: r.team, external: r.external, status };
 }
 
 /**
- * Only a session for the invited address accepts; the member's team, kind, party and assignments land in one act. An
+ * Only a session for an invited address (the member's email or their number) accepts; the member's team, kind, party and assignments land in one act. An
  * expired, revoked or used invitation refuses `expired` and is left as it was.
  */
 export async function acceptInvitation(h: IdentityHost, session: { user: string }, id: string): Promise<Result<null>> {
 	const now = h.now();
 	const [invs, users] = await h.db.read([
-		{ text: 'SELECT id, email, team, assignments, external, party, expires_at, accepted_at, revoked_at FROM sys_invitation WHERE id = $1', params: [id] },
-		{ text: 'SELECT email FROM sys_user WHERE id = $1 AND active', params: [session.user] },
+		{ text: 'SELECT id, email, phone, team, assignments, external, party, expires_at, accepted_at, revoked_at FROM sys_invitation WHERE id = $1', params: [id] },
+		{ text: 'SELECT email, phone FROM sys_user WHERE id = $1 AND active', params: [session.user] },
 	]);
 	const inv = invs!.rows[0] as (Invitation & { expires_at: string; accepted_at: string | null; revoked_at: string | null }) | undefined;
-	const email = (users!.rows[0] as { email: string | null } | undefined)?.email;
+	const member = users!.rows[0] as { email: string | null; phone: string | null } | undefined;
 	if (inv === undefined) return refuse('notFound', 'No such invitation.');
-	if (email == null || email.toLowerCase() !== inv.email.toLowerCase()) return refuse('forbidden', 'This invitation is for another address.');
+	const sameEmail = member?.email != null && inv.email !== null && member.email.toLowerCase() === inv.email.toLowerCase();
+	const samePhone = member?.phone != null && inv.phone !== null && digits(member.phone) === digits(inv.phone);
+	if (!sameEmail && !samePhone) return refuse('forbidden', 'This invitation is for another address.');
 	if (inv.accepted_at !== null || inv.revoked_at !== null || Date.parse(inv.expires_at) <= now.getTime()) return refuse('expired', 'This invitation has expired.');
 	const s = stmt();
 	return write(h, s, `WITH ${acceptPieces(s, inv, session.user, now, 'true', false)}${projection(h, s, 'member')} SELECT (SELECT count(*) FROM member)::int AS n`, undefined,
@@ -95,12 +119,23 @@ export async function resendInvitation(h: IdentityHost, auth: Authority, id: str
 	if (denied) return denied;
 	const s = stmt(), now = h.now();
 	const r = await write(h, s, `WITH u AS (UPDATE sys_invitation SET expires_at = ${s.p(new Date(now.getTime() + INVITE_MS).toISOString())}::timestamptz, revision = revision + 1
-WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${historyOf(s, 'sys_invitation', 'u', now, by(auth))} SELECT n->>'email' AS email FROM u`, undefined,
-		(row) => row === undefined ? refuse('notFound', 'No open invitation.') : ok(String(row['email'])));
+WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${historyOf(s, 'sys_invitation', 'u', now, by(auth))} SELECT n->>'email' AS email, n->>'phone' AS phone FROM u`, undefined,
+		(row) => row === undefined ? refuse('notFound', 'No open invitation.') : ok(addressesOf({ email: row['email'] as string | null, phone: row['phone'] as string | null }) ?? []));
 	if (!r.ok) return r;
-	const link = under(h.publicUrl, `/invite/${id}`);
-	await callPort('email', h.mail, LIMITS.callMs.other, (mail, signal) =>
-		mail.send('email', { to: r.value, subject: 'You are invited to a workspace', text: `Accept your invitation: ${link}`, link }, signal));
+	await deliver(h, r.value, id);
+	return ok(null);
+}
+
+/**
+ * Opens or closes self sign-up (the workspace's `signup`): a runtime switch an administrator flips without a release.
+ * Closed, only members and invited addresses sign in.
+ */
+export async function setSignup(h: IdentityHost, auth: Authority, open: boolean): Promise<Result<null>> {
+	const denied = requireAdmin(auth);
+	if (denied) return denied;
+	if (h.signup === undefined) return refuse('notFound', 'This workspace declares no sign-up.');
+	await h.db.write(open ? { text: `DELETE FROM sys_config WHERE key = '${SIGNUP_KEY}'`, params: [] }
+		: { text: `INSERT INTO sys_config (key, value) VALUES ('${SIGNUP_KEY}', 'closed') ON CONFLICT (key) DO UPDATE SET value = 'closed'`, params: [] });
 	return ok(null);
 }
 
@@ -244,7 +279,7 @@ export async function authenticateKey(h: IdentityHost, bearer: string): Promise<
 }
 
 /**
- * The `bolt.membership` platform run (§5.11.3): hands the queued `{ user, email, team, state }` to the host's port. A
+ * The `bolt.membership` platform run (§5.11.3): hands the queued `{ user, email, phone, team, state }` to the host's port. A
  * port failure fails the run with the facility's kind.
  * ponytail: platform runs take one attempt, so a failed projection waits for the member's next lifecycle change; give
  * platform runs retries when a host's directory drifts.

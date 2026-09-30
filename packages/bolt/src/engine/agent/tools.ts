@@ -256,7 +256,13 @@ export async function perform(x: Pick<ToolContext, 'engine' | 'authority' | 'bin
 	const reads = r.outcome.records.filter((c) => c.collection in x.engine.manifest.collections).slice(0, 20);
 	const stored = reads.length === 0 ? [] : await x.engine.read(reads.map((c) => lowerRead(x.engine.manifest, 'get', [c.collection, c.id])), { as: 'caller', authority: x.authority }, x.bindings)
 		.catch(() => [] as Json[]);
-	return { ...(r.outcome as unknown as { [k: string]: Json }), stored: stored as Json[] };
+	// the event runs this write queued carry its record ids (`queueTriggered`): answer them, so the model can `wait` on one
+	const ids = r.outcome.records.map((c) => c.id);
+	const [queued] = ids.length === 0 ? [undefined] : await x.engine.db.read([{ text: `SELECT id, automation FROM sys_run
+		WHERE state IN ('queued', 'running') AND cause IN ('created', 'updated', 'deleted')
+		AND input -> 'ids' ?| ARRAY(SELECT jsonb_array_elements_text($1::jsonb))`, params: [JSON.stringify(ids)] }]).catch(() => [undefined]);
+	const runs = (queued?.rows ?? []).map((row) => ({ run: String(row['id']), automation: String(row['automation']) }));
+	return { ...(r.outcome as unknown as { [k: string]: Json }), stored: stored as Json[], ...(runs.length === 0 ? {} : { runs }) };
 }
 
 /** `act`'s writes: one `{ callable, input }`, or `actions` of them. */
@@ -413,7 +419,7 @@ export function catalogue(x: ToolContext): Tool[] {
 		+ 'create, update and upsert take one row or an array of rows: many rows (an import from a sheet) are one call and one statement. '
 		+ `Several different writes: actions [{ callable, input }] (at most ${BATCH}) run in order, stopping at the first that does not commit. `
 		+ (e.files !== undefined ? 'An input too large to write out (a month of work days, a sheet of orders): build it with sandbox_run as JSON in /outputs and give that file\'s id as inputFile instead of input. ' : '')
-		+ (can.acts.has(APPROVE) ? `${APPROVE} decides a pending approval request you are an approver of. ` : '') + 'A committed write answers the stored rows.',
+		+ (can.acts.has(APPROVE) ? `${APPROVE} decides a pending approval request you are an approver of. ` : '') + 'A committed write answers the stored rows, and as `runs` any automation runs it started (they run in the background; wait on a run id only when its result is needed now).',
 		obj({ callable: str('collection.verb, collection.action, approvals.process or automation.<name>'), input: { type: ANY, description: 'the input the callable accepts' },
 			inputFile: str('instead of input: the id of a JSON file you wrote with sandbox_run; its contents are the input'),
 			actions: { type: 'array', maxItems: BATCH, items: obj({ callable: { type: 'string' }, input: { type: ANY } }, ['callable']), description: 'several writes, in order' } }),
@@ -644,7 +650,9 @@ export function catalogue(x: ToolContext): Tool[] {
 			if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
 				const deadline = Date.now() + ms;
 				for (;;) {
-					const [rows] = await x.engine.db.read([{ text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY($1::text[])`, params: [ids] }]);
+					// a list travels as JSON text (both adapters send parameters as text), as `Binder.bind` sends one
+					const [rows] = await x.engine.db.read([{ text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run
+						WHERE id = ANY(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))`, params: [JSON.stringify(ids)] }]);
 					const views = (rows?.rows ?? []).map((r) => runView(a, r)).filter((v) => v !== null);
 					if (views.length === 0) return err(`No job or automation run ${ids.join(', ')}.`);
 					const ended = views.find((v) => v.status !== 'queued' && v.status !== 'running');
@@ -653,6 +661,10 @@ export function catalogue(x: ToolContext): Tool[] {
 					await new Promise((resolve) => setTimeout(resolve, Math.min(3_000, Math.max(0, deadline - Date.now()))));
 				}
 			}
+			// with no ids and nothing of this turn running there is nothing to wait for: say so, never answer as if time passed
+			// (a probe's agent read `{ settled: null }` as thirty seconds and polled a background run in a loop)
+			if (ids.length === 0 && x.jobs.pending().length === 0)
+				return ok({ settled: null, pending: [], waited: 0, note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).' });
 			const got = await x.jobs.wait(ids, ms);
 			return ok(got === null ? { settled: null, pending: x.jobs.pending() as unknown as Json } : { settled: got, pending: x.jobs.pending() as unknown as Json });
 		});

@@ -2,7 +2,7 @@
 // An app or group literal is typed against its own folder's children, so, like `collection`, it takes its name (the
 // folder path); the build checks the name against the folder.
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, PolicyName } from '../names.ts';
+import type { AppName, CollectionName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
 import type { AiModelClass, ChildName, GroupName, PageName } from './names.ts';
 
@@ -27,6 +27,25 @@ type WorkspaceBase = {
 	csp?: { connect?: readonly `https://${string}`[] };
 	/** `triage: false` turns off System 1 triage of the in-app agent. */
 	agent?: { triage?: false }; // hook:triage
+	/** Who may join without an invitation (§5.11.2); absent, only invited members join. */
+	signup?: Signup;
+};
+/**
+ * Self sign-up: a newcomer proves an address (`via`: a code by email, by SMS to a mobile number, or either) and becomes
+ * an external member holding `policies`. `party` names the record that is them — the row of `collection` whose
+ * `match[email | phone]` field holds the proven address — so a guest already on file (a customer who booked without an
+ * account) is promoted to a registered member bound to their own rows (`{ actor: 'party' }`). An administrator can close
+ * sign-up in Settings without a release.
+ */
+type Signup = {
+	via: NonEmpty<'email' | 'phone'>;
+	policies: NonEmpty<string>;
+	party?: { collection: string; match: { email?: string; phone?: string } };
+};
+type SignupFor = {
+	via: NonEmpty<'email' | 'phone'>;
+	policies: NonEmpty<PolicyName>;
+	party?: { collection: CollectionName; match: { email?: string; phone?: string } };
 };
 type WorkspaceFor<S> = {
 	tz: IanaZone; locale: string; currency?: CurrencyCode;
@@ -40,6 +59,8 @@ type WorkspaceFor<S> = {
 	csp?: { connect?: readonly `https://${string}`[] };
 	/** Rule 60a (hook:triage): the in-app agent is triaged where the host binds the port; `false` opts out. */
 	agent?: { triage?: false };
+	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
+	signup?: SignupFor;
 };
 type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 

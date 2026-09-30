@@ -150,11 +150,23 @@ describe('wait', () => {
 		let state = 'running';
 		const row = () => ({ id: 'run-1', automation: 'tidy', cause: 'start', state, due_at: 'd', started: 's', progress: null, output: state === 'succeeded' ? { ok: true } : null,
 			error: null, attempts: 1, results: [], input: {}, actor: null, starter: null });
-		const db = { read: async (q: { params: Json[] }[]) => [{ rows: (q[0]!.params[0] as string[]).includes('run-1') ? [row()] : [] }] };
+		// the adapters send every parameter as text, so a list must arrive as JSON text (a bare array became
+		// `malformed array literal` on a live host); the fake refuses anything else, as Postgres did
+		const db = { read: async (q: { params: Json[] }[]) => {
+			const p = q[0]!.params[0];
+			if (typeof p !== 'string') throw new Error('malformed array literal');
+			return [{ rows: (JSON.parse(p) as string[]).includes('run-1') ? [row()] : [] }];
+		} };
 		const x = ctx({}, { db });
 		setTimeout(() => { state = 'succeeded'; }, 50);
 		expect(await result(x, 'wait', { jobs: ['run-1'], seconds: 10 })).toMatchObject({ result: { settled: { id: 'run-1', status: 'succeeded', result: { ok: true } } } });
 		expect(await result(x, 'wait', { jobs: ['nope'] })).toEqual({ result: { error: 'No job or automation run nope.' } });
+	});
+
+	it('says there is nothing to wait for instead of answering as if the time passed', async () => {
+		const started = Date.now();
+		expect(await result(ctx(), 'wait', { seconds: 30 })).toMatchObject({ result: { settled: null, pending: [], waited: 0, note: expect.stringContaining('pass its run id') } });
+		expect(Date.now() - started).toBeLessThan(1_000);
 	});
 });
 

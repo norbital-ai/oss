@@ -9,7 +9,7 @@ import { imageJob } from '../engine/runs/files.ts';
 export type { Cell } from '../engine/agent/xlsx.ts';
 import { canApprove, canSupersede, type Request } from '../engine/approvals/route.ts';
 import * as members from '../engine/identity/members.ts';
-import { refuse, requireAdmin, type IdentityHost, type Result } from '../engine/identity/session.ts';
+import { refuse, requireAdmin, SIGNUP_KEY, type IdentityHost, type Result } from '../engine/identity/session.ts';
 import { actorRef } from '../engine/write/commit.ts';
 import { RUN_VIEW_COLUMNS, runView, type RunView } from '../engine/runs/index.ts';
 import { pausedIntegrations, setPaused } from '../engine/integrations/sync.ts';
@@ -99,6 +99,8 @@ export type Settings = {
 	audit: { collection: string; record: string; revision: number; at: string; actor: string | null; op: string; changes: Json }[];
 	/** `<collection>.integration`s; an administrator pauses or resumes each (L-BOLT-365). */
 	integrations: { name: string; direction: Json; paused: boolean }[];
+	/** The workspace's self sign-up: the means it declares and whether an administrator left it open; `null` when it declares none. */
+	signup: { via: readonly ('email' | 'phone')[]; open: boolean } | null;
 };
 
 /**
@@ -112,13 +114,13 @@ const AUDIT_LIMIT = 200;
 export async function settings(h: IdentityHost, m: EngineManifest, auth: Authority, secrets?: SecretsPort): Promise<Result<Settings>> {
 	const denied = requireAdmin(auth);
 	if (denied) return denied;
-	const [users, teams, assignments, invitations, keys, audit, deliveries] = await h.db.read([
+	const [users, teams, assignments, invitations, keys, audit, deliveries, signup] = await h.db.read([
 		// administrators first, then staff, then external members; by name, else address (L-BOLT-516)
-		q(`SELECT u.id, u.email, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
-			FROM sys_user u ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, '')), u.id`),
+		q(`SELECT u.id, u.email, u.phone, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
+			FROM sys_user u ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
 		q('SELECT id, name, parent FROM sys_team ORDER BY lower(name)'),
 		q('SELECT id, principal_type, principal, policy, scope FROM sys_assignment ORDER BY policy, id'),
-		q(`SELECT id, email, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
+		q(`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
 			WHEN expires_at <= $1::timestamptz THEN 'expired' ELSE 'open' END AS status, expires_at::text AS expires_at FROM sys_invitation ORDER BY expires_at DESC`, h.now().toISOString()),
 		q('SELECT id, name, prefix, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'),
 		q(`SELECT collection, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
@@ -128,6 +130,7 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 			min(next_attempt_at) FILTER (WHERE status = 'queued' AND attempts > 0)::text AS next_retry,
 			(array_agg(error ORDER BY created_at DESC) FILTER (WHERE status IN ('failed', 'uncertain', 'skipped') AND error IS NOT NULL))[1] AS last_error
 			FROM sys_message WHERE direction = 'outbound' AND created_at > $1::timestamptz - interval '1 day' GROUP BY channel`, h.now().toISOString()),
+		q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
 	]);
 	const idle: ChannelDelivery = { sent: 0, pending: 0, retrying: 0, failed: 0, nextRetry: null, lastError: null };
 	const delivery = new Map(deliveries!.rows.map((r) => [String(r['channel']), { sent: Number(r['sent']), pending: Number(r['pending']), retrying: Number(r['retrying']),
@@ -144,6 +147,7 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 		connections: Object.entries(m.connections).map(([name, c]) => ({ name, auth: (c as { auth?: Json }).auth ?? null })),
 		mcp: Object.entries(m.mcp).map(([name, s]) => ({ name, url: (s as { url?: Json }).url ?? null })),
 		integrations: Object.entries(m.integrations).map(([name, i]) => ({ name, direction: (i as Row)['direction'] ?? null, paused: paused.has(name) })),
+		signup: h.signup === undefined ? null : { via: h.signup.via, open: signup!.rows[0]?.value !== 'closed' },
 	} };
 }
 
@@ -185,12 +189,13 @@ export async function settingsOp(h: IdentityHost, m: EngineManifest, auth: Autho
 	if (denied) return denied;
 	const id = x['id'];
 	switch (op) {
+		case 'setSignup': return typeof x['open'] === 'boolean' ? members.setSignup(h, auth, x['open']) : bad(op);
 		case 'invite': {
-			if (!str(x['email']) || !(x['team'] === undefined || str(x['team']))) return bad(op);
+			if (!(str(x['email']) || str(x['phone'])) || !(x['team'] === undefined || str(x['team']))) return bad(op);
 			const assignments = Array.isArray(x['assignments']) ? x['assignments'] : [];
 			if (!assignments.every((a) => typeof a === 'object' && a !== null && !Array.isArray(a) && str((a as Row)['policy']) && ((a as Row)['scope'] === undefined || ref((a as Row)['scope'])))) return bad(op);
 			if (!(x['party'] === undefined || ref(x['party']))) return bad(op);
-			return members.invite(h, m, auth, { email: x['email'], ...(str(x['team']) ? { team: x['team'] } : {}), external: x['external'] === true,
+			return members.invite(h, m, auth, { ...(str(x['email']) ? { email: x['email'] } : {}), ...(str(x['phone']) ? { phone: x['phone'] } : {}), ...(str(x['team']) ? { team: x['team'] } : {}), external: x['external'] === true,
 				assignments: assignments as members.InviteInput['assignments'] & object, ...(ref(x['party']) ? { party: x['party'] } : {}) });
 		}
 		case 'revokeInvitation': return str(id) ? members.revokeInvitation(h, auth, id) : bad(op);

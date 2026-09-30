@@ -29,11 +29,11 @@
 	{:else if signedIn}
 		<Stack gap="lg">
 			<h1 class="text-title text-balance">{t('Accept the invitation')}</h1>
-			<p class="text-sm leading-relaxed text-muted-foreground">{t('You are invited to this workspace as')} {r.value.email}.</p>
+			<p class="text-sm leading-relaxed text-muted-foreground">{t('You are invited to this workspace as')} {r.value.email ?? r.value.phone}.</p>
 			{#if error !== null}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 			<Button class="w-full" onclick={accept}>{t('Accept the invitation')}</Button>
 		</Stack>
 	{:else}
-		<SignIn {api} {t} next="/" email={r.value.email} {workspace} />
+		<SignIn {api} {t} next="/" address={r.value.email ?? r.value.phone ?? ''} {workspace} />
 	{/if}
 {/await}

@@ -49,6 +49,18 @@ export function buildChecks(m: EngineManifest, bodies: { automations: readonly s
 	const out: Finding[] = [];
 	const at = (code: string, role: string, name: string, message: string) => out.push({ code, path: path(role, name), message: `${path(role, name)}: ${message}` });
 
+	// self sign-up (§5.11.2): the policies a newcomer holds exist, and the record that is them is matched on text fields
+	const signup = (m.workspace as { signup?: { policies: readonly string[]; party?: { collection: string; match: { email?: string; phone?: string } } } }).signup;
+	for (const p of signup?.policies ?? []) if (m.policies[p] === undefined) at('workspace/signup', 'workspace', 'workspace', `signup: there is no policy '${p}'`);
+	if (signup?.party !== undefined) {
+		const { collection, match } = signup.party;
+		const fields = m.models[collection]?.fields as { readonly [f: string]: { kind: string } } | undefined;
+		if (fields === undefined) at('workspace/signup', 'workspace', 'workspace', `signup: party collection '${collection}' has no model`);
+		else for (const f of [match.email, match.phone]) if (f !== undefined && fields[f]?.kind !== 'text')
+			at('workspace/signup', 'workspace', 'workspace', `signup: party match '${collection}.${f}' is not a text field`);
+		if (match.email === undefined && match.phone === undefined) at('workspace/signup', 'workspace', 'workspace', 'signup: party matches on an email field, a phone field, or both');
+	}
+
 	for (const [model, spec] of Object.entries(m.models)) {
 		for (const [f, k] of Object.entries(spec.fields) as [string, Obj & { kind: string }][]) {
 			const range = (message: string) => at('model/range', 'model', model, `${f}: ${message}`);

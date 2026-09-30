@@ -47,6 +47,8 @@ export type ShellBoot = {
 	preview: { user: string; by: string } | { team: string; by: string } | null;
 	/** The host's banner for this member (`ShellHost.notice`: a billing notice). */
 	notice?: ShellNotice;
+	/** The member's other workspaces (`ShellHost.workspaces`): the switcher's options. */
+	workspaces?: readonly WorkspaceLink[];
 	nav: NavNode[]; surfaces: Surfaces; inbox: number;
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
@@ -61,6 +63,8 @@ export type ShellBoot = {
 	/** The schema fingerprint the page boots against: `$bolt` sends it as `Bolt-Contract` (L-BOLT-171). */
 	contract?: string;
 };
+/** Another workspace the member belongs to; `href` enters it. */
+export type WorkspaceLink = { handle: string; name: string; href: string };
 /** A host banner above every page; `href` is its one action. */
 export type ShellNotice = { text: string; tone?: 'info' | 'warning'; href?: string; action?: string };
 /**

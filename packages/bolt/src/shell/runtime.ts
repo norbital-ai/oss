@@ -45,10 +45,11 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 	}
 	return {
 		boot: (app?: string) => call<ShellBoot>('GET', app === undefined ? SHELL : `${SHELL}${q('app', app)}`),
-		sendCode: (email: string) => call<null>('POST', PATHS.session.code, { email }),
-		verify: (email: string, code: string) => call<{ user: string }>('POST', PATHS.session.verify, { email, code }),
+		methods: () => call<import('./host.ts').SignInMethods>('GET', PATHS.session.methods),
+		sendCode: (address: string) => call<null>('POST', PATHS.session.code, { address }),
+		verify: (address: string, code: string) => call<{ user: string }>('POST', PATHS.session.verify, { address, code }),
 		signOut: () => call<null>('POST', PATHS.session.signout),
-		invitation: (id: string) => call<{ email: string; team: string | null; external: boolean; status: 'open' | 'accepted' | 'revoked' | 'expired' }>(
+		invitation: (id: string) => call<{ email: string | null; phone: string | null; team: string | null; external: boolean; status: 'open' | 'accepted' | 'revoked' | 'expired' }>(
 			'GET', `${PATHS.session.invitation}/${encodeURIComponent(id)}`),
 		accept: (id: string) => call<null>('POST', PATHS.session.invitation, { id }),
 		inbox: () => call<import('./data.ts').Inbox>('GET', `${SHELL}/inbox`),

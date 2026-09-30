@@ -21,6 +21,7 @@ import Hero from './support/shell-hero.svelte';
 import Upload from './support/shell-upload.svelte';
 import Rep from './support/shell-rep.svelte';
 import NoisyRep from './support/shell-rep-noisy.svelte';
+import BadRead from './support/shell-bad-read.svelte';
 import ScopedPage from './support/shell-scoped-page.svelte';
 import ScopedShellPage from './support/shell-scoped-shell-page.svelte';
 import ScopedRep from './support/shell-scoped-rep.svelte';
@@ -192,6 +193,12 @@ describe('sweep() mounts representations (§3.7, X-20)', () => {
 			representations: { docs: page(Rep as Component) as never } });
 		expect(report.visited.map((v) => v.path)).toEqual(expect.arrayContaining([`/app/desk/hero?record=docs/new`, `/app/desk/hero?record=docs/${doc}`]));
 		expect(report.findings).toEqual([]);
+	});
+
+	it('finds a live read the host refuses as malformed, which no console shows', async () => {
+		const t = await testWorkspace({ manifest });
+		await expect(sweep(t, { as: [{ admin: true }], pages: { 'desk/hero': page(BadRead as Component), 'desk/upload': page(Hero) } }))
+			.rejects.toThrow(/administrator \/app\/desk\/hero read: .*invalid/);
 	});
 
 	it('finds what a representation logs', async () => {

@@ -4,7 +4,7 @@
 // popover: Settings (People, Organization, Audit, Automations), System (Channels, Integrations, Environment secrets,
 // Workspace Studio, whose runtime log is the workspace log) and Kiosks (every `kiosk: true` page the viewer may open — device surfaces, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
-import { based, type NavNode, type NavPage, type ShellBoot } from './nav.ts';
+import { based, type NavNode, type NavPage, type ShellBoot, type WorkspaceLink } from './nav.ts';
 
 /** Norbius's row is no page: the shell opens the agent when the navigator is handed this href. */
 export const NORBIUS = '#norbius';
@@ -18,8 +18,8 @@ export interface NavItem {
 	readonly featureColor?: FeatureColorKey;
 }
 export interface NavModel {
-	/** The switcher's workspace: its name and logo (the host's brand icon), else initials. */
-	readonly workspace: { readonly name: string; readonly logo: string | null; readonly apex: string | null };
+	/** The switcher's workspace: its name and logo (the host's brand icon), else initials; `others` are its options. */
+	readonly workspace: { readonly name: string; readonly logo: string | null; readonly others: readonly WorkspaceLink[] };
 	readonly user: { readonly name: string; readonly email: string; readonly role: string };
 	readonly sections: readonly { readonly key: 'operations' | 'applications'; readonly label: string; readonly items: readonly NavItem[] }[];
 	readonly utilities: readonly NavItem[];
@@ -84,7 +84,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 		...group('kiosks', 'Kiosks', boot.nav.flatMap(kioskPages).map((p) => leaf(`${p.app}/${p.name}`, p.title, p.icon ?? 'lucide:scan-face', p.href))),
 	];
 	return {
-		workspace: { name: boot.workspace.name, logo: boot.workspace.logo ?? null, apex: boot.workspace.apex ?? null },
+		workspace: { name: boot.workspace.name, logo: boot.workspace.logo ?? null, others: boot.workspaces ?? [] },
 		user: { name: boot.name ?? actor?.email ?? '', email: actor?.email ?? '', role: boot.admin ? t('Administrator') : actor?.external ? t('External') : t('Member') },
 		sections: [...(ops.length > 0 ? [{ key: 'operations' as const, label: t('Operations'), items: ops }] : []),
 			{ key: 'applications', label: t('Applications'), items: apps }],

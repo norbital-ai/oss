@@ -3,6 +3,7 @@
 // The remove/anonymise statement of a tenant collection is the write compiler's generated delete/update without a
 // transform (38e(d)); it consults `judgeErase` first.
 import type { Json } from '../../decl/values.ts';
+import { digits } from './address.ts';
 import type { Authority, EngineManifest, RowData } from '../contracts.ts';
 import { macKey } from '../access/rate.ts';
 import { catalogOf } from '../access/pred.ts';
@@ -95,13 +96,13 @@ export function judgeErase(m: EngineManifest, auth: Authority, collection: strin
 const PERSONAL = `ARRAY['email', 'name', 'phone', 'telegram', 'party', 'party_id']`;
 /**
  * `sys_user.erase` (38e(e)): an inactive member only. One statement: fixed values onto the row; the member's sessions,
- * challenge, assignments, push subscriptions and every invitation to their address go.
+ * challenges, assignments, push subscriptions and every invitation to their email or number go.
  */
 export async function eraseUser(h: IdentityHost, auth: Authority, user: string): Promise<Result<null>> {
 	const denied = requireAdmin(auth);
 	if (denied) return denied;
-	const [rows] = await h.db.read([{ text: 'SELECT email, active FROM sys_user WHERE id = $1', params: [user] }]);
-	const u = rows!.rows[0] as { email: string | null; active: boolean } | undefined;
+	const [rows] = await h.db.read([{ text: 'SELECT email, phone, active FROM sys_user WHERE id = $1', params: [user] }]);
+	const u = rows!.rows[0] as { email: string | null; phone: string | null; active: boolean } | undefined;
 	if (u === undefined) return refuse('notFound', 'No such member.');
 	if (u.active) return refuse('active', 'Deactivate the member before erasing them.');
 	const s = stmt(), id = s.p(user), email = s.p((u.email ?? '').toLowerCase()), now = h.now();
@@ -112,11 +113,11 @@ export async function eraseUser(h: IdentityHost, auth: Authority, user: string):
 purge AS (UPDATE bolt_history SET changes = changes - ${PERSONAL} WHERE collection = 'sys_user' AND record::text = ${id} AND ${gate}),
 ${historyOf(s, 'sys_user', 'erased', now, by(auth), 'erased')},
 sessions AS (DELETE FROM sys_session WHERE "user" = ${id} AND ${gate}),
-challenge AS (DELETE FROM sys_challenge WHERE address_mac = ${s.p(macKey(h.keys.ipMac, (u.email ?? '').trim().toLowerCase()))} AND ${gate}),
+challenge AS (DELETE FROM sys_challenge WHERE address_mac IN (${s.p(macKey(h.keys.ipMac, (u.email ?? '').trim().toLowerCase()))}, ${s.p(macKey(h.keys.ipMac, `tel:${digits(u.phone ?? '')}`))}) AND ${gate}),
 grants AS (DELETE FROM sys_assignment WHERE principal_type = 'sys_user' AND principal = ${id} AND ${gate} ${IMAGES}),
 ${historyOf(s, 'sys_assignment', 'grants', now, by(auth))},
 push AS (DELETE FROM bolt_push_subscriptions WHERE "user" = ${id} AND ${gate}),
-invitations AS (DELETE FROM sys_invitation WHERE lower(email) = ${email} AND ${gate} RETURNING id),
+invitations AS (DELETE FROM sys_invitation WHERE (lower(email) = ${email} OR (${s.p(digits(u.phone ?? ''))} <> '' AND regexp_replace(phone, '\\D', '', 'g') = ${s.p(digits(u.phone ?? ''))})) AND ${gate} RETURNING id),
 forgotten AS (DELETE FROM bolt_history WHERE collection = 'sys_invitation' AND record::text IN (SELECT id FROM invitations))${projection(h, s, 'erased', 'true', true)}
 SELECT count(*)::int AS n FROM erased` });
 	if (out.rows[0]?.n !== 1) return refuse('active', 'Deactivate the member before erasing them.');

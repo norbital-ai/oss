@@ -1,15 +1,32 @@
-// Sessions and sign-in (§5.11.2, rules 38, 38a): an emailed one-time code against a persisted challenge, sessions stored
+// Sessions and sign-in (§5.11.2, rules 38, 38a): a one-time code, emailed or texted, against a persisted challenge, sessions stored
 // only as a SHA-256 of their token, the host operations `session.mint` and `founder.bootstrap` (§5.11.3). Every act is
 // one write statement that also persists its rate increments; reads and pre-statement refusals are memory-only.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
 import { addressBucket, macKey, ratePiece, type Charge, type RateWindows } from '../access/rate.ts';
 import { callPort, DbError, LIMITS, type Authority, type Lock, type TenantDb, type TransportPort } from '../contracts.ts';
+import { ADDRESS_HINT, addressKey, memberColumn, memberValue, parseAddress, type Address } from './address.ts';
 
-/** What identity needs from its host. `devSink` is `bolt dev` and the test kit only: the fixed code `123456` (38a(f)). */
+/**
+ * Self sign-up (the workspace's `signup`): who may join without an invitation, by which proof, holding which policies, and
+ * the record that is them — the row of `party.collection` whose `party.match[kind]` field holds the proven address.
+ */
+export type Signup = { via: readonly ('email' | 'phone')[]; policies: readonly string[];
+	party?: { collection: string; match: { readonly email?: string; readonly phone?: string } } };
+/** The workspace's declared self sign-up, as identity hosts take it. */
+export const signupOf = (m: { readonly workspace: object }): Signup | undefined => (m.workspace as { signup?: Signup }).signup;
+/** The `sys_config` key an administrator closes self sign-up with (`'closed'`); absent, a declared sign-up is open. */
+export const SIGNUP_KEY = 'signup';
+
+/**
+ * What identity needs from its host. `mail` sends emailed codes and invitations, `sms` texted ones. `devSink` is
+ * `bolt dev` and the test kit only: the fixed code `123456` (38a(f)).
+ */
 export type IdentityHost = {
 	db: TenantDb; now: () => Date; windows: RateWindows; keys: Keys;
-	mail?: TransportPort; devSink?: boolean; publicUrl: string;
+	mail?: TransportPort; sms?: TransportPort; devSink?: boolean; publicUrl: string;
+	/** The workspace's `signup` declaration; absent, only invited members join. */
+	signup?: Signup;
 	/**
 	 * §5.11.3: present when the host binds the `membership` port. Member lifecycle verbs then queue `bolt.membership` in
 	 * their statement, and `announce` wakes the run queue for it (rule 52a).
@@ -32,7 +49,6 @@ export function stmt() {
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const randomToken = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
 export const newId = () => crypto.randomUUID();
-const addressOf = (email: string) => email.trim().toLowerCase();
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 export const SESSION_MS = 7 * DAY;
 const CODE_MS = 10 * 60_000, ATTEMPTS = 3;
@@ -52,9 +68,9 @@ export async function loadKeys(db: TenantDb): Promise<Keys> {
 }
 
 // ── pre-sign-in limits (rule 38): constants, per address MAC and per IP MAC ──
-function preSignIn(h: IdentityHost, rule: 'session.sendCode' | 'session.verifyCode', email: string, ip: string): Charge[] {
+function preSignIn(h: IdentityHost, rule: 'session.sendCode' | 'session.verifyCode', a: Address, ip: string): Charge[] {
 	return [
-		{ rule, bucket: macKey(h.keys.ipMac, addressOf(email)), limit: rule === 'session.sendCode' ? 5 : 20, windowMs: HOUR },
+		{ rule, bucket: macKey(h.keys.ipMac, addressKey(a)), limit: rule === 'session.sendCode' ? 5 : 20, windowMs: HOUR },
 		{ rule: 'session.ip', bucket: macKey(h.keys.ipMac, addressBucket(ip)), limit: 60, windowMs: HOUR },
 	];
 }
@@ -63,8 +79,8 @@ function admitMemory(h: IdentityHost, charges: readonly Charge[]): Result<never>
 	return v.ok ? null : refuse('rateLimited', 'Too many attempts. Try again later.', v.retryAfter);
 }
 const retryAfter = (h: IdentityHost) => Math.ceil((HOUR - (h.now().getTime() % HOUR)) / 1000);
-const codeMac = (h: IdentityHost, email: string, code: string) =>
-	createHmac('sha256', h.keys.session).update(`${addressOf(email)}\u0000${code}`).digest('hex');
+const codeMac = (h: IdentityHost, a: Address, code: string) =>
+	createHmac('sha256', h.keys.session).update(`${addressKey(a)}\u0000${code}`).digest('hex');
 /** Six digits from the host's CSPRNG (38a(d)), unbiased by rejection. */
 function sixDigits(): string {
 	for (;;) {
@@ -86,32 +102,55 @@ const codeEmail = (code: string) => `<!DOCTYPE html>
 <tr><td style="padding:8px 32px 32px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:#52525b">It expires in 10 minutes. If you did not ask for this code, you can ignore this email.</td></tr>
 </table></td></tr></table></body></html>`;
 
+/** A newcomer may join by proving `a`: the workspace declares sign-up by that means and no administrator has closed it. */
+const signupOpen = (h: IdentityHost, a: Address, config: { readonly value?: unknown } | undefined) =>
+	h.signup !== undefined && h.signup.via.includes(a.kind) && config?.value !== 'closed';
+const SIGNUP_CONFIG = { text: `SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`, params: [] };
+/** The open invitations addressed to `a`, newest first. */
+const invitationsTo = (a: Address, now: Date) => ({
+	text: `SELECT id, email, phone, team, assignments, external, party FROM sys_invitation WHERE ${a.kind === 'email' ? 'lower(email) = $1' : `regexp_replace(phone, '\\D', '', 'g') = $1`}
+		AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $2::timestamptz ORDER BY expires_at DESC LIMIT 1`,
+	params: [memberValue(a), now.toISOString()] });
+
 /**
- * Rule 38a(a–c): persists the challenge (replacing any earlier one) and only then hands the code to the mail port,
- * whether or not the address is a member. A mail refusal is returned; a fresh `sendCode` is allowed at once.
+ * Rule 38a(a–c): persists the challenge (replacing any earlier one) and only then hands the code to the mail port (an
+ * email) or the SMS port (a mobile number), whether or not the address is a member. A text costs money and a stranger's
+ * number is anyone's to type, so a number that is no member's, invited nor free to sign up is answered the same and
+ * sent nothing. A port refusal is returned; a fresh `sendCode` is allowed at once.
  */
-export async function sendCode(h: IdentityHost, email: string, ip: string): Promise<Result<null>> {
-	const charges = preSignIn(h, 'session.sendCode', email, ip);
+export async function sendCode(h: IdentityHost, typed: string, ip: string): Promise<Result<null>> {
+	const a = parseAddress(typed);
+	if (a === null) return refuse('check', ADDRESS_HINT);
+	const charges = preSignIn(h, 'session.sendCode', a, ip);
 	const limited = admitMemory(h, charges);
 	if (limited) return limited;
+	if (a.kind === 'phone') {
+		const now = h.now();
+		const [users, invitations, config] = await h.db.read([
+			{ text: `SELECT 1 FROM sys_user WHERE ${memberColumn(a, '$1')} AND active`, params: [memberValue(a)] }, invitationsTo(a, now), SIGNUP_CONFIG]);
+		if (users!.rows.length === 0 && invitations!.rows.length === 0 && !signupOpen(h, a, config!.rows[0])) return ok(null);
+	}
 	const code = h.devSink === true ? '123456' : sixDigits();
 	const now = h.now();
 	const s = stmt();
 	const rate = ratePiece(charges, now.getTime(), s.p);
 	const saved = await h.db.write({ params: s.params, text: `WITH ${rate.cte},
 ch AS (INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
-	SELECT ${s.p(macKey(h.keys.ipMac, addressOf(email)))}, ${s.p(codeMac(h, email, code))}, 0, ${s.p(new Date(now.getTime() + CODE_MS).toISOString())}::timestamptz
+	SELECT ${s.p(macKey(h.keys.ipMac, addressKey(a)))}, ${s.p(codeMac(h, a, code))}, 0, ${s.p(new Date(now.getTime() + CODE_MS).toISOString())}::timestamptz
 	WHERE ${rate.admitted}
 	ON CONFLICT (address_mac) DO UPDATE SET code_mac = excluded.code_mac, attempts = 0, expires_at = excluded.expires_at RETURNING 1)
 SELECT count(*)::int AS saved FROM ch` });
 	if (saved.rows[0]!.saved !== 1) return refuse('rateLimited', 'Too many attempts. Try again later.', retryAfter(h));
-	const sent = await callPort('email', h.mail, LIMITS.callMs.other, (m, signal) =>
-		m.send('email', { to: email, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in 10 minutes.`, html: codeEmail(code) }, signal));
+	const sent = a.kind === 'email'
+		? await callPort('email', h.mail, LIMITS.callMs.other, (m, signal) =>
+			m.send('email', { to: a.value, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in 10 minutes.`, html: codeEmail(code) }, signal))
+		: await callPort('sms', h.sms, LIMITS.callMs.other, (m, signal) =>
+			m.send('sms', { to: a.value, text: `Your sign-in code is ${code}. It expires in 10 minutes.` }, signal));
 	return 'kind' in sent ? refuse(sent.kind === 'unavailable' ? 'unavailable' : sent.kind === 'timeout' ? 'timeout' : 'upstream', 'The code could not be sent.') : ok(null);
 }
 
 export type Session = { token: string; user: string; expiresAt: string };
-export type Invitation = { id: string; email: string; team: string | null; assignments: { policy: string; scope?: Json }[]; external: boolean; party: Json };
+export type Invitation = { id: string; email: string | null; phone: string | null; team: string | null; assignments: { policy: string; scope?: Json }[]; external: boolean; party: Json };
 
 // ── history (§5.11.1, rule 17): `sys_user`, `sys_team`, `sys_assignment` and `sys_invitation` keep `bolt_history` ──
 /** The RETURNING of a CTE that writes a historied identity table: its id and both images. */
@@ -142,8 +181,8 @@ export const MEMBERSHIP = 'bolt.membership';
  */
 export function projection(h: IdentityHost, s: ReturnType<typeof stmt>, cte: string, gate = 'true', erased = false): string {
 	if (h.membership === undefined) return '';
-	const input = erased ? `jsonb_build_object('user', x.id, 'email', NULL, 'team', NULL, 'state', 'erased')`
-		: `jsonb_build_object('user', x.id, 'email', x.n->'email', 'team', x.n->'team', 'state', CASE WHEN (x.n->>'active')::boolean THEN 'active' ELSE 'inactive' END)`;
+	const input = erased ? `jsonb_build_object('user', x.id, 'email', NULL, 'phone', NULL, 'team', NULL, 'state', 'erased')`
+		: `jsonb_build_object('user', x.id, 'email', x.n->'email', 'phone', x.n->'phone', 'team', x.n->'team', 'state', CASE WHEN (x.n->>'active')::boolean THEN 'active' ELSE 'inactive' END)`;
 	return `,\n${cte}_m AS (INSERT INTO sys_run (id, automation, input, due_at, cause, depth)
 	SELECT gen_random_uuid()::text, ${s.p(MEMBERSHIP)}, ${input}, ${s.p(h.now().toISOString())}::timestamptz, 'platform', 0 FROM ${cte} x WHERE ${gate})`;
 }
@@ -179,53 +218,84 @@ const sessionValues = (s: ReturnType<typeof stmt>, now: Date, via: string, hash:
 	`${s.p(newId())}, ${s.p(hash)}, ${s.p(via)}, ${s.p(now.toISOString())}::timestamptz, ${s.p(new Date(now.getTime() + SESSION_MS).toISOString())}::timestamptz, ${s.p(now.toISOString())}::timestamptz`;
 export const SESSION_COLUMNS = `(id, "user", token_hash, via, created_at, expires_at, refreshed_at)`;
 
+/** The one record `signup.party` names for `a` (its match field holds the address), or none. */
+const partyRow = (h: IdentityHost, a: Address) => {
+	const field = h.signup?.party?.match[a.kind];
+	if (h.signup?.party === undefined || field === undefined) return { text: 'SELECT NULL::text AS id WHERE false', params: [] };
+	const column = `"${h.signup.party.collection}"."${field}"`;
+	return { text: `SELECT id::text AS id FROM "${h.signup.party.collection}" WHERE ${a.kind === 'email' ? `lower(${column}) = $1` : `regexp_replace(${column}, '\\D', '', 'g') = $1`} LIMIT 2`,
+		params: [memberValue(a)] };
+};
+
 /**
- * Rule 38a(b): 3 attempts per code, compared in constant time, single use. Success mints a session for the member, or,
- * for an address with an open invitation and no member yet, creates the member and accepts it in the same statement.
+ * Rule 38a(b): 3 attempts per code, compared in constant time, single use. Success mints a session for the member; for
+ * an address with no member yet, it creates one in the same statement: accepting the open invitation to it, or, where
+ * the workspace lets newcomers sign up by that means, as an external member holding `signup.policies` and bound to the
+ * record that is them (a guest becomes a registered member). A member who signed up before their record existed is
+ * bound to it at their next sign-in.
  */
-export async function verifyCode(h: IdentityHost, email: string, code: string, ip: string): Promise<Result<Session>> {
-	const charges = preSignIn(h, 'session.verifyCode', email, ip);
+export async function verifyCode(h: IdentityHost, typed: string, code: string, ip: string): Promise<Result<Session>> {
+	const a = parseAddress(typed);
+	if (a === null) return refuse('check', ADDRESS_HINT);
+	const charges = preSignIn(h, 'session.verifyCode', a, ip);
 	const limited = admitMemory(h, charges);
 	if (limited) return limited;
-	const now = h.now(), address = macKey(h.keys.ipMac, addressOf(email));
-	const [challenges, users, invitations] = await h.db.read([
+	const now = h.now(), address = macKey(h.keys.ipMac, addressKey(a));
+	const [challenges, users, invitations, config, parties] = await h.db.read([
 		{ text: 'SELECT code_mac, attempts, expires_at FROM sys_challenge WHERE address_mac = $1', params: [address] },
-		{ text: 'SELECT id, active FROM sys_user WHERE lower(email) = $1', params: [addressOf(email)] },
-		{ text: `SELECT id, email, team, assignments, external, party FROM sys_invitation WHERE lower(email) = $1 AND accepted_at IS NULL
-			AND revoked_at IS NULL AND expires_at > $2::timestamptz ORDER BY expires_at DESC LIMIT 1`, params: [addressOf(email), now.toISOString()] },
+		{ text: `SELECT id, active, kind, party FROM sys_user WHERE ${memberColumn(a, '$1')}`, params: [memberValue(a)] },
+		invitationsTo(a, now), SIGNUP_CONFIG, partyRow(h, a),
 	]);
 	const ch = challenges!.rows[0] as { code_mac: string; attempts: number; expires_at: string } | undefined;
 	if (ch === undefined || Date.parse(ch.expires_at) <= now.getTime()) return refuse('invalidCode', 'The code is wrong or has expired.');
 	const s = stmt();
 	const rate = ratePiece(charges, now.getTime(), s.p);
-	const given = Buffer.from(codeMac(h, email, /^\d{6}$/.test(code) ? code : 'x'), 'hex');
+	const given = Buffer.from(codeMac(h, a, /^\d{6}$/.test(code) ? code : 'x'), 'hex');
 	if (!timingSafeEqual(given, Buffer.from(ch.code_mac, 'hex'))) {
-		const a = s.p(address), n = s.p(ch.attempts);
+		const at = s.p(address), n = s.p(ch.attempts);
 		await h.db.write({ params: s.params, text: `WITH ${rate.cte},
-bump AS (UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${a} AND attempts = ${n} AND attempts + 1 < ${ATTEMPTS} RETURNING 1),
-gone AS (DELETE FROM sys_challenge WHERE address_mac = ${a} AND attempts = ${n} AND attempts + 1 >= ${ATTEMPTS} RETURNING 1)
+bump AS (UPDATE sys_challenge SET attempts = attempts + 1 WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 < ${ATTEMPTS} RETURNING 1),
+gone AS (DELETE FROM sys_challenge WHERE address_mac = ${at} AND attempts = ${n} AND attempts + 1 >= ${ATTEMPTS} RETURNING 1)
 SELECT 1` });
 		return refuse('invalidCode', 'The code is wrong or has expired.');
 	}
-	const user = users!.rows[0] as { id: string; active: boolean } | undefined;
+	const user = users!.rows[0] as { id: string; active: boolean; kind: string; party: Json } | undefined;
 	const inv = invitations!.rows[0] as Invitation | undefined;
+	const signup = user === undefined && inv === undefined && signupOpen(h, a, config!.rows[0]);
+	// exactly one record is the person; two holding the same address name nobody
+	const party = parties!.rows.length === 1 ? { collection: h.signup!.party!.collection, id: String(parties!.rows[0]!.id) } : null;
 	if (user !== undefined && !user.active) return refuse('notMember', 'This member is deactivated.');
-	if (user === undefined && inv === undefined) return refuse('notMember', 'This address has no invitation to this workspace.');
+	if (user === undefined && inv === undefined && !signup) return refuse('notMember', 'This address has no invitation to this workspace.');
 	const token = randomToken(), userId = user?.id ?? newId();
 	const used = `used AS (DELETE FROM sys_challenge WHERE address_mac = ${s.p(address)} AND attempts = ${s.p(ch.attempts)} AND ${rate.admitted} RETURNING 1)`;
 	const pieces = [rate.cte, used];
-	if (user === undefined) {
-		const i = inv!;
-		pieces.push(`born AS (INSERT INTO sys_user (id, email, name, kind, team, party)
-	SELECT ${s.p(userId)}, ${s.p(email.trim())}, ${s.p(email.trim().split('@')[0]!)}, ${s.p(i.external ? 'external' : 'staff')}, ${s.p(i.team)}, ${s.p(jsonb(i.party))}::jsonb
-	WHERE EXISTS (SELECT 1 FROM used) AND EXISTS (SELECT 1 FROM sys_invitation WHERE ${openInvitation(s, i.id, now)}) ${IMAGES}),
+	const email = a.kind === 'email' ? a.value : inv?.email ?? null, phone = a.kind === 'phone' ? a.value : inv?.phone ?? null;
+	const name = a.kind === 'email' ? a.value.split('@')[0]! : a.value;
+	if (user === undefined && inv !== undefined) {
+		pieces.push(`born AS (INSERT INTO sys_user (id, email, phone, name, kind, team, party)
+	SELECT ${s.p(userId)}, ${s.p(email)}, ${s.p(phone)}, ${s.p(name)}, ${s.p(inv.external ? 'external' : 'staff')}, ${s.p(inv.team)}, ${s.p(jsonb(inv.party))}::jsonb
+	WHERE EXISTS (SELECT 1 FROM used) AND EXISTS (SELECT 1 FROM sys_invitation WHERE ${openInvitation(s, inv.id, now)}) ${IMAGES}),
 ${historyOf(s, 'sys_user', 'born', now, `member:${userId}`)}`);
-		pieces.push(acceptPieces(s, i, userId, now, 'EXISTS (SELECT 1 FROM born)', true));
+		pieces.push(acceptPieces(s, inv, userId, now, 'EXISTS (SELECT 1 FROM born)', true));
+	} else if (signup) {
+		const grants = h.signup!.policies.map((p) => `(${s.p(newId())}, 'sys_user', ${s.p(userId)}, ${s.p(p)}, NULL::jsonb)`);
+		pieces.push(`born AS (INSERT INTO sys_user (id, email, phone, name, kind, party)
+	SELECT ${s.p(userId)}, ${s.p(email)}, ${s.p(phone)}, ${s.p(name)}, 'external', ${s.p(jsonb(party))}::jsonb
+	WHERE EXISTS (SELECT 1 FROM used) ${IMAGES}),
+${historyOf(s, 'sys_user', 'born', now, `member:${userId}`)},
+member AS (SELECT id FROM born),
+grants AS (INSERT INTO sys_assignment (id, principal_type, principal, policy, scope)
+	SELECT * FROM (VALUES ${grants.join(', ')}) v WHERE EXISTS (SELECT 1 FROM born) ${IMAGES}),
+${historyOf(s, 'sys_assignment', 'grants', now, `member:${userId}`)}`);
+	} else if (user!.kind === 'external' && user!.party === null && party !== null) {
+		pieces.push(`bound AS (UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
+	WHERE id = ${s.p(userId)} AND party IS NULL AND EXISTS (SELECT 1 FROM used) ${IMAGES}),
+${historyOf(s, 'sys_user', 'bound', now, `member:${userId}`)}`);
 	}
-	const via = user === undefined ? 'invitation' : 'code';
 	const born = user === undefined;
-	// §5.11.3: a member born by accepting an invitation is projected, in this statement
-	const project = born ? projection(h, s, 'born', 'EXISTS (SELECT 1 FROM accepted)') : '';
+	const via = !born ? 'code' : signup ? 'signup' : 'invitation';
+	// §5.11.3: a member born by accepting an invitation or signing up is projected, in this statement
+	const project = born ? projection(h, s, 'born', signup ? 'true' : 'EXISTS (SELECT 1 FROM accepted)') : '';
 	const out = await h.db.write({ params: s.params, text: `WITH ${pieces.join(',\n')}${project},
 sess AS (INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, ${s.p(userId)}, v.h, v.via, v.c, v.e, v.r
 	FROM (VALUES (${sessionValues(s, now, via, sha256(token))})) v(id, h, via, c, e, r)
@@ -236,7 +306,7 @@ SELECT (SELECT expires_at FROM sess) AS expires_at` }, lock(born));
 	if (project !== '') announceMembership(h);
 	return ok({ token, user: userId, expiresAt: new Date(String(expires)).toISOString() });
 }
-const lock = (born: boolean): Lock | undefined => born ? { advisory: ['sys_user.email'] } : undefined;
+const lock = (born: boolean): Lock | undefined => born ? { advisory: ['sys_user.address'] } : undefined;
 
 type Authenticated = { user: string; session: string; impersonatedBy: string | null; expiresAt: number };
 /**
@@ -292,15 +362,18 @@ WHERE u.id = ${s.p(user)} AND u.active RETURNING expires_at` });
 }
 
 /**
- * `founder.bootstrap { email, name? }` (§5.11.3): host only; creates the first admin and a session for the proven
- * address; idempotent per address (a second call mints a session for the same member); refused once another admin exists.
+ * `founder.bootstrap { address, name? }` (§5.11.3): host only; creates the first admin and a session for the proven
+ * address (an email or a mobile number); idempotent per address (a second call mints a session for the same member);
+ * refused once another admin exists.
  */
-export async function founderBootstrap(h: IdentityHost, email: string, name?: string): Promise<Result<Session>> {
+export async function founderBootstrap(h: IdentityHost, typed: string, name?: string): Promise<Result<Session>> {
+	const a = parseAddress(typed);
+	if (a === null) return refuse('check', ADDRESS_HINT);
 	const now = h.now(), token = randomToken(), s = stmt(), id = newId();
-	const e = s.p(addressOf(email));
 	try {
-		const out = await h.db.write({ params: s.params, text: `WITH existing AS (SELECT id FROM sys_user WHERE lower(email) = ${e} AND admin AND active),
-ins AS (INSERT INTO sys_user (id, email, name, kind, admin) SELECT ${s.p(id)}, ${s.p(email.trim())}, ${s.p(name ?? email.trim().split('@')[0]!)}, 'staff', true
+		const out = await h.db.write({ params: s.params, text: `WITH existing AS (SELECT id FROM sys_user WHERE ${memberColumn(a, s.p(memberValue(a)))} AND admin AND active),
+ins AS (INSERT INTO sys_user (id, email, phone, name, kind, admin)
+	SELECT ${s.p(id)}, ${s.p(a.kind === 'email' ? a.value : null)}, ${s.p(a.kind === 'phone' ? a.value : null)}, ${s.p(name ?? (a.kind === 'email' ? a.value.split('@')[0]! : a.value))}, 'staff', true
 	WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE admin) ${IMAGES}),
 ${historyOf(s, 'sys_user', 'ins', now, 'host')},
 u AS (SELECT id FROM existing UNION ALL SELECT id FROM ins),

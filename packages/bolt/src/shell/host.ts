@@ -10,7 +10,7 @@ import { addressBucket, chargesFor, macKey, RateWindows, type RateKind } from '.
 import { admitVisitor } from '../engine/callables/index.ts';
 import { Authorities, previewAs } from '../engine/identity/actor.ts';
 import { acceptInvitation, authenticateKey, inspectInvitation } from '../engine/identity/members.ts';
-import { authenticate, forget, sendCode, sha256, verifyCode, type IdentityHost, type Result } from '../engine/identity/session.ts';
+import { authenticate, forget, sendCode, sha256, SIGNUP_KEY, verifyCode, type IdentityHost, type Result } from '../engine/identity/session.ts';
 import type { Envoys } from '../engine/envoys/index.ts';
 import type { Runs } from '../engine/runs/index.ts';
 import { basePath, BOLT, HEADERS, PATHS, SW, under } from '../protocol/wire.ts';
@@ -19,7 +19,7 @@ import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import { channelMessages, events, inbox, runList, settings, settingsOp, type LogLevel, type SecretsPort } from './data.ts';
 import { studioOp, studioView, type StudioPort } from './studio.ts';
 import { CALLBACK, type OAuth } from '../engine/connections.ts';
-import { audienceOf, challengeOf, COOKIES, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type ShellBoot, type ShellNotice } from './nav.ts';
+import { audienceOf, challengeOf, COOKIES, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type ShellBoot, type ShellNotice, type WorkspaceLink } from './nav.ts';
 
 const SESSION_S = 7 * 86_400, VISITOR_S = 30 * 86_400;
 /** The service worker's source: it shows a pushed notice and opens its link. */
@@ -34,6 +34,10 @@ self.addEventListener('notificationclick', (e) => {
 `;
 
 /** Host-side Turnstile verification (§5.10): `devTurnstile` in `bolt dev` and the test kit, Cloudflare's elsewhere. */
+/** How a workspace signs people in (`GET /__bolt/session/methods`): by email, by mobile number, and who may sign up by which. */
+export type SignInMethods = { email: boolean; phone: boolean; signup: readonly ('email' | 'phone')[];
+	/** The workspace's locale: a mobile number's country defaults to its region. */
+	locale: string };
 export type Turnstile = { siteKey: string; verify(token: string, ip: string): Promise<boolean> };
 export const devTurnstile: Turnstile = { siteKey: 'dev', verify: async (token) => token === 'dev-pass' };
 export function cloudflareTurnstile(siteKey: string, secret: string, f: typeof fetch = fetch): Turnstile {
@@ -77,6 +81,8 @@ export type ShellHostConfig = {
 	organization?: { write(auth: Authority, branding: { name: string; logo: string | null }): Promise<void> };
 	/** Where the sign-in card's "Change workspace" leads (the host's workspace picker); absent → no link. */
 	apex?: string;
+	/** The member's other workspaces, listed in the switcher, each with the link that enters it without a second sign-in; absent → none. */
+	workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
 	uuid?: () => string;
 };
 type Caller = { authority: Authority | null; real: Authority | null; token: string | null; preview: ShellBoot['preview']; expiresAt?: number };
@@ -208,9 +214,11 @@ export function shellHost(c: ShellHostConfig) {
 		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined);
 		const box = s.inbox ? await inbox(h.db, auth) : null;
 		const notice = await c.notice?.(auth) ?? null;
+		// never while previewing: the switcher would carry the previewed member's workspaces
+		const workspaces = x.preview === null ? await c.workspaces?.(auth) ?? [] : [];
 		const b: ShellBoot = { workspace: ws, actor: auth.actor, name: (users!.rows[0]?.['name'] ?? null) as string | null, admin: auth.admin,
 			preview: x.preview, nav: nav(m, auth), surfaces: s, inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length + box.notices.filter((n) => !n.read).length,
-			push: s.inbox ? c.push?.publicKey ?? null : null, visitor: null, catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)), ...(c.ai === false ? { aiUnconfigured: true as const } : {}), ...(notice === null ? {} : { notice }), // hook:decisions — also hides the Describe input (rule 16a)
+			push: s.inbox ? c.push?.publicKey ?? null : null, visitor: null, catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)), ...(c.ai === false ? { aiUnconfigured: true as const } : {}), ...(notice === null ? {} : { notice }), ...(workspaces.length === 0 ? {} : { workspaces }), // hook:decisions — also hides the Describe input (rule 16a)
 			envoys: Object.fromEntries(Object.entries(m.envoys ?? {}).flatMap(([k, e]) => typeof (e as { name?: unknown }).name === 'string' ? [[k, (e as { name: string }).name]] : [])) };
 		// the session slides in the database (a day at most between refreshes); every boot carries it to the cookie too, so a
 		// member who keeps coming back is never signed out by a cookie that kept its first seven days
@@ -220,13 +228,20 @@ export function shellHost(c: ShellHostConfig) {
 
 	async function session(request: Request, path: string, x: () => Promise<Caller>): Promise<Response | null> {
 		const ip = c.ip(request);
+		if (request.method === 'GET' && path === PATHS.session.methods) {
+			const [config] = await h.db.read([{ text: `SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`, params: [] }]);
+			const open = h.signup !== undefined && config!.rows[0]?.value !== 'closed';
+			const methods: SignInMethods = { email: h.mail !== undefined, phone: h.sms !== undefined, locale: String(m.workspace.locale),
+				signup: open ? h.signup!.via.filter((v) => v === 'email' ? h.mail !== undefined : h.sms !== undefined) : [] };
+			return json({ value: methods });
+		}
 		if (request.method === 'POST' && path === PATHS.session.code) {
 			const b = await body(request);
-			return answer(await sendCode(h, text(b, 'email'), ip));
+			return answer(await sendCode(h, text(b, 'address'), ip));
 		}
 		if (request.method === 'POST' && path === PATHS.session.verify) {
 			const b = await body(request);
-			return answer(await verifyCode(h, text(b, 'email'), text(b, 'code'), ip),
+			return answer(await verifyCode(h, text(b, 'address'), text(b, 'code'), ip),
 				(s) => json({ value: { user: s.user } }, 200, { 'set-cookie': cookie(COOKIES.session, s.token, SESSION_S) }));
 		}
 		if (request.method === 'POST' && path === PATHS.session.signout) {

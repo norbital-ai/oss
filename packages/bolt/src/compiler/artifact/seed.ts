@@ -64,7 +64,7 @@ export function defaultRows(bank: BankReader): SeedRows {
 		const name = file.slice(0, -'.json'.length);
 		const rows = bank.json<{ [f: string]: Json }[]>(file);
 		if (name === 'team') out['sys_team'] = rows.map((r) => ({ id: r['id']!, name: r['name']!, parent: r['parent_id'] ?? r['parent'] ?? null }));
-		else if (name === 'user') out['sys_user'] = rows.map((r) => ({ id: r['id']!, name: r['name']!, email: r['email'] ?? null, kind: 'staff',
+		else if (name === 'user') out['sys_user'] = rows.map((r) => ({ id: r['id']!, name: r['name']!, email: r['email'] ?? null, ...(r['phone'] == null ? {} : { phone: r['phone'] }), kind: 'staff',
 			admin: r['status'] === 'admin', team: r['team_id'] ?? r['team'] ?? null }));
 		else out[name] = rows;
 	}

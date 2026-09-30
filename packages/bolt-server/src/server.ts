@@ -9,7 +9,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { loadPackWithAssets, readArtifact, workspaceFiles, type Artifact } from '@norbital-ai/bolt/artifact';
-import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, engine, fileAttachments, filesHandler, founderBootstrap, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, type Authority, type Bindings, type ChannelConnection, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
+import { smsTransport } from './sms.ts';
+import { Authorities, BoltError, boltHandler, clientAddress, cloudflareTurnstile, devTurnstile, engine, fileAttachments, filesHandler, founderBootstrap, LIMITS, loadKeys, mint, openPglite, postgresDb, publicFetch, RateWindows, readPack, resendEvent, sealedSecrets, shellHost, signupOf, type Authority, type Bindings, type ChannelConnection, type Engine, type EngineManifest, type FilesPort, type IdentityHost, type Json, type PgPool, type TenantDb, type TransportPort } from '@norbital-ai/bolt/engine';
 import type { Config } from './config.ts';
 import { devSink, mailSender, mailTransport, type Sender } from './mail.ts';
 import { aiModalityRefusals, facilities, localFiles, nominatim, openAi, publicWeb, s3Files, timekeeper } from './ports.ts';
@@ -55,6 +56,9 @@ export function requirements(c: Config, m: EngineManifest, o: StartOptions): { e
 	const errors: string[] = [], warnings: string[] = [];
 	if (c.files === null) errors.push('files are required: set BOLT_FILES_PROVIDER (local or s3) and BOLT_FILES_ENDPOINT');
 	if (c.mail === null && o.mail === undefined && o.dev !== true) errors.push('mail is required for sign-in: set BOLT_MAIL');
+	const signup = signupOf(m);
+	if (signup?.via.includes('phone') === true && c.sms === null && o.dev !== true)
+		errors.push('this workspace lets people sign up by mobile number: set BOLT_SMS (twilio:… or log)');
 	const env = (m.workspace.env ?? {}) as { readonly [n: string]: { secret?: boolean } };
 	const oauth = Object.values(m.connections).some((x) => typeof x['auth'] === 'object' && x['auth'] !== null && 'oauth2' in x['auth']);
 	if (c.masterKey === null && (oauth || Object.values(env).some((d) => d.secret !== false))) errors.push('this workspace declares secrets: set BOLT_MASTER_KEY');
@@ -211,7 +215,10 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 
 		const now = () => new Date();
 		const keys = await loadKeys(db);
-		const identity: IdentityHost = { db, now, windows: new RateWindows(), keys, mail: email, devSink: o.dev === true, publicUrl: c.publicUrl };
+		const sms = c.sms !== null ? smsTransport(c.sms, log, f) : o.dev === true ? smsTransport('log', log) : undefined;
+		const signup = signupOf(m);
+		const identity: IdentityHost = { db, now, windows: new RateWindows(), keys, mail: email, ...(sms === undefined ? {} : { sms }), ...(signup === undefined ? {} : { signup }),
+			devSink: o.dev === true, publicUrl: c.publicUrl };
 		const authorities = new Authorities(m, release);
 
 		if (pack !== null) log(await loadPackWithAssets(db, m, pack, files, now().toISOString()) ? `--seed: loaded pack ${pack.meta.name} (${pack.meta.hash.slice(0, 12)})`
@@ -220,7 +227,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 			const [admins] = await db.read([{ text: `SELECT 1 FROM sys_user WHERE admin LIMIT 1`, params: [] }]);
 			if (admins!.rows.length === 0) {
 				const r = await founderBootstrap(identity, c.founder);
-				log(r.ok ? `--founder: ${c.founder} is the administrator; sign in with the emailed code` : `--founder: ${r.message}`);
+				log(r.ok ? `--founder: ${c.founder} is the administrator; sign in with the code sent to it` : `--founder: ${r.message}`);
 			}
 		}
 		await e.runs!.boot();
@@ -262,8 +269,8 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 			const answer = (r: Awaited<ReturnType<typeof mint>>) => r.ok ? Response.json({ value: r.value }) : err(r.code, r.message, r.code === 'notFound' ? 404 : 403);
 			if (op === 'host.ping') return Response.json({ value: { workspace: handle, at: now().toISOString() } }); // L-BOLT-298: the host answers signed operations
 			if (op === 'session.mint' && typeof input['user'] === 'string') return answer(await mint(identity, input['user']));
-			if (op === 'founder.bootstrap' && typeof input['email'] === 'string')
-				return answer(await founderBootstrap(identity, input['email'], typeof input['name'] === 'string' ? input['name'] : undefined));
+			if (op === 'founder.bootstrap' && typeof input['address'] === 'string')
+				return answer(await founderBootstrap(identity, input['address'], typeof input['name'] === 'string' ? input['name'] : undefined));
 			return err('unknownOp', `'${op}' is not a host operation of bolt start`, 404);
 		}
 

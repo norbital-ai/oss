@@ -220,8 +220,9 @@ export function engine(config: EngineConfig): Engine {
 			},
 		};
 	};
-	const flows = approvals(m, db, { publish: (c) => { live.publish(c); }, clock: () => clock() }); // hook:approvals — seal and restore reach the lane
-	const announce = config.deadlines && announceTriggered(m, config.deadlines, config.scope ?? ''); // hook:automations
+	const flows = approvals(m, db, { publish: (c) => { live.publish(c); }, clock: () => clock(), wake: (at) => wakeAt(at) }); // hook:approvals — seal and restore reach the lane
+	// through wakeAt, so a run a write queues during an open wake (an agent turn's act) is claimed at once, not after it
+	const announce = config.deadlines && announceTriggered(m, (at) => wakeAt(at)); // hook:automations
 	const writes: WriteEngine = { manifest: m, db, transforms: new Set(config.transforms ?? []), ...(guest === undefined ? {} : { guest }), bridge,
 		approval: config.approval ?? flows.hook, ...(config.admit === undefined ? {} : { admit: config.admit }) };
 	const clock = config.clock ?? (() => new Date().toISOString());
@@ -305,7 +306,7 @@ export { decodeSeed, seed, type SeedPack } from './write/seed.ts';
 export { loadPack, readPack, type Pack, type PackJson } from './write/pack.ts';
 export { Authorities } from './identity/actor.ts';
 export { RateWindows, chargesFor, clientAddress } from './access/rate.ts';
-export { founderBootstrap, loadKeys, mint, type IdentityHost, type Session } from './identity/session.ts';
+export { founderBootstrap, loadKeys, mint, signupOf, type IdentityHost, type Session, type Signup } from './identity/session.ts';
 export { membershipRun } from './identity/members.ts'; // §5.11.3 — a host binding `membership` passes it as `runs.platform['bolt.membership']`
 export { MEMBERSHIP } from './identity/session.ts';
 export { connections, oauth, tokenName, type ConnectionsHost, type OAuth } from './connections.ts'; // hook:hosting — every host's connections (§5.11.4)

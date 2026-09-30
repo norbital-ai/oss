@@ -385,13 +385,19 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 		return json({ value: await h.engine.agents.models() });
 	}
 	async function approval(request: Request, authority: Authority): Promise<Response> {
-		const id = new URL(request.url).searchParams.get('id') ?? '';
+		const p = new URL(request.url).searchParams;
+		const id = p.get('id') ?? '';
 		const readable = async (collection: string, record: string) => {
 			try {
 				const [row] = await h.engine.read([lower({ m: 'get', a: [collection, record] })], { as: 'caller', authority }, h.bindings());
 				return row !== null && row !== undefined;
 			} catch { return false; }
 		};
+		if (!p.has('id')) {
+			const records = p.getAll('record'), ids = p.getAll('request');
+			return json({ value: await h.engine.approvals.list({ ...(p.has('collection') ? { collection: p.get('collection')! } : {}),
+				...(records.length === 0 ? {} : { records }), ...(ids.length === 0 ? {} : { ids }), all: p.get('all') === '1' }, authority, readable) });
+		}
 		const view = await h.engine.approvals.view(id, authority, readable);
 		return view === null ? json({ error: { code: 'notFound', message: 'Not found or no access.' } }, 404) : json({ value: view });
 	}

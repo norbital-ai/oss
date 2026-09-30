@@ -178,11 +178,13 @@
 				<span class="min-w-0 flex-1 truncate text-xs font-medium">{model.workspace.name}</span>
 				<Icon name="lucide:check" class="size-3.5 shrink-0" />
 			</Inline>
-			{#if model.workspace.apex !== null}
-				<a href={model.workspace.apex} class="mt-1 flex h-8 items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent">
-					<Icon name="lucide:arrow-left-right" class="size-3.5" />{t('Change workspace')}
+			<!-- a full load: the link leaves this workspace through the host's handoff -->
+			{#each model.workspace.others as w (w.handle)}
+				<a href={w.href} data-sveltekit-reload data-testid="workspace-option" class="mt-1 flex h-8 items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent">
+					{@render avatar(initials(w.name), w.handle, null, 'size-6')}
+					<span class="min-w-0 flex-1 truncate">{w.name}</span>
 				</a>
-			{/if}
+			{/each}
 		</Popover.Content>
 	</Popover.Root>
 {/snippet}

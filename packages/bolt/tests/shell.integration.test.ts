@@ -78,8 +78,8 @@ async function call(j: Jar, method: string, path: string, body?: unknown, header
 }
 async function signIn(email: string): Promise<Jar> {
 	const j = jar();
-	expect((await call(j, 'POST', '/__bolt/session/code', { email })).status).toBe(200);
-	const v = await call(j, 'POST', '/__bolt/session/verify', { email, code: '123456' });
+	expect((await call(j, 'POST', '/__bolt/session/code', { address: email })).status).toBe(200);
+	const v = await call(j, 'POST', '/__bolt/session/verify', { address: email, code: '123456' });
 	expect(v.status).toBe(200);
 	expect(j.has('nb_s')).toBe(true);
 	return j;
@@ -96,7 +96,7 @@ beforeAll(async () => {
 	identity = { db: t.db, now: () => new Date(t.clock.now()), windows: new RateWindows(), keys: await loadKeys(t.db), mail, devSink: true, publicUrl: ORIGIN };
 	const authorities = new Authorities(manifest, 'test');
 	const shell = shellHost({ manifest, identity, authorities, workspace: { name: 'Acme', handle: 'acme' }, ip: () => '203.0.113.9', turnstile: devTurnstile, runs: t.engine.runs!, studio, ai: false,
-		apex: 'https://example.test/pick', organization: { write: async (_auth, b) => { branded.push(b); } } });
+		apex: 'https://example.test/pick', workspaces: async () => [{ handle: 'globex', name: 'Globex', href: 'https://example.test/acme/switch?to=globex' }], organization: { write: async (_auth, b) => { branded.push(b); } } });
 	const bolt = boltHandler({ engine: t.engine, session: shell.authority, uuid: () => crypto.randomUUID(),
 		bindings: () => ({ now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }) });
 	handle = async (r) => (await shell.handle(r)) ?? (await bolt(r)) ?? new Response(null, { status: 404 });
@@ -118,6 +118,7 @@ describe('shell host (§5.10)', () => {
 		expect(b.catalog['applications']).toEqual({ label: ['name'], description: 'Applications', fields: { name: { kind: 'text' } }, relations: { opening: { targets: ['openings'], inverse: 'applications' } }, create: { columns: ['opening', 'name'] } });
 		expect((await boot(jar())).status).toBe(401);
 		expect(b.workspace).toMatchObject({ name: 'Acme', handle: 'acme', apex: 'https://example.test/pick', organization: true });
+		expect(b.workspaces).toEqual([{ handle: 'globex', name: 'Globex', href: 'https://example.test/acme/switch?to=globex' }]);
 	});
 
 	it('a signed-out boot names the workspace, its handle and where to change workspace', async () => {
@@ -170,6 +171,7 @@ describe('shell host (§5.10)', () => {
 		expect((await call(admin, 'POST', '/__bolt/shell/preview', { user: repId })).status).toBe(204);
 		const { boot: b } = await boot(admin);
 		expect(b).toMatchObject({ admin: false, preview: { user: repId }, surfaces: { settings: false } });
+		expect(b.workspaces).toBeUndefined(); // the switcher never lists the previewed member's workspaces
 		expect((await call(admin, 'GET', '/__bolt/shell/settings')).status).toBe(403);
 		expect((await call(admin, 'POST', '/__bolt/shell/preview', { user: null })).status).toBe(204);
 		expect((await boot(admin)).boot).toMatchObject({ admin: true, preview: null });

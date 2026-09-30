@@ -40,8 +40,8 @@ async function call(j: Jar, method: string, path: string, body?: unknown) {
 }
 async function signIn(email: string): Promise<Jar> {
 	const j: Jar = new Map();
-	await call(j, 'POST', '/__bolt/session/code', { email });
-	expect((await call(j, 'POST', '/__bolt/session/verify', { email, code: '123456' })).status).toBe(200);
+	await call(j, 'POST', '/__bolt/session/code', { address: email });
+	expect((await call(j, 'POST', '/__bolt/session/verify', { address: email, code: '123456' })).status).toBe(200);
 	return j;
 }
 const op = (j: Jar, name: string, input: unknown) => call(j, 'POST', '/__bolt/shell/settings', { op: name, input });

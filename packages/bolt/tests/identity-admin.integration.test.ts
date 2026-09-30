@@ -164,12 +164,12 @@ describe('membership projection (§5.11.3)', () => {
 		later();
 		expect((await eraseUser(bound, boss, user)).ok).toBe(true);
 		expect((await projected()).map((r) => r['input'])).toEqual([
-			{ user, email: 'new@acme.example', team: null, state: 'active' },
-			{ user, email: 'new@acme.example', team, state: 'active' },
-			{ user, email: 'new@acme.example', team, state: 'inactive' },
-			{ user, email: 'new@acme.example', team, state: 'active' },
-			{ user, email: 'new@acme.example', team, state: 'inactive' },
-			{ user, email: null, team: null, state: 'erased' },
+			{ user, email: 'new@acme.example', phone: null, team: null, state: 'active' },
+			{ user, email: 'new@acme.example', phone: null, team, state: 'active' },
+			{ user, email: 'new@acme.example', phone: null, team, state: 'inactive' },
+			{ user, email: 'new@acme.example', phone: null, team, state: 'active' },
+			{ user, email: 'new@acme.example', phone: null, team, state: 'inactive' },
+			{ user, email: null, phone: null, team: null, state: 'erased' },
 		]);
 		expect(announced.length).toBe(6);
 		// an admin flag change is not a lifecycle change

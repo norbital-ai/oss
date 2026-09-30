@@ -28,8 +28,10 @@ const manifest = {
 	policies: {
 		staff: { description: 'Staff', grants: { sent_emails: { read: true, create: true, update: true, moves: 'all' } } },
 		mailer: { description: 'The mail channel', grants: { sent_emails: { read: true, update: true } } },
+		clerk: { description: 'A clerk: a notice is held for a lead', grants: { sent_emails: { read: true,
+			create: { approval: [{ match: { requestor: 'in_team' }, steps: [['Leads']] }] } } } },
 	},
-	teams: {},
+	teams: { Clerks: ['clerk'], Leads: ['staff'] },
 	automations: { ping: { description: 'Sends a WhatsApp line', runAs: ['staff'] } },
 	channels: {
 		customer_mail: { transport: 'email', address: 'support', policies: ['mailer'], outbound: { notice: { from: 'sent_emails', on: 'create' } } },
@@ -118,6 +120,38 @@ describe('record-driven outbound (G12 (3))', () => {
 		await ch.receive({ kind: 'delivery', channel: 'customer_mail', providerId: mail.sent[0]!.providerId, event: 'bounced', at: '2026-09-25T10:05:00.000Z', data: { reason: 'mailbox full' } });
 		expect((await row(id))['failed_reason']).toBe('mailbox full');
 		expect(await outbox()).toMatchObject([{ status: 'failed' }]);
+	});
+});
+
+describe('a notice held for approval (rules 47, 61)', () => {
+	const clerk = () => t.member(['clerk'], { teamPath: ['Clerks'] });
+	const lead = () => t.member(['staff'], { teamPath: ['Leads'] });
+	const held = async () => {
+		const o = await t.as(clerk()).act('sent_emails.create', { to: 'carol@acme.com', subject: 'PCN 1234', body: 'Your parts change.' });
+		if (o.kind !== 'pendingApproval') throw new Error(JSON.stringify(o));
+		return o.requestId;
+	};
+	const decide = (requestId: string, status: 'APPROVED' | 'REJECTED') =>
+		t.engine.approvals.process({ requestId, status, reason: 'no', authority: t.as(lead()).authority, now: t.clock.now() });
+
+	it('is sent only once the request is approved, by the run the seal queues', async () => {
+		const requestId = await held();
+		await t.runDue();
+		expect(mail.sent).toHaveLength(0);
+		expect(await outbox()).toMatchObject([{ status: 'queued' }]);
+		expect((await decide(requestId, 'APPROVED')).kind).toBe('decided');
+		await t.runDue();
+		expect(mail.sent).toHaveLength(1);
+		expect(mail.sent[0]!.message).toMatchObject({ subject: 'PCN 1234' });
+	});
+
+	it('is never sent when the request is rejected', async () => {
+		const requestId = await held();
+		await decide(requestId, 'REJECTED');
+		await t.runDue();
+		await ch.deliver();
+		expect(mail.sent).toHaveLength(0);
+		expect(await outbox()).toMatchObject([{ status: 'skipped', error: 'the record no longer exists' }]);
 	});
 });
 

@@ -93,11 +93,11 @@ afterAll(async () => {
 
 describe('bolt start on PGlite', () => {
 	it('signs the founder in with the emailed code', async () => {
-		expect((await call('POST', '/__bolt/session/code', { email: FOUNDER })).status).toBe(200);
+		expect((await call('POST', '/__bolt/session/code', { address: FOUNDER })).status).toBe(200);
 		const code = /\b(\d{6})\b/.exec(mail.mail.at(-1)?.text ?? '')?.[1];
 		expect(mail.mail.at(-1)?.to).toEqual([FOUNDER]);
 		expect(code).toMatch(/^\d{6}$/);
-		const r = await call('POST', '/__bolt/session/verify', { email: FOUNDER, code });
+		const r = await call('POST', '/__bolt/session/verify', { address: FOUNDER, code });
 		expect(r.status).toBe(200);
 		cookie = r.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
 		expect(cookie).toContain('nb_s=');

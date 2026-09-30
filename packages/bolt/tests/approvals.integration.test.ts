@@ -219,6 +219,22 @@ describe('approvals: the view and the decision log (§3.8, L-BOLT-484, 600)', ()
 		expect(done!.appliedAt).not.toBeNull();
 	});
 
+	it('lists the requests a caller may see: open ones by collection or record, closed ones on asking', async () => {
+		const first = pending((await run(sales, { verb: 'create', input: { title: 'desk' } })).outcome);
+		const second = pending((await run(sales, { verb: 'create', input: { title: 'lamp' } })).outcome);
+		const unread = async () => false;
+		expect((await flows.list({ collection: 'orders' }, finance, unread)).map((v) => v.id).toSorted()).toEqual([second, first].toSorted());
+		expect(await flows.list({ collection: 'orders' }, ops, unread)).toEqual([]);
+		expect(await flows.list({ collection: 'invoices' }, finance, unread)).toEqual([]);
+		const [view] = await flows.list({ ids: [first] }, finance, unread);
+		expect(view).toMatchObject({ id: first, status: 'ONGOING', canDecide: true, requestor: { name: 'Sal' } });
+		const record = view!.record;
+		expect((await flows.list({ records: [record] }, finance, unread)).map((v) => v.id)).toEqual([first]);
+		await decide(first, finance, 'REJECTED');
+		expect((await flows.list({ collection: 'orders' }, sales, unread)).map((v) => v.id)).toEqual([second]);
+		expect((await flows.list({ collection: 'orders', all: true }, sales, unread)).map((v) => v.id).toSorted()).toEqual([first, second].toSorted());
+	});
+
 	it('a final decision is one write statement with its seal or its restore (rule 20)', async () => {
 		const inner = db, statements: string[] = [];
 		const counted = (s: { text: string }) => { if (!/^\s*SELECT/i.test(s.text)) statements.push(s.text.slice(0, 40)); };

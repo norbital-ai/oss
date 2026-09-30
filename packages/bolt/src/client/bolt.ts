@@ -342,6 +342,21 @@ export function createBolt(config: BoltConfig) {
 				if ('error' in body) throw fail(body, res.status);
 				return body.value;
 			},
+			/**
+			 * The approval views the caller may see (as `get`), newest first, at most 200: open requests on `collection`, on
+			 * its `records`, or by request id (`ids`: a held row's `approval_id`); `all` adds closed ones.
+			 */
+			async list(filter: { collection?: string; records?: readonly string[]; ids?: readonly string[]; all?: boolean } = {}): Promise<ApprovalView[]> {
+				const q = new URLSearchParams();
+				if (filter.collection !== undefined) q.set('collection', filter.collection);
+				for (const r of filter.records ?? []) q.append('record', r);
+				for (const id of filter.ids ?? []) q.append('request', id);
+				if (filter.all === true) q.set('all', '1');
+				const res = await f(`${base}${PATHS.approval}?${q}`, { credentials: 'same-origin' });
+				const body = await res.json() as { value: ApprovalView[] } | WireError;
+				if ('error' in body) throw fail(body, res.status);
+				return body.value;
+			},
 		},
 		actor: config.actor,
 		/** The page's locale tag. */

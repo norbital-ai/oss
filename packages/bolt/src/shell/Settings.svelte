@@ -10,7 +10,7 @@
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
-	import { Button, Checkbox, Combobox, Dialog, Input, Table, Tabs } from '@norbital-ai/ui';
+	import { Button, Checkbox, Combobox, Dialog, Input, PhoneInput, Table, Tabs } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
 	import type { ChannelConnection } from '../engine/channels/connection.ts';
 	import type { ChannelMessage, Settings } from './data.ts';
@@ -67,15 +67,15 @@
 
 	const str = (v: Json | undefined) => v === null || v === undefined ? '' : String(v);
 	const when = (v: Json | undefined) => typeof v === 'string' && v !== '' ? new Date(v).toLocaleString(bolt.locale) : '—';
-	const named = (rows: readonly { readonly [k: string]: Json }[]) => rows.map((r) => ({ value: str(r['id']), label: str(r['name']) || str(r['email']) }));
+	const named = (rows: readonly { readonly [k: string]: Json }[]) => rows.map((r) => ({ value: str(r['id']), label: str(r['name']) || str(r['email']) || str(r['phone']) }));
 	const TABLES: { readonly [table: string]: string } = { sys_user: 'member', sys_team: 'team', sys_assignment: 'assignment', sys_invitation: 'invitation' };
 
 	// ── rows: the settings read projected per table (staging's in-memory collections) ──
 	const teamName = (id: Json | undefined) => str(s?.teams.find((x) => x['id'] === id)?.['name']);
-	const members = $derived((s?.members ?? []).map((u) => ({ id: str(u['id']), name: str(u['name']), email: str(u['email']), kind: t(str(u['kind'])), external: u['kind'] === 'external',
+	const members = $derived((s?.members ?? []).map((u) => ({ id: str(u['id']), name: str(u['name']), email: str(u['email']), phone: str(u['phone']), kind: t(str(u['kind'])), external: u['kind'] === 'external',
 		team: teamName(u['team']), team_id: str(u['team']) || null, admin: u['admin'] === true, active: u['active'] === true, last_seen: str(u['last_seen']) || null })));
 	const teams = $derived((s?.teams ?? []).map((x) => ({ id: str(x['id']), name: str(x['name']), parent: str(x['parent']) || null })));
-	const invitations = $derived((s?.invitations ?? []).map((i) => ({ id: str(i['id']), email: str(i['email']), team: teamName(i['team']), external: i['external'] === true,
+	const invitations = $derived((s?.invitations ?? []).map((i) => ({ id: str(i['id']), email: str(i['email']) || str(i['phone']), team: teamName(i['team']), external: i['external'] === true,
 		status: t(str(i['status'])), state: str(i['status']), expires_at: str(i['expires_at']) })));
 	const principal = (type: Json | undefined, id: Json | undefined) => type === 'sys_team' ? teamName(id) : type === 'sys_user'
 		? str(s?.members.find((u) => u['id'] === id)?.['name']) : str(s?.keys.find((k) => k['id'] === id)?.['name']);
@@ -172,13 +172,13 @@
 	let peopleTab = $state('members');
 	type Creating = 'invite' | 'assign' | 'team' | 'key';
 	let creating = $state<Creating | null>(null);
-	let form = $state({ email: '', team: '', external: false, teamName: '', parent: '', keyName: '', type: 'sys_user', principal: '', policy: '' });
+	let form = $state({ email: '', phone: null as string | null, team: '', external: false, teamName: '', parent: '', keyName: '', type: 'sys_user', principal: '', policy: '' });
 	/** A new or rotated key, shown once in the dialog. */
 	let issued = $state<string | null>(null);
 	const keyOf = (v: Json | undefined) => { const k = typeof v === 'object' && v !== null && 'key' in v ? v.key : null; return typeof k === 'string' ? k : null; };
 	async function create(): Promise<void> {
 		const c = creating;
-		const v = c === 'invite' ? await op('invite', { email: form.email, team: form.team || undefined, external: form.external })
+		const v = c === 'invite' ? await op('invite', { email: form.email || undefined, phone: form.phone ?? undefined, team: form.team || undefined, external: form.external })
 			: c === 'assign' ? await op('assign', { type: form.type, principal: form.principal, policy: form.policy })
 			: c === 'team' ? await op('createTeam', { name: form.teamName, parent: form.parent || null })
 			: await op('issueKey', { name: form.keyName });
@@ -193,7 +193,7 @@
 	function closeDialog(): void {
 		creating = null;
 		issued = null;
-		form = { ...form, email: '', teamName: '', parent: '', keyName: '', principal: '', policy: '' };
+		form = { ...form, email: '', phone: null, teamName: '', parent: '', keyName: '', principal: '', policy: '' };
 	}
 	const CREATE_TITLES: { readonly [k in Creating]: string } = { invite: 'Invite', assign: 'Assign a policy', team: 'Create team', key: 'Issue key' };
 
@@ -242,7 +242,7 @@
 
 {#snippet membersTab()}
 	<Table of={members} key="members" onOpen={show('member')} toolbar={{ title: t('Members'), description: t('Everyone with access to this workspace. Administrators see everything; preview a member to check what their teams grant.'), export: true }}
-		columns={[{ field: 'name', label: t('Name') }, { field: 'email', label: t('Email') }, { field: 'team', label: t('Team') }, { field: 'kind', label: t('Kind') },
+		columns={[{ field: 'name', label: t('Name') }, { field: 'email', label: t('Email') }, { field: 'phone', label: t('Mobile number') }, { field: 'team', label: t('Team') }, { field: 'kind', label: t('Kind') },
 			{ field: 'admin', label: t('Admin') }, { field: 'active', label: t('Active') }, { field: 'last_seen', label: t('Last seen'), cell: at },
 			{ field: 'id', label: t('Actions'), hide: 'narrow', cell: memberCell }]} />
 {/snippet}
@@ -257,9 +257,15 @@
 	</Stack>
 {/snippet}
 {#snippet invitationsTab()}
+	{#if s?.signup}
+		<Cluster gap="sm" justify="between">
+			<p class="text-meta">{t('This workspace lets people join by proving their address. Close sign-up to admit only invited members.')}</p>
+			<label class="flex items-center gap-2 text-sm"><Checkbox checked={s.signup.open} onCheckedChange={(v) => void op('setSignup', { open: v === true })} /> {t('Newcomers may sign up')}</label>
+		</Cluster>
+	{/if}
 	<Table of={invitations} key="invitations" onOpen={show('invitation')}
-		toolbar={{ title: t('Invitations'), description: t('Invite people by email. External members can never be administrators.'), new: () => (creating = 'invite'), export: true }}
-		columns={[{ field: 'email', label: t('Email') }, { field: 'team', label: t('Team') }, { field: 'status', label: t('Status') }, { field: 'external', label: t('External') },
+		toolbar={{ title: t('Invitations'), description: t('Invite people by email or mobile number. External members can never be administrators.'), new: () => (creating = 'invite'), export: true }}
+		columns={[{ field: 'email', label: t('Address') }, { field: 'team', label: t('Team') }, { field: 'status', label: t('Status') }, { field: 'external', label: t('External') },
 			{ field: 'expires_at', label: t('Expires'), cell: at }, { field: 'id', label: t('Actions'), hide: 'narrow', cell: invitationCell }]} />
 {/snippet}
 {#snippet assignmentsTab()}
@@ -346,7 +352,7 @@
 		{@const u = members.find((x) => x.id === open?.id)}
 		{#if u !== undefined}
 			<DetailSheet title={u.name || u.email} acts={memberActs(u)} onClose={close}
-				fields={[{ label: t('Email'), value: u.email }, { label: t('Kind'), value: u.kind }, { label: t('Last seen'), value: when(u.last_seen) }]}>
+				fields={[{ label: t('Email'), value: u.email }, { label: t('Mobile number'), value: u.phone }, { label: t('Kind'), value: u.kind }, { label: t('Last seen'), value: when(u.last_seen) }]}>
 				<div class="flex flex-col gap-3 border-t pt-3 text-sm">
 					<label class="flex flex-col gap-1"><span class="text-meta">{t('Team')}</span>
 						<Combobox size="sm" clearable placeholder={t('No team')} options={named(s.teams)} value={u.team_id} onChange={(team) => op('assignTeam', { id: u.id, team })} aria-label={t('Team')} /></label>
@@ -493,7 +499,8 @@
 		{:else if s !== null}
 			<form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); void create(); }}>
 				{#if creating === 'invite'}
-					<Input class="h-8" type="email" placeholder={t('Email')} aria-label={t('Email')} required bind:value={form.email} />
+					<Input class="h-8" type="email" placeholder={t('Email')} aria-label={t('Email')} required={form.phone === null} bind:value={form.email} />
+					<PhoneInput value={form.phone} onChange={(v) => (form.phone = typeof v === 'string' ? v : null)} />
 					<Combobox size="sm" clearable placeholder={t('No team')} aria-label={t('Team')} options={named(s.teams)} value={form.team || null} onChange={(v) => (form.team = v ?? '')} />
 					<label class="flex items-center gap-2 text-sm"><Checkbox bind:checked={form.external} /> {t('External')}</label>
 				{:else if creating === 'assign'}

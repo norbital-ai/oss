@@ -163,8 +163,8 @@ describe('bolt dev host', () => {
 	};
 
 	it('signs the founder in with the dev sink code and reads the seeded rows', async () => {
-		expect((await call('/__bolt/session/code', { email: 'boss@acme.example' })).status).toBe(200);
-		expect((await call('/__bolt/session/verify', { email: 'boss@acme.example', code: '123456' })).status).toBe(200);
+		expect((await call('/__bolt/session/code', { address: 'boss@acme.example' })).status).toBe(200);
+		expect((await call('/__bolt/session/verify', { address: 'boss@acme.example', code: '123456' })).status).toBe(200);
 		const q = await (await call('/__bolt/q', { reads: [{ m: 'read', a: ['customers', { all: true }] }] })).json() as { answers: { rows: { name: string }[] }[] };
 		expect(q.answers[0]!.rows.map((r) => r.name)).toEqual(['Bank Co']);
 		const act = await call('/__bolt/act', { callable: 'customers.create', input: { name: 'New' }, issuedAt: new Date().toISOString() }, { 'Idempotency-Key': randomUUID() });

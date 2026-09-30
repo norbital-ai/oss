@@ -1,7 +1,7 @@
 // The one queue (rules 48–52a): `sys_run` rows with a `due_at`. Event-triggered runs are a piece of the causing act's
 // statement, their `where` evaluated there once; a due time 5 minutes or more ahead is rounded up to a 5-minute bucket.
 import type { Json } from '../../decl/values.ts';
-import type { Bindings, Captured, DeadlinesPort, EngineManifest, Pred, RowData } from '../contracts.ts';
+import type { Bindings, Captured, EngineManifest, Pred, RowData } from '../contracts.ts';
 import { catalogOf, durationMs, holds3, toPred } from '../access/pred.ts';
 import { q, SYSTEM_COLUMNS } from '../../protocol/catalog.ts';
 import { ownPredSql, type Chain } from '../write/sql.ts';
@@ -90,7 +90,7 @@ export function queueTriggered(m: EngineManifest, c: Chain, now: string, actor: 
  * Rule 52a's announcement for runs an act queued: the earliest due time any captured change fires. The statement is the
  * authority; this judges `where` in JS only to avoid a spurious wake (a predicate JS cannot judge counts as a match).
  */
-export function announceTriggered(m: EngineManifest, deadlines: DeadlinesPort, scope: string): (captured: readonly Captured[], b: Bindings) => void {
+export function announceTriggered(m: EngineManifest, wake: (at: string) => void): (captured: readonly Captured[], b: Bindings) => void {
 	return (captured, b) => {
 		const at = Date.parse(b.now);
 		let due: number | undefined;
@@ -107,7 +107,7 @@ export function announceTriggered(m: EngineManifest, deadlines: DeadlinesPort, s
 			});
 			if (hit) due = Math.min(due ?? Infinity, dueAt(at, at + (t.delayMs ?? 0)));
 		}
-		if (due !== undefined) deadlines.announce(scope, iso(due));
+		if (due !== undefined) wake(iso(due));
 	};
 }
 
