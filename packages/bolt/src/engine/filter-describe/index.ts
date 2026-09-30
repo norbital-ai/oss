@@ -34,6 +34,8 @@ export const FILTER_MAX_FIELDS = 16;
 export const FILTER_MAX_TEXT = 500;
 /** Relation hops a condition path may take: the builder's own two-hop limit. */
 export const FILTER_MAX_HOPS = 2;
+/** A named child relation's options asked about before every other candidate has had a place. */
+const PER_RELATION = 4;
 
 const CANDIDATES = 5, WORDS = 8, NONE = '(no value)';
 
@@ -76,7 +78,8 @@ export type LocalFilterField = { name: string; label: string; kind: 'text' | 'nu
 
 type Op = { op: string; label: string };
 /** One offered field: its operators and values. `path` is the serialisable replacement for the old `put` closure. */
-type Field = { label: string; path: readonly FilterStep[]; kind: string; ops: readonly Op[]; values: FilterValue[]; sort?: string; hit?: boolean };
+type Field = { label: string; path: readonly FilterStep[]; kind: string; ops: readonly Op[]; values: FilterValue[]; sort?: string; hit?: boolean;
+	/** How strongly the description names the field: its words in the label, a row a search found, one of its own values. */ named?: number };
 
 const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum', 'duration']);
 /** Kinds `OrderBy` refuses: no sort key is offered on them (the builder's own `UNSORTABLE`). */
@@ -119,6 +122,9 @@ const words = (text: string) => [...new Set((text.toLowerCase().replace(/'s\b/g,
 const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /** The operators and values a field is offered with, or `undefined` when no option can express it. */
+/** The values copied from the description (its words, quoted strings, numbers, dates): offered, but never evidence. */
+const ECHOES = new WeakSet<FilterArg>();
+const echoed = (x: Json): FilterArg => { const a = { lit: x }; ECHOES.add(a); return a; };
 function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[]): { ops: Op[]; values: FilterValue[] } | undefined {
 	const values: FilterValue[] = [];
 	const add = (label: string, arg: FilterArg) => { let l = label, n = 2; while (values.some((v) => v.label === l)) l = `${label} (${n++})`; values.push({ label: l, arg }); };
@@ -128,9 +134,9 @@ function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | und
 	if (f.many) {
 		// any list field: has one / any / all of the element kind, or is empty (a list is never null-tested)
 		if (k === 'enum') for (const v of s?.values ?? []) add(v, { lit: v });
-		else if (k === 'text') for (const x of [...lit.strings, ...ws]) add(x, { lit: x });
-		else if (NUMERIC.has(k)) for (const x of lit.numbers) add(String(x), { lit: x });
-		else if (k === 'date') for (const d of lit.dates) add(d, { lit: d });
+		else if (k === 'text') for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
+		else if (NUMERIC.has(k)) for (const x of lit.numbers) add(String(x), echoed(x));
+		else if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
 		else if (k === 'bool') { add('yes', { lit: true }); add('no', { lit: false }); }
 		return { ops: [op('has', 'has'), op('hasAny', 'has any of'), op('hasAll', 'has all of'), op('isEmpty', 'is empty'), op('notEmpty', 'is not empty')], values };
 	}
@@ -143,23 +149,23 @@ function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | und
 		ops = [op('eq', 'is')]; add('yes', { lit: true }); add('no', { lit: false });
 	} else if (k === 'text') {
 		ops = [op('like', 'contains'), op('eq', 'is'), op('ne', 'is not'), op('in', 'is any of'), op('nin', 'is none of')];
-		for (const x of [...lit.strings, ...ws]) add(x, { lit: x });
+		for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
 	} else if (NUMERIC.has(k)) {
 		ops = [op('eq', 'is'), op('ne', 'is not'), op('gt', 'more than'), op('gte', 'at least'), op('lt', 'less than'), op('lte', 'at most'),
 			op('in', 'is any of'), op('nin', 'is none of')];
-		for (const x of lit.numbers) add(String(x), { lit: x });
+		for (const x of lit.numbers) add(String(x), echoed(x));
 	} else if (k === 'date' || k === 'instant' || k === 'time') {
 		const when = k !== 'time';
 		ops = [...(when ? [op('during', 'is within')] : []), op('eq', 'is'), op('ne', 'is not'), op('gt', when ? 'after' : 'more than'), op('gte', when ? 'on or after' : 'at least'),
 			op('lt', when ? 'before' : 'less than'), op('lte', when ? 'on or before' : 'at most')];
 		if (when) for (const v of spans(k)) add(v.label, v.arg);
-		if (k === 'date') for (const d of lit.dates) add(d, { lit: d });
+		if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
 	} else if (k === 'period' && f.periodOf === 'date') {
 		// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
 		ops = [op('contains', 'in force on'), op('overlaps', 'overlaps'), op('within', 'is within')];
 		add('today', { lit: { today: '' } });
 		for (const v of spans('date')) add(v.label, v.arg);
-		for (const d of lit.dates) add(d, { lit: d });
+		for (const d of lit.dates) add(d, echoed(d));
 	} else if (k === 'json') {
 		ops = [op('contains', 'contains')];
 	} else if (k === 'id' || k === 'currency') {
@@ -289,7 +295,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			for (const [q, word] of [['some', 'any'], ['every', 'all'], ['none', 'none']] as const)
 				leaves(rel.child, [{ k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
 			// its count, and numeric child aggregates: compared with the numbers in the text
-			const values: FilterValue[] = lit.numbers.map((x) => ({ label: String(x), arg: { lit: x } }));
+			const values: FilterValue[] = lit.numbers.map((x) => ({ label: String(x), arg: echoed(x) }));
 			const cmp: Op[] = [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'gt', label: 'more than' }, { op: 'gte', label: 'at least' },
 				{ op: 'lt', label: 'less than' }, { op: 'lte', label: 'at most' }];
 			out.push({ label: `${rl} › count`, path: [{ k: 'count', rel: r }], kind: 'count', ops: cmp, values: [...values] });
@@ -327,10 +333,20 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		// A field the description names, by its label, by a row a search on its words found, or by one of its OWN values
 		// appearing in the text. A value the words contributed is not evidence — a text field is handed the description's
 		// words as its options, so matching one would call every text field a hit and rank the collection by its schema.
+		// A word names a label token in another inflection too: `log` → `logs`, `suspicion` → `suspicious` (a shared stem of
+		// five letters, or one word the other's prefix). A number in the text is a value of every numeric field, so it marks
+		// them all as candidates but names none of them: `named` counts only the label's words, a search hit and a value
+		// that is not a number, and ranks the fields a wide collection is asked about.
 		const said = text.toLowerCase();
+		const akin = (w: string, x: string) => w.startsWith(x) || x.startsWith(w) || [...w].findIndex((ch, i) => ch !== x[i]) >= 5;
 		for (const f of out) {
 			const tokens = f.label.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2);
-			f.hit = searched.has(f) || tokens.some((x) => ws.includes(x)) || f.values.some((v) => !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
+			const valued = f.values.filter((v) => !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
+			// a value copied from the description is an echo, never evidence; one the engine or the schema declares (a state,
+			// a choice, `this week`) that the text says names the field
+			const declared = f.values.some((v) => !ECHOES.has(v.arg) && new RegExp(`\\b${v.label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(said));
+			f.named = ws.filter((w) => tokens.some((x) => akin(w, x))).length + (searched.has(f) ? 1 : 0) + (declared ? 1 : 0);
+			f.hit = f.named > 0 || valued.length > 0;
 		}
 		return out;
 	}
@@ -391,9 +407,22 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const DIRS = { asc: 'ascending (oldest, lowest, A→Z first)', desc: 'descending (newest, highest, Z→A first)' };
 		// the fields the description most plausibly means, asked about in that order: a wide collection keeps the ones a
 		// person actually wrote of rather than the first twelve the schema happens to declare
-		const asked = fields
+		const ranked = fields
 			.map((f, i) => ({ f, i }))
-			.sort((l, r) => Number(r.f.hit ?? false) - Number(l.f.hit ?? false) || l.i - r.i)
+			.sort((l, r) => (r.f.named ?? 0) - (l.f.named ?? 0) || Number(r.f.hit ?? false) - Number(l.f.hit ?? false)
+				// among fields named equally, the shallower path: a count before every child field under any / all / none
+				|| l.f.path.length - r.f.path.length || l.i - r.i);
+		// one child relation named by the description offers its count, aggregates and every field under any / all / none:
+		// past its first few, the rest wait behind the other candidates, so a second condition ("done", a date) still fits
+		const seen = new Map<string, number>();
+		const crowded = new Set(ranked.filter(({ f }) => {
+			const step = f.path.find((p) => p.k === 'some' || p.k === 'every' || p.k === 'none' || p.k === 'count' || p.k === 'agg');
+			const rel = step !== undefined && 'rel' in step ? step.rel : undefined;
+			if (rel === undefined || !f.hit) return false;
+			seen.set(rel, (seen.get(rel) ?? 0) + 1);
+			return seen.get(rel)! > PER_RELATION;
+		}));
+		const asked = [...ranked.filter((x) => x.f.hit && !crowded.has(x)), ...ranked.filter((x) => crowded.has(x)), ...ranked.filter((x) => !x.f.hit)]
 			.slice(0, FILTER_MAX_FIELDS);
 		const state = { description: o.text, collection: human(o.collection), fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today, timezone: o.bindings.tz, weekStartsOn: 'Monday' };

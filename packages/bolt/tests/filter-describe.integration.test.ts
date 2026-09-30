@@ -150,6 +150,34 @@ describe('filter.describe (rule 16a)', () => {
 		expect(labels.indexOf('Assignee')).toBeLessThan(labels.findIndex((l: string) => l.startsWith('Filler')));
 	});
 
+	it('a wide parent reaches a child count the description names in another inflection ("those with 1 suspicion log")', async () => {
+		// the field-operations shape: a wide parent of numeric fields (a number in the text makes each of them a candidate),
+		// its child relation named in the plural and in another word form, each child field also offered under any / all /
+		// none. The count the description names must still be one of the sixteen fields asked about.
+		const wide = { ...manifest,
+			models: { ...manifest.models,
+				members: { description: 'A member of staff', label: 'name', fields: { name: { kind: 'text' }, suspicion_checked_at: { kind: 'instant', optional: true },
+					grade: { kind: 'state', initial: 'junior', states: { junior: { to: ['senior'] }, senior: {} } },
+					...Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`tally_${i}`, { kind: 'int' as const }])) } },
+				suspicious_activity_logs: { description: 'A finding', label: 'summary', fields: { summary: { kind: 'text' }, severity: { kind: 'int' },
+					note: { kind: 'text', optional: true }, raised_on: { kind: 'date' } } } },
+			relationships: { ...manifest.relationships, 'suspicious_activity_logs.member': { to: 'members', inverse: 'suspicious_activity_logs' } },
+			collections: { ...manifest.collections, suspicious_activity_logs: { read: { fields: 'all' }, create: { input: { columns: ['summary', 'severity', 'raised_on', 'member'] } } } },
+		} as unknown as EngineManifest;
+		const count = 'Suspicious activity logs \u203a count';
+		const t2 = await testWorkspace({ manifest: wide, metering, ai: ai(system1(byField({ [count]: { op: 'at least', value: '1' } }))) });
+		const r = await t2.engine.filters!.describe({ collection: 'members', text: 'those with 1 suspicion log', authority: t2.as(t2.admin).authority,
+			bindings: { now: t2.clock.now(), today: t2.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
+		expect(r).toEqual({ ok: true, where: { suspicious_activity_logs: { count: { gte: 1 } } } });
+		// a second condition the description names still has a place beside the child relation's many options
+		const seen: System1Request[] = [];
+		const t3 = await testWorkspace({ manifest: wide, metering, ai: ai({ async ask(q) { seen.push(q); return { costUsd: 0, provider: 's', answers: Object.fromEntries(Object.entries(q.questions)
+			.map(([id, x]) => [id, x.type === 'noul' ? { type: 'noul', noul: 0.1 } : { type: 'choice', choice: Object.keys(x.criteria)[0]!, confidence: 1, probabilities: {} }])) }; } }) });
+		await t3.engine.filters!.describe({ collection: 'members', text: 'seniors with 1 suspicion log', authority: t3.as(t3.admin).authority,
+			bindings: { now: t3.clock.now(), today: t3.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
+		expect((seen[0]!.state.fields as { label: string }[]).map((f) => f.label)).toEqual(expect.arrayContaining([count, 'Grade']));
+	});
+
 	it('a failed System 1 call applies nothing and is recorded', async () => {
 		port.throws = true;
 		expect(await describeAs('jobs over 3 hours')).toMatchObject({ ok: false, code: 'upstream' });
