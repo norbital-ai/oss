@@ -111,7 +111,10 @@
 		: kinds.catalog?.[collection] !== undefined ? kinds.catalog : { ...kinds.catalog, [collection]: localExposure([], fields, (f) => fieldLabel(f)) });
 	const sorts = $derived(kind === 'collection' || kind === 'local' ? sortable(catalog[source], kind !== 'local', catalog) : []);
 	const vs = viewState(bolt, { key: () => urlKey, collection: () => source, catalog: () => catalog, initialFilter: () => initialFilter });
-	const selectable = $derived(kind !== 'local' && (tb.select === true || tb.delete === true || (tb.actions || []).some((t) => t.requiresSelection || t.group === 'bulk' || typeof t.disabled === 'function')));
+	// Local projections can drive bulk actions only when each row names a distinct, stable record.
+	const localIds = $derived(kind === 'local' ? (of as readonly Row[]).map((row) => row['id']) : []);
+	const identified = $derived(kind !== 'local' || (localIds.every((id) => typeof id === 'string' && id.trim() !== '') && new Set(localIds).size === localIds.length));
+	const selectable = $derived(identified && (tb.select === true || tb.delete === true || (tb.actions || []).some((t) => t.requiresSelection || t.group === 'bulk' || typeof t.disabled === 'function')));
 	const contexts = getAllContexts(); // a New's sheet mounts outside the page; the page's create scope rides along
 	const canNew = $derived(tb.new !== false && kind === 'collection' && (typeof tb.new === 'function' || kinds.catalog?.[collection]?.create !== undefined));
 
