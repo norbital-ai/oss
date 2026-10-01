@@ -31,10 +31,13 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	import Editor from '../kinds/editor.svelte';
 	import ReadValue from '../kinds/read-value.svelte';
 	import { useForm } from './form-state.svelte.js';
+	import { claimSectionField } from './section.svelte';
 	import { useFieldLabel } from '../views/bolt.js';
 
 	let { name, label, help, editor, address, class: className, readonly, disabled }: FieldProps = $props();
 	const form = useForm();
+	// svelte-ignore state_referenced_locally -- a field's name is fixed for its life
+	claimSectionField(name);
 	const t = uiText();
 	const fieldLabel = useFieldLabel();
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));

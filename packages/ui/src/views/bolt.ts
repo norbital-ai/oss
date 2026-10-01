@@ -135,6 +135,8 @@ export function useBolt(): ViewBolt {
 const COLLECTION = Symbol('ui.views.collection');
 /** The collection the values beneath belong to (a Table's, a record's, a Form's): their enum words read its catalog keys. */
 export const provideCollection = (of: () => string) => setContext(COLLECTION, of);
+/** The collection named by the nearest `provideCollection`, or `undefined` outside one. */
+export const useCollectionKey = (): string | undefined => getContext<(() => string) | undefined>(COLLECTION)?.();
 /**
  * An enum or state value's words beneath a view: `models.<c>.fields.<field>.<value>` through the page's `t` when a
  * shell and a collection are above, else the value in words (`enumText`). Call it at a component's init.

@@ -1,6 +1,7 @@
 // `Form` and `Field` (§3.6): generated from a collection's exposure, drafts kept until the outcome, only changed fields sent.
 export { default as Field, type FieldEditor, type FieldProps } from './field.svelte';
 export { default as Fieldset, type FieldsetProps } from './fieldset.svelte';
+export { default as Section, type SectionProps } from './section.svelte';
 import type { ComponentConstructorOptions, SvelteComponent } from 'svelte';
 import FormView, { type FormProps, type FormSource } from './form.svelte';
 /** `Form` typed by its `of`: a collection's row and create input, or an action's input. */
