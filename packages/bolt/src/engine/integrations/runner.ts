@@ -270,10 +270,15 @@ export function integrations(config: IntegrationsConfig) {
 	return {
 		deliver, run,
 		/** The platform runs `<c>.integration` (input `{ mode }`), for the runs area's `platform` map (rule 48). */
-		handlers(runId: () => string = () => crypto.randomUUID()): { [name: string]: (input: Json) => Promise<Json> } {
+		handlers(runId: () => string = () => crypto.randomUUID()): { [name: string]: (input: Json, invocation?: { id: string }) => Promise<Json> } {
 			return Object.fromEntries(Object.keys(m.integrations).map((c) => [`${c}.integration`,
-				async (input: Json) => await run(c, (isObj(input) && typeof input['mode'] === 'string' ? input['mode'] : 'reconcile') as Mode, runId(),
-					isObj(input) ? input['message'] : undefined, isObj(input) && typeof input['cursor'] === 'string' ? input['cursor'] : null) as unknown as Json]));
+				async (input: Json, invocation?: { id: string }) => {
+					const report = await run(c, (isObj(input) && typeof input['mode'] === 'string' ? input['mode'] : 'reconcile') as Mode, invocation?.id ?? runId(),
+						isObj(input) ? input['message'] : undefined, isObj(input) && typeof input['cursor'] === 'string' ? input['cursor'] : null);
+					if (isObj(input) && input['mode'] === 'deliver' && report.failures.length > 0)
+						throw new BoltError(report.failures.some((f) => f.error === 'conflict') ? 'conflict' : 'invalidInput', 'admission', report.failures.map((f) => f.error).join('; '));
+					return report as unknown as Json;
+				}]));
 		},
 		/**
 		 * Wires every transport's inbound stream; returns the unsubscribe. Each inbound message queues one `deliver` run of

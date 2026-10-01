@@ -140,8 +140,8 @@ describe('WhatsApp (Baileys) messages', () => {
 describe('the WhatsApp Web link', () => {
 	const workDir = mkdtempSync(join(tmpdir(), 'providers-baileys-'));
 	const fake = () => {
-		const opened: { ev: EventEmitter; socket: WaSocket; dir: string; sent: unknown[] }[] = [];
-		const open = async (dir: string) => {
+		const opened: { ev: EventEmitter; socket: WaSocket; dir: string; sent: unknown[]; credentialsChanged: () => void }[] = [];
+		const open = async (dir: string, _syncOnly?: boolean, credentialsChanged = () => {}) => {
 			const ev = new EventEmitter(),
 				sent: unknown[] = [];
 			const socket: WaSocket = {
@@ -159,7 +159,7 @@ describe('the WhatsApp Web link', () => {
 				logout: async () => {},
 				end: () => {}
 			};
-			opened.push({ ev, socket, dir, sent });
+			opened.push({ ev, socket, dir, sent, credentialsChanged });
 			return { socket, download: async () => null };
 		};
 		return { opened, provider: baileys({ open, workDir, backoffMs: () => 5, sealMs: 5 }) };
@@ -216,6 +216,38 @@ describe('the WhatsApp Web link', () => {
 		expect(resumed.opened).toHaveLength(1);
 		expect(again.link.connection().state).toBe('connecting');
 		await again.link.close();
+	});
+	it('flushes pending auth changes before shutdown removes the working copy', async () => {
+		const { opened, provider } = fake(), h = await host(provider, fakeFetch([]));
+		await h.link.pair({});
+		await writeFile(join(opened[0]!.dir, 'creds.json'), '{"me":2}');
+		opened[0]!.ev.emit('creds.update', {});
+		await h.link.close();
+		expect(h.saved.at(-1)).toEqual({ files: { 'creds.json': '{"me":2}' } });
+	});
+	it('seals key-store changes even without a creds.update event', async () => {
+		const { opened, provider } = fake(), h = await host(provider, fakeFetch([]));
+		await h.link.pair({});
+		await writeFile(join(opened[0]!.dir, 'session-key.json'), '{"key":1}');
+		opened[0]!.credentialsChanged();
+		await wait(30);
+		expect(h.saved.at(-1)).toEqual({ files: { 'session-key.json': '{"key":1}' } });
+		await h.link.close();
+	});
+	it('retries refused messages and serializes live and history delivery', async () => {
+		const { opened, provider } = fake();
+		let attempts = 0;
+		const events: unknown[] = [];
+		const link = await provider.open({ channel: 'personal', syncOnly: true, credential: null, webhookUrl: 'https://ws.example', fetch: fakeFetch([]),
+			save: async () => {}, changed: () => {}, emit: async (event) => { if (++attempts === 1) throw new Error('temporary database failure'); events.push(event); } });
+		await link.pair({});
+		const message = (id: string) => ({ key: { id, remoteJid: '659@s.whatsapp.net' }, messageTimestamp: 1_790_000_000, message: { conversation: id } });
+		opened[0]!.ev.emit('messaging-history.set', { messages: [message('H1')] });
+		opened[0]!.ev.emit('messages.upsert', { type: 'notify', messages: [message('L1')] });
+		await wait(30);
+		expect(attempts).toBe(3);
+		expect(events).toMatchObject([{ message: { id: 'H1' } }, { message: { id: 'L1' } }]);
+		await link.close();
 	});
 	it('emits inbound messages for this channel and sends only while connected', async () => {
 		const { opened, provider } = fake(),

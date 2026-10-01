@@ -28,6 +28,9 @@ const accounts = async () => (await t.as(t.admin).read('accounts', { all: true, 
 const byErp = async (id: string) => (await accounts()).find((r) => r['erp_id'] === id)!;
 
 describe('one_way: serial-pcn supplier mail (the reference)', () => {
+	it('queued channel delivery refuses invalid mapping instead of reporting successful completion', async () => {
+		await expect(sync.handlers()['pcn_notices.integration']!({ mode: 'deliver', message: mail({ id: null }) })).rejects.toMatchObject({ code: 'invalidInput' });
+	});
 	it('a delivered mail lands in pcn_notices, which no grant names, in one statement, its supplier resolved by Reply-To', async () => {
 		const onsemi = ok(await t.as(t.admin).act('suppliers.create', { name: 'onsemi', domain: 'onsemi.com' })).records[0]!.id;
 		t.count.reset();

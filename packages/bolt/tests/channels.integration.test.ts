@@ -3,6 +3,8 @@
 // the row after it is closed — plus inbound dedupe and edits, serial at-least-once delivery, the epoch, and `ctx.send`.
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
+import { runs } from '../src/engine/runs/index.ts';
+import { BoltError } from '../src/engine/contracts.ts';
 import { channels, type Channels } from '../src/engine/channels/index.ts';
 import { SendRefused } from '../src/engine/channels/status.ts';
 import { fakeTransport, type FakeTransport } from '../src/engine/channels/transports.ts';
@@ -546,6 +548,7 @@ describe('delivery order and epochs', () => {
 
 describe('inbound history', () => {
 	it('personal history reaches integrations with sent direction and never admits an envoy or sends', async () => {
+		let attempts = 0;
 		const events: Json[] = [],
 			admitted: string[] = [];
 		const personal = channels({
@@ -556,8 +559,10 @@ describe('inbound history', () => {
 					channels: { desk_wa: { transport: 'whatsapp', syncOnly: true } }
 				}
 			},
+			clock: () => t.clock.now(),
 			integrations: {
 				deliver: async (event) => {
+					if (++attempts === 1) throw new BoltError('upstream', 'facility', 'Temporary service failure');
 					if (event.kind === 'inbound') events.push(event.message);
 				}
 			},
@@ -573,7 +578,15 @@ describe('inbound history', () => {
 		});
 		await personal.receive({ kind: 'inbound', channel: 'desk_wa', message });
 		await personal.receive({ kind: 'inbound', channel: 'desk_wa', message });
+		expect(events).toEqual([]);
+		const worker = runs({ engine: t.engine, deadlines: t.fakes.deadlines, scope: 'test', clock: () => Date.parse(t.clock.now()), platform: personal.handlers() });
+		await worker.tick();
+		expect((await t.db.read([{ text: "SELECT state, attempts FROM sys_run WHERE automation = 'channels.integrate'", params: [] }]))[0]!.rows).toEqual([{ state: 'queued', attempts: 1 }]);
+		await personal.receive({ kind: 'inbound', channel: 'desk_wa', message });
+		t.clock.advance('1min');
+		await worker.tick();
 		expect(events).toEqual([message]);
+		expect((await t.db.read([{ text: "SELECT state, attempts FROM sys_run WHERE automation = 'channels.integrate'", params: [] }]))[0]!.rows).toEqual([{ state: 'succeeded', attempts: 2 }]);
 		expect(admitted).toEqual([]);
 		expect(
 			(
@@ -585,6 +598,23 @@ describe('inbound history', () => {
 		await expect(personal.send('desk_wa', { to: 'customer', text: 'hello' })).rejects.toThrow(
 			/cannot send/
 		);
+	});
+	it('atomically queues native integration deliveries and survives restart/redelivery', async () => {
+		const engine = { ...t.engine, manifest: { ...t.engine.manifest, integrations: { sent_emails: { direction: 'one_way' as const, source: { channel: 'desk_wa' } } } } };
+		const open = () => channels({ engine, clock: () => t.clock.now(), deadlines: t.fakes.deadlines });
+		await t.db.write({ text: "ALTER TABLE sys_run ADD CONSTRAINT reject_delivery CHECK (automation <> 'sent_emails.integration')", params: [] });
+		await expect(open().receive({ kind: 'inbound', channel: 'desk_wa', message: inbound() })).rejects.toThrow();
+		expect((await t.db.read([{ text: 'SELECT count(*)::int AS n FROM sys_message', params: [] }]))[0]!.rows).toEqual([{ n: 0 }]);
+		await t.db.write({ text: 'ALTER TABLE sys_run DROP CONSTRAINT reject_delivery', params: [] });
+		await open().receive({ kind: 'inbound', channel: 'desk_wa', message: inbound() });
+		await open().receive({ kind: 'inbound', channel: 'desk_wa', message: inbound() });
+		const jobs = (await t.db.read([{ text: 'SELECT automation, state, input FROM sys_run', params: [] }]))[0]!.rows;
+		expect(jobs).toEqual([{ automation: 'sent_emails.integration', state: 'queued', input: { mode: 'deliver', message: inbound() } }]);
+		const edited = inbound({ text: 'revised', version: '2026-09-25T10:01:00.000Z' });
+		await open().receive({ kind: 'inbound', channel: 'desk_wa', message: edited });
+		await open().receive({ kind: 'inbound', channel: 'desk_wa', message: edited });
+		expect((await t.db.read([{ text: 'SELECT count(*)::int AS n FROM sys_run', params: [] }]))[0]!.rows).toEqual([{ n: 2 }]);
+		expect((await t.db.read([{ text: "SELECT input->'message'->>'text' AS text FROM sys_run ORDER BY input->'message'->>'version' NULLS FIRST", params: [] }]))[0]!.rows).toEqual([{ text: 'first' }, { text: 'revised' }]);
 	});
 	const inbound = (over: { [k: string]: Json } = {}): Json => ({
 		id: 'W1',

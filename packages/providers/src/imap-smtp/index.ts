@@ -552,19 +552,22 @@ async function open(
 	async function pull(me: ImapFlow): Promise<void> {
 		const cursor = box?.cursor;
 		if (client !== me || box === null || cursor === undefined) return;
-		const got: { uid: number; source: Uint8Array }[] = [];
-		for await (const msg of me.fetch(
-			`${cursor.uid + 1}:*`,
-			{ uid: true, source: true },
-			{ uid: true }
-		))
-			if (msg.uid > cursor.uid && msg.source !== undefined)
-				got.push({ uid: msg.uid, source: msg.source });
+		// Search returns only UIDs; fetch bounded batches so a history import never holds the mailbox bodies in memory.
+		const found = await me.search({ uid: `${cursor.uid + 1}:*` }, { uid: true });
+		const ids = (found || []).filter((uid) => uid > cursor.uid).sort((a, b) => a - b);
 		let at = cursor.uid;
 		try {
-			for (const msg of got.sort((a, b) => a.uid - b.uid)) {
-				await deliver(box, msg.source, `imap-${cursor.validity}-${msg.uid}`);
-				at = msg.uid;
+			for (let offset = 0; offset < ids.length; offset += 25) {
+				if (client !== me || box === null) return;
+				const got: { uid: number; source: Uint8Array }[] = [];
+				for await (const msg of me.fetch(ids.slice(offset, offset + 25).join(','), { uid: true, source: true }, { uid: true }))
+					if (msg.source !== undefined) got.push({ uid: msg.uid, source: msg.source });
+				for (const msg of got.sort((a, b) => a.uid - b.uid)) {
+					await deliver(box, msg.source, `imap-${cursor.validity}-${msg.uid}`);
+					at = msg.uid;
+				}
+				if (at !== cursor.uid && box !== null)
+					await save({ ...box, cursor: { validity: cursor.validity, uid: at } });
 			}
 		} finally {
 			if (at !== cursor.uid && box !== null)

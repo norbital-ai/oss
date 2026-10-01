@@ -39,7 +39,7 @@ export function triggersOf(m: EngineManifest): Triggers {
 		for (const x of on) {
 			if (typeof x['cron'] === 'string') {
 				const cron = parseCron(x['cron']), tz = typeof x['tz'] === 'string' ? x['tz'] : m.workspace.tz;
-				crons.push({ automation, key: `cron:${x['cron']}@${tz}`, cron, tz, bucket: periodAtLeast5Min(cron) });
+				crons.push({ automation, key: `cron:${automation}:${x['cron']}@${tz}`, cron, tz, bucket: periodAtLeast5Min(cron) });
 				continue;
 			}
 			if (typeof x['webhook'] === 'string') {

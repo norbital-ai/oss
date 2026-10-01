@@ -134,9 +134,9 @@ type Events<T, C> = [C] extends [never]
 	: { [E in DeliveryKind]?: (e: DeliveryEvent<E, T>) => Patch<C> };
 export type ChannelSpec<T = Transport, O = {}> = {
 	transport: T;
-	/** Allow independently sealed email or WhatsApp accounts. Administrators manage all accounts; members manage their own on a syncOnly channel. */
+	/** Allow independently sealed provider accounts. Administrators manage all accounts; members manage their own on a syncOnly channel. */
 	accounts?: boolean;
-	/** Personal ingestion only: import available provider history through integrations, never send or invoke an envoy. Cannot declare outbound. Only providers advertising supportsSync are offered. */
+	/** Personal ingestion only: import available provider history through integrations, never send or invoke an envoy. Cannot declare outbound. Only providers advertising supportsSync are offered; custom channels use their authored inbound or poll mapping. */
 	syncOnly?: boolean;
 	/**
 	 * custom: the connection outbound messages are POSTed to (`src/connection/+<name>.connection.ts`). A custom channel
@@ -184,6 +184,8 @@ export type ChannelSpec<T = Transport, O = {}> = {
  * export default channel({ transport: 'telegram' });
  * @example
  * export default channel({ transport: 'whatsapp', accounts: true, syncOnly: true });
+ *
+ * Provider adapters supply setup descriptors (form, QR, code or OAuth), live state and webhook/session handlers through ChannelProvider. The shared runtime handles account ownership, sealed credentials and restoration for every transport, including tenant-authored custom mappings.
  *
  * Personal accounts register with POST /__bolt/transports/<channel>/accounts { id }; GET lists their public
  * connection states. Pair and observe each account with the standard /__bolt/transports/<channel>~<id>

@@ -20,7 +20,7 @@
 	} = $props();
 
 	// the component is a module, so the same chunk is fetched once however often this is re-derived
-	const own = $derived(transport === 'custom' ? workspace?.[channel] ?? null : null);
+	const own = $derived(transport === 'custom' ? workspace?.[channel.split('~')[0]!] ?? null : null);
 	const chunk = $derived(own?.().then((m) => m.default) ?? null);
 	// a reconnect is a connected channel catching its breath: it keeps its summary, not a setup form
 	const connected = $derived(connection?.state === 'connected' || connection?.state === 'reconnecting');

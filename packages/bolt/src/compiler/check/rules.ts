@@ -261,16 +261,6 @@ export function buildChecks(
 			if (ch[flag] !== undefined && typeof ch[flag] !== 'boolean')
 				at('channel/flag', 'channel', name, `${flag} must be boolean`);
 		if (
-			(ch['accounts'] === true || ch['syncOnly'] === true) &&
-			!['whatsapp', 'email'].includes(String(ch['transport']))
-		)
-			at(
-				'channel/accounts',
-				'channel',
-				name,
-				'personal account channels support email or whatsapp'
-			);
-		if (
 			ch['syncOnly'] === true &&
 			(ch['outbound'] !== undefined ||
 				Object.values(m.envoys ?? {}).some((e) => e['channel'] === name))
@@ -281,6 +271,8 @@ export function buildChecks(
 				name,
 				'personal sync channels cannot declare outbound or an envoy'
 			);
+		if (ch['accounts'] === true && ch['syncOnly'] !== true && Object.values(m.envoys ?? {}).some((e) => e['channel'] === name))
+			at('channel/accounts-envoy', 'channel', name, 'an envoy cannot bind a channel with multiple accounts');
 		const send = ch['send'];
 		const inbound = ch['inbound'],
 			poll = ch['poll'];
@@ -301,7 +293,7 @@ export function buildChecks(
 				);
 			continue;
 		}
-		if (typeof send !== 'string' || m.connections?.[send] === undefined)
+		if (ch['syncOnly'] !== true && (typeof send !== 'string' || m.connections?.[send] === undefined))
 			at(
 				'channel/custom-send',
 				'channel',

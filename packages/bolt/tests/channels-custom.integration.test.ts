@@ -90,3 +90,25 @@ describe('a custom channel\'s inbound', () => {
 		expect((await inbound()).map((r) => r['provider_id'])).toEqual(['q1', 'q2']);
 	});
 });
+
+
+it('custom personal accounts retain mapped source identity without invoking an envoy', async () => {
+	const personalManifest = { ...manifest, envoys: {}, channels: { partner: { ...manifest.channels['partner'], accounts: true, syncOnly: true } } };
+	const personal = await testWorkspace({ manifest: personalManifest, guest: { source: guest }, http });
+	const own = new Map<string, Json>();
+	const sources = channelLinks({ manifest: personalManifest, providers: [], load: async (key) => own.get(key) ?? null,
+		store: async (key, value) => { if (value === null) own.delete(key); else own.set(key, value); },
+		webhookUrl: (channel) => `https://acme.example/hooks/bolt.custom/${channel}`, emit: (_transport, event) => personal.engine.channels.receive(event) });
+	for (const account of ['alice', 'bob']) {
+		await sources.admin(new Request('https://acme.example/x', { method: 'POST', body: JSON.stringify({ id: account }) }), 'partner', 'accounts');
+		await sources.pair(`partner~${account}`, { signingSecret: SECRET });
+		const body = { events: [event('same', 'personal activity')] };
+		const request = () => new Request('https://acme.example/x', { method: 'POST', headers: { 'x-signature': sign(body) }, body: JSON.stringify(body) });
+		expect((await sources.webhook(`partner~${account}`, request())).status).toBe(200);
+		expect((await sources.webhook(`partner~${account}`, request())).status).toBe(200);
+	}
+	expect((await personal.db.read([{ text: 'SELECT provider_id, message FROM sys_message ORDER BY provider_id', params: [] }]))[0]!.rows)
+		.toEqual([{ provider_id: 'alice:same', message: { sourceAccount: 'alice' } }, { provider_id: 'bob:same', message: { sourceAccount: 'bob' } }]);
+	expect(posted).toEqual([]);
+	await sources.close();
+});

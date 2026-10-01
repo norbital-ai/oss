@@ -10,9 +10,8 @@
 	import type { SetupField } from '../../engine/channels/connection.ts';
 	import Facts from './Facts.svelte';
 	import { aboutOf, sayOf, type ConnectProps } from './connect.ts';
-	import { bolt } from '../runtime.ts';
 
-	let { connection, busy, pair, unpair, t = (key: string) => bolt.t(key), locale }: Pick<ConnectProps, 'connection' | 'busy' | 'pair' | 'unpair' | 'locale'> & { t?: ConnectProps['t'] } = $props();
+	let { connection, busy, pair, unpair, t, locale }: Pick<ConnectProps, 'connection' | 'busy' | 'pair' | 'unpair' | 't' | 'locale'> = $props();
 	const say = $derived(sayOf(t, locale));
 	const c = $derived(connection);
 	const providers = $derived(c?.providers ?? []);

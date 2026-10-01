@@ -108,6 +108,22 @@ describe('the mailbox link (password)', () => {
 		await until(() => (h.saved.at(-1) as { cursor?: { uid: number } }).cursor?.uid === 4);
 	});
 
+	it('backfills personal mailbox history in bounded batches with saved progress', async () => {
+		const { imap, h, input } = await setup();
+		await h.link.close();
+		for (let i = 0; i < 60; i++) imap.deliver(mail(`From: customer@else.example\nMessage-ID: <history-${i}@else.example>`));
+		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+		const saved: (Json | null)[] = [], events: unknown[] = [];
+		const link = await provider.open({ channel: 'personal', syncOnly: true, credential: null, webhookUrl: HOOK, fetch: fakeFetch([]),
+			save: async (value) => { saved.push(value); }, emit: async (value) => { events.push(value); }, changed: () => {} });
+		cleanup.push(() => link.close());
+		await link.pair(input);
+		await until(() => events.length === 61);
+		await until(() => (saved.at(-1) as { cursor?: { uid: number } }).cursor?.uid === 61);
+		expect(imap.fetches).toEqual([25, 25, 11]);
+		expect(saved.some((value) => (value as { cursor?: { uid: number } } | null)?.cursor?.uid === 25)).toBe(true);
+	});
+
 	it('sends as the mailbox with a DSN request; 4xx is a retryable refusal, 5xx a permanent one, both with their codes', async () => {
 		const { h, input, smtp } = await setup();
 		await h.link.pair(input);

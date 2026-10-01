@@ -19,6 +19,7 @@ import { nextSlot } from './cron.ts';
 import { BUCKET_MS, dueAt, iso, REPLACE_QUEUED, triggersOf, type NewRun } from './queue.ts';
 import { deliverWebhook, type WebhookRequest, type WebhookResponse } from './webhook.ts';
 import { authorDecide, authorEmbed, readableFile, storedFiles, type AuthorDecideConfig } from '../decisions/index.ts';
+import { isObj } from '../channels/store.ts';
 import { prepareSend, sendPiece } from '../channels/outbound.ts'; // hook:envoys
 import { FILE_METHODS, runConvert, runSpeech, runFiles } from './files.ts';
 import { INFER_MS, inferFacility, type InferTool } from '../agent/ai.ts';
@@ -313,7 +314,7 @@ export function runs(cfg: RunsConfig): Runs {
 		}
 		for (const r of rows) stopping.delete(r.id);
 		// attempts (rule 54): only Transient retries, by re-queueing the same row; its journal carries over
-		const attempts = spec?.retry?.attempts ?? 1;
+		const attempts = spec?.retry?.attempts ?? ((head.automation.endsWith('.integration') || head.automation === 'channels.integrate') && isObj(head.input) && head.input['mode'] === 'deliver' ? 3 : 1);
 		const retry = transient(outcome) && head.attempts < attempts;
 		const at = clock();
 		const backoff = Math.min(durationMs(spec?.retry?.backoff ?? '10s') * 2 ** (head.attempts - 1), 3_600_000) * (0.5 + Math.random());

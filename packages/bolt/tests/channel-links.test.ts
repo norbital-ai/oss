@@ -13,8 +13,8 @@ import { channelLinks } from '../src/engine/channels/links.ts';
 import type { Authority, EngineManifest, TransportEvent } from '../src/engine/contracts.ts';
 
 /** A provider that pairs on `{ key }` and refuses anything else; it records what it opened with. */
-const fake = (id: string, opened: ChannelOpen[] = []): ChannelProvider => ({
-	transport: 'whatsapp',
+const fake = (id: string, opened: ChannelOpen[] = [], transport: ChannelProvider['transport'] = 'whatsapp'): ChannelProvider => ({
+	transport,
 	supportsSync: true,
 	id,
 	label: `Fake ${id}`,
@@ -32,7 +32,7 @@ const fake = (id: string, opened: ChannelOpen[] = []): ChannelProvider => ({
 				return { providerId: `${id}:${channel}:${(message as { text: string }).text}` };
 			},
 			connection: () =>
-				connection(ctx.channel, 'whatsapp', as === null ? 'unpaired' : 'connected', {
+				connection(ctx.channel, transport, as === null ? 'unpaired' : 'connected', {
 					pairedAs: as,
 					stored: as !== null
 				}),
@@ -472,5 +472,50 @@ describe('personal channel account authorization', () => {
 		expect((await resumed.admin(post({}), 'personal~phone', 'test', member('alice'))).status).toBe(
 			400
 		);
+	});
+});
+
+
+describe('provider-defined personal account transports', () => {
+	it('shares sealed credentials, routing and resume for any sync-capable provider', async () => {
+		const sealed = new Map<string, Json>(), events: TransportEvent[] = [];
+		const make = () => channelLinks({
+			manifest: { channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } } },
+			providers: [fake('custom-telegram', [], 'telegram')], load: async (name) => sealed.get(name) ?? null,
+			store: async (name, value) => { if (value === null) sealed.delete(name); else sealed.set(name, value); },
+			webhookUrl: (channel, transport) => `https://ws.example/hooks/bolt.${transport}/${channel}`,
+			emit: async (_transport, event) => { events.push(event); },
+		});
+		const links = make();
+		await links.admin(post({ id: 'source' }), 'personal', 'accounts');
+		await links.pair('personal~source', { key: 'private' });
+		await links.close();
+		const resumed = make();
+		await resumed.resume();
+		expect(resumed.state('personal~source')).toMatchObject({ transport: 'telegram', pairedAs: 'private' });
+		await resumed.webhook('personal~source', post({ id: 'one', thread: 'chat' }));
+		expect(events).toEqual([{ kind: 'inbound', channel: 'personal', message: { id: 'source:one', thread: 'source:chat', sourceAccount: 'source' } }]);
+		await resumed.unpair('personal~source');
+		expect(sealed.has('personal~source')).toBe(false);
+		await resumed.close();
+	});
+	it('uses the authored custom inbound signature with each account own sealed credential', async () => {
+		const sealed = new Map<string, Json>(), events: TransportEvent[] = [];
+		const links = channelLinks({
+			manifest: { channels: { own: { transport: 'custom', accounts: true, syncOnly: true, inbound: { verify: { scheme: 'bearer', secret: 'token' } } } } },
+			providers: [], load: async (key) => sealed.get(key) ?? null,
+			store: async (key, value) => { if (value === null) sealed.delete(key); else sealed.set(key, value); },
+			webhookUrl: (channel) => `https://ws.example/hooks/bolt.custom/${channel}`,
+			emit: async (_transport, event) => { events.push(event); },
+		});
+		await links.admin(post({ id: 'source' }), 'own', 'accounts');
+		await links.pair('own~source', { token: 'secret' });
+		expect(links.state('own~source')).toMatchObject({ about: { webhookUrl: 'https://ws.example/hooks/bolt.custom/own~source' } });
+		expect((await links.webhook('own~source', post({ item: 1 }))).status).toBe(401);
+		const request = new Request('https://ws.example/x', { method: 'POST', headers: { authorization: 'Bearer secret' }, body: '{"item":1}' });
+		expect((await links.webhook('own~source', request)).status).toBe(200);
+		expect(events).toMatchObject([{ channel: 'own', message: { sourceAccount: 'source', body: { item: 1 } } }]);
+		expect((events[0] as Extract<TransportEvent, { kind: 'inbound' }>).message).not.toHaveProperty('id');
+		await links.close();
 	});
 });

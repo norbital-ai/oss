@@ -111,6 +111,17 @@ async function world(manifest: EngineManifest, bodies: { [name: string]: Body } 
 const setNow = (w: World, ms: number) => { w.clock.ms = ms; };
 
 describe('the deadlines port and the idle workspace (rule 52a)', () => {
+	it('runs both automations sharing a cron expression and maintains their independent next slots', async () => {
+		const scheduled = { ...empty, automations: {
+			first: { description: 'First task', on: { cron: '*/5 * * * *' }, runAs: ['ops'] },
+			second: { description: 'Second task', on: { cron: '*/5 * * * *' }, runAs: ['ops'] },
+		} } as EngineManifest;
+		const w = await world(scheduled, { first: async () => {}, second: async () => {} });
+		await w.until(T0 + 5 * 60_000);
+		expect(w.calls.map((call) => call.target).sort()).toEqual(['first', 'second']);
+		await w.until(T0 + 10 * 60_000);
+		expect(w.calls.map((call) => call.target).sort()).toEqual(['first', 'first', 'second', 'second']);
+	});
 	it('an idle workspace issues zero statements over a simulated week', async () => {
 		const w = await world(empty);
 		await w.until(T0 + 7 * DAY);

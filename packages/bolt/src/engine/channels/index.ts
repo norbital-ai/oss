@@ -49,6 +49,7 @@ import {
 import { decodeInbound, type Inbound } from './transports.ts';
 
 export type { Transports };
+const INTEGRATE = 'channels.integrate';
 export type ChannelsConfig = {
 	engine: Pick<Engine, 'manifest' | 'db' | 'act' | 'read' | 'authority'>;
 	transports?: Transports;
@@ -252,11 +253,21 @@ export function channels(cfg: ChannelsConfig) {
 		}
 		RETURNING (xmax = 0) AS inserted`
 		);
+		const integrationTargets = Object.entries(m.integrations).filter(([, spec]) => isObj(spec['source']) && spec['source']['channel'] === channel);
+		const integrationJobs: { automation: string; key: string; input: Json }[] = integrationTargets.map(([collection]) => ({ automation: `${collection}.integration`, key: `channel:${channel}:${id}:${inbound.version}:${collection}`, input: { mode: 'deliver', message: isObj(message) ? { ...message, attachments: stored } : message } }));
+		if (cfg.integrations !== undefined) integrationJobs.push({ automation: INTEGRATE, key: `channel:${channel}:${id}:${inbound.version}:integrations`, input: { mode: 'deliver', message: isObj(message) ? { ...message, attachments: stored } : message, channel, run: `channel:${channel}:${id}` } });
+		if (!inbound.deleted && (specOf(channel)['syncOnly'] === true || !inbound.history) && integrationJobs.length > 0) {
+			c.cte('integrations', `INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth)
+				SELECT v.id, v.automation, v.input, ${c.p(now)}::timestamptz, v.key, 'inbound', 0
+				FROM jsonb_to_recordset(${c.p(integrationJobs.map((job) => ({ id: crypto.randomUUID(), ...job })))}::jsonb) AS v(id text, automation text, input jsonb, key text)
+				WHERE EXISTS (SELECT 1 FROM msg) ON CONFLICT (key) DO NOTHING RETURNING id`);
+		}
 		const [row] = (
 			await db.write(
 				c.sql(`(SELECT inserted FROM msg) AS inserted, (SELECT count(*) FROM msg)::int AS n`)
 			)
 		).rows;
+		if (integrationJobs.length > 0 && Number(row!['n']) > 0) cfg.deadlines?.announce(cfg.scope ?? '', now);
 		if (row!['n'] === 0) return null; // a redelivery, an older version, or a change to a tombstone: nothing moved
 		return {
 			...inbound,
@@ -277,8 +288,11 @@ export function channels(cfg: ChannelsConfig) {
 		}
 		// a custom channel's webhook hands over its verified request (`{ body, headers }`): the channel's own `inbound` maps it
 		if (transportOf(event.channel) === 'custom') {
-			for (const message of await mapped(event.channel, 'inbound', event.message))
-				await arrived({ kind: 'inbound', channel: event.channel, message });
+			for (const message of await mapped(event.channel, 'inbound', event.message)) {
+				const account = isObj(event.message) ? event.message['sourceAccount'] : undefined;
+				await arrived({ kind: 'inbound', channel: event.channel, message: typeof account === 'string' && isObj(message)
+					? { ...message, sourceAccount: account, id: `${account}:${String(message['id'])}`, thread: `${account}:${String(message['thread'] ?? message['id'])}` } : message });
+			}
 			return;
 		}
 		await arrived(event);
@@ -288,8 +302,6 @@ export function channels(cfg: ChannelsConfig) {
 		const got = await ingest(event.channel, event.message, event.bins);
 		if (got === null || !got.inserted || got.deleted) return;
 		const syncOnly = specOf(event.channel)['syncOnly'] === true;
-		if (syncOnly || !got.history)
-			await cfg.integrations?.deliver(event, `channel:${event.channel}:${got.row}`);
 		if (syncOnly) return;
 		if (got.email !== null ? got.references.length > 0 : got.replyTo !== null) await replied(got);
 		if (!got.history) await cfg.admit?.(got);
@@ -942,6 +954,11 @@ export function channels(cfg: ChannelsConfig) {
 				.map((c) => [`${POLL}${c}`, async () => await poll(c)]);
 			return {
 				[DELIVER]: async () => await deliver(),
+				[INTEGRATE]: async (input) => {
+					if (!isObj(input) || typeof input['channel'] !== 'string' || input['message'] === undefined) throw new BoltError('invalidInput', 'decode', 'invalid channel integration delivery');
+					await cfg.integrations?.deliver({ kind: 'inbound', channel: input['channel'], message: input['message'] }, String(input['run']));
+					return null;
+				},
 				[NOTIFY]: notify,
 				...Object.fromEntries(polls)
 			};

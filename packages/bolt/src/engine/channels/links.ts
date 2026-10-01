@@ -46,12 +46,13 @@ export type LinkHost = {
  */
 const workspaceProvider = (m: LinkHost['manifest']): ChannelProvider => ({
 	transport: 'custom',
+	supportsSync: true,
 	id: 'workspace',
 	label: { en: 'Workspace', zh: '工作区' },
 	setup: { kind: 'none', steps: [] },
 	async open(ctx) {
 		let credential = ctx.credential;
-		const inbound = m.channels[ctx.channel]?.['inbound'];
+		const inbound = m.channels[ctx.channel.split('~')[0]!]?.['inbound'];
 		const verify = isObj(inbound) && isObj(inbound['verify']) ? inbound['verify'] : null;
 		return {
 			send: async () => {
@@ -138,7 +139,7 @@ export function channelLinks(h: LinkHost) {
 		[...h.providers, WORKSPACE].filter(
 			(p) =>
 				p.transport === transport &&
-				(h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true || p.supportsSync === true)
+				(h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true || (p.supportsSync === true && (p !== WORKSPACE || isObj(h.manifest.channels[baseOf(channel)]?.['inbound']) || isObj(h.manifest.channels[baseOf(channel)]?.['poll']))))
 		);
 	const emit = async (transport: string, event: TransportEvent) => {
 		if (h.emit !== undefined) return h.emit(transport, event);
@@ -153,7 +154,7 @@ export function channelLinks(h: LinkHost) {
 		const base = held?.link.connection() ?? connection(channel, transport, 'unpaired');
 		const hook =
 			ps.some((p) => p.setup.webhook === true) ||
-			(transport === 'custom' && isObj(h.manifest.channels[channel]?.['inbound']))
+			(transport === 'custom' && isObj(h.manifest.channels[baseOf(channel)]?.['inbound']))
 				? { webhookUrl: h.webhookUrl(channel, transport) }
 				: {};
 		const redirect = ps.some((p) => p.setup.steps.some((s) => s.copy === 'redirectUrl'))
@@ -216,8 +217,7 @@ export function channelLinks(h: LinkHost) {
 									message: {
 										...e.message,
 										sourceAccount: account,
-										thread: `${account}:${String(e.message['thread'] ?? e.message['id'])}`,
-										id: `${account}:${String(e.message['id'])}`
+										...(transport === 'custom' ? {} : { thread: `${account}:${String(e.message['thread'] ?? e.message['id'])}`, id: `${account}:${String(e.message['id'])}` })
 									}
 								}
 							: { ...e, channel: base }

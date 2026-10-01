@@ -38,9 +38,11 @@ export type WaSocket = {
 /** Opens one socket over the auth directory; `download` fetches a message's media (or `null`). */
 export type WaOpen = (
 	authDir: string,
-	syncOnly?: boolean
+	syncOnly?: boolean,
+	credentialsChanged?: () => void
 ) => Promise<{
 	socket: WaSocket;
+	flushAuth?(): Promise<void>;
 	download(message: unknown): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
 }>;
 type WaState =
@@ -125,30 +127,32 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 				current = s;
 				ctx.changed();
 			};
+			let sealingWork = Promise.resolve();
+			const persist = () => {
+				sealingWork = sealingWork.catch(() => undefined).then(async () => {
+					const names = (await readdir(dir)).filter((n) => n.endsWith('.json'));
+					const files = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await readFile(join(dir, n), 'utf8')] as const)));
+					await ctx.save({ files });
+				});
+				return sealingWork;
+			};
+			let deliveries = Promise.resolve();
+			let flushAuth = async () => {};
 			const seal = () => {
+				if (closed) return;
 				clearTimeout(sealing);
-				sealing = setTimeout(
-					() =>
-						void (async () => {
-							const names = (await readdir(dir)).filter((n) => n.endsWith('.json'));
-							const files = Object.fromEntries(
-								await Promise.all(
-									names.map(async (n) => [n, await readFile(join(dir, n), 'utf8')] as const)
-								)
-							);
-							await ctx.save({ files });
-						})().catch((e: unknown) =>
-							console.error('[providers] whatsapp credentials not sealed', e)
-						),
-					o.sealMs ?? 1_000
-				);
+				sealing = setTimeout(() => {
+					sealing = undefined;
+					void persist().catch((e: unknown) => console.error('[providers] whatsapp credentials not sealed', e));
+				}, o.sealMs ?? 1_000);
 			};
 
 			async function connect(phone?: string): Promise<void> {
 				clearTimeout(timer);
 				set({ state: 'connecting', attempt });
-				await mkdir(dir, { recursive: true });
-				const opened = await open(dir, ctx.syncOnly);
+				await mkdir(dir, { recursive: true, mode: 0o700 });
+				const opened = await open(dir, ctx.syncOnly, seal);
+				flushAuth = opened.flushAuth ?? (async () => {});
 				const s = opened.socket;
 				socket = s;
 				let codeAsked = false;
@@ -187,6 +191,7 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 							detail = `${code ?? 'no status'}: ${u.lastDisconnect?.error?.message ?? 'closed'}`;
 						if (code === LOGGED_OUT) {
 							clearTimeout(sealing);
+							sealing = undefined;
 							void rm(dir, { recursive: true, force: true });
 							void ctx.save(null).catch(() => undefined);
 							set({ state: 'loggedOut', detail });
@@ -232,8 +237,7 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 						// a key distribution or a context stub rides beside a real message with nothing to say: no row for it
 						if (found['text'] === '' && media === null && found['deleted'] !== true) continue;
 						const bins = media !== null && media.bytes.byteLength <= MEDIA_MAX ? [media.bytes] : [];
-						await ctx
-							.emit({
+						const event = {
 								kind: 'inbound',
 								channel: ctx.channel,
 								message: (bins.length === 0
@@ -250,14 +254,24 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 											]
 										}) as Json,
 								...(bins.length === 0 ? {} : { bins })
-							})
-							.catch((e: unknown) => console.error('[providers] whatsapp message not stored', e));
+						} as const;
+						let failures = 0;
+						while (!closed) {
+							try { await ctx.emit(event); break; }
+							catch (e) {
+								console.error('[providers] whatsapp message retrying', e);
+								await new Promise((resolve) => setTimeout(resolve, backoffMs(failures++)));
+							}
+						}
 					}
 				};
-				on<{ type: string; messages: unknown[] }>('messages.upsert', (p) => {
-					if (p.type === 'notify' || p.type === 'append') void deliver(p.messages, false);
+				const enqueue = (messages: readonly unknown[], history: boolean) => {
+					deliveries = deliveries.catch((e: unknown) => console.error('[providers] whatsapp import failed', e)).then(() => closed ? undefined : deliver(messages, history));
+				};
+				on<{ type: string; messages: unknown[] }>('messages.upsert' , (p) => {
+					if (p.type === 'notify' || p.type === 'append') enqueue(p.messages, false);
 				});
-				on<{ messages: unknown[] }>('messaging-history.set', (p) => void deliver(p.messages, true));
+				on<{ messages: unknown[] }>('messaging-history.set', (p) => enqueue(p.messages, true));
 				// receipts on what we sent: the server's ack, the phone's delivery, the blue ticks, an error
 				on<unknown[]>('messages.update', (updates) => {
 					for (const u of updates) {
@@ -274,7 +288,7 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 			const files =
 				isObj(ctx.credential) && isObj(ctx.credential['files']) ? ctx.credential['files'] : null;
 			if (files !== null) {
-				await mkdir(dir, { recursive: true });
+				await mkdir(dir, { recursive: true, mode: 0o700 });
 				for (const [name, content] of Object.entries(files))
 					if (/^[\w.-]+\.json$/.test(name) && typeof content === 'string')
 						await writeFile(join(dir, name), content);
@@ -334,6 +348,8 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 				async unpair() {
 					clearTimeout(timer);
 					clearTimeout(sealing);
+					sealing = undefined;
+					await sealingWork.catch(() => undefined);
 					const s = socket;
 					socket = undefined;
 					closed = true;
@@ -345,7 +361,11 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 				},
 				async close() {
 					stop();
+					await flushAuth();
 					clearTimeout(sealing);
+					sealing = undefined;
+					if (current.state !== 'unpaired' && current.state !== 'loggedOut') await persist();
+					else await sealingWork;
 					await rm(dir, { recursive: true, force: true });
 				},
 				async send(_channel, message, _signal, files = []) {
@@ -495,17 +515,26 @@ function whatsappText(content: Obj): string {
 }
 
 /** The real socket. Baileys is an optional dependency, so it is imported by name at first use. */
-export const baileysSocket: WaOpen = async (authDir, syncOnly) => {
+export const baileysSocket: WaOpen = async (authDir, syncOnly, credentialsChanged = () => {}) => {
 	const name = '@whiskeysockets/baileys';
 	type Baileys = {
 		default: (o: object) => WaSocket;
-		useMultiFileAuthState(d: string): Promise<{ state: object; saveCreds(): Promise<void> }>;
+		useMultiFileAuthState(d: string): Promise<{ state: { creds: object; keys: { set(data: object): Promise<void> } }; saveCreds(): Promise<void> }>;
 		fetchLatestWaWebVersion(): Promise<{ version: number[] }>;
 		Browsers: { ubuntu(n: string): unknown };
 		downloadMediaMessage(m: unknown, t: 'buffer', o: object): Promise<Buffer>;
 	};
 	const b = (await import(name)) as Baileys;
 	const { state, saveCreds } = await b.useMultiFileAuthState(authDir);
+	const setKeys = state.keys.set.bind(state.keys);
+	let authWrites = Promise.resolve();
+	state.keys.set = (data) => {
+		authWrites = authWrites.catch(() => undefined).then(async () => {
+			await setKeys(data);
+			credentialsChanged();
+		});
+		return authWrites;
+	};
 	const { version } = await b.fetchLatestWaWebVersion();
 	const quiet = {
 		level: 'silent',
@@ -524,9 +553,13 @@ export const baileysSocket: WaOpen = async (authDir, syncOnly) => {
 		syncFullHistory: syncOnly === true
 	});
 	// Baileys writes the files first; the link seals them on the same event, a second later
-	socket.ev.on('creds.update', (() => void saveCreds()) as (arg: never) => void);
+	socket.ev.on('creds.update', (() => {
+		authWrites = authWrites.catch(() => undefined).then(async () => { await saveCreds(); credentialsChanged(); });
+		void authWrites.catch((e: unknown) => console.error('[providers] whatsapp auth write failed', e));
+	}) as (arg: never) => void);
 	return {
 		socket,
+		flushAuth: () => authWrites,
 		async download(message) {
 			const content =
 				(

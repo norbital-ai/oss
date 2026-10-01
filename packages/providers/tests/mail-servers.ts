@@ -18,6 +18,7 @@ export async function fakeImap(o: { accept: (user: string, secret: { pass?: stri
 	const idlers = new Set<(n: number) => void>();
 	const sockets = new Set<Socket>();
 	const logins: string[] = [];
+	const fetches: number[] = [];
 	let next = 1;
 	const server = createServer((socket) => {
 		sockets.add(socket);
@@ -78,6 +79,7 @@ export async function fakeImap(o: { accept: (user: string, secret: { pass?: stri
 					const [sub = '', ...more] = args.split(' ');
 					if (sub.toUpperCase() === 'FETCH') {
 						const found = uidsOf(more[0] ?? '');
+						fetches.push(found.length);
 						for (const uid of found) {
 							const m = messages.find((x) => x.uid === uid)!, seq = messages.indexOf(m) + 1;
 							say(`* ${seq} FETCH (UID ${uid} BODY[] {${Buffer.byteLength(m.raw)}}\r\n${m.raw})`);
@@ -86,7 +88,8 @@ export async function fakeImap(o: { accept: (user: string, secret: { pass?: stri
 					}
 					if (sub.toUpperCase() === 'SEARCH') {
 						const id = /HEADER Message-ID "?([^"\s]+)"?/i.exec(args)?.[1];
-						const hits = messages.filter((m) => id !== undefined && m.raw.toLowerCase().includes(`message-id: ${id.toLowerCase()}`)).map((m) => m.uid);
+						const range = /UID ([\d:*]+)/i.exec(more.join(' '))?.[1];
+						const hits = range !== undefined ? uidsOf(range) : messages.filter((m) => id !== undefined && m.raw.toLowerCase().includes(`message-id: ${id.toLowerCase()}`)).map((m) => m.uid);
 						say(`* SEARCH${hits.map((h) => ` ${h}`).join('')}`);
 						return say(`${tag} OK searched`);
 					}
@@ -108,7 +111,7 @@ export async function fakeImap(o: { accept: (user: string, secret: { pass?: stri
 	});
 	const port = await listen(server);
 	return {
-		port, logins,
+		port, logins, fetches,
 		/** A message lands in the folder; IDLE clients hear EXISTS. */
 		deliver(raw: string) {
 			messages.push({ uid: next++, raw: raw.replace(/\r?\n/g, '\r\n') });

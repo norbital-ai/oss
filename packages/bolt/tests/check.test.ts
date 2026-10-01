@@ -244,7 +244,7 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };`
 		]);
 	});
 
-	it('rejects personal channel outbound, envoys and unsupported transports', () => {
+	it('rejects personal channel outbound and envoys while allowing provider-defined transports', () => {
 		const m = {
 			workspace: {},
 			models: {},
@@ -257,18 +257,20 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };`
 			channels: {
 				sent: { transport: 'email', syncOnly: true, outbound: {} },
 				answered: { transport: 'whatsapp', syncOnly: true },
-				unsupported: { transport: 'slack', accounts: true }
+				provider_defined: { transport: 'slack', accounts: true, syncOnly: true },
+				multiple_envoy: { transport: 'telegram', accounts: true },
+				custom_sync: { transport: 'custom', accounts: true, syncOnly: true, inbound: { verify: { scheme: 'bearer', secret: 'token' }, messages: true } }
 			},
-			envoys: { agent: { channel: 'answered' } }
+			envoys: { agent: { channel: 'answered' }, invalid: { channel: 'multiple_envoy' } }
 		} as unknown as EngineManifest;
 		expect(
-			buildChecks(m, { automations: [] }, (_r, n) => n)
+			buildChecks(m, { automations: [], connects: ['custom_sync'] }, (_r, n) => n)
 				.filter((f) => f.code.startsWith('channel/'))
 				.map((f) => f.code + ' ' + f.path)
 		).toEqual([
 			'channel/sync-only sent',
 			'channel/sync-only answered',
-			'channel/accounts unsupported'
+			'channel/accounts-envoy multiple_envoy'
 		]);
 	});
 
