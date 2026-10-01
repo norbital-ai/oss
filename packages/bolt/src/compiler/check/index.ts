@@ -142,7 +142,12 @@ async function bundle(root: string, code: readonly Discovered[], errors: CheckDi
 					return `export default globalThis[Symbol.for('norbital.bolt.asset')](${JSON.stringify(sha)});`;
 				},
 			}],
-			build: { write: false, minify: false, sourcemap: true, rollupOptions: { input: ENTRY, preserveEntrySignatures: 'strict', output: { format: 'es', entryFileNames: 'guest.mjs', codeSplitting: false } } },
+			build: { write: false, minify: 'oxc', sourcemap: true, rollupOptions: { input: ENTRY, preserveEntrySignatures: 'strict', output: {
+				format: 'es', entryFileNames: 'guest.mjs', codeSplitting: false,
+				// Compact bindings reduce isolate startup CPU; preserve names for runtime diagnostics and reflection.
+				minify: { compress: { keepNames: { function: true, class: true } }, mangle: { toplevel: true, keepNames: { function: true, class: true } }, codegen: { removeWhitespace: true, legalComments: 'inline' } },
+				comments: { legal: true },
+			} } },
 		}) as Rollup.RollupOutput;
 	} catch (e) {
 		errors.push({ code: 'bundle/failed', path: 'src', message: e instanceof Error ? e.message : String(e) });

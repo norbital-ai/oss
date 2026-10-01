@@ -7,6 +7,10 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import ivm from 'isolated-vm';
+import { PRELUDE } from '../src/engine/guest/prelude.ts';
+import { assetHook, digest, randomStream } from '../src/engine/guest/runner.ts';
+import { TraceMap, originalPositionFor } from '@jridgewell/trace-mapping';
 import { check } from '../src/compiler/check/index.ts';
 import { buildChecks, cronValid } from '../src/compiler/check/rules.ts';
 import type { EngineManifest } from '../src/engine/contracts.ts';
@@ -72,6 +76,42 @@ describe('bolt check', () => {
 		});
 		expect(r.guest!.source).toContain('bodies');
 		expect(existsSync(join(root, '.norbital/names.ts'))).toBe(true);
+	});
+
+	it('minifies guest bindings while preserving declarations, callable names, assets and original source positions', async () => {
+		const files = { ...GOOD,
+			'lib/blob.bin': 'bytes\u0000!',
+			'src/data/collection/orders/+collection.ts': `import { collection } from '@norbital-ai/bolt';
+import blob from '../../../../lib/blob.bin?bytes';
+class OrderMarker {}
+const c = collection('orders', { read: { fields: 'all' }, create: { input: { columns: ['title'] } }, queries: { count: { description: OrderMarker.name, input: {}, output: { kind: 'int' } } } });
+async function transformOrders(rows) { return rows; }
+async function countOrders() { return blob.length; }
+c.transform(transformOrders); c.query('count', countOrders); export default c;`
+		};
+		const root = workspace(files);
+		const result = await check(root);
+		expect(result.errors).toEqual([]);
+		expect(result.manifest).toEqual((await check(root)).manifest);
+		expect(result.manifest!.collections['orders']!.queries!['count']!.description).toBe('OrderMarker');
+		const map = new TraceMap(JSON.parse(result.guest!.sourceMap!));
+		const source = result.guest!.source;
+		const at = source.indexOf('function transformOrders');
+		expect(at).toBeGreaterThan(-1);
+		const prefix = source.slice(0, at);
+		const position = originalPositionFor(map, { line: prefix.split('\n').length, column: prefix.length - prefix.lastIndexOf('\n') - 1 });
+		expect(position.source).toContain('src/data/collection/orders/+collection.ts');
+		expect(position.line).toBe(5);
+		const isolate = new ivm.Isolate({ memoryLimit: 256 });
+		try {
+			const context = await isolate.createContext();
+			await context.evalClosure(PRELUDE, [() => {}, randomStream('bolt:check'), digest, assetHook(result.guest!.assets)], { result: { reference: true } });
+			const module = await isolate.compileModule(source);
+			await module.instantiate(context, () => { throw new Error('unexpected external import'); });
+			await module.evaluate({ timeout: 1000 });
+			await context.global.set('__ns', module.namespace.derefInto());
+			expect(await context.eval(`(async()=>{ const c=__ns.default.collection.orders; return { transformName:c.bodies.transform.name, queryName:c.bodies.queries.count.name, rows:await c.bodies.transform([{title:'kept'}]), count:await c.bodies.queries.count() }; })()`, { promise: true, copy: true })).toEqual({ transformName: 'transformOrders', queryName: 'countOrders', rows: [{ title: 'kept' }], count: 7 });
+		} finally { isolate.dispose(); }
 	});
 
 	it('reports every error of every stage in one run', async () => {
