@@ -1,5 +1,9 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { check } from '../src/compiler/check/index.ts';
 import ivm from 'isolated-vm';
 import { describe, expect, it } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
@@ -313,6 +317,50 @@ describe('next guest globals (rule 6)', () => {
 		expect(ok(await run({ source, snapshot: snap.bytes }))).toEqual(evaluated); // a fresh heap each time
 		expect(buildSnapshot({ source: `console.log('loaded');\nconst d = {};\nexport { d as default };\n` })).toEqual({ refused: 'Error: guest.mjs calls the host while it evaluates' });
 		expect(buildSnapshot({ source: `const f = new Intl.DateTimeFormat('en');\nexport { f as default };\n` })).toMatchObject({ refused: expect.stringMatching(/^V8 aborted/) });
+	});
+
+	it('snapshots actual minified compiler output with legal comments and the original source map', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norbital-snapshot-'));
+		try {
+			mkdirSync(join(root, 'src/automation'), { recursive: true });
+			writeFileSync(join(root, 'src/+workspace.ts'), `export default { tz: 'UTC', locale: 'en' };`);
+			writeFileSync(join(root, 'src/automation/+a.automation.ts'), `/*! @license snapshot regression */
+import { automation } from '@norbital-ai/bolt';
+const a = automation({ description: 'Snapshot', on: { cron: '0 0 * * *' } });
+async function snapshotBody(input) {
+ class SnapshotMarker {}
+ if (input.fail) throw new Error('mapped snapshot failure');
+ return { value: input.value, bodyName: snapshotBody.name, className: SnapshotMarker.name };
+}
+a.run(snapshotBody); export default a;`);
+			const built = await check(root);
+			expect(built.errors).toEqual([]);
+			const program = built.guest!;
+			expect(program.source).toMatch(/;export\{/);
+			expect(program.source).toContain('@license snapshot regression');
+			const snapshot = buildSnapshot(program);
+			if ('refused' in snapshot) throw new Error(snapshot.refused);
+			const run = (snapshotBytes?: Uint8Array, input: Json = { value: 42 }) => guestRunner({ ...program, ...(snapshotBytes == null ? {} : { snapshot: snapshotBytes }) }, { lowerRead, console: () => {} }).invoke(invocation(input), recorder().bridge);
+			const evaluated = ok(await run());
+			expect(evaluated).toEqual({ value: 42, bodyName: 'snapshotBody', className: 'SnapshotMarker' });
+			expect(ok(await run(snapshot.bytes))).toEqual(evaluated);
+			const evaluatedFailure = await run(undefined, { fail: true });
+			const restoredFailure = await run(snapshot.bytes, { fail: true });
+			expect(restoredFailure.kind).toBe('failed');
+			if (restoredFailure.kind !== 'failed' || evaluatedFailure.kind !== 'failed') throw new Error('Expected mapped errors');
+			expect(evaluatedFailure.error.cause).toMatchObject({ name: 'Error', message: 'mapped snapshot failure', at: expect.stringContaining('src/automation/+a.automation.ts:6') });
+			expect(restoredFailure.error.cause).toMatchObject({ name: 'Error', message: 'mapped snapshot failure', at: expect.stringContaining('src/automation/+a.automation.ts:6') });
+			const repeated = buildSnapshot(program);
+			if ('refused' in repeated) throw new Error(repeated.refused);
+			expect(createHash('sha256').update(repeated.bytes).digest('hex')).toBe(createHash('sha256').update(snapshot.bytes).digest('hex'));
+			writeFileSync(join(root, 'blob.bin'), 'bytes\u0000!');
+			writeFileSync(join(root, 'src/+workspace.ts'), `import blob from '../blob.bin?bytes'; export default { tz: 'UTC', locale: blob.length === 7 ? 'en' : 'invalid' };`);
+			const withAsset = await check(root);
+			expect(withAsset.errors).toEqual([]);
+			expect(Object.keys(withAsset.guest!.assets!)).toHaveLength(1);
+			expect(buildSnapshot(withAsset.guest!)).toEqual({ refused: 'Error: guest.mjs calls the host while it evaluates' });
+			expect(ok(await guestRunner(withAsset.guest!, { lowerRead, console: () => {} }).invoke(invocation({ value: 42 }), recorder().bridge))).toEqual(evaluated);
+		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
 
 	it('labels guest console lines for the host', async () => {

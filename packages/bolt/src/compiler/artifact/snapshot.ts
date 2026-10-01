@@ -14,7 +14,8 @@ process.stdin.on('data', (c) => chunks.push(c)).on('end', () => {
 	const s = ivm.Isolate.createSnapshot(JSON.parse(Buffer.concat(chunks).toString('utf8')));
 	process.stdout.write(Buffer.from(s.copy()));
 });`;
-const EXPORT = /^export \{ ([\w$]+) as default \};$/m;
+// Rolldown may place the default export inline; only trailing comments may follow it.
+const EXPORT = /\bexport\s*\{\s*([\w$]+)\s+as\s+default\s*\}\s*;(?=\s*(?:(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*)*$)/;
 
 /**
  * `guest.mjs` as a script with the same line and column positions (its source map still applies): the module body in a
