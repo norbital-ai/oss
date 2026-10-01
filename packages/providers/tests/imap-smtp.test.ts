@@ -54,6 +54,10 @@ describe('reading the watched folder', () => {
 		// a report about someone else's message names none of ours
 		expect(await readMail(dsn('failed', '5.1.1', '', '<other@elsewhere.example>'), 'elsewhere.example', 'x')).toMatchObject({ ids: ['<other@elsewhere.example>'] });
 	});
+	it('preserves delivery reports as ordinary message evidence for personal sync', async () => {
+		expect(await readMail(dsn('failed', '5.1.1', '550 rejected'), 'acme.example', 'x', false)).toMatchObject({ kind: 'mail', message: { subject: 'Delivery Status Notification', text: expect.stringContaining('could not be delivered') } });
+	});
+
 	it('a legacy NDR in prose (qmail) is a bounce on the quoted Message-ID; Exchange\'s In-Reply-To also names it', async () => {
 		const qmail = mail('From: MAILER-DAEMON@mx.example\nTo: desk@acme.example\nSubject: failure notice\nMessage-ID: <q1@mx.example>',
 			'Hi. This is the qmail-send program at mx.example.\nI\'m afraid I wasn\'t able to deliver your message to the following addresses.\n\n<carol@else.example>:\n'
@@ -109,15 +113,20 @@ describe('the mailbox link (password)', () => {
 	});
 
 	it('backfills personal mailbox history in bounded batches with saved progress', async () => {
-		const { imap, h, input } = await setup();
+		const { imap, smtp, h, input } = await setup();
 		await h.link.close();
+		await smtp.close();
 		for (let i = 0; i < 60; i++) imap.deliver(mail(`From: customer@else.example\nMessage-ID: <history-${i}@else.example>`));
 		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
 		const saved: (Json | null)[] = [], events: unknown[] = [];
 		const link = await provider.open({ channel: 'personal', syncOnly: true, credential: null, webhookUrl: HOOK, fetch: fakeFetch([]),
 			save: async (value) => { saved.push(value); }, emit: async (value) => { events.push(value); }, changed: () => {} });
 		cleanup.push(() => link.close());
-		await link.pair(input);
+		const { smtpHost: _host, smtpPort: _port, ...readOnly } = input;
+		await link.pair(readOnly);
+		await expect(link.send('personal', { id: 'never-send', text: 'hi' }, signal())).rejects.toThrow(/only synchronizes/);
+		await expect(link.test!(signal())).rejects.toThrow(/only synchronizes/);
+		expect(provider.describe!({ syncOnly: true }).setup.fields?.map((f) => f.name)).not.toEqual(expect.arrayContaining(['smtpHost', 'smtpPort', 'tracking', 'quietHours']));
 		await until(() => events.length === 61);
 		await until(() => (saved.at(-1) as { cursor?: { uid: number } }).cursor?.uid === 61);
 		expect(imap.fetches).toEqual([25, 25, 11]);
@@ -186,14 +195,14 @@ describe('the mailbox link (password)', () => {
 describe('the mailbox link (the channel\'s own OAuth)', () => {
 	const cleanup: (() => Promise<void>)[] = [];
 	afterEach(async () => { for (const c of cleanup.splice(0)) await c(); });
-	async function setup(tokenRoute: (body: URLSearchParams) => Response) {
+	async function setup(tokenRoute: (body: URLSearchParams) => Response, syncOnly = false) {
 		let now = 1_800_000_000_000;
 		const imap = await fakeImap({ accept: (u, s) => u === 'desk@acme.example' && (s.token === 'at-1' || s.token === 'at-2') });
 		const smtp = await fakeSmtp({ accept: (_u, token) => token === 'at-1' || token === 'at-2' });
 		const f = fakeFetch([(c) => c.url.endsWith('/oauth2/v2.0/token') ? tokenRoute(new URLSearchParams(c.body)) : undefined]);
 		const servers = { imap: { host: '127.0.0.1', port: imap.port }, smtp: { host: '127.0.0.1', port: smtp.port } };
 		const provider = mailbox({ plain: true, servers: { microsoft: servers }, now: () => now }).find((p) => p.id === 'microsoft')!;
-		const h = await host(provider, f, null, HOOK);
+		const h = await host(provider, f, null, HOOK, { syncOnly });
 		cleanup.push(async () => { await h.link.close(); await imap.close(); await smtp.close(); });
 		return { h, f, imap, advance: (ms: number) => { now += ms; } };
 	}
@@ -212,6 +221,12 @@ describe('the mailbox link (the channel\'s own OAuth)', () => {
 			scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access' });
 		expect(url.searchParams.get('state')).toMatch(/^[\w-]{32}$/);
 		expect(h.saved).toEqual([]); // nothing is kept before the sign-in
+	});
+
+	it('requests IMAP and refresh permissions without SMTP.Send for personal synchronization', async () => {
+		const { h } = await setup(() => json({}), true);
+		await h.link.pair(input);
+		expect(authorize(h.link).searchParams.get('scope')).toBe('https://outlook.office.com/IMAP.AccessAsUser.All offline_access');
 	});
 
 	it('refuses a callback with a wrong or expired state; a good one exchanges the code with the verifier and seals the tokens', async () => {

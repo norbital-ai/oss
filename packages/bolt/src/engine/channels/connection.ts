@@ -107,6 +107,8 @@ export type ChannelLink = Pick<TransportPort, 'send' | 'typing'> & {
 /** A provider (`@norbital-ai/providers`), registered by the host. Bolt never names one. */
 export type ChannelProvider = ProviderChoice & {
 	transport: Transport;
+	/** Provider-owned registration UI for this channel mode; credentials and pairing keep the same runtime. */
+	describe?(options: { readonly syncOnly: boolean }): Pick<ProviderChoice, 'label' | 'setup'>;
 	/** Imports personal messages and history without sending or triggering replies. */
 	supportsSync?: boolean;
 	/** The provider can send a test message once connected (`POST …/test`). */

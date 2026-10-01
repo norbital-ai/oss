@@ -139,7 +139,11 @@ export function channelLinks(h: LinkHost) {
 		[...h.providers, WORKSPACE].filter(
 			(p) =>
 				p.transport === transport &&
-				(h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true || (p.supportsSync === true && (p !== WORKSPACE || isObj(h.manifest.channels[baseOf(channel)]?.['inbound']) || isObj(h.manifest.channels[baseOf(channel)]?.['poll']))))
+				(h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true ||
+					(p.supportsSync === true &&
+						(p !== WORKSPACE ||
+							isObj(h.manifest.channels[baseOf(channel)]?.['inbound']) ||
+							isObj(h.manifest.channels[baseOf(channel)]?.['poll']))))
 		);
 	const emit = async (transport: string, event: TransportEvent) => {
 		if (h.emit !== undefined) return h.emit(transport, event);
@@ -152,25 +156,31 @@ export function channelLinks(h: LinkHost) {
 		const held = live.get(channel),
 			ps = choices(transport, channel);
 		const base = held?.link.connection() ?? connection(channel, transport, 'unpaired');
+		const descriptions = ps.map((p): ProviderChoice => ({
+			id: p.id,
+			...(p.describe?.({
+				syncOnly: h.manifest.channels[baseOf(channel)]?.['syncOnly'] === true
+			}) ?? { label: p.label, setup: p.setup })
+		}));
 		const hook =
-			ps.some((p) => p.setup.webhook === true) ||
+			descriptions.some((p) => p.setup.webhook === true) ||
 			(transport === 'custom' && isObj(h.manifest.channels[baseOf(channel)]?.['inbound']))
 				? { webhookUrl: h.webhookUrl(channel, transport) }
 				: {};
-		const redirect = ps.some((p) => p.setup.steps.some((s) => s.copy === 'redirectUrl'))
+		const redirect = descriptions.some((p) => p.setup.steps.some((s) => s.copy === 'redirectUrl'))
 			? { redirectUrl: `${h.webhookUrl(channel, transport)}${OAUTH_CALLBACK}` }
 			: {};
 		const test =
-			held?.provider.test !== undefined && base.state === 'connected'
+			h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true &&
+			held?.provider.test !== undefined &&
+			base.state === 'connected'
 				? { test: held.provider.test }
 				: {};
 		return {
 			...base,
 			...test,
 			...(held === undefined ? {} : { provider: held.provider.id }),
-			providers: ps
-				.filter((p) => p !== WORKSPACE)
-				.map(({ id, label, setup }): ProviderChoice => ({ id, label, setup })),
+			providers: descriptions.filter((p) => p.id !== WORKSPACE.id),
 			about: { ...(isObj(base.about) ? base.about : {}), ...hook, ...redirect }
 		};
 	}
@@ -217,7 +227,12 @@ export function channelLinks(h: LinkHost) {
 									message: {
 										...e.message,
 										sourceAccount: account,
-										...(transport === 'custom' ? {} : { thread: `${account}:${String(e.message['thread'] ?? e.message['id'])}`, id: `${account}:${String(e.message['id'])}` })
+										...(transport === 'custom'
+											? {}
+											: {
+													thread: `${account}:${String(e.message['thread'] ?? e.message['id'])}`,
+													id: `${account}:${String(e.message['id'])}`
+												})
 									}
 								}
 							: { ...e, channel: base }

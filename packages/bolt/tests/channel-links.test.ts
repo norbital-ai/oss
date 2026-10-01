@@ -477,6 +477,16 @@ describe('personal channel account authorization', () => {
 
 
 describe('provider-defined personal account transports', () => {
+	it('uses provider-authored registration for the channel mode and hides sending tests for sync', async () => {
+		const provider = { ...fake('adapter', [], 'telegram'), test: {}, describe: ({ syncOnly }: { syncOnly: boolean }) => ({ label: syncOnly ? 'Import account' : 'Send account', setup: { kind: 'form' as const, steps: [], fields: [{ name: 'readToken', label: 'Read token' }] } }) };
+		const links = channelLinks({ manifest: { channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } } }, providers: [provider], load: async () => null, store: async () => {}, webhookUrl: () => 'https://ws.example/hook' });
+		await links.admin(post({ id: 'source' }), 'personal', 'accounts');
+		await links.pair('personal~source', { key: 'private' });
+		expect(links.state('personal~source')).toMatchObject({ providers: [{ id: 'adapter', label: 'Import account', setup: { fields: [{ name: 'readToken' }] } }] });
+		expect(links.state('personal~source').test).toBeUndefined();
+		await links.close();
+	});
+
 	it('shares sealed credentials, routing and resume for any sync-capable provider', async () => {
 		const sealed = new Map<string, Json>(), events: TransportEvent[] = [];
 		const make = () => channelLinks({

@@ -46,7 +46,7 @@ type Mailbox = {
 	tracking: boolean;
 	quietHours: number;
 	imap: Server;
-	smtp: Server;
+	smtp?: Server;
 	password?: string;
 	pixelKey: string;
 	oauth?: { clientId: string; clientSecret: string; tenant?: string; tokens: Tokens | null };
@@ -70,7 +70,7 @@ const KNOWN = {
 		smtp: { host: 'smtp.gmail.com', port: 465 }
 	}
 };
-const appOf = (m: Mailbox): OAuthApp =>
+const appOf = (m: Mailbox, syncOnly = false): OAuthApp =>
 	m.method === 'google'
 		? {
 				authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -83,7 +83,7 @@ const appOf = (m: Mailbox): OAuthApp =>
 				tokenUrl: `https://login.microsoftonline.com/${encodeURIComponent(m.oauth?.tenant ?? 'organizations')}/oauth2/v2.0/token`,
 				scopes: [
 					'https://outlook.office.com/IMAP.AccessAsUser.All',
-					'https://outlook.office.com/SMTP.Send',
+					...(syncOnly ? [] : ['https://outlook.office.com/SMTP.Send']),
 					'offline_access'
 				]
 			};
@@ -252,6 +252,51 @@ const GOOGLE: ChannelProvider['setup'] = {
 	fields: [F.address, F.clientId, F.clientSecret, ...COMMON]
 };
 
+const syncSetup = (method: Method): ChannelProvider['setup'] => {
+	const setup = method === 'password' ? PASSWORD : method === 'microsoft' ? MICROSOFT : GOOGLE;
+	const fields = (setup.fields ?? [])
+		.map((f) =>
+			f.name === 'address' ? { ...f, hint: t('The mailbox to synchronize', '要同步的邮箱') } : f
+		)
+		.filter(
+			(f) => !['smtpHost', 'smtpPort', 'fromName', 'tracking', 'quietHours'].includes(f.name)
+		);
+	const steps =
+		method === 'password'
+			? []
+			: method === 'microsoft'
+				? [
+						setup.steps[0]!,
+						{
+							text: t(
+								'Grant delegated IMAP.AccessAsUser.All and offline_access permissions for this mailbox.',
+								'为此邮箱授予委托的 IMAP.AccessAsUser.All 和 offline_access 权限。'
+							)
+						},
+						setup.steps[2]!,
+						{
+							text: t(
+								'Connect and sign in as the mailbox in the window that opens.',
+								'点击连接，在打开的窗口中以该邮箱登录。'
+							)
+						}
+					]
+				: setup.steps.slice(0, -1);
+	return {
+		...setup,
+		fields,
+		steps: [
+			...steps,
+			{
+				text: t(
+					'Messages in the selected folder sync into this workspace. This connection does not send email.',
+					'所选文件夹中的邮件会同步到此工作区。此连接不会发送邮件。'
+				)
+			}
+		]
+	};
+};
+
 const SIGN_IN = { microsoft: 'Sign in with Microsoft', google: 'Sign in with Google' } as const;
 const PIXEL = Uint8Array.from(
 	Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
@@ -276,7 +321,8 @@ const sleep = (ms: number, signal: AbortSignal) =>
 function mailboxOf(
 	method: Method,
 	input: Json,
-	known: { imap: Server; smtp: Server } | undefined
+	known: { imap: Server; smtp: Server } | undefined,
+	syncOnly: boolean
 ): Mailbox {
 	const get = (k: string) => (isObj(input) ? str(input[k]) : null)?.trim() || null;
 	const need = (k: string, label: string) => {
@@ -301,7 +347,7 @@ function mailboxOf(
 		address,
 		fromName: get('fromName'),
 		folder: get('folder') ?? 'INBOX',
-		tracking: get('tracking') === 'on',
+		tracking: !syncOnly && get('tracking') === 'on',
 		quietHours: quiet,
 		pixelKey: randomBytes(32).toString('base64url')
 	};
@@ -314,10 +360,14 @@ function mailboxOf(
 				host: need('imapHost', 'The IMAP server'),
 				port: port('imapPort', 993, 'The IMAP port')
 			},
-			smtp: {
-				host: need('smtpHost', 'The SMTP server'),
-				port: port('smtpPort', 587, 'The SMTP port')
-			}
+			...(syncOnly
+				? {}
+				: {
+						smtp: {
+							host: need('smtpHost', 'The SMTP server'),
+							port: port('smtpPort', 587, 'The SMTP port')
+						}
+					})
 		};
 	const tenant = method === 'microsoft' ? need('tenant', 'The directory (tenant) ID') : undefined;
 	if (tenant !== undefined && !/^[\w.-]+$/.test(tenant))
@@ -325,7 +375,7 @@ function mailboxOf(
 	return {
 		...common,
 		user: address,
-		...known!,
+		...(syncOnly ? { imap: known!.imap } : known!),
 		oauth: {
 			clientId: need('clientId', 'The client ID'),
 			clientSecret: need('clientSecret', 'The client secret'),
@@ -353,6 +403,27 @@ function provider(method: Method, o: MailboxOptions): ChannelProvider {
 							'Google Workspace 或 Gmail（使用 Google 登录）'
 						),
 		setup: method === 'password' ? PASSWORD : method === 'microsoft' ? MICROSOFT : GOOGLE,
+		describe: ({ syncOnly }) => ({
+			label:
+				method === 'password'
+					? t(
+							syncOnly ? 'Mail server (IMAP, password)' : 'Mail server (IMAP + SMTP, password)',
+							syncOnly ? '邮件服务器（IMAP，密码）' : '邮件服务器（IMAP + SMTP，密码）'
+						)
+					: method === 'microsoft'
+						? t('Microsoft 365 (sign in with Microsoft)', 'Microsoft 365（使用 Microsoft 登录）')
+						: t(
+								'Google Workspace or Gmail (sign in with Google)',
+								'Google Workspace 或 Gmail（使用 Google 登录）'
+							),
+			setup: syncOnly
+				? syncSetup(method)
+				: method === 'password'
+					? PASSWORD
+					: method === 'microsoft'
+						? MICROSOFT
+						: GOOGLE
+		}),
 		test: {},
 		open: (ctx) => open(ctx, method, id, known, o, now)
 	};
@@ -400,7 +471,7 @@ async function open(
 		if (tokens === null) throw new OAuthRefused('the mailbox is not signed in', true);
 		const next = await (refreshing ??= fresh(
 			ctx.fetch,
-			appOf(m),
+			appOf(m, ctx.syncOnly === true),
 			{ id: m.oauth.clientId, secret: m.oauth.clientSecret },
 			tokens,
 			now()
@@ -437,8 +508,10 @@ async function open(
 			connectionTimeout: 30_000,
 			greetingTimeout: 30_000
 		});
-	const smtpOf = (m: Mailbox, auth: Awaited<ReturnType<typeof login>>) =>
-		createTransport({
+	const smtpOf = (m: Mailbox, auth: Awaited<ReturnType<typeof login>>) => {
+		if (ctx.syncOnly === true || m.smtp === undefined)
+			throw new SendRefused('This mailbox only synchronizes messages.');
+		return createTransport({
 			host: m.smtp.host,
 			port: m.smtp.port,
 			secure: !plain && m.smtp.port === 465,
@@ -452,8 +525,9 @@ async function open(
 					? { user: auth.user, pass: auth.pass ?? '' }
 					: { type: 'OAuth2', user: auth.user, accessToken: auth.accessToken }
 		});
+	};
 
-	/** Signs in to both servers and opens the folder, before anything is kept. */
+	/** Signs in to the configured servers and opens the folder, before anything is kept. */
 	async function verify(m: Mailbox): Promise<void> {
 		const auth = await login(m);
 		const imap = imapOf(m, auth);
@@ -468,10 +542,11 @@ async function open(
 		} finally {
 			await imap.logout().catch(() => imap.close());
 		}
+		if (ctx.syncOnly === true) return;
 		const smtp = smtpOf(m, auth);
 		try {
 			await smtp.verify().catch((e: unknown) => {
-				throw new Error(`SMTP ${m.smtp.host}: ${messageOf(e)}`);
+				throw new Error(`SMTP ${m.smtp?.host}: ${messageOf(e)}`);
 			});
 		} finally {
 			smtp.close();
@@ -517,7 +592,7 @@ async function open(
 				void drain(me);
 			});
 			await me.connect();
-			const mb = await me.mailboxOpen(m.folder);
+			const mb = await me.mailboxOpen(m.folder, { readOnly: ctx.syncOnly === true });
 			const validity = String(mb.uidValidity);
 			// Personal sync backfills the selected folder; messaging channels begin with new arrivals.
 			if (box !== null && box.cursor?.validity !== validity)
@@ -560,7 +635,11 @@ async function open(
 			for (let offset = 0; offset < ids.length; offset += 25) {
 				if (client !== me || box === null) return;
 				const got: { uid: number; source: Uint8Array }[] = [];
-				for await (const msg of me.fetch(ids.slice(offset, offset + 25).join(','), { uid: true, source: true }, { uid: true }))
+				for await (const msg of me.fetch(
+					ids.slice(offset, offset + 25).join(','),
+					{ uid: true, source: true },
+					{ uid: true }
+				))
 					if (msg.source !== undefined) got.push({ uid: msg.uid, source: msg.source });
 				for (const msg of got.sort((a, b) => a.uid - b.uid)) {
 					await deliver(box, msg.source, `imap-${cursor.validity}-${msg.uid}`);
@@ -576,7 +655,7 @@ async function open(
 	}
 	/** One message from the folder: a report on a message we sent, or inbound mail (never our own). */
 	async function deliver(m: Mailbox, source: Uint8Array, local: string): Promise<void> {
-		const read = await readMail(source, domainOf(m), midOf(m, local));
+		const read = await readMail(source, domainOf(m), midOf(m, local), ctx.syncOnly !== true);
 		if (read.kind === 'report') {
 			for (const providerId of read.ids)
 				await ctx.emit({
@@ -664,7 +743,7 @@ async function open(
 				const response = typeof x.response === 'string' ? x.response : messageOf(e);
 				if (x.code === 'EAUTH') refused(e);
 				throw new SendRefused(
-					`${m.smtp.host}: ${response}`,
+					`${m.smtp?.host}: ${response}`,
 					codeOf(response),
 					x.responseCode >= 500
 				);
@@ -703,7 +782,7 @@ async function open(
 			const oauth = p.draft.oauth!;
 			const tokens = await grant(
 				ctx.fetch,
-				appOf(p.draft),
+				appOf(p.draft, ctx.syncOnly === true),
 				{ id: oauth.clientId, secret: oauth.clientSecret },
 				{
 					grant_type: 'authorization_code',
@@ -746,14 +825,14 @@ async function open(
 				...(detail === null ? {} : { detail }),
 				about: {
 					address: m.address,
-					server: `${m.imap.host} · ${m.smtp.host}`,
+					server: ctx.syncOnly === true ? m.imap.host : `${m.imap.host} · ${m.smtp?.host}`,
 					folder: m.folder,
 					openTracking: m.tracking ? 'on' : 'off'
 				}
 			});
 		},
 		async pair(input) {
-			const draft = mailboxOf(method, input, known);
+			const draft = mailboxOf(method, input, known, ctx.syncOnly === true);
 			if (draft.oauth === undefined) {
 				await verify(draft);
 				await adopt(draft);
@@ -766,7 +845,7 @@ async function open(
 				at: now(),
 				draft,
 				url: authorizeUrl(
-					appOf(draft),
+					appOf(draft, ctx.syncOnly === true),
 					draft.oauth.clientId,
 					redirect,
 					a.state,
@@ -789,6 +868,7 @@ async function open(
 			stop();
 		},
 		async send(_channel, message, signal, files) {
+			if (ctx.syncOnly === true) throw new SendRefused('This mailbox only synchronizes messages.');
 			const m = need(),
 				w = message as unknown as Wire;
 			const mid = midOf(m, w.id);
@@ -803,6 +883,7 @@ async function open(
 		},
 		/** Sends a message to the mailbox itself and waits for it to arrive in the watched folder (or INBOX). */
 		async test(signal) {
+			if (ctx.syncOnly === true) throw new SendRefused('This mailbox only synchronizes messages.');
 			const m = need(),
 				local = randomUUID(),
 				mid = midOf(m, local);

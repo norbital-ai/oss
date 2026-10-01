@@ -68,7 +68,7 @@ const flat = (list: Parsed['to']) => (list ?? []).flatMap((a) => a.group === und
  * Reads one raw message. `domain` is the channel address's domain: every Message-ID this channel sends is `<id@domain>`,
  * so a report names ours only by one of those (an envelope id `id` is ours as `<id@domain>`).
  */
-export async function readMail(source: Uint8Array | string, domain: string, fallbackId: string): Promise<Read> {
+export async function readMail(source: Uint8Array | string, domain: string, fallbackId: string, deliveryReports = true): Promise<Read> {
 	const e = await PostalMime.parse(source, { forceRfc822Attachments: true, attachmentEncoding: 'arraybuffer' });
 	const headers: { [k: string]: string } = {};
 	for (const h of e.headers) headers[h.key] ??= h.value;
@@ -76,7 +76,7 @@ export async function readMail(source: Uint8Array | string, domain: string, fall
 	const subject = e.subject ?? '';
 	const status = e.attachments.find((a) => /^message\/(global-)?delivery-status$/i.test(a.mimeType));
 	const dsnType = /report-type\s*=\s*"?delivery-status/i.test(headers['content-type'] ?? '');
-	if (status !== undefined || dsnType || (DAEMON.test(from.address) && NDR.test(subject))) {
+	if (deliveryReports && (status !== undefined || dsnType || (DAEMON.test(from.address) && NDR.test(subject)))) {
 		const original = e.attachments.filter((a) => /^(message\/(global-)?rfc822|text\/rfc822-headers|message\/global-headers)$/i.test(a.mimeType)).map((a) => decode(a.content)).join('\n');
 		const text = e.text ?? '';
 		const envid = status === undefined ? undefined : fields(decode(status.content).split(/\r?\n\s*\r?\n/)[0] ?? '').get('original-envelope-id');
