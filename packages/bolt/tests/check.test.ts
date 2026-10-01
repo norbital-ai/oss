@@ -12,7 +12,9 @@ import { buildChecks, cronValid } from '../src/compiler/check/rules.ts';
 import type { EngineManifest } from '../src/engine/contracts.ts';
 
 const made: string[] = [];
-afterAll(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+afterAll(() => {
+	for (const d of made) rmSync(d, { recursive: true, force: true });
+});
 /** A workspace directory under the scratch root, from `path → source`. */
 function workspace(files: { [path: string]: string }): string {
 	const root = join(tmpdir(), 'norbital-scratch', `check-${randomUUID()}`);
@@ -40,7 +42,9 @@ export default c;`,
 const a = automation({ description: 'Nightly', on: { cron: '0 2 * * 1-5' }, runAs: ['rep'] });
 a.run(async () => {});
 export default a;`,
-	'seed/orders.json': JSON.stringify([{ id: '0199a000-0000-4000-8000-000000000001', title: 'seeded' }]),
+	'seed/orders.json': JSON.stringify([
+		{ id: '0199a000-0000-4000-8000-000000000001', title: 'seeded' }
+	])
 };
 
 describe('bolt check', () => {
@@ -48,71 +52,126 @@ describe('bolt check', () => {
 		const root = workspace(GOOD);
 		const r = await check(root);
 		expect(r.errors).toEqual([]);
-		expect(r.stages).toEqual(['discover', 'names', 'bundle', 'evaluate', 'manifest', 'seed', 'schema', 'rules']);
+		expect(r.stages).toEqual([
+			'discover',
+			'names',
+			'bundle',
+			'evaluate',
+			'manifest',
+			'seed',
+			'schema',
+			'rules'
+		]);
 		expect(r.transforms).toEqual(['orders']);
-		expect(r.manifest!.models['orders']!.fields['stamp']).toMatchObject({ default: '2000-01-01T00:00:00.000Z' });
+		expect(r.manifest!.models['orders']!.fields['stamp']).toMatchObject({
+			default: '2000-01-01T00:00:00.000Z'
+		});
 		expect(r.manifest!.automations['nightly']).toMatchObject({ runAs: ['rep'] });
-		expect(r.seed).toEqual({ orders: [{ id: '0199a000-0000-4000-8000-000000000001', title: 'seeded' }] });
+		expect(r.seed).toEqual({
+			orders: [{ id: '0199a000-0000-4000-8000-000000000001', title: 'seeded' }]
+		});
 		expect(r.guest!.source).toContain('bodies');
 		expect(existsSync(join(root, '.norbital/names.ts'))).toBe(true);
 	});
 
 	it('reports every error of every stage in one run', async () => {
-		const r = await check(workspace({
-			'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
-			'src/+layout.ts': `export default 1;`,
-			'src/lib/disk.ts': `import { readFileSync } from 'node:fs'; export const read = readFileSync;`,
-			'src/data/+relationship.ts': `export default { 'applications.opening': { to: 'openings', inverse: 'applications' }, 'applications.source': { to: 'sources' } };`,
-			'src/data/model/orders/+model.ts': `import { read } from '../../../lib/disk.ts'; void read;
+		const r = await check(
+			workspace({
+				'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
+				'src/+layout.ts': `export default 1;`,
+				'src/lib/disk.ts': `import { readFileSync } from 'node:fs'; export const read = readFileSync;`,
+				'src/data/+relationship.ts': `export default { 'applications.opening': { to: 'openings', inverse: 'applications' }, 'applications.source': { to: 'sources' } };`,
+				'src/data/model/orders/+model.ts': `import { read } from '../../../lib/disk.ts'; void read;
 export default { description: 'o', label: 'title', search: { text: ['title'], semantic: { fields: ['title'], model: 'default' } }, fields: { title: { kind: 'text' },
 	v: { kind: 'vector', dim: 5000, metric: 'l2' }, n: { kind: 'seq', pattern: 'X-{abc}' },
 	s: { kind: 'state', initial: 'nope', states: { a: {} } }, at: { kind: 'time', precision: 'month' } } };`,
-			'src/data/model/openings/+model.ts': `export default { description: 'o', label: 'title', fields: { title: { kind: 'text' } } };`,
-			'src/data/model/sources/+model.ts': `export default { description: 's', label: 'name', fields: { name: { kind: 'text' } } };`,
-			'src/data/model/applications/+model.ts': `export default { description: 'a', label: 'name', fields: { name: { kind: 'text' } } };`,
-			'src/data/collection/orders/+collection.ts': `export default { name: 'orders', spec: { read: { fields: 'all' }, create: { input: { columns: ['title'] } },
+				'src/data/model/openings/+model.ts': `export default { description: 'o', label: 'title', fields: { title: { kind: 'text' } } };`,
+				'src/data/model/sources/+model.ts': `export default { description: 's', label: 'name', fields: { name: { kind: 'text' } } };`,
+				'src/data/model/applications/+model.ts': `export default { description: 'a', label: 'name', fields: { name: { kind: 'text' } } };`,
+				'src/data/collection/orders/+collection.ts': `export default { name: 'orders', spec: { read: { fields: 'all' }, create: { input: { columns: ['title'] } },
 	actions: { hidden: { description: 'h', input: {}, internal: true } } } };`,
-			'src/data/collection/openings/+collection.ts': `export default { name: 'openings', spec: { read: { fields: 'all' } } };`,
-			'src/data/collection/sources/+collection.ts': `export default { name: 'sources', spec: { read: { fields: 'all' } } };`,
-			'src/data/collection/applications/+collection.ts': `export default { name: 'applications', spec: { read: { fields: 'all' },
+				'src/data/collection/openings/+collection.ts': `export default { name: 'openings', spec: { read: { fields: 'all' } } };`,
+				'src/data/collection/sources/+collection.ts': `export default { name: 'sources', spec: { read: { fields: 'all' } } };`,
+				'src/data/collection/applications/+collection.ts': `export default { name: 'applications', spec: { read: { fields: 'all' },
 	create: { input: { columns: ['name', 'opening', 'source'] } }, update: { input: { columns: ['name'] } } } };`,
-			'src/access/+rep.policy.ts': `export default { description: 'r', grants: { orders: { read: true,
+				'src/access/+rep.policy.ts': `export default { description: 'r', grants: { orders: { read: true,
 	create: { approval: { steps: [['a'], ['a'], ['a'], ['a'], ['a'], ['a'], ['a'], ['a'], ['a']] } } } },
 	limits: { act: { rate: '5/min', per: 'ip' }, read: '0/min' } };`,
-			'src/access/+auditor.policy.ts': `export default { description: 'a', grants: { orders: { read: { fields: ['v'] } } } };`,
-			'src/access/+applicant.policy.ts': `export default { description: 'v', grants: { applications: { create: true, update: true } } };`,
-			'src/access/+kiosk.policy.ts': `export default { description: 'k', grants: { openings: { read: true } } };`,
-			'src/access/+hirer.policy.ts': `export default { description: 'h', grants: { openings: { read: true, update: { where: { or: [{ title: { eq: 'x' } }, { applications: { some: {} } }] } } } } };`,
-			'src/app/careers/+app.ts': `export default { name: 'careers', spec: { title: 'c', description: 'c', icon: 'x', audience: { public: ['applicant', 'kiosk'] }, pages: {} } };`,
-			'src/automation/+tick.automation.ts': `export default { spec: { description: 't', on: [{ cron: '61 * * * *' }, { created: 'orders' }],
-	input: { note: { kind: 'text' } }, runAs: ['rep'] } };`,
-		}));
+				'src/access/+auditor.policy.ts': `export default { description: 'a', grants: { orders: { read: { fields: ['v'] } } } };`,
+				'src/access/+applicant.policy.ts': `export default { description: 'v', grants: { applications: { create: true, update: true } } };`,
+				'src/access/+kiosk.policy.ts': `export default { description: 'k', grants: { openings: { read: true } } };`,
+				'src/access/+hirer.policy.ts': `export default { description: 'h', grants: { openings: { read: true, update: { where: { or: [{ title: { eq: 'x' } }, { applications: { some: {} } }] } } } } };`,
+				'src/app/careers/+app.ts': `export default { name: 'careers', spec: { title: 'c', description: 'c', icon: 'x', audience: { public: ['applicant', 'kiosk'] }, pages: {} } };`,
+				'src/automation/+tick.automation.ts': `export default { spec: { description: 't', on: [{ cron: '61 * * * *' }, { created: 'orders' }],
+	input: { note: { kind: 'text' } }, runAs: ['rep'] } };`
+			})
+		);
 		const codes = [...new Set(r.errors.map((e) => e.code))].sort();
 		expect(codes).toEqual([
-			'access/internal-unreachable', 'access/ip-limit', 'access/limit', 'access/masked-search', 'access/visitor-grant', 'access/visitor-ref', 'access/write-many',
-			'approval/steps', 'automation/cron', 'automation/event-input', 'automation/no-body', 'discover/unknown-role',
-			'guest/node-import', 'model/precision', 'model/range', 'model/seq', 'model/state',
+			'access/internal-unreachable',
+			'access/ip-limit',
+			'access/limit',
+			'access/masked-search',
+			'access/visitor-grant',
+			'access/visitor-ref',
+			'access/write-many',
+			'approval/steps',
+			'automation/cron',
+			'automation/event-input',
+			'automation/no-body',
+			'discover/unknown-role',
+			'guest/node-import',
+			'model/precision',
+			'model/range',
+			'model/seq',
+			'model/state'
 		]);
 		expect(r.stages.at(-1)).toBe('rules');
-		expect(r.errors.filter((e) => e.code === 'model/state').map((e) => e.message)).toContainEqual(expect.stringContaining("'a' is unreachable from 'nope'"));
+		expect(r.errors.filter((e) => e.code === 'model/state').map((e) => e.message)).toContainEqual(
+			expect.stringContaining("'a' is unreachable from 'nope'")
+		);
 		expect(r.errors.find((e) => e.code === 'guest/node-import')!.path).toBe('src/lib/disk.ts');
-		expect(r.errors.find((e) => e.code === 'model/precision')!.message).toContain('at: a time takes precision hour, minute');
-		expect(r.errors.filter((e) => e.code === 'model/range').map((e) => e.message)).toEqual([expect.stringContaining('v: vector dim is 1 to 2,000'),
-			expect.stringContaining("search.semantic: dim is 1 to 2,000 (the embedding column's width")]);
-		expect(r.errors.find((e) => e.code === 'access/visitor-ref')!.message).toContain('applications.source');
-		expect(r.errors.filter((e) => e.code === 'access/write-many').map((e) => e.message)).toEqual([expect.stringContaining("openings.update: a write grant cannot scope through the many-relation 'applications'")]);
-		expect(r.errors.filter((e) => e.code === 'access/visitor-grant').map((e) => e.path).sort()).toEqual(['src/access/+applicant.policy.ts', 'src/access/+kiosk.policy.ts']);
+		expect(r.errors.find((e) => e.code === 'model/precision')!.message).toContain(
+			'at: a time takes precision hour, minute'
+		);
+		expect(r.errors.filter((e) => e.code === 'model/range').map((e) => e.message)).toEqual([
+			expect.stringContaining('v: vector dim is 1 to 2,000'),
+			expect.stringContaining("search.semantic: dim is 1 to 2,000 (the embedding column's width")
+		]);
+		expect(r.errors.find((e) => e.code === 'access/visitor-ref')!.message).toContain(
+			'applications.source'
+		);
+		expect(r.errors.filter((e) => e.code === 'access/write-many').map((e) => e.message)).toEqual([
+			expect.stringContaining(
+				"openings.update: a write grant cannot scope through the many-relation 'applications'"
+			)
+		]);
+		expect(
+			r.errors
+				.filter((e) => e.code === 'access/visitor-grant')
+				.map((e) => e.path)
+				.sort()
+		).toEqual(['src/access/+applicant.policy.ts', 'src/access/+kiosk.policy.ts']);
 	});
 
 	it('evaluates declarations with the guest globals (rule 6)', async () => {
-		const r = await check(workspace({ 'src/+workspace.ts': `const n = new TextEncoder().encode(new URL('https://a.test/x').href).length;
-export default structuredClone({ tz: 'UTC', locale: 'en', n: n + new TextDecoder().decode(new Uint8Array([1])).length + typeof queueMicrotask.length });` }));
+		const r = await check(
+			workspace({
+				'src/+workspace.ts': `const n = new TextEncoder().encode(new URL('https://a.test/x').href).length;
+export default structuredClone({ tz: 'UTC', locale: 'en', n: n + new TextDecoder().decode(new Uint8Array([1])).length + typeof queueMicrotask.length });`
+			})
+		);
 		expect(r.errors).toEqual([]);
 	});
 
 	it('bundles a `?bytes` import as a server asset by sha256, readable while declarations evaluate (§5.8, L-COL-099)', async () => {
-		const r = await check(workspace({ 'lib/blob.bin': 'bytes\u0000!', 'src/+workspace.ts': `import blob from '../lib/blob.bin?bytes';
-export default { tz: 'UTC', locale: 'en', n: blob.length };` }));
+		const r = await check(
+			workspace({
+				'lib/blob.bin': 'bytes\u0000!',
+				'src/+workspace.ts': `import blob from '../lib/blob.bin?bytes';
+export default { tz: 'UTC', locale: 'en', n: blob.length };`
+			})
+		);
 		expect(r.errors).toEqual([]);
 		const sha = createHash('sha256').update('bytes\u0000!').digest('hex');
 		expect(Object.keys(r.guest!.assets ?? {})).toEqual([sha]);
@@ -121,60 +180,184 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };` }));
 	});
 
 	it('writes the generated tsconfig before bundling, so a fresh checkout checks', async () => {
-		const root = workspace({ 'tsconfig.json': JSON.stringify({ extends: './.norbital/tsconfig.json' }), 'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };` });
+		const root = workspace({
+			'tsconfig.json': JSON.stringify({ extends: './.norbital/tsconfig.json' }),
+			'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`
+		});
 		expect((await check(root)).errors).toEqual([]);
 		expect(existsSync(join(root, '.norbital/bolt.d.ts'))).toBe(true);
 	});
 
 	it('refuses module evaluation over 100 ms of CPU (rule 6)', async () => {
-		const r = await check(workspace({ 'src/+workspace.ts': `let x = 0; for (let i = 0; i < 1e9; i++) x ^= i; export default { tz: 'UTC', locale: 'en', x: x & 0 };` }));
+		const r = await check(
+			workspace({
+				'src/+workspace.ts': `let x = 0; for (let i = 0; i < 1e9; i++) x ^= i; export default { tz: 'UTC', locale: 'en', x: x & 0 };`
+			})
+		);
 		expect(r.errors.map((e) => e.code)).toContain('guest/eval-cpu');
 	});
 
 	it('checks from the published build, where bolt is index.js', async () => {
-		const built = await import(new URL('../build/compiler/check/index.js', import.meta.url).href) as { check: typeof check };
-		expect((await built.check(workspace(GOOD))).errors.filter((e) => e.code === 'bundle/failed')).toEqual([]);
+		const built = (await import(
+			new URL('../build/compiler/check/index.js', import.meta.url).href
+		)) as { check: typeof check };
+		expect(
+			(await built.check(workspace(GOOD))).errors.filter((e) => e.code === 'bundle/failed')
+		).toEqual([]);
 	});
 
 	it('refuses a label naming an id or a foreign key, and an instant named as a calendar day (model/label, model/instant-date)', () => {
-		const m = { workspace: {}, models: {
-			lines: { label: ['order', 'title'], fields: { title: { kind: 'text' }, shipped_on: { kind: 'instant' }, due_date: { kind: 'instant' }, paid_at: { kind: 'instant' }, born_on: { kind: 'date' } } },
-			orders: { label: 'id', fields: {} }, notes: { label: 'code', fields: {}, computed: { code: { kind: 'text', expr: { field: 'id' } } } } },
-			relationships: { 'lines.order': { to: 'orders' } }, automations: {}, apps: {}, policies: {}, collections: {} } as unknown as EngineManifest;
-		const found = buildChecks(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`);
+		const m = {
+			workspace: {},
+			models: {
+				lines: {
+					label: ['order', 'title'],
+					fields: {
+						title: { kind: 'text' },
+						shipped_on: { kind: 'instant' },
+						due_date: { kind: 'instant' },
+						paid_at: { kind: 'instant' },
+						born_on: { kind: 'date' }
+					}
+				},
+				orders: { label: 'id', fields: {} },
+				notes: {
+					label: 'code',
+					fields: {},
+					computed: { code: { kind: 'text', expr: { field: 'id' } } }
+				}
+			},
+			relationships: { 'lines.order': { to: 'orders' } },
+			automations: {},
+			apps: {},
+			policies: {},
+			collections: {}
+		} as unknown as EngineManifest;
+		const found = buildChecks(m, { automations: [] }, (_r, n) => n).map(
+			(f) => `${f.code} ${f.message}`
+		);
 		expect(found).toEqual([
 			"model/instant-date lines: shipped_on: a field named *_on or *_date is a calendar day; declare it { kind: 'date' }",
 			"model/instant-date lines: due_date: a field named *_on or *_date is a calendar day; declare it { kind: 'date' }",
 			expect.stringContaining("model/label lines: label 'order' is a foreign key"),
-			expect.stringContaining("model/label orders: label 'id' is the row id"),
+			expect.stringContaining("model/label orders: label 'id' is the row id")
+		]);
+	});
+
+	it('rejects personal channel outbound, envoys and unsupported transports', () => {
+		const m = {
+			workspace: {},
+			models: {},
+			relationships: {},
+			automations: {},
+			apps: {},
+			policies: {},
+			collections: {},
+			connections: {},
+			channels: {
+				sent: { transport: 'email', syncOnly: true, outbound: {} },
+				answered: { transport: 'whatsapp', syncOnly: true },
+				unsupported: { transport: 'slack', accounts: true }
+			},
+			envoys: { agent: { channel: 'answered' } }
+		} as unknown as EngineManifest;
+		expect(
+			buildChecks(m, { automations: [] }, (_r, n) => n)
+				.filter((f) => f.code.startsWith('channel/'))
+				.map((f) => f.code + ' ' + f.path)
+		).toEqual([
+			'channel/sync-only sent',
+			'channel/sync-only answered',
+			'channel/accounts unsupported'
 		]);
 	});
 
 	it('refuses a custom channel without its connect page or its send connection, and send on a provider channel (channel/*)', () => {
-		const m = { workspace: {}, models: {}, relationships: {}, automations: {}, apps: {}, policies: {}, collections: {},
+		const m = {
+			workspace: {},
+			models: {},
+			relationships: {},
+			automations: {},
+			apps: {},
+			policies: {},
+			collections: {},
 			connections: { partner_api: { baseUrl: 'PARTNER_URL' } },
-			channels: { partner: { transport: 'custom', send: 'partner_api' }, bare: { transport: 'custom' }, desk: { transport: 'slack', send: 'partner_api' } } } as unknown as EngineManifest;
-		const found = buildChecks(m, { automations: [], connects: ['partner'] }, (_r, n) => n).map((f) => f.code + ' ' + f.path);
-		expect(found).toEqual(['channel/custom-send bare', 'channel/custom-connect bare', 'channel/send desk']);
-		expect(buildChecks(m, { automations: [], connects: ['partner', 'bare'] }, (_r, n) => n).map((f) => f.code)).not.toContain('channel/custom-connect');
+			channels: {
+				partner: { transport: 'custom', send: 'partner_api' },
+				bare: { transport: 'custom' },
+				desk: { transport: 'slack', send: 'partner_api' }
+			}
+		} as unknown as EngineManifest;
+		const found = buildChecks(m, { automations: [], connects: ['partner'] }, (_r, n) => n).map(
+			(f) => f.code + ' ' + f.path
+		);
+		expect(found).toEqual([
+			'channel/custom-send bare',
+			'channel/custom-connect bare',
+			'channel/send desk'
+		]);
+		expect(
+			buildChecks(m, { automations: [], connects: ['partner', 'bare'] }, (_r, n) => n).map(
+				(f) => f.code
+			)
+		).not.toContain('channel/custom-connect');
 	});
 
-	it('checks a custom channel\'s inbound webhook and poll; a provider channel declares neither (channel/*)', () => {
-		const m = { workspace: {}, models: {}, relationships: {}, automations: {}, apps: {}, policies: {}, collections: {},
+	it("checks a custom channel's inbound webhook and poll; a provider channel declares neither (channel/*)", () => {
+		const m = {
+			workspace: {},
+			models: {},
+			relationships: {},
+			automations: {},
+			apps: {},
+			policies: {},
+			collections: {},
 			connections: { api: { baseUrl: 'API_URL' } },
 			channels: {
-				good: { transport: 'custom', send: 'api', inbound: { verify: { scheme: 'hmac-sha256', secret: 'signingSecret' }, messages: true },
-					poll: { connection: 'api', cron: '*/5 * * * *', path: '/messages', messages: true } },
-				bad: { transport: 'custom', send: 'api', inbound: { verify: { scheme: 'md5', secret: '' } }, poll: { connection: 'nope', cron: 'often' } },
-				desk: { transport: 'slack', inbound: { verify: { scheme: 'slack', secret: 's' }, messages: true } },
-			} } as unknown as EngineManifest;
-		const found = buildChecks(m, { automations: [], connects: ['good', 'bad'] }, (_r, n) => n).map((f) => f.code + ' ' + f.path);
-		expect(found).toEqual(['channel/inbound-verify bad', 'channel/inbound-messages bad', 'channel/poll-connection bad', 'channel/poll-cron bad',
-			'channel/poll-path bad', 'channel/poll-messages bad', 'channel/custom-inbound desk']);
+				good: {
+					transport: 'custom',
+					send: 'api',
+					inbound: { verify: { scheme: 'hmac-sha256', secret: 'signingSecret' }, messages: true },
+					poll: { connection: 'api', cron: '*/5 * * * *', path: '/messages', messages: true }
+				},
+				bad: {
+					transport: 'custom',
+					send: 'api',
+					inbound: { verify: { scheme: 'md5', secret: '' } },
+					poll: { connection: 'nope', cron: 'often' }
+				},
+				desk: {
+					transport: 'slack',
+					inbound: { verify: { scheme: 'slack', secret: 's' }, messages: true }
+				}
+			}
+		} as unknown as EngineManifest;
+		const found = buildChecks(m, { automations: [], connects: ['good', 'bad'] }, (_r, n) => n).map(
+			(f) => f.code + ' ' + f.path
+		);
+		expect(found).toEqual([
+			'channel/inbound-verify bad',
+			'channel/inbound-messages bad',
+			'channel/poll-connection bad',
+			'channel/poll-cron bad',
+			'channel/poll-path bad',
+			'channel/poll-messages bad',
+			'channel/custom-inbound desk'
+		]);
 	});
 
 	it('parses cron strings at build (rule 52)', () => {
-		for (const ok of ['0 2 * * *', '*/15 * * * *', '0 9-17 * * 1-5', '5,35 0 1 1,6 0', '@daily']) expect(cronValid(ok)).toBe(true);
-		for (const bad of ['61 * * * *', '* * * *', '0 0 0 * *', '*/0 * * * *', '0 0 * 13 *', '5-1 * * * *', '@often']) expect(cronValid(bad)).toBe(false);
+		for (const ok of ['0 2 * * *', '*/15 * * * *', '0 9-17 * * 1-5', '5,35 0 1 1,6 0', '@daily'])
+			expect(cronValid(ok)).toBe(true);
+		for (const bad of [
+			'61 * * * *',
+			'* * * *',
+			'0 0 0 * *',
+			'*/0 * * * *',
+			'0 0 * 13 *',
+			'5-1 * * * *',
+			'@often'
+		])
+			expect(cronValid(bad)).toBe(false);
 	});
 });

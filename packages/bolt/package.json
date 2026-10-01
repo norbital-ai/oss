@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.155",
+	"version": "0.0.156",
 	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
 	"type": "module",
 	"sideEffects": [
@@ -8,6 +8,11 @@
 	],
 	"license": "AGPL-3.0-only",
 	"exports": {
+		"./channels": {
+			"types": "./build/channels.d.ts",
+			"svelte": "./build/channels.js",
+			"default": "./build/channels.js"
+		},
 		".": {
 			"types": "./build/index.d.ts",
 			"default": "./build/index.js"

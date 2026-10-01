@@ -13,7 +13,8 @@ import { isObj } from './store.ts';
  * Where a connection is. `pairing` is the provider asking for something; `reconnecting` is a retry after a drop and is
  * progress, not failure; `error` is the only terminal one and names its own recovery in `error` (rule 61).
  */
-export type ConnectionState = 'unpaired' | 'connecting' | 'pairing' | 'connected' | 'reconnecting' | 'error';
+export type ConnectionState =
+	'unpaired' | 'connecting' | 'pairing' | 'connected' | 'reconnecting' | 'error';
 
 /** What the provider wants from the operator, when it wants something. `value` is the payload to draw (a QR, a code). */
 export type Pairing = {
@@ -35,11 +36,18 @@ export type Pairing = {
 /** Operator-facing text a provider supplies: English, and each framework locale it is written in (the shell picks by locale). */
 export type LocalText = string | { readonly en: string; readonly zh?: string };
 /** `x` in `locale`, English when it has none. */
-export const localText = (x: LocalText, locale: string): string => typeof x === 'string' ? x : locale.startsWith('zh') ? x.zh ?? x.en : x.en;
+export const localText = (x: LocalText, locale: string): string =>
+	typeof x === 'string' ? x : locale.startsWith('zh') ? (x.zh ?? x.en) : x.en;
 /** One input a provider's setup collects. `secret` is drawn masked and never echoed back in `about`. */
-export type SetupField = { name: string; label: LocalText; secret?: boolean; hint?: LocalText; optional?: boolean;
+export type SetupField = {
+	name: string;
+	label: LocalText;
+	secret?: boolean;
+	hint?: LocalText;
+	optional?: boolean;
 	/** A choice among these values (the first is the default), instead of free text. */
-	options?: readonly { value: string; label: LocalText }[] };
+	options?: readonly { value: string; label: LocalText }[];
+};
 /**
  * One instruction, in order. `href` is where to do it (the provider's console); `copy` a value to paste there: the
  * channel's `webhookUrl`, or `redirectUrl` (its `OAUTH_CALLBACK`, to register with an OAuth app).
@@ -67,6 +75,8 @@ export type TestSend = { to?: SetupField };
 export type ChannelOpen = {
 	/** The declared channel name: one link per channel, several channels per transport. */
 	channel: string;
+	/** Import personal activity, including sent messages and provider history. */
+	syncOnly?: boolean;
 	/** What the last `save` stored, or `null` when unpaired. */
 	credential: Json | null;
 	/** This channel's own inbound URL on the host, shown to the operator and registered with the provider where it can. */
@@ -97,6 +107,8 @@ export type ChannelLink = Pick<TransportPort, 'send' | 'typing'> & {
 /** A provider (`@norbital-ai/providers`), registered by the host. Bolt never names one. */
 export type ChannelProvider = ProviderChoice & {
 	transport: Transport;
+	/** Imports personal messages and history without sending or triggering replies. */
+	supportsSync?: boolean;
 	/** The provider can send a test message once connected (`POST …/test`). */
 	test?: TestSend;
 	open(ctx: ChannelOpen): Promise<ChannelLink>;
@@ -129,7 +141,14 @@ export type ChannelConnection = {
 	about?: Json;
 };
 
-const STATES = new Set<ConnectionState>(['unpaired', 'connecting', 'pairing', 'connected', 'reconnecting', 'error']);
+const STATES = new Set<ConnectionState>([
+	'unpaired',
+	'connecting',
+	'pairing',
+	'connected',
+	'reconnecting',
+	'error'
+]);
 
 /** Decodes a host's answer at the trust boundary. `null` for anything malformed: the adapter's bug, never a page's. */
 export function decodeConnection(channel: string, v: Json): ChannelConnection | null {
@@ -138,53 +157,121 @@ export function decodeConnection(channel: string, v: Json): ChannelConnection | 
 	if (typeof state !== 'string' || !STATES.has(state as ConnectionState)) return null;
 	const p = isObj(v['pairing']) ? v['pairing'] : null;
 	const kind = p === null ? null : p['kind'];
-	const pairing: Pairing | null = p === null || (kind !== 'qr' && kind !== 'code' && kind !== 'credential' && kind !== 'form' && kind !== 'oauth') ? null : {
-		kind, value: typeof p!['value'] === 'string' ? p!['value'] : null,
-		...(typeof p!['expiresAt'] === 'string' ? { expiresAt: p!['expiresAt'] } : {}),
-		...(typeof p!['label'] === 'string' ? { label: p!['label'] } : {}),
-		...(Array.isArray(p!['fields']) ? { fields: fieldsOf(p!['fields']) } : {})
-	};
-	const providers = Array.isArray(v['providers']) ? v['providers'].flatMap((c): ProviderChoice[] => {
-		const label = isObj(c) ? textOf(c['label']) : null;
-		if (!isObj(c) || typeof c['id'] !== 'string' || label === null || !isObj(c['setup'])) return [];
-		const s = c['setup'], k = s['kind'];
-		if (k !== 'form' && k !== 'qr' && k !== 'code' && k !== 'none') return [];
-		const steps = (Array.isArray(s['steps']) ? s['steps'] : []).flatMap((x): SetupStep[] => {
-			const text = isObj(x) ? textOf(x['text']) : null;
-			return !isObj(x) || text === null ? [] : [{ text, ...(typeof x['href'] === 'string' ? { href: x['href'] } : {}), ...(x['copy'] === 'webhookUrl' || x['copy'] === 'redirectUrl' ? { copy: x['copy'] } : {}) }];
-		});
-		return [{ id: c['id'], label, setup: { kind: k, steps, ...(Array.isArray(s['fields']) ? { fields: fieldsOf(s['fields']) } : {}), ...(s['webhook'] === true ? { webhook: true } : {}) } }];
-	}) : undefined;
-	const test = isObj(v['test']) ? { ...(isObj(v['test']['to']) ? { to: fieldsOf([v['test']['to']])[0]! } : {}) } : undefined;
+	const pairing: Pairing | null =
+		p === null ||
+		(kind !== 'qr' &&
+			kind !== 'code' &&
+			kind !== 'credential' &&
+			kind !== 'form' &&
+			kind !== 'oauth')
+			? null
+			: {
+					kind,
+					value: typeof p!['value'] === 'string' ? p!['value'] : null,
+					...(typeof p!['expiresAt'] === 'string' ? { expiresAt: p!['expiresAt'] } : {}),
+					...(typeof p!['label'] === 'string' ? { label: p!['label'] } : {}),
+					...(Array.isArray(p!['fields']) ? { fields: fieldsOf(p!['fields']) } : {})
+				};
+	const providers = Array.isArray(v['providers'])
+		? v['providers'].flatMap((c): ProviderChoice[] => {
+				const label = isObj(c) ? textOf(c['label']) : null;
+				if (!isObj(c) || typeof c['id'] !== 'string' || label === null || !isObj(c['setup']))
+					return [];
+				const s = c['setup'],
+					k = s['kind'];
+				if (k !== 'form' && k !== 'qr' && k !== 'code' && k !== 'none') return [];
+				const steps = (Array.isArray(s['steps']) ? s['steps'] : []).flatMap((x): SetupStep[] => {
+					const text = isObj(x) ? textOf(x['text']) : null;
+					return !isObj(x) || text === null
+						? []
+						: [
+								{
+									text,
+									...(typeof x['href'] === 'string' ? { href: x['href'] } : {}),
+									...(x['copy'] === 'webhookUrl' || x['copy'] === 'redirectUrl'
+										? { copy: x['copy'] }
+										: {})
+								}
+							];
+				});
+				return [
+					{
+						id: c['id'],
+						label,
+						setup: {
+							kind: k,
+							steps,
+							...(Array.isArray(s['fields']) ? { fields: fieldsOf(s['fields']) } : {}),
+							...(s['webhook'] === true ? { webhook: true } : {})
+						}
+					}
+				];
+			})
+		: undefined;
+	const test = isObj(v['test'])
+		? { ...(isObj(v['test']['to']) ? { to: fieldsOf([v['test']['to']])[0]! } : {}) }
+		: undefined;
 	return {
-		channel: typeof v['channel'] === 'string' ? v['channel'] : channel, transport: typeof v['transport'] === 'string' ? v['transport'] : '',
-		state: state as ConnectionState, pairing, stored: v['stored'] === true,
+		channel: typeof v['channel'] === 'string' ? v['channel'] : channel,
+		transport: typeof v['transport'] === 'string' ? v['transport'] : '',
+		state: state as ConnectionState,
+		pairing,
+		stored: v['stored'] === true,
 		...(typeof v['pairedAs'] === 'string' ? { pairedAs: v['pairedAs'] } : {}),
 		...(typeof v['detail'] === 'string' ? { detail: v['detail'] } : {}),
 		...(typeof v['error'] === 'string' ? { error: v['error'] } : {}),
 		...(typeof v['provider'] === 'string' ? { provider: v['provider'] } : {}),
 		...(providers === undefined ? {} : { providers }),
-		...(test === undefined || (isObj(v['test']) && isObj(v['test']['to']) && test.to === undefined) ? {} : { test }),
+		...(test === undefined || (isObj(v['test']) && isObj(v['test']['to']) && test.to === undefined)
+			? {}
+			: { test }),
 		...(v['about'] === undefined ? {} : { about: v['about'] })
 	};
 }
-const textOf = (v: Json | undefined): LocalText | null => typeof v === 'string' ? v
-	: isObj(v) && typeof v['en'] === 'string' ? { en: v['en'], ...(typeof v['zh'] === 'string' ? { zh: v['zh'] } : {}) } : null;
-const fieldsOf = (v: readonly Json[]): SetupField[] => v.flatMap((f): SetupField[] => {
-	const label = isObj(f) ? textOf(f['label']) : null, hint = isObj(f) ? textOf(f['hint']) : null;
-	return !isObj(f) || typeof f['name'] !== 'string' || label === null ? [] : [{
-		name: f['name'], label, ...(f['secret'] === true ? { secret: true } : {}), ...(f['optional'] === true ? { optional: true } : {}), ...(hint === null ? {} : { hint }),
-		...(Array.isArray(f['options']) ? { options: f['options'].flatMap((o) => { const l = isObj(o) ? textOf(o['label']) : null;
-			return isObj(o) && typeof o['value'] === 'string' && l !== null ? [{ value: o['value'], label: l }] : []; }) } : {}) }];
-});
+const textOf = (v: Json | undefined): LocalText | null =>
+	typeof v === 'string'
+		? v
+		: isObj(v) && typeof v['en'] === 'string'
+			? { en: v['en'], ...(typeof v['zh'] === 'string' ? { zh: v['zh'] } : {}) }
+			: null;
+const fieldsOf = (v: readonly Json[]): SetupField[] =>
+	v.flatMap((f): SetupField[] => {
+		const label = isObj(f) ? textOf(f['label']) : null,
+			hint = isObj(f) ? textOf(f['hint']) : null;
+		return !isObj(f) || typeof f['name'] !== 'string' || label === null
+			? []
+			: [
+					{
+						name: f['name'],
+						label,
+						...(f['secret'] === true ? { secret: true } : {}),
+						...(f['optional'] === true ? { optional: true } : {}),
+						...(hint === null ? {} : { hint }),
+						...(Array.isArray(f['options'])
+							? {
+									options: f['options'].flatMap((o) => {
+										const l = isObj(o) ? textOf(o['label']) : null;
+										return isObj(o) && typeof o['value'] === 'string' && l !== null
+											? [{ value: o['value'], label: l }]
+											: [];
+									})
+								}
+							: {})
+					}
+				];
+	});
 
 /**
  * An adapter's own state, as one of ours. Every host adapter answers this way, so adding a provider is writing one of
  * these rather than teaching the shell a new vocabulary.
  */
 export function connection(
-	channel: string, transport: string, state: ConnectionState,
-	more: Omit<ChannelConnection, 'channel' | 'transport' | 'state' | 'stored'> & { stored?: boolean } = {}
+	channel: string,
+	transport: string,
+	state: ConnectionState,
+	more: Omit<ChannelConnection, 'channel' | 'transport' | 'state' | 'stored'> & {
+		stored?: boolean;
+	} = {}
 ): ChannelConnection {
 	return { channel, transport, state, ...more, stored: more.stored ?? false };
 }

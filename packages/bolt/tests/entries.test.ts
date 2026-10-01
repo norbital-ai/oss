@@ -10,7 +10,7 @@ import * as TypeService from '../src/tooling/type-service.ts';
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { exports: Record<string, { types: string; default: string }> };
 
 it('exports the protocol, type-service and isolate-globals entries over existing sources', () => {
-	expect(Object.keys(pkg.exports)).toEqual(['.', './client', './engine', './artifact', './protocol', './type-service', './docs', './isolate-globals', './test', './test/browser']);
+	expect(Object.keys(pkg.exports)).toEqual(['./channels', '.', './client', './engine', './artifact', './protocol', './type-service', './docs', './isolate-globals', './test', './test/browser']);
 	for (const [entry, t] of Object.entries(pkg.exports)) {
 		expect(t.types, entry).toBe(t.default.replace(/\.js$/, '.d.ts'));
 		expect(existsSync(new URL(t.default.replace('./build/', '../src/').replace(/\.js$/, '.ts'), import.meta.url)), entry).toBe(true);

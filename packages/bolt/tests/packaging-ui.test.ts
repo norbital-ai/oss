@@ -14,10 +14,52 @@ describe('$bolt', () => {
 });
 
 describe('bolt.runs', () => {
-	it('lists one automation\'s runs up to the limit', async () => {
+	it("lists one automation's runs up to the limit", async () => {
 		const urls: string[] = [];
-		const api = shellApi(async (input) => { urls.push(String(input)); return new Response(JSON.stringify({ value: [] })); });
+		const api = shellApi(async (input) => {
+			urls.push(String(input));
+			return new Response(JSON.stringify({ value: [] }));
+		});
 		await api.runs({ automation: 'payroll_export', limit: 5 });
 		expect(urls).toEqual(['/__bolt/shell/runs?automation=payroll_export&limit=5']);
+	});
+});
+
+describe('channel accounts', () => {
+	it('lists and registers accounts through the shared authenticated transport API', async () => {
+		const calls: {
+			url: string;
+			method: string | undefined;
+			credentials: RequestCredentials | undefined;
+			body: string | undefined;
+		}[] = [];
+		const api = shellApi(async (input, init) => {
+			calls.push({
+				url: String(input),
+				method: init?.method,
+				credentials: init?.credentials,
+				body: init?.body as string | undefined
+			});
+			return new Response(JSON.stringify({ value: [] }));
+		});
+		expect(await api.transport.accounts('sales_mail')).toEqual({ ok: true, value: [] });
+		expect(await api.transport.addAccount('sales_mail', 'phone-1')).toEqual({
+			ok: true,
+			value: []
+		});
+		expect(calls).toEqual([
+			{
+				url: '/__bolt/transports/sales_mail/accounts',
+				method: 'GET',
+				credentials: 'same-origin',
+				body: undefined
+			},
+			{
+				url: '/__bolt/transports/sales_mail/accounts',
+				method: 'POST',
+				credentials: 'same-origin',
+				body: '{"id":"phone-1"}'
+			}
+		]);
 	});
 });
