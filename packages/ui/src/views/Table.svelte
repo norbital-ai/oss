@@ -300,7 +300,7 @@
 {/snippet}
 
 {#snippet footer()}
-	<footer class="text-muted-foreground flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t px-2 py-1 text-xs" data-table-footer>
+	<footer class="text-muted-foreground flex shrink-0 min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t px-2 py-1 text-xs" data-table-footer>
 		<span class="px-1 tabular-nums" data-range>{range}</span>
 		{#if paged}
 			<div class="flex items-center gap-1" data-pager>
@@ -346,7 +346,7 @@
 
 <!-- the view fills a bounded parent (a flex column or a definite height) and scrolls inside its card; it never grows the
      parent past its own minimum. The card: the grid (wide) or the list (narrow), then the footer, pinned at the card's foot. -->
-<section class="@container flex h-full min-w-0 flex-1 flex-col gap-2" data-view="table" data-source={kind}>
+<section class="@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2" data-view="table" data-source={kind}>
 	<ViewToolbar config={toolbar} {collection} view={canFilter ? vs : undefined} {catalog} {source} author={where} sortable={sorts}
 		bind:q={qText} searchable={canSearch} selected={selectable ? [...selected] : undefined} onSettled={() => selected.clear()} {exporter}
 		onAdd={kind === 'local' && onChange && add ? () => onChange([...(of as readonly Row[]), add()]) : undefined}
@@ -360,20 +360,20 @@
 				{:else}
 					<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
 					{@const what = collection === '' ? msg(bolt, 'table.rows', 'rows') : lowerLead(label(bolt, collection))}
-					<div class="bg-card flex min-h-72 min-w-0 flex-1 flex-col justify-center rounded-md border" data-table-card>
+					<div class="bg-card min-w-0 rounded-md border" data-table-card>
 						{#if filtered}
-							<EmptyState icon="search" title={msg(bolt, 'table.noMatch', 'No {what} match this search or filter', { what })} hint={msg(bolt, 'table.noMatchHint', 'Try a different search, or clear the filters.')}>
+							<EmptyState variant="inset" icon="search" title={msg(bolt, 'table.noMatch', 'No {what} match this search or filter', { what })} hint={msg(bolt, 'table.noMatchHint', 'Try a different search, or clear the filters.')}>
 								<Button size="sm" variant="outline" onclick={() => { vs.clear(); qText = ''; }}>{msg(bolt, 'view.clearAll', 'Clear all')}</Button>
 							</EmptyState>
 						{:else}
-							<EmptyState title={msg(bolt, 'table.empty', 'No {what} yet', { what })} hint={canNew ? msg(bolt, 'table.noneHint', 'Create the first one to get started.') : msg(bolt, 'table.emptyHint', 'Nothing has been added here yet.')}>
+							<EmptyState variant="inset" title={msg(bolt, 'table.empty', 'No {what} yet', { what })} hint={canNew ? msg(bolt, 'table.noneHint', 'Create the first one to get started.') : msg(bolt, 'table.emptyHint', 'Nothing has been added here yet.')}>
 								{#if canNew}<Button size="sm" onclick={() => typeof tb.new === 'function' ? tb.new() : openRecord(collection, 'new', contexts)}><Glyph name="plus" />{msg(bolt, 'table.new', 'New')}</Button>{/if}
 							</EmptyState>
 						{/if}
 					</div>
 				{/if}
 			{:else}
-				<div class="bg-card flex max-h-[calc(100dvh-8rem)] min-h-72 min-w-0 flex-1 flex-col rounded-md border" data-table-card>
+				<div class="bg-card flex min-h-0 min-w-0 flex-1 flex-col rounded-md border" data-table-card>
 					<!-- its own scroll port (staging's grid): the grey header sticks, pinned columns stay while the rest scrolls sideways.
 					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
 					     the nowrap row actions never squeeze a truncating column down to its first letters -->

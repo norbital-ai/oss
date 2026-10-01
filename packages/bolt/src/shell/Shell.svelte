@@ -287,7 +287,7 @@
 			{/await}
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
-		<Inbox {api} {bolt} {t} push={boot.push} onCount={(n) => (waiting = n)} />
+		<Inbox {api} {bolt} {t} onCount={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		<Settings {api} {bolt} {t} tab={current.tab} workspace={boot.workspace} run={url.searchParams.get('run')} onRun={openRun} connects={config.connects} />
 	{:else if current.kind === 'redirect'}
@@ -333,7 +333,7 @@
 		<div class="h-dvh min-h-0 overflow-clip">{@render content()}</div>
 	{:else}
 		{#snippet navigation(open: boolean)}
-			<Nav model={model!} expanded={open} mobile={narrow.current} {t} environment={boot?.workspace.environment ?? null} {locale} onLocale={setLocale}
+			<Nav {api} push={boot?.push ?? null} model={model!} expanded={open} mobile={narrow.current} {t} environment={boot?.workspace.environment ?? null} {locale} onLocale={setLocale}
 				{theme} onTheme={chooseTheme} {sync} previewing={boot?.preview !== null} onEndPreview={endPreview}
 				{...boot?.admin && boot.surfaces.settings && boot.preview === null ? { loadTeams: teams, onPreviewTeam: previewTeam } : {}}
 				onSearch={() => { navOpen = false; finding = true; }} onNavigate={go} onSignOut={signOut} notice={boot?.notice}

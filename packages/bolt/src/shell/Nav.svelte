@@ -10,6 +10,8 @@
 	import { Badge, Button, Combobox, Icon, Popover, Spinner, Tooltip, cn } from '@norbital-ai/ui';
 	import { FEATURE_COLORS, NorbiusStrip } from '@norbital-ai/ui/brand';
 	import { Frame, Imposter, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { SW } from '../protocol/wire.ts';
+	import type { ShellApi } from './runtime.ts';
 	import type { SyncStatus } from '../client/bolt.ts';
 	import { NORBIUS, type NavItem, type NavModel, type Translate } from './model.ts';
 	import { based, type ShellNotice } from './nav.ts';
@@ -18,9 +20,9 @@
 
 	let {
 		model, expanded = true, mobile = false, t, environment = null, locale = 'en', onLocale, theme = 'system', onTheme, sync = 'idle',
-		previewing = false, loadTeams, onPreviewTeam, onEndPreview, onSearch, onToggle, onNavigate, onSignOut, bell, notice,
+		previewing = false, loadTeams, onPreviewTeam, onEndPreview, onSearch, onToggle, onNavigate, onSignOut, bell, notice, api, push = null,
 	}: {
-		model: NavModel; expanded?: boolean; mobile?: boolean; t: Translate; environment?: string | null; locale?: string;
+		api: ShellApi; push?: string | null; model: NavModel; expanded?: boolean; mobile?: boolean; t: Translate; environment?: string | null; locale?: string;
 		onLocale?: (locale: string) => void; theme?: Theme; onTheme?: (theme: Theme) => void; sync?: SyncStatus;
 		/** A preview runs: the menu offers its end. `loadTeams` is an administrator's: the teams a preview may take. */
 		previewing?: boolean; loadTeams?: () => Promise<readonly { id: string; name: string }[]>; onPreviewTeam?: (team: string) => void; onEndPreview?: () => void;
@@ -30,6 +32,21 @@
 		/** The host's notice (a billing reminder): a footer line here, so it never takes the page's height. */
 		notice?: ShellNotice | undefined;
 	} = $props();
+
+	// web push (§5.7): offered when the host has a VAPID key and the browser can take a subscription
+	const canPush = typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof PushManager !== 'undefined';
+	let pushed = $state<'off' | 'on' | 'denied'>('off');
+	async function enablePush(key: string): Promise<void> {
+		try {
+			const reg = await navigator.serviceWorker.register(based(SW), { scope: based('/') });
+			const raw = atob(key.replace(/-/g, '+').replace(/_/g, '/'));
+			const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+			const r = await api.push(sub.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } });
+			pushed = r.ok ? 'on' : 'denied';
+		} catch {
+			pushed = 'denied';
+		}
+	}
 
 	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
 	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length]!);
@@ -323,6 +340,15 @@
 						{/each}
 					</Inline>
 				</Inline>
+			{/if}
+			{#if push !== null && canPush}
+				{#if pushed === 'off'}
+					<Button type="button" variant="ghost" class="h-9 w-full justify-start px-2 text-xs font-normal" onclick={() => enablePush(push)}>
+						<Icon name="lucide:bell" class="size-3.5" /><span>{t('Notify me on this device')}</span>
+					</Button>
+				{:else}
+					<p class="px-2 py-1.5 text-tiny text-muted-foreground" role="status">{pushed === 'on' ? t('Notices arrive on this device.') : t('Notifications are blocked here.')}</p>
+				{/if}
 			{/if}
 			{#if teams !== null || previewing}
 				<div class="-mx-1 my-1 h-px bg-border"></div>

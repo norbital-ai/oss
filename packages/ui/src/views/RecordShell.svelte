@@ -351,7 +351,7 @@
 {:else if record.state.kind === 'error'}
 	{@render failure(record.state.message)}
 {:else}
-	<article class="flex min-w-0 flex-col gap-3" data-view="record" data-collection={of} data-held={heldBy ?? undefined}>
+	<article class={['flex min-h-0 min-w-0 flex-col gap-3', (inside === undefined || inside === of) && 'h-full']} data-view="record" data-collection={of} data-held={heldBy ?? undefined}>
 		{#if toSheet === undefined}<header>{@render head()}</header>{/if}
 		{#if mode === 'create' || tabItems.length === 1}{@render body()}
 		{:else if nested}{@render body()}{#if heldBy !== null && inside !== of}{@render approval()}{/if}

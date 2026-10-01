@@ -92,7 +92,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	}
 </script>
 
-<section class="flex min-w-0 flex-col gap-2" data-view="matrix">
+<section class="flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2" data-view="matrix">
 	{#if notice}<p role="alert" class="text-destructive text-sm">{notice}</p>{/if}
 	{#if selection.length > 0}
 		<div class="flex items-center gap-2">
@@ -107,7 +107,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 						: msg(bolt, 'matrix.pageError', 'Rows {from}–{to} could not be read ({code}): {message}', { from: back.length * MATRIX_PAGE + 1, to: back.length * MATRIX_PAGE + pageRows.length, code: items.state.code, message: items.state.message })}
 				</div>
 			{/if}
-			<div class="max-h-[70dvh] overflow-x-scroll overflow-y-auto rounded-md border">
+			<div class="min-h-0 flex-1 overflow-auto rounded-md border">
 				<table class="border-separate border-spacing-0 text-sm" style="table-layout:fixed">
 					<thead>
 						<tr>
@@ -147,11 +147,11 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 					</tbody>
 				</table>
 			</div>
-			<div class="text-muted-foreground flex items-center justify-end gap-2 text-xs">
+			<footer class="text-muted-foreground flex shrink-0 items-center justify-end gap-2 border-t py-2 text-xs" data-matrix-footer>
 				<Button size="sm" variant="outline" disabled={back.length === 0} onclick={() => { after = back.at(-1) ?? null; back = back.slice(0, -1); }}>{msg(bolt, 'table.prev', 'Previous')}</Button>
 				<Button size="sm" variant="outline" disabled={rowPage.state.kind !== 'ready' || nextOf(rowPage.state.value) === null}
 					onclick={() => { if (rowPage.state.kind === 'ready') { back = [...back, after]; after = nextOf(rowPage.state.value); } }}>{msg(bolt, 'table.next', 'Next')}</Button>
-			</div>
+			</footer>
 		{/snippet}
 	</ReadGate>
 	{#if creating !== null}

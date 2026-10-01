@@ -40,7 +40,9 @@
 	}
 </script>
 
-<form class={className ?? 'grid gap-4'} onsubmit={send} novalidate aria-busy={form.pending}>
+<form class={['flex h-full min-h-0 min-w-0 flex-col', className]} onsubmit={send} novalidate aria-busy={form.pending}>
+	<div class="min-h-0 flex-1 overflow-auto pb-4" data-form-body>
+	<div class="grid gap-4">
 	{#if children}
 		{@render children(form)}
 	{:else if sections && sections.length > 0}
@@ -59,8 +61,10 @@
 		</Alert>
 	{/if}
 	{#if update && record !== null}<RecordInfo row={record} />{/if}
+	</div>
+	</div>
 	<!-- the action footer (staging's): a hairline above, unsaved changes said beside the buttons; none on a readonly form without actions -->
-	{#if (!readonly && !settled) || actions}<footer class="flex flex-wrap items-center justify-end gap-2 border-t pt-3" data-form-footer>
+	{#if (!readonly && !settled) || actions}<footer class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t py-3" data-form-footer>
 		{#if !readonly && update && form.dirty && !form.pending}<span class="text-meta mr-auto" role="status">{t('unsaved')}</span>{/if}
 		{@render actions?.(form)}
 		{#if !readonly && !settled}<Button type="submit" disabled={form.pending || controls.disabled || (update && !form.dirty)}>

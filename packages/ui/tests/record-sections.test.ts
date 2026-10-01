@@ -77,6 +77,9 @@ test('edit: the form is sectioned and a collapsed field still saves', async () =
 	await settle();
 	const form = target.querySelector('form');
 	assert.deepEqual(fieldsIn(section(form, 'core')), ['site', 'title']);
+	const footer = form.querySelector('[data-form-footer]');
+	assert.equal(form.lastElementChild, footer, 'the footer ends the form');
+	assert.equal(form.querySelector('[data-form-body]').contains(footer), false, 'the footer stays outside the scrolling fields');
 	assert.equal(section(form, 'more').querySelector('h3 button').getAttribute('aria-expanded'), 'false');
 	const notes = form.querySelector('[data-field=notes] input, [data-field=notes] textarea');
 	notes.value = 'Front gate';
@@ -93,7 +96,10 @@ test('create: sections apply to the generated create form', async () => {
 	const { target } = await show({ mode: 'create', sections: SECTIONS });
 	const form = target.querySelector('form');
 	assert.deepEqual(fieldsIn(section(form, 'core')), ['site', 'title']);
-	assert.deepEqual(fieldsIn(form.querySelectorAll('form > section')[2]), ['crew']);
+	const footer = form.querySelector('[data-form-footer]');
+	assert.equal(form.lastElementChild, footer, 'the footer ends the form');
+	assert.equal(form.querySelector('[data-form-body]').contains(footer), false, 'the footer stays outside the scrolling fields');
+	assert.deepEqual(fieldsIn(form.querySelectorAll('[data-form-body] > div > section')[2]), ['crew']);
 });
 
 test('no sections: the flat grid, unchanged', async () => {
