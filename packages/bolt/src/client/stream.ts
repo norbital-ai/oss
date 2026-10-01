@@ -55,6 +55,13 @@ export function liveStream(open: () => EventSourceLike, onFrame: (frame: Frame) 
 		get retrying() { return retrying; },
 		want(on: boolean) {
 			wanted = on;
+			// a new view in a hidden tab is someone reading it (a background load, an automated browser): the grace restarts
+			// from now, so the read is answered rather than left loading until the tab is shown
+			if (on && signals?.hidden === true) {
+				hiddenSince = Date.now();
+				clearTimeout(grace);
+				grace = setTimeout(reconcile, HIDDEN_CLOSE_MS);
+			}
 			reconcile();
 		},
 	};

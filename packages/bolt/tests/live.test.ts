@@ -452,4 +452,29 @@ describe('$bolt client without a server', () => {
 		} finally { random.mockRestore(); vi.useRealTimers(); }
 	});
 
+	it('a new view in a hidden tab opens the link and restarts the grace: a background load, and a page hidden past it', async () => {
+		vi.useFakeTimers();
+		try {
+			const sources: EventSourceLike[] = [];
+			const signals = { hidden: true, addEventListener: () => {} };
+			const fetch = async () => Response.json({ errors: [] });
+			const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, signals, openStream: () => {
+				const s: EventSourceLike = { onmessage: null, onerror: null, close: () => {} };
+				sources.push(s);
+				return s;
+			} });
+			const stop = bolt.live(bolt.read('orders', { all: true })).subscribe(() => {});
+			expect(sources).toHaveLength(1); // was 0: a never-shown tab counted as hidden since the epoch, so its reads never answered
+			await vi.advanceTimersByTimeAsync(HIDDEN_CLOSE_MS);
+			expect(bolt.syncStatus).toBe('idle');
+			// still hidden, long past the grace: the next page's view was left loading until the tab was shown
+			const next = bolt.live(bolt.read('orders', { where: { region: 'north' } })).subscribe(() => {});
+			expect(sources).toHaveLength(2);
+			await vi.advanceTimersByTimeAsync(HIDDEN_CLOSE_MS);
+			expect(bolt.syncStatus).toBe('idle');
+			stop();
+			next();
+		} finally { vi.useRealTimers(); }
+	});
+
 });
