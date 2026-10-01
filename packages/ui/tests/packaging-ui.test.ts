@@ -145,3 +145,17 @@ test('two or more row actions fold into one menu in the grid; a single action st
 	assert.match(one.target.querySelector('tbody [data-row-actions]').textContent, /Cancel/);
 	one.done();
 });
+
+test('the toolbar row: title, ⓘ and every widget flush left in that order; only New is pushed right', async () => {
+	const v = await show({ part: 'table', props: { of: 'jobs', columns: ['title'], toolbar: { title: 'Jobs', description: 'All jobs', new: () => {},
+		actions: [{ run: () => {}, label: 'Recount' }] } } });
+	const row = v.target.querySelector('[data-view-title]').parentElement;
+	const marks = [...row.children].map((el) => ['data-view-title', 'data-view-about', 'data-search-toggle', 'data-view-trigger', 'data-view-actions', 'data-view-new']
+		.find((a) => el.hasAttribute(a) || el.querySelector(`[${a}]`) !== null) ?? el.tagName);
+	assert.deepEqual(marks, ['data-view-title', 'data-view-about', 'data-search-toggle', 'data-view-trigger', 'data-view-actions', 'data-view-new']);
+	// nothing stretches between the widgets: the create slot alone takes the free space, so a wrap keeps it at the row's end
+	const pushers = [...row.children].filter((el) => /(^|\s)(ml-auto|flex-1|grow)(\s|$)/.test(el.getAttribute('class') ?? ''));
+	assert.deepEqual(pushers.map((el) => el.hasAttribute('data-view-new')), [true]);
+	assert.equal(row.querySelector('[data-view-new]').getAttribute('aria-label'), 'New');
+	v.done();
+});

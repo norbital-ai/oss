@@ -314,7 +314,7 @@
 					<Popover.Content align="start" class="w-[min(22rem,calc(100vw-1rem))] p-3 text-sm leading-relaxed" data-view-description>{about}</Popover.Content>
 				</Popover.Root>
 			{/if}
-			<span class="flex-1"></span>
+			<!-- the owner's toolbar: title, ⓘ and every widget flush left; New alone pushed right (and to the end of a wrapped row) -->
 			{#if cfg.controls}<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-controls>{@render cfg.controls()}</div>{/if}
 			{#if canSearch}
 				<!-- the search is an icon: its popover opens with the box focused, and says what it searches and which
@@ -327,7 +327,7 @@
 							</Button>
 						{/snippet}
 					</Popover.Trigger>
-					<Popover.Content align="end" class="flex {chosen?.input === undefined ? 'w-[min(26rem,calc(100vw-1rem))]' : 'w-[min(36rem,calc(100vw-1rem))]'} flex-col gap-2 p-2" data-search-panel
+					<Popover.Content align="start" class="flex {chosen?.input === undefined ? 'w-[min(26rem,calc(100vw-1rem))]' : 'w-[min(36rem,calc(100vw-1rem))]'} flex-col gap-2 p-2" data-search-panel
 						onOpenAutoFocus={(e) => { e.preventDefault(); box?.focus(); }}>
 						<div class="border-input bg-background focus-within:ring-ring/50 flex min-h-8 flex-wrap items-center gap-1 rounded-sm border px-2 shadow-xs focus-within:ring-[3px]">
 							<Glyph name="search" class="text-muted-foreground size-4 shrink-0" />
@@ -394,7 +394,7 @@
 							</Button>
 						{/snippet}
 					</Popover.Trigger>
-					<Popover.Content align="end" class="flex max-h-[min(70dvh,36rem)] w-[min(24rem,calc(100vw-1rem))] flex-col gap-0.5 overflow-y-auto p-1.5" data-view-menu>
+					<Popover.Content align="start" class="flex max-h-[min(70dvh,36rem)] w-[min(24rem,calc(100vw-1rem))] flex-col gap-0.5 overflow-y-auto p-1.5" data-view-menu>
 						{#each groups as grp, gi (grp.g)}
 							<p class={['text-muted-foreground px-2 pb-1 text-xs font-medium', gi === 0 ? 'pt-1' : 'mt-1 border-t pt-2']} data-menu-group={grp.g}>{grp.title}</p>
 							{#each grp.of as e (e.key)}
@@ -411,7 +411,7 @@
 				</Popover.Root>
 			{/if}
 			{#if canNew}
-				<Button size="default" class="px-2.5 @xl:px-3" aria-label={msg(bolt, 'table.new', 'New')} data-view-new
+				<Button size="default" class="ml-auto px-2.5 @xl:px-3" aria-label={msg(bolt, 'table.new', 'New')} data-view-new
 					onclick={create}>
 					<Glyph name="plus" /><span class="hidden @xl:inline">{onAdd ? msg(bolt, 'table.add', 'Add row') : msg(bolt, 'table.new', 'New')}</span>
 				</Button>

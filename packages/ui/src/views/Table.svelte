@@ -278,8 +278,10 @@
 	const opens = $derived(kind === 'collection' || onOpen !== undefined);
 	const open = (row: Row) => onOpen ? onOpen(row) : kind === 'collection' && typeof row['id'] === 'string' && openRecord(collection, row['id']);
 	/** A click on a row opens it, as the phone's card does; a link, a control, a sheet or selected text keeps its own. */
+	// only a control inside the row counts: the sheet the table sits in is a dialog too, and keeps nothing
 	const rowClick = (e: MouseEvent, row: Row) => {
-		if (!opens || (e.target as Element).closest('a, button, input, select, textarea, label, [contenteditable], [role=dialog]') || (getSelection()?.toString() ?? '') !== '') return;
+		const own = (e.target as Element).closest('a, button, input, select, textarea, label, [contenteditable], [role=dialog]');
+		if (!opens || (own !== null && (e.currentTarget as Element).contains(own)) || (getSelection()?.toString() ?? '') !== '') return;
 		open(row);
 	};
 	/** A cell's full text, its tooltip when the single line truncates. */
@@ -486,7 +488,7 @@
 									     receives its own tap (it opens the related record) -->
 									<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
 									<div role={opens ? 'button' : undefined} tabindex={opens ? 0 : undefined} class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 text-left" data-row-card
-										onclick={(e) => { if (opens && !(e.target as Element).closest('a, button, [role=dialog]')) open(row); }}
+										onclick={(e) => rowClick(e, row)}
 										onkeydown={(e) => { if (opens && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(row); } }}>
 										{#if lead}<span class="truncate text-sm font-medium">{@render cell(row, lead)}</span>{/if}
 										{#if rest.length > 0}

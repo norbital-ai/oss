@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.149",
+	"version": "0.0.150",
 	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
 	"type": "module",
 	"sideEffects": false,

@@ -67,7 +67,7 @@
 			</button>
 		{/snippet}
 	</Popover.Trigger>
-	<Popover.Content align="end" aria-label={msg(bolt, 'view.filterSort', 'Filter and sort')}
+	<Popover.Content align="start" aria-label={msg(bolt, 'view.filterSort', 'Filter and sort')}
 		class={cn('flex w-[min(46rem,calc(100vw-2rem))] flex-col gap-3 p-3',
 			// one control height: on touch the kit raises buttons to the hit target, so inputs and selects follow
 			'[&_input:not([type=checkbox])]:min-h-(--hit-target) [&_select]:min-h-(--hit-target)')} data-view-panel>

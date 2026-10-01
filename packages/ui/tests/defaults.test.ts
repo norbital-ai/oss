@@ -174,6 +174,17 @@ test('Table: a row click opens its record; links, buttons and selected text do n
 	assert.equal(tr.tabIndex, 0);
 });
 
+test('Table inside a sheet: the row and the phone card still open their record (the sheet is no control of the row)', async () => {
+	const { bolt } = fake([ROW]);
+	const t = await show('table', { of: 'jobs', columns: ['title', 'kind'] }, bolt, jobs);
+	t.setAttribute('role', 'dialog'); // a project's RecordShell sheet around its Trials table
+	t.querySelector('[data-table-wide] tbody tr:not([aria-hidden]) td').click();
+	assert.deepEqual(records(), ['jobs/j1']);
+	history.replaceState(null, '', '/');
+	t.querySelector('[data-row-card]').click();
+	assert.deepEqual(records(), ['jobs/j1']);
+});
+
 test('Table: an enum is a neutral chip in words, a state a coloured badge; a FK column is named by its target', async () => {
 	const { bolt } = fake([ROW]);
 	const t = await show('table', { of: 'jobs', columns: ['title', 'kind', 'status', 'account_id'] }, bolt, jobs);
