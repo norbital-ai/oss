@@ -1,7 +1,8 @@
 <!--
 @component
-A `file` field's input: a drop zone (or click to browse), uploads through the host first (accept and size checked), each
-in flight or failed shown as a row, then the stored files as rows with thumbnail, size, download and remove.
+A `file` field's input, the height of a text input: "Add file(s)" when empty, else the files as chips (each opening its
+preview, Download and Remove) and a "+" while there is room. Uploads go through the host first (accept and size checked;
+the limits are the trigger's hint); files dropped anywhere on the field upload too.
 -->
 <script lang="ts" module>
 	import type { Json, KindOf } from './kind.js';
@@ -75,32 +76,47 @@ in flight or failed shown as a row, then the stored files as rows with thumbnail
 	};
 	const types = $derived(kind.accept.includes('*/*') ? '' : kind.accept.map((a) =>
 		typeNames[a] ?? a.replace(/^[^/]+\/(?!\*)/, '').replace('/*', '').toUpperCase()).join(', '));
+	const hintId = $props.id();
+	const label = $derived(kind.multiple ? t('addFiles') : t('addFile'));
+	const hint = $derived([kind.multiple ? t('upToFiles').replace('{n}', String(MAX_FILES)) : '', kind.multiple ? t('sizeEach').replace('{size}', size) : size, types].filter(Boolean).join(' · '));
 </script>
 
-<div class="grid min-w-0 gap-2">
-	{#if refs.length > 0 || pending.length > 0}
-		<FileList {refs} {pending} onRemove={can ? remove : undefined} onRetry={can ? (p) => run(retry(p)) : undefined} onDismiss={(p) => (pending = pending.filter((x) => x.key !== p.key))} {disabled} />
-	{/if}
-	{#if can && room > 0}
-		<label
-			for={id}
-			class={cn(
-				'grid cursor-pointer place-items-center gap-1 rounded-lg border-2 border-dashed border-border px-3 text-center transition-colors hover:border-brand-400 hover:bg-brand-muted/30',
-				refs.length + pending.length > 0 ? 'py-3' : 'py-6',
-				over && 'border-brand-400 bg-brand-muted/30',
-				invalid && 'border-destructive'
-			)}
-			ondragover={(e) => { e.preventDefault(); over = true; }}
-			ondragleave={() => (over = false)}
-			ondrop={(e) => { e.preventDefault(); over = false; start([...(e.dataTransfer?.files ?? [])]); }}
-		>
-			<Icon icon="lucide:upload" class={cn('text-muted-foreground', refs.length + pending.length > 0 ? 'size-4' : 'size-6')} />
-			<span class="text-sm font-medium text-muted-foreground">{kind.multiple ? t('dropFiles') : t('dropFile')}</span>
-			<span class="text-meta">
-				{[kind.multiple ? t('upToFiles').replace('{n}', String(MAX_FILES)) : '', kind.multiple ? t('sizeEach').replace('{size}', size) : size, types].filter(Boolean).join(' · ')}
-			</span>
-			<input {id} type="file" class="sr-only" accept={kind.accept.join(',')} multiple={kind.multiple} onchange={(e) => { start([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
-		</label>
-	{/if}
+<div class="grid min-w-0 gap-1">
+	<div
+		class={cn(
+			'flex min-h-9 min-w-0 flex-wrap items-center gap-1 rounded-sm border border-input bg-background p-1 shadow-xs transition-colors dark:bg-input/30',
+			over && 'border-brand-400 bg-brand-muted/30',
+			invalid && 'border-destructive',
+			disabled && 'opacity-50'
+		)}
+		data-file-field
+		data-over={over || undefined}
+		role="group"
+		ondragover={(e) => { if (!can || room <= 0) return; e.preventDefault(); over = true; }}
+		ondragleave={() => (over = false)}
+		ondrop={(e) => { e.preventDefault(); over = false; if (can) start([...(e.dataTransfer?.files ?? [])]); }}
+	>
+		<FileList {refs} {pending} onRemove={can ? remove : undefined} onRetry={can ? (p) => run(retry(p)) : undefined} onDismiss={(p) => (pending = pending.filter((x) => x.key !== p.key))} {disabled}>
+			{#if can && room > 0}
+				{@const empty = refs.length + pending.length === 0}
+				<label
+					for={id}
+					class={cn(
+						'inline-flex cursor-pointer items-center gap-1.5 rounded-sm text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-within:ring-2 focus-within:ring-ring/50',
+						empty ? 'h-7 px-2' : 'size-7 justify-center'
+					)}
+					title={hint}
+					data-file-add
+				>
+					<Icon icon={empty ? 'lucide:upload' : 'lucide:plus'} class="size-4 shrink-0" />
+					<span class={empty ? undefined : 'sr-only'}>{label}</span>
+					<span id={hintId} class="sr-only">{hint}</span>
+					<input {id} type="file" class="sr-only" accept={kind.accept.join(',')} multiple={kind.multiple} aria-describedby={hintId} onchange={(e) => { start([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
+				</label>
+			{:else if refs.length + pending.length === 0}
+				<span class="px-2 text-sm text-muted-foreground">{t('none')}</span>
+			{/if}
+		</FileList>
+	</div>
 	{#each problems as p (p)}<p class="text-xs text-destructive">{p}</p>{/each}
 </div>

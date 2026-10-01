@@ -34,7 +34,7 @@ export const UI_ZH: { readonly [k in UiTextKey]: string } = {
 	today: '今天', previous: '上一个', next: '下一个', more: '还有 {n} 项', day: '日', week: '周', month: '月', notifications: '通知',
 	fullScreen: '全屏', exitFullScreen: '退出全屏', createdAt: '{who} 于 {when} 创建', updatedAt: '{who} 于 {when} 更新',
 	unsaved: '未保存的更改', discard: '放弃', discardDraft: '放弃未保存的更改？', copy: '复制', copied: '已复制',
-	addressSearchUnavailable: '地址搜索不可用', dropFiles: '将文件拖放到此处或点击浏览', dropFile: '将文件拖放到此处或点击浏览',
+	addressSearchUnavailable: '地址搜索不可用', addFiles: '添加文件', addFile: '添加文件', fileSize: '大小', fileType: '类型', uploaded: '上传时间', uploadedBy: '上传者',
 	upToFiles: '最多 {n} 个文件', sizeEach: '每个 {size}', fileCount: '{n} 个文件', download: '下载', preview: '预览', retry: '重试',
 	uploadFailed: '上传失败', countryCode: '国家代码', invalidPhone: '请输入有效的电话号码', currency: '货币',
 	mobileNumber: '手机号码', sendCode: '发送验证码', resendCode: '重新发送验证码', verify: '验证', code: '六位验证码', codeSent: '验证码已发送至 {phone}。', enterCode: '输入验证码', changeNumber: '更换号码',

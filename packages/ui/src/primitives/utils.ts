@@ -43,7 +43,7 @@ export const UI_TEXT = {
 	today: 'Today', previous: 'Previous', next: 'Next', more: '+{n} more', day: 'Day', week: 'Week', month: 'Month', notifications: 'Notifications',
 	fullScreen: 'Full screen', exitFullScreen: 'Exit full screen', createdAt: 'Created {when} by {who}', updatedAt: 'Updated {when} by {who}',
 	unsaved: 'Unsaved changes', discard: 'Discard', discardDraft: 'Discard your unsaved changes?', copy: 'Copy', copied: 'Copied',
-	dropFiles: 'Drop files here or click to browse', dropFile: 'Drop a file here or click to browse', upToFiles: 'Up to {n} files',
+	addFiles: 'Add files', addFile: 'Add file', upToFiles: 'Up to {n} files', fileSize: 'Size', fileType: 'Type', uploaded: 'Uploaded', uploadedBy: 'Uploaded by',
 	sizeEach: '{size} each', fileCount: '{n} files', download: 'Download', preview: 'Preview', retry: 'Retry', uploadFailed: 'Upload failed',
 	countryCode: 'Country code', invalidPhone: 'Enter a valid phone number', currency: 'Currency',
 	mobileNumber: 'Mobile number', sendCode: 'Send code', resendCode: 'Resend code', verify: 'Verify', code: 'Six-digit code', codeSent: 'We texted a code to {phone}.',
