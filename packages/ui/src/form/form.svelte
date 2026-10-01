@@ -4,6 +4,7 @@
 	import type { Outcome, Row } from './draft.js';
 	import type { ActionInputOf, ActionKey, CollectionKey, IdOf, InsertOf, RecordFieldOf, RecordOf } from '../views/bolt.js';
 	import type { FormState } from './form-state.svelte.js';
+	import type { RecordSection } from './section.svelte';
 
 	/**
 	 * `Form of="<c>" mode="create" | "update"` edits a collection's allowlisted fields; `Form of={{ action: '<c>.<a>' }}`
@@ -25,6 +26,8 @@
 		values?: Partial<S extends { action: infer A } ? ActionInputOf<A> : InsertOf<S>>;
 		/** A subset and order of the generated fields. */
 		fields?: readonly (S extends string ? RecordFieldOf<S> : string)[];
+		/** The generated fields grouped into collapsible `Section`s, in order; fields no section lists follow, untitled. */
+		sections?: readonly RecordSection[];
 		submit?: string;
 		/**
 		 * Every field shows its value as copyable text, no field chrome, and no submit: the form as a view of the row. It
@@ -50,7 +53,7 @@
 	import { formSpec } from './draft.js';
 	import FormBody from './form-body.svelte';
 
-	let { of, mode, id, record, values = {}, fields, submit, readonly, disabled, onOutcome, children, actions, class: className }: FormProps = $props();
+	let { of, mode, id, record, values = {}, fields, sections, submit, readonly, disabled, onOutcome, children, actions, class: className }: FormProps = $props();
 	const bolt = useBolt();
 	const host = useKinds();
 	const t = uiText();
@@ -114,6 +117,6 @@
 	<Alert variant="secondary">{t('notFound')}</Alert>
 {:else}
 	{#key `${spec.callable}:${id ?? ''}`}
-		<FormBody {spec} record={row} values={{ ...prefill, ...values as Row }} modelFields={exposure?.fields ?? {}} {act} {fields} {submit} {readonly} {disabled} {onOutcome} {children} {actions} class={className} />
+		<FormBody {spec} record={row} values={{ ...prefill, ...values as Row }} modelFields={exposure?.fields ?? {}} {act} {fields} {sections} {submit} {readonly} {disabled} {onOutcome} {children} {actions} class={className} />
 	{/key}
 {/if}

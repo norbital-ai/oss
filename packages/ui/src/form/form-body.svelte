@@ -9,11 +9,12 @@
 	import type { Fields } from '../kinds/kind.js';
 	import { locked, type FormSpec, type Outcome, type Row } from './draft.js';
 	import Field from './field.svelte';
+	import Section, { groupSections, type RecordSection } from './section.svelte';
 	import RecordInfo from './record-info.svelte';
 	import { FormState, provideForm, type Act } from './form-state.svelte.js';
 
-	let { spec, record, values, modelFields, act, fields, submit, readonly: asked, disabled: askedDisabled, onOutcome, children, actions, class: className }: {
-		spec: FormSpec; record: Row | null; values: Row; modelFields: Fields; act: Act; fields?: readonly string[]; submit?: string; readonly?: boolean;
+	let { spec, record, values, modelFields, act, fields, sections, submit, readonly: asked, disabled: askedDisabled, onOutcome, children, actions, class: className }: {
+		spec: FormSpec; record: Row | null; values: Row; modelFields: Fields; act: Act; fields?: readonly string[]; sections?: readonly RecordSection[]; submit?: string; readonly?: boolean;
 		disabled?: boolean; onOutcome?(outcome: Outcome): void; children?: Snippet<[FormState]>; actions?: Snippet<[FormState]>; class?: string;
 	} = $props();
 	// an update the viewer may read but not make is readonly whatever the page asked. A form is a boundary: a create
@@ -42,6 +43,13 @@
 <form class={className ?? 'grid gap-4'} onsubmit={send} novalidate aria-busy={form.pending}>
 	{#if children}
 		{@render children(form)}
+	{:else if sections && sections.length > 0}
+		{#each groupSections(sections, visible) as g, i (g.section?.name ?? '')}
+			{@const s = g.section}
+			<Section first={i === 0} title={s?.title} hint={s?.hint} name={s?.name} defaultOpen={s?.defaultOpen} summary={typeof s?.summary === 'function' ? s.summary(form.row) : s?.summary}>
+				{#each g.names as name (name)}<Field {name} />{/each}
+			</Section>
+		{/each}
 	{:else}
 		{#each visible as name (name)}<Field {name} />{/each}
 	{/if}

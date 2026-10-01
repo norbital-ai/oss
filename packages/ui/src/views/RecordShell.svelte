@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import type { CollectionKey, IdOf, InsertOf, Outcome, RecordFieldOf, Row } from './bolt.js';
 	import type { RunsForProps } from './RunsFor.svelte';
+	import type { RecordSection } from '../form/section.svelte';
 
 	/** An authored tab; a `keepAlive` tab stays mounted while hidden, so a form inside it keeps its state. */
 	export type RecordTab = { name: string; title: string; body: Snippet; icon?: string; keepAlive?: true };
@@ -15,6 +16,11 @@
 		values?: Partial<InsertOf<C>>;
 		/** Generated view: create offers these beyond `values`' keys; update shows only these, in this order (else every field). */
 		fields?: readonly RecordFieldOf<C>[];
+		/**
+		 * Generated view (read, edit, create): the fields grouped into collapsible `Section`s, in order; fields no section
+		 * lists follow in one untitled, always-open group. Titles and summaries arrive translated.
+		 */
+		sections?: readonly RecordSection[];
 		/** The heading; default the record's label fields by kind (a create: "New <singular>"). */
 		title?: string;
 		/** A line under the heading: text, or field names shown by kind (`['customer', 'due_on']` → `Acme · Jan 2, 2026`). */
@@ -56,6 +62,7 @@
 	import { TAB_LEVEL, Tabs, type TabItem } from '../primitives/tabs/index.js';
 	import Form from '../form/form.svelte';
 	import RecordInfo from '../form/record-info.svelte';
+	import Section, { groupSections } from '../form/section.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
 	import { useKinds } from '../kinds/context.js';
 	import { fieldsText } from '../kinds/kind.js';
@@ -71,7 +78,7 @@
 	import RunsFor from './RunsFor.svelte';
 	import Value from './Value.svelte';
 
-	let { of, id, mode = 'update', values = {}, fields = [], title, subtitle, icon, badge, hint, actions, trailing, tabs = [], runs = [], children, onDone }: RecordShellProps = $props();
+	let { of, id, mode = 'update', values = {}, fields = [], sections = [], title, subtitle, icon, badge, hint, actions, trailing, tabs = [], runs = [], children, onDone }: RecordShellProps = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
 	provideCollection(() => of);
@@ -154,6 +161,13 @@
 	const shown = $derived(mode === 'update' && fields.length > 0 ? fields.filter((f) => exposure === undefined || exposure.fields[f] !== undefined)
 		: exposure !== undefined ? Object.keys(exposure.fields).filter((f) => !exposure.fields[f]?.hidden)
 		: Object.keys(row ?? {}).filter((f) => !SYSTEM.has(f) && !f.startsWith('$')));
+	const relationKeys = $derived(Object.keys(exposure?.relations ?? {}));
+	// a section naming a field the collection does not have is ignored, said once to the author
+	untrack(() => {
+		const e = exposure;
+		if (e === undefined) return;
+		for (const s of sections) for (const f of s.fields) if (e.fields[f] === undefined && e.relations?.[f] === undefined) console.warn(`[ui] RecordShell ${of}: section ${s.name} names unknown field ${f}; ignored`);
+	});
 	let editing = $state(false);
 	function done(o: Outcome) {
 		notify(bolt, o);
@@ -208,38 +222,53 @@
 	</div>
 {/snippet}
 
+{#snippet fieldCell(f: string)}
+	<div class="flex flex-col gap-0.5 text-sm" data-field={f}>
+		<span class="text-muted-foreground text-xs">{label(bolt, of, f, exposure?.fields[f]?.label)}</span>
+		<span><Value value={row?.[f]} kind={exposure?.fields[f]} row={row ?? {}} name={f} /></span>
+	</div>
+{/snippet}
+
+{#snippet relationCell(fk: string)}
+	{@const v = row?.[fk]}
+	{@const rel = exposure!.relations![fk]!}
+	{@const target = rel.targets[0]!}
+	<div class="flex flex-col gap-0.5 text-sm" data-field={fk}>
+		<span class="text-muted-foreground text-xs">{label(bolt, of, fk)}</span>
+		{#if typeof v === 'string' && rel.targets.length === 1}
+			<button type="button" class="text-primary w-fit text-left underline-offset-4 hover:underline" onclick={() => openRecord(target, v)}>
+				<!-- the target's label; never its id (a target this viewer cannot read is a dash) -->
+				{#await bolt.get(target, v)}…{:then r}{[rel.label ?? kinds.catalog?.[target]?.label ?? []].flat().map((l) => show(r?.[l] ?? null, bolt.locale)).filter(Boolean).join(' · ') || '—'}{:catch}—{/await}
+			</button>
+		{:else}
+			<span><Value value={v} /></span>
+		{/if}
+	</div>
+{/snippet}
+
 {#snippet generated()}
 	{#if mode === 'create'}
-		<Form {of} mode="create" {values} {...fields.length > 0 ? { fields } : {}} onOutcome={done} />
+		<Form {of} mode="create" {values} {...fields.length > 0 ? { fields } : {}} {sections} onOutcome={done} />
 	{:else if editing && id !== undefined && shownPast === null}
-		<Form {of} mode="update" {id} record={row} onOutcome={done} />
+		<Form {of} mode="update" {id} record={row} {sections} onOutcome={done} />
 		<Button size="sm" variant="ghost" onclick={() => (editing = false)}>{msg(bolt, 'record.cancel', 'Cancel')}</Button>
 	{:else}
-		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2" data-view="record-generated">
-			{#each shown as f (f)}
-				{@const name = label(bolt, of, f, exposure?.fields[f]?.label)}
-				<div class="flex flex-col gap-0.5 text-sm" data-field={f}>
-					<span class="text-muted-foreground text-xs">{name}</span>
-				<span><Value value={row?.[f]} kind={exposure?.fields[f]} row={row ?? {}} name={f} /></span>
-				</div>
-			{/each}
-			<!-- one-relations: the target's label, opening the target record -->
-			{#each Object.entries(exposure?.relations ?? {}) as [fk, rel] (fk)}
-				{@const v = row?.[fk]}
-				{@const target = rel.targets[0]!}
-				<div class="flex flex-col gap-0.5 text-sm" data-field={fk}>
-					<span class="text-muted-foreground text-xs">{label(bolt, of, fk)}</span>
-					{#if typeof v === 'string' && rel.targets.length === 1}
-						<button type="button" class="text-primary w-fit text-left underline-offset-4 hover:underline" onclick={() => openRecord(target, v)}>
-							<!-- the target's label; never its id (a target this viewer cannot read is a dash) -->
-							{#await bolt.get(target, v)}…{:then r}{[rel.label ?? kinds.catalog?.[target]?.label ?? []].flat().map((l) => show(r?.[l] ?? null, bolt.locale)).filter(Boolean).join(' · ') || '—'}{:catch}—{/await}
-						</button>
-					{:else}
-						<span><Value value={v} /></span>
-					{/if}
-				</div>
-			{/each}
-		</div>
+		{#if sections.length > 0}
+			<div class="flex flex-col gap-3" data-view="record-generated">
+				{#each groupSections(sections, [...shown, ...relationKeys.filter((r) => !shown.includes(r))]) as g, i (g.section?.name ?? '')}
+					{@const s = g.section}
+					<Section first={i === 0} title={s?.title} hint={s?.hint} name={s?.name} defaultOpen={s?.defaultOpen} summary={typeof s?.summary === 'function' ? s.summary(row ?? {}) : s?.summary}>
+						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">{#each g.names as f (f)}{#if exposure?.relations?.[f]}{@render relationCell(f)}{:else}{@render fieldCell(f)}{/if}{/each}</div>
+					</Section>
+				{/each}
+			</div>
+		{:else}
+			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2" data-view="record-generated">
+				{#each shown as f (f)}{@render fieldCell(f)}{/each}
+				<!-- one-relations: the target's label, opening the target record -->
+				{#each relationKeys as fk (fk)}{@render relationCell(fk)}{/each}
+			</div>
+		{/if}
 		{#if row !== null}<RecordInfo row={row} class="mt-4" />{/if}
 		<div class="mt-3 flex items-center gap-2">
 			{#if exposure?.update !== undefined && shownPast === null}

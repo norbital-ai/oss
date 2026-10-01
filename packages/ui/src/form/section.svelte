@@ -31,6 +31,26 @@ collection and section; a section holding a field with an error opens itself.
 		class?: string;
 		children: Snippet;
 	};
+	/**
+	 * A declared section of a generated record view or form (`RecordShell`/`Form` `sections`): its fields, in order. Its
+	 * title and summary arrive translated; `summary` may read the row shown (the draft while editing).
+	 */
+	export type RecordSection = {
+		/** The stable key the open state is remembered under. */
+		name: string;
+		title?: string;
+		hint?: string;
+		fields: readonly string[];
+		defaultOpen?: boolean;
+		summary?: string | ((row: { readonly [field: string]: unknown }) => string);
+	};
+	/** `names` grouped by `sections` in each section's order; names no section lists follow in one untitled group. */
+	export function groupSections(sections: readonly RecordSection[], names: readonly string[]): { section?: RecordSection; names: string[] }[] {
+		const known = new Set(names);
+		const listed = new Set<string>();
+		const groups = sections.map((section) => ({ section, names: section.fields.filter((f) => known.has(f) && !listed.has(f) && listed.add(f)) }));
+		return [...groups, { names: names.filter((f) => !listed.has(f)) }].filter((g) => g.names.length > 0);
+	}
 	const SECTION = Symbol.for('norbital.ui.section');
 	/** A `Field` names itself to its section, so an error on it opens the section. */
 	export const claimSectionField = (name: string) => getContext<Set<string> | undefined>(SECTION)?.add(name);
