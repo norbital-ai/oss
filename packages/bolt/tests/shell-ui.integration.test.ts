@@ -4,6 +4,7 @@
 // for it; the sweep mounts every representation in the record sheet, whose module imports `$bolt`.
 import './setup-happy-dom.js';
 import { randomUUID } from 'node:crypto';
+import type { Window as HappyWindow } from 'happy-dom';
 import { flushSync, unmount, type Component } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EngineManifest } from '../src/engine/contracts.ts';
@@ -42,7 +43,7 @@ const manifest = {
 const page = (c: Component) => async () => ({ default: c });
 
 const views: (() => void)[] = [];
-afterEach(async () => { for (const off of views.splice(0)) off(); });
+afterEach(async () => { for (const off of views.splice(0)) off(); (window as unknown as HappyWindow).happyDOM.setWindowSize({ width: 1024, height: 768 }); });
 const tick = async () => { await new Promise((r) => setTimeout(r, 5)); flushSync(); };
 const until = async (ok: () => boolean | Promise<boolean>, n = 600) => { for (let i = 0; i < n && !await ok(); i++) await tick(); expect(await ok()).toBe(true); };
 
@@ -75,6 +76,41 @@ async function open(t: TestWorkspace, path: string, pages: ShellMountConfig['pag
 }
 
 describe('the shell renders a page (§5.10)', () => {
+	it('hoists mobile page identity into navigation and restores the desktop hero on resize', async () => {
+		const resize = (width: number) =>
+			(window as unknown as HappyWindow).happyDOM.setWindowSize({ width, height: 812 });
+		resize(375);
+		const t = await testWorkspace({ manifest });
+		const { target } = await open(t, '/app/desk/hero', { 'desk/hero': page(Hero) });
+		await until(() => target.querySelector('[data-export]') !== null);
+		// Prime happy-dom's change listener at its initial matching viewport before resizing away.
+		window.dispatchEvent(new Event('resize'));
+		const hero = () => target.querySelector('[data-layout=app-media-header]')!;
+		const nav = () => target.querySelector('main header');
+		await until(() => nav() !== null);
+		expect(nav()!.textContent).toContain('Dispatch board');
+		expect(nav()!.textContent).toContain('Every job due today');
+		expect(hero().textContent).not.toContain('Dispatch board');
+		expect(hero().textContent).not.toContain('Every job due today');
+		expect(hero().querySelector('[data-layout=frame]')).not.toBeNull();
+		expect(hero().querySelector('[data-export]')).not.toBeNull();
+		(target.querySelector('[data-export]') as HTMLButtonElement).click();
+		await until(() => nav()!.textContent!.includes('Dispatch overview'));
+		expect(nav()!.textContent).toContain('All jobs this week');
+		expect(target.textContent).not.toContain('Every job due today');
+		expect(hero().textContent).not.toContain('Dispatch overview');
+		resize(1024);
+		await until(() => nav() === null);
+		expect(hero().textContent).toContain('Dispatch overview');
+		expect(hero().textContent).toContain('All jobs this week');
+		resize(375);
+		await until(() => nav() !== null);
+		expect(nav()!.textContent).toContain('Dispatch overview');
+		expect(nav()!.textContent).toContain('All jobs this week');
+		expect(hero().textContent).not.toContain('All jobs this week');
+		expect(hero().querySelector('[data-export]')).not.toBeNull();
+	});
+
 	it('shows the AppShell identity and its actions in the hero above the page', async () => {
 		const t = await testWorkspace({ manifest });
 		const { target } = await open(t, '/app/desk/hero', { 'desk/hero': page(Hero) });

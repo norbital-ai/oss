@@ -38,6 +38,8 @@ export type InboundChat = {
 	readonly replyTo: string | null;
 	readonly text: string;
 	readonly attachments: readonly Attachment[];
+	readonly group?: boolean;
+	readonly participants?: readonly { readonly handle: string; readonly name: string | null }[];
 };
 /** One inbound message of a custom channel, as its `inbound` or `poll` mapping produces it. `id` deduplicates (a redelivery is one row); `thread` is the chat. */
 export type ReceivedMessage = {
@@ -48,6 +50,7 @@ export type ReceivedMessage = {
 	text: string;
 	replyTo?: string | null;
 	group?: boolean;
+	participants?: readonly { handle: string; name?: string | null }[];
 };
 export type Inbound<T> = T extends 'email'
 	? InboundMail

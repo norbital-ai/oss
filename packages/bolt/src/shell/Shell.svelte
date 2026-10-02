@@ -228,7 +228,8 @@
 	// the open app's pages strip is tab level 1 (ui's `TAB_LEVEL` context): a page's own Tabs nest under it as level 2
 	const strip = $derived(current.kind === 'page' && !site && boot?.visitor === null ? app?.pages ?? null : null);
 	setContext(TAB_LEVEL, { get level() { return strip === null ? undefined : 1; }, get shown() { return strip?.map((p) => p.label) ?? []; } });
-	const mobileTitle = $derived(app?.label ?? model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ?? boot?.workspace.name ?? '');
+	const mobileTitle = $derived(identity.current?.title ?? app?.label ?? model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ?? boot?.workspace.name ?? '');
+	const mobileDescription = $derived(identity.current?.description ?? app?.description ?? null);
 	// an administrator's team preview from the account menu: the teams Settings lists
 	async function teams(): Promise<{ id: string; name: string }[]> {
 		const r = await api.settings();
@@ -264,7 +265,7 @@
 				<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
 				{#if !site && (identity.current !== null || (app !== null && boot?.visitor === null))}
 					<MediaHeader src={identity.current?.banner === undefined || identity.current.banner === null ? app?.thumbnail ?? null : media(identity.current.banner)} icon={identity.current?.icon ?? app?.icon ?? null}
-						title={identity.current?.title ?? app?.label ?? null} description={identity.current?.description ?? app?.description ?? null}
+						title={narrow.current ? null : identity.current?.title ?? app?.label ?? null} description={narrow.current ? null : identity.current?.description ?? app?.description ?? null}
 						{...identity.current?.actions === undefined ? {} : { actions: identity.current.actions }} />
 				{/if}
 				{#if strip !== null}
@@ -360,7 +361,10 @@
 						<Button variant="ghost" size="icon" class="size-11" aria-label={t('Open navigation')} onclick={() => (navOpen = true)}>
 							<Icon name="lucide:panel-bottom" class="size-4" />
 						</Button>
-						<p class="min-w-0 flex-1 truncate text-sm font-medium">{mobileTitle}</p>
+						<Stack gap="none" grow>
+							<h1 class="truncate text-sm font-medium">{mobileTitle}</h1>
+							{#if mobileDescription}<p class="line-clamp-2 text-xs leading-snug text-muted-foreground">{mobileDescription}</p>{/if}
+						</Stack>
 						<Inline gap="xs" shrink={false} class="pr-[env(safe-area-inset-right)]">
 							{#if bolt !== null}<Bell {api} {bolt} {t} expanded={false} onNavigate={navigate} />{/if}
 							{#if boot.surfaces.agent}

@@ -21,7 +21,15 @@ export type WaSocket = {
 	ev: { on(event: string, listener: (arg: never) => void): void };
 	user?: { id: string; lid?: string } | undefined;
 	/** The account's LID↔phone map. A group mention names our LID, and `user.lid` is optional and often absent. */
-	signalRepository?: { getLIDForPN(pn: string): Promise<string | null> } | undefined;
+	signalRepository?:
+		| {
+				getLIDForPN?(pn: string): Promise<string | null>;
+				lidMapping?: {
+					getLIDForPN(pn: string): Promise<string | null>;
+					getPNForLID(lid: string): Promise<string | null>;
+				};
+		  }
+		| undefined;
 	sendMessage(
 		jid: string,
 		content:
@@ -31,7 +39,12 @@ export type WaSocket = {
 	): Promise<{ key?: { id?: string | null } } | undefined>;
 	sendPresenceUpdate?(type: 'composing' | 'paused', jid: string): Promise<void>;
 	requestPairingCode(phone: string): Promise<string>;
-	groupMetadata?(jid: string): Promise<{ subject?: string }>;
+	groupMetadata?(
+		jid: string
+	): Promise<{
+		subject?: string;
+		participants?: { id: string; phoneNumber?: string; name?: string; notify?: string }[];
+	}>;
 	logout(): Promise<void>;
 	end(error: Error | undefined): void;
 };
@@ -183,7 +196,7 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 						void (async () => {
 							lid =
 								s.user?.lid ??
-								(await s.signalRepository?.getLIDForPN(s.user?.id ?? '').catch(() => null)) ??
+								(await (s.signalRepository?.lidMapping?.getLIDForPN(s.user?.id ?? '') ?? s.signalRepository?.getLIDForPN?.(s.user?.id ?? ''))?.catch(() => null)) ??
 								undefined;
 						})();
 						set({ state: 'connected', as: s.user?.id ?? null });
@@ -212,20 +225,26 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 						);
 					}
 				});
-				// a group's name, read once per group per socket; a failed read names nothing
-				const subjects = new Map<string, Promise<string | null>>();
-				const subjectOf = (jid: string) => {
-					let got = subjects.get(jid);
-					if (got === undefined)
-						subjects.set(
-							jid,
-							(got = (s.groupMetadata?.(jid) ?? Promise.resolve<{ subject?: string }>({})).then(
-								(g) => g.subject?.trim() || null,
-								() => null
-							))
-						);
+				// Membership is transport metadata; applications decide which groups are relevant.
+				const groups = new Map<
+					string,
+					Promise<Awaited<ReturnType<NonNullable<WaSocket['groupMetadata']>>>>
+				>();
+				const groupOf = (jid: string) => {
+					let got = groups.get(jid);
+					if (got === undefined) {
+						got = (s.groupMetadata?.(jid) ?? Promise.resolve({})).catch(() => {
+							groups.delete(jid);
+							return {};
+						});
+						groups.set(jid, got);
+					}
 					return got;
 				};
+				on<{ id: string }>('group-participants.update', (p) => groups.delete(p.id));
+				on<{ id?: string }[]>('groups.update', (groups_) => {
+					for (const group of groups_) if (group.id !== undefined) groups.delete(group.id);
+				});
 				const deliver = async (messages: readonly unknown[], history: boolean) => {
 					for (const raw of messages) {
 						const found = whatsappMessage(raw, s.user?.id, {
@@ -234,8 +253,30 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 							...(lid === undefined ? {} : { lid })
 						});
 						if (found === null) continue;
-						const title = found['group'] === true ? await subjectOf(String(found['thread'])) : null;
-						const message = title === null ? found : { ...found, title };
+						const group = found['group'] === true ? await groupOf(String(found['thread'])) : null;
+						const participants =
+							group?.participants === undefined || ctx.syncOnly !== true
+								? undefined
+								: await Promise.all(
+										group.participants.map(async (participant) => ({
+											handle:
+												participant.phoneNumber ??
+												(participant.id.endsWith('@lid')
+													? ((await s.signalRepository?.lidMapping
+															?.getPNForLID(participant.id)
+															.catch(() => null)) ?? participant.id)
+													: participant.id),
+											name: participant.name ?? participant.notify ?? null
+										}))
+									);
+						const sender = isObj(found['from']) ? str(found['from']['handle']) : null;
+						const phone = sender?.endsWith('@lid') ? await s.signalRepository?.lidMapping?.getPNForLID(sender).catch(() => null) : sender;
+						const message = {
+							...found,
+							...(phone?.endsWith('@s.whatsapp.net') && isObj(found['from']) ? { from: { ...found['from'], handle: phone }, ...(found['group'] === true ? {} : { thread: phone.replace(/:\d+(?=@s\.whatsapp\.net$)/, '') }) } : {}),
+							...(group?.subject ? { title: group.subject } : {}),
+							...(participants === undefined ? {} : { participants })
+						};
 						const media = history ? null : await opened.download(raw).catch(() => null);
 						// a key distribution or a context stub rides beside a real message with nothing to say: no row for it
 						if (found['text'] === '' && media === null && found['deleted'] !== true) continue;
@@ -445,11 +486,15 @@ export function whatsappMessage(
 	const group = jid.endsWith('@g.us');
 	const sentAt = new Date(ts * 1000).toISOString();
 	const from = {
-		handle: group ? (str(key['participant']) ?? jid) : jid,
+		handle: group
+			? (str(key['participantPn']) ?? str(key['participant']) ?? jid)
+			: str(key['remoteJidAlt'])?.endsWith('@s.whatsapp.net')
+				? str(key['remoteJidAlt'])!
+				: jid,
 		name: str(msg['pushName'])?.trim() ?? null
 	};
 	const base = {
-		thread: jid,
+		thread: !group && from.handle.endsWith('@s.whatsapp.net') ? from.handle.replace(/:\d+(?=@s\.whatsapp\.net$)/, '') : jid,
 		sentAt,
 		from,
 		group,
@@ -475,7 +520,7 @@ export function whatsappMessage(
 			invocation: 'ambient'
 		};
 	}
-	const text = whatsappText(content);
+	const text = whatsappText(content) || (options.includeSent === true ? whatsappMediaDescription(content) : '');
 	const context = [
 		content['extendedTextMessage'],
 		content['imageMessage'],
@@ -503,6 +548,13 @@ export function whatsappMessage(
 		invocation: !group ? 'direct' : mentioned ? 'mention' : repliedToUs ? 'reply' : 'ambient'
 	};
 }
+function whatsappMediaDescription(content: Obj): string {
+	for (const [kind, label] of [['documentMessage', 'Document'], ['imageMessage', 'Image'], ['videoMessage', 'Video'], ['audioMessage', 'Audio']] as const) {
+		if (isObj(content[kind])) return `[${label}${str(content[kind]['fileName']) === null ? '' : `: ${str(content[kind]['fileName'])}`}]`;
+	}
+	return '';
+}
+
 function whatsappText(content: Obj): string {
 	for (const [k, f] of [
 		['conversation', null],

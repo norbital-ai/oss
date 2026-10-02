@@ -65,7 +65,7 @@
 	<!-- Dark scrim: strong at the copy edge, lighter toward the top; the copy sits on its bottom edge. -->
 	<Imposter placement="fill" class="bg-linear-to-t from-black/80 via-black/50 to-black/25">
 		<Stack gap="none" justify="end" fill>
-			<Inline align="end" gap="md" class={cn(INSET_X_CLASS, 'py-3')}>
+			<Inline align="end" justify="between" gap="md" class={cn(INSET_X_CLASS, 'py-3')}>
 				{#if icon}
 					<Frame
 						ratio="square"

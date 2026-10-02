@@ -12,6 +12,8 @@ export default model({
 		channel: { kind: 'text', optional: true },
 		thread: { kind: 'text', optional: true },
 		kind: { kind: 'text', optional: true },
+		/** Provider membership for personal sync, shared by the conversation rather than copied into every message. */
+		participants: { kind: 'json', optional: true },
 		parent: { kind: 'text', optional: true },
 		status: { kind: 'text', default: 'idle' },
 		lease_until: { kind: 'instant', optional: true },

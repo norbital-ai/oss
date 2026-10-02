@@ -108,7 +108,7 @@ it('custom personal accounts retain mapped source identity without invoking an e
 		expect((await sources.webhook(`partner~${account}`, request())).status).toBe(200);
 	}
 	expect((await personal.db.read([{ text: 'SELECT provider_id, message FROM sys_message ORDER BY provider_id', params: [] }]))[0]!.rows)
-		.toEqual([{ provider_id: 'alice:same', message: { sourceAccount: 'alice' } }, { provider_id: 'bob:same', message: { sourceAccount: 'bob' } }]);
+		.toEqual([{ provider_id: 'alice:same', message: { sourceAccount: 'alice', sourceUser: null, thread: 'alice:chat-1', group: false, title: null } }, { provider_id: 'bob:same', message: { sourceAccount: 'bob', sourceUser: null, thread: 'bob:chat-1', group: false, title: null } }]);
 	expect(posted).toEqual([]);
 	await sources.close();
 });

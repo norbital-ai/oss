@@ -594,10 +594,20 @@ describe('inbound history', () => {
 					{ text: 'SELECT direction, origin, message FROM sys_message', params: [] }
 				])
 			)[0]!.rows
-		).toEqual([{ direction: 'outbound', origin: 'sync', message: { sourceAccount: 'alice' } }]);
+		).toEqual([{ direction: 'outbound', origin: 'sync', message: { sourceAccount: 'alice', sourceUser: null, thread: '6591234567@s.whatsapp.net', group: false, title: null } }]);
 		await expect(personal.send('desk_wa', { to: 'customer', text: 'hello' })).rejects.toThrow(
 			/cannot send/
 		);
+	});
+	it('stores personal group membership once per conversation and keeps sync conversations outside envoys', async () => {
+		const personal = channels({ engine: { ...t.engine, manifest: { ...t.engine.manifest, channels: { desk_wa: { transport: 'whatsapp', syncOnly: true } } } }, clock: () => t.clock.now() });
+		const message = inbound({ id: 'group-history', thread: 'alice:group', group: true, history: true, sourceAccount: 'alice', sourceUser: 'alice-user', title: 'Customer group', participants: [{ handle: '6591009037@s.whatsapp.net', name: 'POC' }, { handle: 123 }] });
+		await personal.receive({ kind: 'inbound', channel: 'desk_wa', message });
+		expect((await t.db.read([{ text: 'SELECT title, envoy, participants FROM sys_conversation', params: [] }]))[0]!.rows).toEqual([{ title: 'Customer group', envoy: null, participants: [{ handle: '6591009037@s.whatsapp.net', name: 'POC' }] }]);
+		expect((await t.db.read([{ text: 'SELECT message FROM sys_message', params: [] }]))[0]!.rows).toEqual([{ message: { sourceAccount: 'alice', sourceUser: 'alice-user', thread: 'alice:group', group: true, title: 'Customer group' } }]);
+		await personal.receive({ kind: 'inbound', channel: 'desk_wa', message: inbound({ id: 'group-history', thread: 'alice:group', group: true, history: true, sourceAccount: 'alice', sourceUser: 'alice-user', participants: [] }) });
+		expect((await t.db.read([{ text: 'SELECT title, participants FROM sys_conversation', params: [] }]))[0]!.rows).toEqual([{ title: 'Customer group', participants: [] }]);
+		expect((await history()).length).toBe(1);
 	});
 	it('atomically queues native integration deliveries and survives restart/redelivery', async () => {
 		const engine = { ...t.engine, manifest: { ...t.engine.manifest, integrations: { sent_emails: { direction: 'one_way' as const, source: { channel: 'desk_wa' } } } } };

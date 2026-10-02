@@ -45,6 +45,11 @@ describe('WhatsApp (Baileys) messages', () => {
 			)
 		).toMatchObject({ direction: 'outbound', history: true, text: 'sent quote' });
 	});
+	it('preserves attachment-only history and uses supplied phone identity instead of an opaque LID', () => {
+		expect(whatsappMessage(wa({ remoteJid: 'opaque@lid', remoteJidAlt: '6591009037@s.whatsapp.net' }, { documentMessage: { fileName: 'scope.pdf' } }), self, { includeSent: true, history: true })).toMatchObject({
+			from: { handle: '6591009037@s.whatsapp.net' }, text: '[Document: scope.pdf]', history: true
+		});
+	});
 	it('our own echo and empty messages are not messages', () => {
 		expect(
 			whatsappMessage(
@@ -247,6 +252,26 @@ describe('the WhatsApp Web link', () => {
 		await wait(30);
 		expect(attempts).toBe(3);
 		expect(events).toMatchObject([{ message: { id: 'H1' } }, { message: { id: 'L1' } }]);
+		await link.close();
+	});
+	it('captures personal group membership and refreshes it after a participant change', async () => {
+		const { opened, provider } = fake();
+		const events: unknown[] = [];
+		const link = await provider.open({ channel: 'personal', syncOnly: true, credential: null, webhookUrl: 'https://ws.example', fetch: fakeFetch([]), save: async () => {}, changed: () => {}, emit: async (event) => { events.push(event); } });
+		await link.pair({});
+		const socket = opened[0]!.socket;
+		let membership = [{ id: 'opaque@lid', phoneNumber: '6591009037@s.whatsapp.net', notify: 'POC' }];
+		let reads = 0;
+		socket.groupMetadata = async () => { reads++; return { subject: 'Customer group', participants: membership }; };
+		const message = (id: string) => ({ key: { id, remoteJid: '120363123@g.us', participant: '6599999999@s.whatsapp.net' }, messageTimestamp: 1_790_000_000, message: { conversation: 'Discuss the project' } });
+		opened[0]!.ev.emit('messaging-history.set', { messages: [message('past')] });
+		await wait(10);
+		membership = [];
+		opened[0]!.ev.emit('group-participants.update', { id: '120363123@g.us' });
+		opened[0]!.ev.emit('messages.upsert', { type: 'notify', messages: [message('live')] });
+		await wait(10);
+		expect(reads).toBe(2);
+		expect(events).toMatchObject([{ message: { id: 'past', history: true, participants: [{ handle: '6591009037@s.whatsapp.net', name: 'POC' }] } }, { message: { id: 'live', participants: [] } }]);
 		await link.close();
 	});
 	it('emits inbound messages for this channel and sends only while connected', async () => {

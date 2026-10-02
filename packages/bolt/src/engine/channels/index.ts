@@ -226,15 +226,21 @@ export function channels(cfg: ChannelsConfig) {
 			return null;
 		}
 		const stored = inbound.deleted ? [] : await files(inbound, bins, c, now);
-		const envoy = Object.entries(m.envoys).find(([, e]) => e['channel'] === channel)?.[0] ?? null;
+		const envoy = specOf(channel)['syncOnly'] === true ? null : Object.entries(m.envoys).find(([, e]) => e['channel'] === channel)?.[0] ?? null;
 		// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it
 		c.cte(
 			'conv',
-			`INSERT INTO sys_conversation (id, channel, thread, kind, envoy, title) VALUES (${c.p(conv)}, ${c.p(channel)}, ${c.p(inbound.thread)},
-			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(envoy)}, ${c.p(inbound.title)}) ON CONFLICT (id) DO UPDATE SET title = excluded.title
-			WHERE excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title RETURNING id`
+			`INSERT INTO sys_conversation (id, channel, thread, kind, envoy, title, participants) VALUES (${c.p(conv)}, ${c.p(channel)}, ${c.p(inbound.thread)},
+			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(envoy)}, ${c.p(inbound.title)}, ${c.p(specOf(channel)['syncOnly'] === true ? inbound.participants ?? null : null)}::jsonb) ON CONFLICT (id) DO UPDATE SET
+			title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants)
+			WHERE (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
+			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) RETURNING id`
 		);
 		const text = inbound.deleted ? '' : inbound.text;
+		const source = specOf(channel)['syncOnly'] === true && isObj(message) ? {
+			sourceAccount: message['sourceAccount'] ?? null, sourceUser: message['sourceUser'] ?? null,
+			thread: inbound.thread, group: inbound.group, title: inbound.title
+		} : null;
 		c.cte(
 			'msg',
 			`INSERT INTO sys_message (id, conversation, channel, direction, origin, provider_id, version, sender, sender_name, sent_at, invocation,
@@ -242,13 +248,13 @@ export function channels(cfg: ChannelsConfig) {
 		VALUES (${c.p(id)}, ${c.p(conv)}, ${c.p(channel)}, ${c.p(specOf(channel)['syncOnly'] === true && isObj(message) && message['direction'] === 'outbound' ? 'outbound' : 'inbound')}, ${c.p(inbound.history || specOf(channel)['syncOnly'] === true ? 'sync' : 'live')}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
 			${c.p(inbound.sender)}, ${c.p(inbound.senderName)}, ${c.p(inbound.sentAt)}::timestamptz, ${c.p(inbound.invocation)}, ${c.p(preview(text))}, ${c.p(text)},
 			${c.p(inbound.email)}::jsonb, ${c.p(stored)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'},
-			${c.p(specOf(channel)['syncOnly'] === true && isObj(message) ? { sourceAccount: message['sourceAccount'] ?? null, sourceUser: message['sourceUser'] ?? null } : null)}::jsonb, ${c.p(now)}::timestamptz)
+			${c.p(source)}::jsonb, ${c.p(now)}::timestamptz)
 		ON CONFLICT (id) DO UPDATE SET ${
 			inbound.deleted
 				? `deleted_at = excluded.deleted_at, ${TOMBSTONE} WHERE sys_message.deleted_at IS NULL`
 				: // an admitted row is the agent's transcript: an edit never rewrites what the model already saw
 					`text = ${KEEP('text')}, preview = ${KEEP('preview')}, email = ${KEEP('email')}, files = ${KEEP('files')}, version = excluded.version,
-				sender_name = coalesce(excluded.sender_name, sys_message.sender_name), edited_at = ${c.p(now)}::timestamptz
+				sender_name = coalesce(excluded.sender_name, sys_message.sender_name), message = coalesce(excluded.message, sys_message.message), edited_at = ${c.p(now)}::timestamptz
 			WHERE sys_message.deleted_at IS NULL AND excluded.version > sys_message.version`
 		}
 		RETURNING (xmax = 0) AS inserted`

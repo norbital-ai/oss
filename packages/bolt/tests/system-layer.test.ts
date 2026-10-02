@@ -104,7 +104,7 @@ const TODAY: { [table: string]: Shape } = {
 		columns: { name: 'text not null', mime: 'text not null', size: 'int not null', key: 'text not null', sha256: 'text not null', field: 'text not null',
 			revision: 'int not null default 1', approval_id: 'text', created_at: 'timestamptz not null', created_by: 'text', updated_at: 'timestamptz', updated_by: 'text' } },
 	sys_conversation: { key: 'id text primary key',
-		columns: { created_at: 'timestamptz not null default now()', title: 'text', owner: 'text', envoy: 'text', channel: 'text', thread: 'text', kind: 'text', parent: 'text',
+		columns: { created_at: 'timestamptz not null default now()', title: 'text', owner: 'text', envoy: 'text', channel: 'text', thread: 'text', kind: 'text', participants: 'jsonb', parent: 'text',
 			status: 'text not null default idle', lease_until: 'timestamptz', model: 'text not null default default',
 			plan: 'jsonb', goals: 'jsonb', read: 'jsonb not null default {}', revision: 'int not null default 1', updated_at: 'timestamptz not null default now()' } },
 	sys_message: { key: 'id text primary key',

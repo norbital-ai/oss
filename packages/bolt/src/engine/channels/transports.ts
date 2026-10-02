@@ -19,6 +19,7 @@ export type Inbound = {
 	mentions: readonly string[];
 	/** A group chat's own name, when the provider says it (Telegram's `chat.title`, WhatsApp's group subject). */
 	title: string | null;
+	participants?: readonly { handle: string; name: string | null }[];
 	/** Email only: the full mail (GAP-C1) and the ids it references, for reply matching. */
 	email: Obj | null; references: readonly string[];
 };
@@ -40,7 +41,11 @@ export function decodeInbound(transport: string, m: Json): Inbound | null {
 		return [{ fileName: a['fileName'] as string, mimeType: a['mimeType'] as string, byteLength: a['byteLength'],
 			...(typeof a['bin'] === 'number' ? { bin: a['bin'] } : {}), ...(a['file'] === undefined ? {} : { file: a['file'] }) }];
 	});
-	const facts = { sentAt, version: iso(m['version']) ?? sentAt, deleted: m['deleted'] === true, history: m['history'] === true, attachments };
+	const participants = Array.isArray(m['participants']) ? m['participants'].flatMap((participant) => {
+		if (!isObj(participant) || str(participant['handle']) === null) return [];
+		return [{ handle: str(participant['handle'])!, name: str(participant['name']) }];
+	}) : undefined;
+	const facts = { ...(participants === undefined ? {} : { participants }), sentAt, version: iso(m['version']) ?? sentAt, deleted: m['deleted'] === true, history: m['history'] === true, attachments };
 	const text = typeof m['text'] === 'string' ? m['text'] : '';
 	if (transport === 'email') {
 		const from = isObj(m['from']) ? str(m['from']['address']) : null;
