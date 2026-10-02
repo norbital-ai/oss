@@ -6,7 +6,11 @@ import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { CollectionName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
 import { createBolt, type BoltConfig } from '../client/bolt.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
-import { decodeConnection, type ChannelConnection } from '../engine/channels/connection.ts';
+import {
+	decodeConnection,
+	type ChannelConnection,
+	type ProviderChoice
+} from '../engine/channels/connection.ts';
 import { BOLT, HEADERS, PATHS, uuidv7, type AgentRow, type PushBody } from '../protocol/wire.ts';
 import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
@@ -120,16 +124,21 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		/**
 		 * A channel's connection to its provider (rule 61, `connection.ts`). The host holds the socket, so this is the only
 		 * place a channel can be paired; it names the channel, never the transport, so a host that answers a transport
-		 * resolves the channel itself. Administrators only — the host re-checks, this is not the gate.
+		 * resolves the channel itself. Personal sync accounts are managed by their owner; the host enforces access.
 		 */
 		transport: {
+			providers: (channel: string) =>
+				call<ProviderChoice[]>(
+					'GET',
+					`${BOLT}/transports/${encodeURIComponent(channel)}/providers`
+				),
 			accounts: (channel: string) =>
-				call<{ id: string; connection: ChannelConnection }[]>(
+				call<{ id: string; owner: string | null; connection: ChannelConnection }[]>(
 					'GET',
 					`${BOLT}/transports/${encodeURIComponent(channel)}/accounts`
 				),
 			addAccount: (channel: string, id: string) =>
-				call<{ id: string; connection: ChannelConnection }[]>(
+				call<{ id: string; owner: string | null; connection: ChannelConnection }[]>(
 					'POST',
 					`${BOLT}/transports/${encodeURIComponent(channel)}/accounts`,
 					{ id }

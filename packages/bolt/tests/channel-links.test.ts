@@ -13,7 +13,11 @@ import { channelLinks } from '../src/engine/channels/links.ts';
 import type { Authority, EngineManifest, TransportEvent } from '../src/engine/contracts.ts';
 
 /** A provider that pairs on `{ key }` and refuses anything else; it records what it opened with. */
-const fake = (id: string, opened: ChannelOpen[] = [], transport: ChannelProvider['transport'] = 'whatsapp'): ChannelProvider => ({
+const fake = (
+	id: string,
+	opened: ChannelOpen[] = [],
+	transport: ChannelProvider['transport'] = 'whatsapp'
+): ChannelProvider => ({
 	transport,
 	supportsSync: true,
 	id,
@@ -323,6 +327,9 @@ describe('a test send and provider text by locale', () => {
 				{
 					id: 'p',
 					label: { en: 'Official', zh: '官方' },
+					name: 'Provider',
+					description: { en: 'Sync messages', zh: '同步消息' },
+					icon: 'lucide:mail',
 					setup: {
 						kind: 'form',
 						steps: [{ text: { en: 'Paste it' } }, { text: 7 }],
@@ -333,6 +340,7 @@ describe('a test send and provider text by locale', () => {
 			test: { to: { name: 'to', label: 'To' } }
 		})!;
 		const p = c.providers![0]!;
+		expect(p).toMatchObject({ name: 'Provider', description: { en: 'Sync messages', zh: '同步消息' }, icon: 'lucide:mail' });
 		expect(localText(p.label, 'zh-CN')).toBe('官方');
 		expect(localText(p.setup.steps[0]!.text, 'zh')).toBe('Paste it');
 		expect(p.setup.steps).toHaveLength(1);
@@ -378,7 +386,8 @@ describe('personal channel accounts', () => {
 					id: `${id}:same`,
 					thread: `${id}:customer`,
 					text: 'Hi',
-					sourceAccount: id
+					sourceAccount: id,
+					sourceUser: null
 				}
 			}))
 		);
@@ -421,6 +430,7 @@ describe('personal channel account authorization', () => {
 	});
 	it('persists ownership, filters accounts, and refuses other owners and external members', async () => {
 		const sealed = new Map<string, Json>();
+		const events: TransportEvent[] = [];
 		const make = () =>
 			channelLinks({
 				manifest: {
@@ -435,7 +445,10 @@ describe('personal channel account authorization', () => {
 					if (value === null) sealed.delete(key);
 					else sealed.set(key, value);
 				},
-				webhookUrl: () => 'https://ws.example/hook'
+				webhookUrl: () => 'https://ws.example/hook',
+				emit: async (_, event) => {
+					events.push(event);
+				}
 			});
 		const links = make();
 		await links.resume();
@@ -458,6 +471,22 @@ describe('personal channel account authorization', () => {
 		expect(
 			(await links.admin(post({ id: 'shared' }), 'shared', 'accounts', member('alice'))).status
 		).toBe(403);
+		await links.pair('personal~phone', { key: 'alice' });
+		await links.webhook(
+			'personal~phone',
+			post({ id: 'one', thread: 'chat', sourceUser: 'forged' })
+		);
+		expect(events).toMatchObject([{ message: { sourceAccount: 'phone', sourceUser: 'alice' } }]);
+		expect(
+			(
+				await links.admin(
+					new Request('https://ws.example'),
+					'personal',
+					'providers',
+					member('alice')
+				)
+			).status
+		).toBe(200);
 		const resumed = make();
 		await resumed.resume();
 		const get = () => new Request('https://ws.example/x');
@@ -475,57 +504,129 @@ describe('personal channel account authorization', () => {
 	});
 });
 
-
 describe('provider-defined personal account transports', () => {
 	it('uses provider-authored registration for the channel mode and hides sending tests for sync', async () => {
-		const provider = { ...fake('adapter', [], 'telegram'), test: {}, describe: ({ syncOnly }: { syncOnly: boolean }) => ({ label: syncOnly ? 'Import account' : 'Send account', setup: { kind: 'form' as const, steps: [], fields: [{ name: 'readToken', label: 'Read token' }] } }) };
-		const links = channelLinks({ manifest: { channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } } }, providers: [provider], load: async () => null, store: async () => {}, webhookUrl: () => 'https://ws.example/hook' });
+		const provider = {
+			...fake('adapter', [], 'telegram'),
+			test: {},
+			describe: ({ syncOnly }: { syncOnly: boolean }) => ({
+				label: syncOnly ? 'Import account' : 'Send account',
+				setup: {
+					kind: 'form' as const,
+					steps: [],
+					fields: [{ name: 'readToken', label: 'Read token' }]
+				}
+			})
+		};
+		const links = channelLinks({
+			manifest: {
+				channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } }
+			},
+			providers: [provider],
+			load: async () => null,
+			store: async () => {},
+			webhookUrl: () => 'https://ws.example/hook'
+		});
 		await links.admin(post({ id: 'source' }), 'personal', 'accounts');
 		await links.pair('personal~source', { key: 'private' });
-		expect(links.state('personal~source')).toMatchObject({ providers: [{ id: 'adapter', label: 'Import account', setup: { fields: [{ name: 'readToken' }] } }] });
+		expect(links.state('personal~source')).toMatchObject({
+			providers: [
+				{ id: 'adapter', label: 'Import account', setup: { fields: [{ name: 'readToken' }] } }
+			]
+		});
 		expect(links.state('personal~source').test).toBeUndefined();
 		await links.close();
 	});
 
 	it('shares sealed credentials, routing and resume for any sync-capable provider', async () => {
-		const sealed = new Map<string, Json>(), events: TransportEvent[] = [];
-		const make = () => channelLinks({
-			manifest: { channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } } },
-			providers: [fake('custom-telegram', [], 'telegram')], load: async (name) => sealed.get(name) ?? null,
-			store: async (name, value) => { if (value === null) sealed.delete(name); else sealed.set(name, value); },
-			webhookUrl: (channel, transport) => `https://ws.example/hooks/bolt.${transport}/${channel}`,
-			emit: async (_transport, event) => { events.push(event); },
-		});
+		const sealed = new Map<string, Json>(),
+			events: TransportEvent[] = [];
+		const make = () =>
+			channelLinks({
+				manifest: {
+					channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } }
+				},
+				providers: [fake('custom-telegram', [], 'telegram')],
+				load: async (name) => sealed.get(name) ?? null,
+				store: async (name, value) => {
+					if (value === null) sealed.delete(name);
+					else sealed.set(name, value);
+				},
+				webhookUrl: (channel, transport) => `https://ws.example/hooks/bolt.${transport}/${channel}`,
+				emit: async (_transport, event) => {
+					events.push(event);
+				}
+			});
 		const links = make();
 		await links.admin(post({ id: 'source' }), 'personal', 'accounts');
 		await links.pair('personal~source', { key: 'private' });
 		await links.close();
 		const resumed = make();
 		await resumed.resume();
-		expect(resumed.state('personal~source')).toMatchObject({ transport: 'telegram', pairedAs: 'private' });
+		expect(resumed.state('personal~source')).toMatchObject({
+			transport: 'telegram',
+			pairedAs: 'private'
+		});
 		await resumed.webhook('personal~source', post({ id: 'one', thread: 'chat' }));
-		expect(events).toEqual([{ kind: 'inbound', channel: 'personal', message: { id: 'source:one', thread: 'source:chat', sourceAccount: 'source' } }]);
+		expect(events).toEqual([
+			{
+				kind: 'inbound',
+				channel: 'personal',
+				message: {
+					id: 'source:one',
+					thread: 'source:chat',
+					sourceAccount: 'source',
+					sourceUser: null
+				}
+			}
+		]);
 		await resumed.unpair('personal~source');
 		expect(sealed.has('personal~source')).toBe(false);
 		await resumed.close();
 	});
 	it('uses the authored custom inbound signature with each account own sealed credential', async () => {
-		const sealed = new Map<string, Json>(), events: TransportEvent[] = [];
+		const sealed = new Map<string, Json>(),
+			events: TransportEvent[] = [];
 		const links = channelLinks({
-			manifest: { channels: { own: { transport: 'custom', accounts: true, syncOnly: true, inbound: { verify: { scheme: 'bearer', secret: 'token' } } } } },
-			providers: [], load: async (key) => sealed.get(key) ?? null,
-			store: async (key, value) => { if (value === null) sealed.delete(key); else sealed.set(key, value); },
+			manifest: {
+				channels: {
+					own: {
+						transport: 'custom',
+						accounts: true,
+						syncOnly: true,
+						inbound: { verify: { scheme: 'bearer', secret: 'token' } }
+					}
+				}
+			},
+			providers: [],
+			load: async (key) => sealed.get(key) ?? null,
+			store: async (key, value) => {
+				if (value === null) sealed.delete(key);
+				else sealed.set(key, value);
+			},
 			webhookUrl: (channel) => `https://ws.example/hooks/bolt.custom/${channel}`,
-			emit: async (_transport, event) => { events.push(event); },
+			emit: async (_transport, event) => {
+				events.push(event);
+			}
 		});
 		await links.admin(post({ id: 'source' }), 'own', 'accounts');
 		await links.pair('own~source', { token: 'secret' });
-		expect(links.state('own~source')).toMatchObject({ about: { webhookUrl: 'https://ws.example/hooks/bolt.custom/own~source' } });
+		expect(links.state('own~source')).toMatchObject({
+			about: { webhookUrl: 'https://ws.example/hooks/bolt.custom/own~source' }
+		});
 		expect((await links.webhook('own~source', post({ item: 1 }))).status).toBe(401);
-		const request = new Request('https://ws.example/x', { method: 'POST', headers: { authorization: 'Bearer secret' }, body: '{"item":1}' });
+		const request = new Request('https://ws.example/x', {
+			method: 'POST',
+			headers: { authorization: 'Bearer secret' },
+			body: '{"item":1}'
+		});
 		expect((await links.webhook('own~source', request)).status).toBe(200);
-		expect(events).toMatchObject([{ channel: 'own', message: { sourceAccount: 'source', body: { item: 1 } } }]);
-		expect((events[0] as Extract<TransportEvent, { kind: 'inbound' }>).message).not.toHaveProperty('id');
+		expect(events).toMatchObject([
+			{ channel: 'own', message: { sourceAccount: 'source', body: { item: 1 } } }
+		]);
+		expect((events[0] as Extract<TransportEvent, { kind: 'inbound' }>).message).not.toHaveProperty(
+			'id'
+		);
 		await links.close();
 	});
 });

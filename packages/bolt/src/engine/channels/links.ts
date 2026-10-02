@@ -158,6 +158,9 @@ export function channelLinks(h: LinkHost) {
 		const base = held?.link.connection() ?? connection(channel, transport, 'unpaired');
 		const descriptions = ps.map((p): ProviderChoice => ({
 			id: p.id,
+			...(p.name === undefined ? {} : { name: p.name }),
+			...(p.description === undefined ? {} : { description: p.description }),
+			...(p.icon === undefined ? {} : { icon: p.icon }),
 			...(p.describe?.({
 				syncOnly: h.manifest.channels[baseOf(channel)]?.['syncOnly'] === true
 			}) ?? { label: p.label, setup: p.setup })
@@ -227,6 +230,8 @@ export function channelLinks(h: LinkHost) {
 									message: {
 										...e.message,
 										sourceAccount: account,
+										// Attribution comes from the registry, never from the provider's payload.
+										sourceUser: owners.get(base)?.[account] ?? null,
 										...(transport === 'custom'
 											? {}
 											: {
@@ -430,13 +435,19 @@ export function channelLinks(h: LinkHost) {
 				(member === undefined ||
 					spec?.['accounts'] !== true ||
 					spec['syncOnly'] !== true ||
-					(verb !== 'accounts' && owners.get(base)?.[channel.slice(base.length + 1)] !== member.id))
+					(verb !== 'accounts' &&
+						verb !== 'providers' &&
+						owners.get(base)?.[channel.slice(base.length + 1)] !== member.id))
 			)
 				return refuse(
 					403,
 					'forbidden',
 					'Only the account owner or an administrator manages a personal channel account.'
 				);
+			if (verb === 'providers' && channel === base && request.method === 'GET')
+				return spec === undefined
+					? refuse(404, 'notFound', 'Unknown channel.')
+					: Response.json({ value: state(channel).providers ?? [] });
 			if (verb === 'accounts' && h.manifest.channels[channel]?.['accounts'] === true) {
 				const previous = registration;
 				let release = () => {};
@@ -476,7 +487,11 @@ export function channelLinks(h: LinkHost) {
 					return Response.json({
 						value: [...ids]
 							.filter((id) => administrator || owners.get(channel)?.[id] === member!.id)
-							.map((id) => ({ id, connection: state(`${channel}~${id}`) }))
+							.map((id) => ({
+								id,
+								owner: owners.get(channel)?.[id] ?? null,
+								connection: state(`${channel}~${id}`)
+							}))
 					});
 				} finally {
 					release();

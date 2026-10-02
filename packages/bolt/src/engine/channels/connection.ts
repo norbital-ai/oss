@@ -67,7 +67,17 @@ export type SetupDescription = {
 	webhook?: boolean;
 };
 /** A provider as the shell offers it: a transport with several (WhatsApp) asks which, by `label`, first. */
-export type ProviderChoice = { id: string; label: LocalText; setup: SetupDescription };
+export type ProviderChoice = {
+	id: string;
+	label: LocalText;
+	setup: SetupDescription;
+	/** Short catalogue name; the full registration label remains in `label`. */
+	name?: LocalText;
+	/** Concise catalogue description, localized by the authored surface. */
+	description?: LocalText;
+	/** Iconify provider mark, with a generic plug fallback when absent. */
+	icon?: string;
+};
 /** A connected channel's test send: a short test message, to the handle the operator types in `to` (absent: to the connected account itself). */
 export type TestSend = { to?: SetupField };
 
@@ -200,6 +210,9 @@ export function decodeConnection(channel: string, v: Json): ChannelConnection | 
 					{
 						id: c['id'],
 						label,
+						...(textOf(c['name']) === null ? {} : { name: textOf(c['name'])! }),
+						...(textOf(c['description']) === null ? {} : { description: textOf(c['description'])! }),
+						...(typeof c['icon'] === 'string' ? { icon: c['icon'] } : {}),
 						setup: {
 							kind: k,
 							steps,

@@ -393,6 +393,19 @@ function provider(method: Method, o: MailboxOptions): ChannelProvider {
 		transport: 'email',
 		supportsSync: true,
 		id,
+		name:
+			method === 'google'
+				? 'Gmail'
+				: method === 'microsoft'
+					? 'Microsoft Outlook'
+					: t('Email', '电子邮件'),
+		icon:
+			method === 'google'
+				? 'logos:google-gmail'
+				: method === 'microsoft'
+					? 'logos:microsoft-icon'
+					: 'lucide:mail',
+		description: t('Sync messages from your inbox', '同步收件箱中的消息'),
 		label:
 			method === 'password'
 				? t('Mail server (IMAP + SMTP, password)', '邮件服务器（IMAP + SMTP，密码）')

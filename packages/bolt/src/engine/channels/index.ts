@@ -242,7 +242,7 @@ export function channels(cfg: ChannelsConfig) {
 		VALUES (${c.p(id)}, ${c.p(conv)}, ${c.p(channel)}, ${c.p(specOf(channel)['syncOnly'] === true && isObj(message) && message['direction'] === 'outbound' ? 'outbound' : 'inbound')}, ${c.p(inbound.history || specOf(channel)['syncOnly'] === true ? 'sync' : 'live')}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
 			${c.p(inbound.sender)}, ${c.p(inbound.senderName)}, ${c.p(inbound.sentAt)}::timestamptz, ${c.p(inbound.invocation)}, ${c.p(preview(text))}, ${c.p(text)},
 			${c.p(inbound.email)}::jsonb, ${c.p(stored)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'},
-			${c.p(specOf(channel)['syncOnly'] === true && isObj(message) ? { sourceAccount: message['sourceAccount'] ?? null } : null)}::jsonb, ${c.p(now)}::timestamptz)
+			${c.p(specOf(channel)['syncOnly'] === true && isObj(message) ? { sourceAccount: message['sourceAccount'] ?? null, sourceUser: message['sourceUser'] ?? null } : null)}::jsonb, ${c.p(now)}::timestamptz)
 		ON CONFLICT (id) DO UPDATE SET ${
 			inbound.deleted
 				? `deleted_at = excluded.deleted_at, ${TOMBSTONE} WHERE sys_message.deleted_at IS NULL`

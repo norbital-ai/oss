@@ -70,6 +70,9 @@ export function baileys(o: BaileysOptions = {}): ChannelProvider {
 		transport: 'whatsapp',
 		supportsSync: true,
 		id: 'baileys',
+		name: 'WhatsApp',
+		icon: 'simple-icons:whatsapp',
+		description: { en: 'Sync messages from your phone', zh: '同步手机中的消息' },
 		label: { en: 'Unofficial (WhatsApp Web)', zh: '非官方（WhatsApp 网页版）' },
 		setup: {
 			kind: 'qr',
