@@ -143,7 +143,7 @@ async function bundle(root: string, code: readonly Discovered[], errors: CheckDi
 				},
 			}],
 			build: { write: false, minify: 'oxc', sourcemap: true, rollupOptions: { input: ENTRY, preserveEntrySignatures: 'strict', output: {
-				format: 'es', entryFileNames: 'guest.mjs', codeSplitting: false,
+				format: 'es', entryFileNames: 'guest.mjs', codeSplitting: false, strictExecutionOrder: true,
 				// Compact bindings reduce isolate startup CPU; preserve names for runtime diagnostics and reflection.
 				minify: { compress: { keepNames: { function: true, class: true } }, mangle: { toplevel: true, keepNames: { function: true, class: true } }, codegen: { removeWhitespace: true, legalComments: 'inline' } },
 				comments: { legal: true },

@@ -114,6 +114,41 @@ c.transform(transformOrders); c.query('count', countOrders); export default c;`
 		} finally { isolate.dispose(); }
 	});
 
+	it('keeps dynamic-only module initialization at first invocation, once, with live repeated imports', async () => {
+		const root = workspace({
+			'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
+			'src/lib/dynamic.ts': `export { value, increment } from './dynamic-dependency.ts';`,
+			'src/lib/dynamic-dependency.ts': `globalThis.dynamicInitializations = (globalThis.dynamicInitializations ?? 0) + 1;
+export let value = 0;
+export function increment() { value += 1; }`,
+			'src/automation/+a.automation.ts': `import { automation } from '@norbital-ai/bolt';
+const a = automation({ description: 'Dynamic', on: { cron: '0 0 * * *' } });
+async function dynamicBody() {
+ const before = globalThis.dynamicInitializations ?? 0;
+ const first = await import('../lib/dynamic.ts');
+ first.increment();
+ const second = await import('../lib/dynamic.ts');
+ return { before, after: globalThis.dynamicInitializations, same: first === second, first: first.value, second: second.value };
+}
+a.run(dynamicBody); export default a;`
+		});
+		const result = await check(root);
+		expect(result.errors).toEqual([]);
+		const isolate = new ivm.Isolate({ memoryLimit: 256 });
+		try {
+			const context = await isolate.createContext();
+			await context.evalClosure(PRELUDE, [() => {}, randomStream('bolt:check'), digest, assetHook(result.guest!.assets)], { result: { reference: true } });
+			const module = await isolate.compileModule(result.guest!.source);
+			await module.instantiate(context, () => { throw new Error('unexpected external import'); });
+			await module.evaluate({ timeout: 1000 });
+			expect(await context.eval('globalThis.dynamicInitializations ?? 0', { copy: true })).toBe(0);
+			await context.global.set('__ns', module.namespace.derefInto());
+			const invoke = () => context.eval('__ns.default.automation.a.body()', { promise: true, copy: true });
+			expect(await invoke()).toEqual({ before: 0, after: 1, same: true, first: 1, second: 1 });
+			expect(await invoke()).toEqual({ before: 1, after: 1, same: true, first: 2, second: 2 });
+		} finally { isolate.dispose(); }
+	});
+
 	it('reports every error of every stage in one run', async () => {
 		const r = await check(
 			workspace({
