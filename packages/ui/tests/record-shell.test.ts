@@ -201,3 +201,32 @@ test('a create is headed "New <singular>", never the collection label', async ()
 	mounted.push(() => { unmount(app); target.remove(); });
 	assert.equal(document.querySelector('[data-record-head] h2').textContent.trim(), 'New job');
 });
+
+
+test('authored record fields restrict read relations and the subsequent edit form', async () => {
+ const { target } = await mountDeal('record', { of: 'deals', id: 'd1', fields: ['title'], sections: [{ name: 'main', title: 'Details', fields: ['title'] }] });
+ assert.ok(target.querySelector('[data-field=title]'));
+ assert.equal(target.querySelector('[data-field=kind]'), null);
+ assert.equal(target.querySelector('[data-field=channel]'), null);
+ assert.equal(target.querySelector('[data-field=client]'), null, 'an omitted relation must not be appended');
+ edit(target).click();
+ await settle();
+ assert.ok(target.querySelector('input[id$="-title"]'));
+ assert.equal(target.querySelector('[data-field=kind]'), null);
+ assert.equal(target.querySelector('[data-field=channel]'), null);
+ assert.equal(target.querySelector('[data-field=client]'), null);
+});
+
+test('an explicitly selected relation appears once by its customer label without a section', async () => {
+ const { bolt } = fake(DEAL);
+ const get = bolt.get;
+ bolt.get = (c, id, select, options) => c === 'clients' ? q({ id, name: 'Acme' }, 'get', [c, id]) : get(c, id, select, options);
+ const target = document.createElement('div'); document.body.append(target);
+ const app = mount(Harness, { target, props: { bolt, catalog: deals, part: 'record', props: { of: 'deals', id: 'd1', fields: ['title', 'client'] } } });
+ mounted.push(() => { unmount(app); target.remove(); });
+ await settle();
+ assert.equal(target.querySelectorAll('[data-field=client]').length, 1);
+ assert.match(target.querySelector('[data-field=client]').textContent, /Acme/);
+ assert.doesNotMatch(target.querySelector('[data-field=client]').textContent, /c1/);
+ assert.equal(target.querySelector('[data-field=kind]'), null);
+});

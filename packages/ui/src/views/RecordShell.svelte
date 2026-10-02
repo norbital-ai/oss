@@ -158,10 +158,10 @@
 
 	// ── the generated view: a display grid by the catalog's kinds (else the row's own keys); edits and creates are `Form` ──
 	const exposure = $derived(kinds.catalog?.[of]);
-	const shown = $derived(mode === 'update' && fields.length > 0 ? fields.filter((f) => exposure === undefined || exposure.fields[f] !== undefined)
+	const shown = $derived(mode === 'update' && fields.length > 0 ? fields.filter((f) => exposure === undefined || exposure.fields[f] !== undefined || exposure.relations?.[f] !== undefined)
 		: exposure !== undefined ? Object.keys(exposure.fields).filter((f) => !exposure.fields[f]?.hidden)
 		: Object.keys(row ?? {}).filter((f) => !SYSTEM.has(f) && !f.startsWith('$')));
-	const relationKeys = $derived(Object.keys(exposure?.relations ?? {}));
+	const relationKeys = $derived(Object.keys(exposure?.relations ?? {}).filter((f) => fields.length === 0 || fields.some((field) => field === f)));
 	// a section naming a field the collection does not have is ignored, said once to the author
 	untrack(() => {
 		const e = exposure;
@@ -250,7 +250,7 @@
 	{#if mode === 'create'}
 		<Form {of} mode="create" {values} {...fields.length > 0 ? { fields } : {}} {sections} onOutcome={done} />
 	{:else if editing && id !== undefined && shownPast === null}
-		<Form {of} mode="update" {id} record={row} {sections} onOutcome={done} />
+		<Form {of} mode="update" {id} record={row} {...fields.length > 0 ? { fields } : {}} {sections} onOutcome={done} />
 		<Button size="sm" variant="ghost" onclick={() => (editing = false)}>{msg(bolt, 'record.cancel', 'Cancel')}</Button>
 	{:else}
 		{#if sections.length > 0}
@@ -264,9 +264,9 @@
 			</div>
 		{:else}
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2" data-view="record-generated">
-				{#each shown as f (f)}{@render fieldCell(f)}{/each}
+				{#each shown as f (f)}{#if exposure?.relations?.[f]}{@render relationCell(f)}{:else}{@render fieldCell(f)}{/if}{/each}
 				<!-- one-relations: the target's label, opening the target record -->
-				{#each relationKeys as fk (fk)}{@render relationCell(fk)}{/each}
+				{#each relationKeys.filter((fk) => !shown.includes(fk)) as fk (fk)}{@render relationCell(fk)}{/each}
 			</div>
 		{/if}
 		{#if row !== null}<RecordInfo row={row} class="mt-4" />{/if}
