@@ -533,3 +533,51 @@ test('Table: `/` lists the search indexes and never filters; /semantic reads by 
 	assert.deepEqual(s.last().where, { id: { in: ['j1'] } });
 	v.done();
 });
+
+
+test('Table: pending description deadline clears busy, shows retry error and preserves prior filter', async () => {
+	let reject;
+	let attempts = 0;
+	const s = scripted({
+		describe: () =>
+			++attempts === 1
+				? new Promise((_resolve, no) => {
+						reject = no;
+					})
+				: Promise.resolve({ where: { status: { eq: 'done' } } })
+	});
+	const v = await show(
+		'table',
+		{ of: 'jobs', columns: ['title', 'hours'], where: { hours: { gte: 1 } } },
+		s.bolt
+	);
+	document.querySelector('[data-view-trigger]').click();
+	flushSync();
+	const input = document.querySelector('[data-describe] input');
+	input.value = 'open jobs';
+	input.dispatchEvent(new Event('input', { bubbles: true }));
+	const form = document.querySelector('[data-describe]');
+	form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	await settle();
+	assert.ok(document.querySelector('[data-view-loading]'));
+	assert.equal(form.querySelector('button[type="submit"]').disabled, true);
+	form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	await settle();
+	assert.equal(attempts, 1, 'the pending request owns the submission');
+	reject(
+		Object.assign(new Error('Describing this filter took too long. Try again.'), {
+			name: 'TimeoutError',
+			code: 'timeout'
+		})
+	);
+	await settle();
+	assert.equal(document.querySelector('[data-view-loading]'), null);
+	assert.deepEqual(s.last().where, { hours: { gte: 1 } });
+	assert.match(document.querySelector('[data-view-error]').textContent, /Try again/);
+	assert.equal(form.querySelector('button[type="submit"]').disabled, false);
+	form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	await settle();
+	assert.ok(document.querySelector('[data-view-applied]'));
+	assert.equal(document.querySelector('[data-view-error]'), null);
+	v.done();
+});

@@ -42,23 +42,23 @@ describe('channel accounts', () => {
 			});
 			return new Response(JSON.stringify({ value: [] }));
 		});
-		expect(await api.transport.accounts('sales_mail')).toEqual({ ok: true, value: [] });
-		expect(await api.transport.addAccount('sales_mail', 'phone-1')).toEqual({
+		expect(await api.transport.connections()).toEqual({ ok: true, value: [] });
+		expect(await api.transport.saveConnection({ id: 'phone-1', name: 'Phone', type: 'whatsapp' })).toEqual({
 			ok: true,
 			value: []
 		});
 		expect(calls).toEqual([
 			{
-				url: '/__bolt/transports/sales_mail/accounts',
+				url: '/__bolt/transports/',
 				method: 'GET',
 				credentials: 'same-origin',
 				body: undefined
 			},
 			{
-				url: '/__bolt/transports/sales_mail/accounts',
+				url: '/__bolt/transports/',
 				method: 'POST',
 				credentials: 'same-origin',
-				body: '{"id":"phone-1"}'
+				body: '{"id":"phone-1","name":"Phone","type":"whatsapp"}'
 			}
 		]);
 	});

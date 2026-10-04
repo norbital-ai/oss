@@ -16,10 +16,9 @@ declare module '../../src/index.ts' {
 		customFields: { rating: typeof m.rating };
 		teams: { Finance: unknown; Sales: unknown };
 		policies: { sales_rep: typeof import('./access.ts').salesRep };
-		channels: { whatsapp: typeof rt.whatsapp; support: typeof rt.support };
+		channelTypes: { whatsapp: typeof rt.whatsapp; support: typeof rt.support };
 		apps: { sales: unknown; portal: unknown };
 		automations: { nightly: typeof rt.nightly; follow_up: typeof rt.follow_up; render: typeof rt.render; inbound_hook: typeof rt.inbound_hook };
-		envoys: { desk: typeof rt.desk };
 		mcp: { erp: typeof rt.erp_mcp };
 		connections: { erp: typeof rt.erp };
 		pages: { sales: 'overview' | 'orders'; portal: 'tickets' };

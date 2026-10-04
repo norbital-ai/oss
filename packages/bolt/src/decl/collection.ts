@@ -7,7 +7,7 @@ import type {
 	RelNameOf, Row, SystemName, TeamName, VectorField, WritableField
 } from './names.ts';
 import type { Where } from './where.ts';
-import type { Msg, Vector } from './values.ts';
+import type { Json, Msg, Vector } from './values.ts';
 
 /**
  * How the in-app agent may call a query or action: `direct` (default), `confirm` (an in-app confirmation card first) or `never`.
@@ -56,10 +56,13 @@ type SelectionBase = { columns: readonly string[]; filled?: readonly string[]; w
  * The general shape of `collection()`'s spec: what callers `read`, the `create`/`update` input allowlists, `delete`, and the named
  * `queries`, `actions`, `similarity` searches and `notifications`.
  */
+export interface ProjectReadCtx extends QueryCtx { readonly admin: boolean; readonly policies: readonly string[]; readonly fields: readonly string[]; }
+export type ReadProjection = { fields: readonly string[]; context: readonly string[] };
+
 export type CollectionSpec = {
 	description?: string;
 	/** The fields and relations callers read (grants narrow them further). */
-	read: { fields: 'all' | readonly string[]; relations?: 'all' | readonly string[] };
+	read: { fields: 'all' | readonly string[]; relations?: 'all' | readonly string[]; projection?: ReadProjection };
 	/** The generated `create`: its input allowlist (`columns`, `filled`, and relation actions under `with`). */
 	create?: { input: SelectionBase };
 	/** The generated `update`: its input allowlist. */
@@ -87,7 +90,7 @@ type ActionsFor<A, Q> = { [N in keyof A]: N extends Reserved ? `error: '${N & st
 type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 type Full<K, S> = {
 	description?: string;
-	read: { fields: 'all' | readonly FieldName<K>[]; relations?: 'all' | readonly RelNameOf<K>[] };
+	read: { fields: 'all' | readonly FieldName<K>[]; relations?: 'all' | readonly RelNameOf<K>[]; projection?: { fields: readonly FieldName<K>[]; context: readonly FieldName<K>[] } };
 	create?: { input: Selection<K> };
 	update?: { input: Selection<K, 'update'> };
 	delete?: {} | { transform: true };
@@ -120,8 +123,9 @@ export type Collection<K extends ModelName | SystemName, S> = {
 	readonly name: K;
 	readonly spec: S;
 	/** The attached bodies, read by the compiler. */
-	readonly bodies: { transform?: Body; queries: Record<string, Body>; actions: Record<string, Body>; similarity: Record<string, object> };
+	readonly bodies: { project?: Body; transform?: Body; queries: Record<string, Body>; actions: Record<string, Body>; similarity: Record<string, object> };
 	/** The one transform for every write batch (R2); at most once. A one_way collection has none. */
+	project(body: (row: Readonly<Record<string, Json>>, ctx: ProjectReadCtx) => Promise<Readonly<Record<string, Json>>>): void;
 	transform(body: Direction<K> extends 'one_way' ? never : TransformBody<K, S>): void;
 	// The name alone infers `Q`: inferring from the body's return into `ValueOf` walked every kind's branch (~2 ms a call).
 	query<Q extends keyof Queries<S> & string>(name: Q,
@@ -155,6 +159,11 @@ export function collection<const K extends ModelName | SystemName, const S exten
 		name,
 		spec,
 		bodies,
+		project(body) {
+			if (spec.read.projection === undefined) throw new Error(`collection ${name}: read projection is not declared`);
+			if (bodies.project !== undefined) throw new Error(`collection ${name}: projection is attached twice`);
+			bodies.project = body;
+		},
 		transform(body) {
 			if (bodies.transform !== undefined) throw new Error(`collection ${name}: transform is attached twice`);
 			bodies.transform = body;

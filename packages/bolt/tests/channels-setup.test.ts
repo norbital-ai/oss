@@ -155,5 +155,5 @@ it('draws a custom channel with the workspace’s own file, and says so when the
 	expect(withFile.el.querySelector('[data-channel-view]')).toBeNull();
 	const missing = show({ connection: base({ transport: 'custom' }), transport: 'custom', workspace: {} });
 	await settle();
-	expect(missing.el.querySelector('[data-custom-missing]')!.textContent).toContain('src/channel/+support.connect.svelte');
+	expect(missing.el.querySelector('[data-custom-missing]')!.textContent).toContain('src/custom_channels/support/+channel.configuration.svelte');
 });

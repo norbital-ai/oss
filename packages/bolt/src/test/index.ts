@@ -31,7 +31,7 @@ import { fakeTransport, type FakeTransport } from '../engine/channels/transports
 export type TestOptions = {
 	/** A workspace directory, compiled by `bolt check`; any error fails the kit with every diagnostic. */
 	root?: string;
-	manifest?: EngineManifest; guest?: GuestProgram; transforms?: Iterable<string>;
+	manifest?: EngineManifest; guest?: GuestProgram; transforms?: Iterable<string>; projections?: Iterable<string>;
 	/**
 	 * With `root`: `'base'` (the default) builds the template's public pack (through `seed/seed.ts` when present),
 	 * `'sample'` loads the sample pack `bolt build --bank` wrote, `'none'` seeds nothing. A pack (rows per collection)
@@ -164,16 +164,19 @@ const checked = (root: string) => {
  * expect(r.kind).toBe('committed');
  */
 export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
-	let { manifest, guest, transforms } = o;
+	let { manifest, guest, transforms, projections } = o;
 	const seed = o.seed ?? (o.root === undefined ? 'none' : 'base');
 	if (o.root !== undefined) {
 		const c = await checked(o.root);
 		if (c.errors.length > 0 || c.manifest === undefined) throw new Error(`bolt check failed:\n${c.errors.map((d) => `  ${d.code} ${d.message}`).join('\n')}`);
-		({ manifest, guest, transforms } = { manifest: c.manifest, guest: c.guest, transforms: c.transforms });
+		({ manifest, guest, transforms, projections } = { manifest: c.manifest, guest: c.guest, transforms: c.transforms, projections: c.projections });
 	}
 	if (typeof seed === 'string' && seed !== 'none' && o.root === undefined) throw new Error(`testWorkspace: seed '${seed}' needs a root`);
 	if (manifest === undefined) throw new Error('testWorkspace takes a root or a manifest');
-	const m = manifest;
+	const m = { ...manifest, channels: { ...manifest.channels }, envoys: { ...manifest.envoys } };
+	// Hand-built engine fixtures supply the initial runtime projection; source artifacts supply seed records.
+	const initialChannels = { ...m.channels }, initialEnvoys = { ...m.envoys };
+	if (o.root === undefined) m.channelTypes = { ...m.channelTypes, ...initialChannels };
 	const inner = o.db ?? (await openPglite()).db;
 	const count = { reads: 0, writes: 0, reset() { count.reads = 0; count.writes = 0; } };
 	/** `t.crash`: the run whose end-of-run statement the dying host never sends. */
@@ -198,18 +201,31 @@ export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
 	const f: Fakes = { ...fakes(), ...(cassette === undefined ? {} : { ai: { requests: cassette.requests, remaining: cassette.remaining } }) };
 	const ai = o.ai ?? cassette?.port;
 	let now = o.now ?? '2026-09-25T10:00:00.000Z';
-	const e = engine({ manifest: m, db, ...(guest === undefined ? {} : { guest }), ...(transforms === undefined ? {} : { transforms }),
-		...(o.approval === undefined ? {} : { approval: o.approval }), console: () => {}, deadlines: f.deadlines, scope: 'test', clock: () => now,
+	const e = engine({ manifest: m, db, ...(guest === undefined ? {} : { guest }), ...(transforms === undefined ? {} : { transforms }), ...(projections === undefined ? {} : { projections }),
+		...(o.approval === undefined ? {} : { approval: o.approval }), deadlines: f.deadlines, scope: 'test', clock: () => now,
 		files: f.files, ...(o.http === undefined ? {} : { http: o.http }), ...(o.convert === undefined ? {} : { convert: o.convert }), ...(o.speech === undefined ? {} : { speech: o.speech }), ...(o.runs === undefined ? {} : { runs: o.runs }), transports: f.transports,
 		...(ai === undefined ? {} : { ai }), ...(o.agent === undefined ? {} : { agent: o.agent }), ...(o.envoys === undefined ? {} : { envoys: o.envoys }),
 		...(o.metering === undefined ? {} : { metering: o.metering }) }); // hook:decisions
 	await e.migrate({ accept: true });
+	if (o.root === undefined) {
+		for (const [id, c] of Object.entries(initialChannels)) {
+			if (typeof c['owner'] === 'string') await db.write({ text: `INSERT INTO sys_user (id, name, kind) VALUES ($1, $1, 'staff') ON CONFLICT DO NOTHING`, params: [c['owner']] });
+			await db.write({ text: `INSERT INTO sys_channel_connection (id, name, type, owner, configuration, revision) VALUES ($1, $2, $3, $4, '{}'::jsonb, 1)`, params: [id, String(c['name'] ?? id), String(c['type'] ?? id), c['owner'] as Json ?? null] });
+		}
+		for (const [id, e] of Object.entries(initialEnvoys)) {
+			await db.write({ text: `INSERT INTO sys_envoy (id, name, task, audience, policies, group_messages, delegation, triage, active, revision) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, true, 1)`, params: [id, String(e['name'] ?? id), String(e['task'] ?? ''), String(e['audience'] ?? 'private'), (e['policies'] ?? []) as Json, String(e['groupMessages'] ?? 'disabled'), String(e['delegation'] ?? 'disabled'), (e['triage'] ?? {}) as Json] });
+			const channels = Array.isArray(e['channels']) ? e['channels'] : typeof e['channel'] === 'string' ? [e['channel']] : [];
+			for (const channel of channels) await db.write({ text: `INSERT INTO sys_envoy_channel (id, envoy, channel_connection, revision) VALUES ($1, $2, $3, 1)`, params: [`${id}:${channel}`, id, String(channel)] });
+		}
+	}
+	await e.refreshMessaging();
 	await e.channels.activate();
 	e.channels.subscribe();
 	e.integrations.subscribe(Object.values(f.transports), randomUUID);
 	// hook:runtime — a pack's `{ asset }` files land in the fake store with their `sys_file` rows, as `bolt start` loads them
 	if (seed === 'base' || seed === 'sample') await (await import('../compiler/artifact/read.ts')).loadPackWithAssets(db, m, await namedPack(o.root!, m, seed), f.files, now);
 	else if (typeof seed === 'object' && Object.keys(seed).length > 0) await restore(m, db, seed, now);
+	await e.refreshMessaging();
 	await e.runs!.boot();
 	count.reset();
 	const calls = e.calls;

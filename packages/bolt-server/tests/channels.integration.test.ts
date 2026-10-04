@@ -19,9 +19,9 @@ import { start, type Server } from '../src/server.ts';
 const TRANSPORTS = ['whatsapp', 'telegram', 'slack', 'discord', 'wechat'] as const;
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' }, models: {}, relationships: {}, collections: {}, policies: {}, automations: {}, integrations: {}, pipelines: {}, teams: {},
-	channels: { wa_sales: { transport: 'whatsapp' }, wa_ops: { transport: 'whatsapp' }, tg: { transport: 'telegram' }, sl: { transport: 'slack' },
+	channelTypes: { wa_sales: { transport: 'whatsapp' }, wa_ops: { transport: 'whatsapp' }, tg: { transport: 'telegram' }, sl: { transport: 'slack' },
 		dc: { transport: 'discord' }, wx: { transport: 'wechat' }, partner: { transport: 'custom', inbound: { verify: { scheme: 'hmac-sha256', secret: 'signingSecret' } } }, mail: { transport: 'email' } },
-	connections: {}, envoys: {}, mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
+	channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
 } as unknown as EngineManifest;
 
 /** A provider that pairs on `{ key }` and turns each webhook body into one inbound message of its channel. */
@@ -85,6 +85,10 @@ beforeAll(async () => {
 	writeFixture();
 	server = await start(config(), { mail, log: () => {}, channelProviders: providers });
 	await signIn();
+	for (const [id, type] of Object.entries(manifest.channelTypes!)) {
+		const response = await call('POST', '/__bolt/transports/', { id, type: type.transport === 'custom' ? id : type.transport, name: id });
+		expect(response.status).toBe(200);
+	}
 }, 60_000);
 afterAll(async () => {
 	await server?.close();

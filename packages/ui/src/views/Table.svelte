@@ -18,7 +18,7 @@
 	 * type. Without `cell` the field kind's default renderer draws it (money, file, point, phone, enum chips, dates, …), and
 	 * a relation its target's label as a link (a many-relation: the first label and "+N").
 	 */
-	export type Col<R = Row, K = R> = { [F in keyof K & string]: F | { field: F; label?: string; width?: number; hide?: 'narrow'; edit?: true;
+	export type Col<R = Row, K = R> = { [F in keyof K & string]: F | { field: F; label?: string; description?: string; width?: number; hide?: 'narrow'; edit?: true;
 		cell?: Snippet<[{ row: R; value: K[F] | undefined }]> } }[keyof K & string];
 	/** A row action literal: `{ action: '<c>.<a>', input?, confirm? }`; the default input targets the row. */
 	export type RowAction<R = Row> = { [A in ActionKey]: { action: A; input?: (row: R) => ActionInputOf<A>; confirm?: string; label?: string } }[ActionKey];
@@ -55,6 +55,7 @@
 	import { watch as onChange_ } from 'runed';
 	import { Button } from '../primitives/button/index.js';
 	import * as Popover from '../primitives/popover/index.js';
+	import { Tooltip } from '../primitives/tooltip/index.js';
 	import { Combobox } from '../primitives/combobox/index.js';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
 	import { useKinds } from '../kinds/context.js';
@@ -297,6 +298,18 @@
 	};
 </script>
 
+{#snippet columnInfo(c: Col)}
+	{#if colOf(c).description}
+		<Tooltip text={colOf(c).description} side="bottom" contentClass="max-w-80 whitespace-normal">
+			{#snippet trigger({ props })}
+				<button {...props} type="button" class="text-muted-foreground grid size-6 shrink-0 place-items-center" aria-label={colLabel(c)}>
+					<Glyph name="info" class="size-3.5" />
+				</button>
+			{/snippet}
+		</Tooltip>
+	{/if}
+{/snippet}
+
 {#snippet cell(row: Row, col: { field: string; cell?: Snippet<[{ row: Row; value: Json | undefined }]> })}
 	{@const value = valueAt(row, col.field)}
 	{#if col.cell}{@render col.cell({ row, value })}{:else}<Value {value} kind={kindOf(col.field)} {row} ref={refOf(row, col.field)} name={col.field} dense />{/if}
@@ -402,6 +415,7 @@
 											{@attach measure(f)}>
 											<span class={['flex min-w-0 items-center gap-1', numeric(f) && 'justify-end']}>
 												<span class="truncate whitespace-nowrap">{colLabel(c)}</span>
+												{@render columnInfo(c)}
 												{#if isPinned}<Glyph name="pin" class="text-muted-foreground size-3 shrink-0" />{/if}
 												<Popover.Root>
 													<Popover.Trigger class={['text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100', 'opacity-0 group-hover:opacity-100']}
@@ -497,7 +511,7 @@
 										{#if rest.length > 0}
 											<span class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
 												{#each rest.slice(0, 4) as c (c.field)}
-													<span class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"><span class="shrink-0">{colLabel(c)}</span><span class="text-foreground/80 min-w-0 truncate [&_[data-enum-list]]:flex-nowrap">{@render cell(row, c)}</span></span>
+													<span class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(c)}<span class="text-foreground/80 min-w-0 truncate [&_[data-enum-list]]:flex-nowrap">{@render cell(row, c)}</span></span>
 												{/each}
 												{#if rest.length > 4}<span>{msg(bolt, 'table.moreFields', '+{n} fields', { n: rest.length - 4 })}</span>{/if}
 											</span>

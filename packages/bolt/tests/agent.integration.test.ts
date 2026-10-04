@@ -30,7 +30,7 @@ const manifest = {
 	},
 	mcp: { hq: { description: 'HQ tools', url: 'HQ_URL', auth: { bearer: 'HQ_TOKEN' } }, down: { description: 'Gone', url: 'DOWN_URL' } },
 	agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: { pricing: '---\ndescription: How we price\n---\n## Discounts\nTen percent.\n## Rounding\nUp.' } },
-	integrations: {}, pipelines: {}, teams: {}, automations: {}, channels: { field: { transport: 'whatsapp' } }, connections: {}, apps: {}, customFields: {},
+	integrations: {}, pipelines: {}, teams: {}, automations: {}, channels: { desk: { transport: 'whatsapp' }, field: { transport: 'whatsapp' } }, connections: {}, apps: {}, customFields: {},
 } as unknown as EngineManifest;
 const guest = { source: `export default { collection: { quotes: { bodies: { actions: {
 	mark: async (input, ctx) => (await ctx.act('quotes.create', { title: input.title })).records[0].id,

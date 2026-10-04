@@ -29,8 +29,7 @@ export type Transport = 'email' | ChatTransport | 'custom' | 'inbox';
 /** The transports that carry chats: one `InboundChat` and one chat outbound shape for all of them. */
 export type ChatTransport = 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'wechat';
 /** The transport a channel declares (`inbox` is the built-in in-app channel). */
-export type TransportOf<N> = N extends 'inbox' ? 'inbox'
-	: N extends keyof NamesPart<'channels'> ? NamesPart<'channels'>[N] extends { transport: infer T } ? T : never : never;
+export type TransportOf<N> = N extends 'inbox' ? 'inbox' : Transport;
 /** The literal an automation declares, by name. */
 export type AutomationSpecOf<A> = A extends AutomationName ? NamesPart<'automations'>[A] extends { spec: infer S } ? S : never : never;
 export type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : true) : never;

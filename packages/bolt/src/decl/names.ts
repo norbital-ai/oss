@@ -24,10 +24,9 @@ export type NamesShape = {
 	/** Each `src/i18n/+<locale>.messages.ts`: its keys must be the base's (checked by `Verify`). */
 	locales: { [locale: string]: { [key: string]: string } };
 	policies: { [policy: string]: unknown };
-	channels: { [channel: string]: unknown };
+	channelTypes: { [type: string]: unknown };
 	apps: { [app: string]: unknown };
 	automations: { [automation: string]: unknown };
-	envoys: { [envoy: string]: unknown };
 	mcp: { [server: string]: unknown };
 	skills: { [skill: string]: unknown };
 	connections: { [connection: string]: unknown };
@@ -79,16 +78,16 @@ export type CustomFieldName = keyof CustomFields & string;
 export type TeamName = keyof NamesPart<'teams'> & string;
 /** The policy names (`src/access/+<name>.policy.ts`). */
 export type PolicyName = keyof NamesPart<'policies'> & string;
-/** The channel names (`src/channel/+<c>.channel.ts`). */
-export type ChannelName = keyof NamesPart<'channels'> & string;
-/** A channel a person is notified on: a declared channel or the built-in `inbox`. */
+/** Runtime channel connection identifiers (`sys_channel_connection`). */
+export type ChannelName = string;
+/** A channel a person is notified on: a runtime connection or the built-in `inbox`. */
 export type PersonChannelName = 'inbox' | ChannelName;
 /** The app names (`src/app/<a>/+app.ts`). */
 export type AppName = keyof NamesPart<'apps'> & string;
 /** The automation names (`src/automation/+<a>.automation.ts`). */
 export type AutomationName = keyof NamesPart<'automations'> & string;
-/** The envoy names (`src/agent/envoy/+<e>.envoy.ts`). */
-export type EnvoyName = keyof NamesPart<'envoys'> & string;
+/** Runtime envoy identifiers (`sys_envoy`). */
+export type EnvoyName = string;
 /** The MCP server names (`src/agent/mcp/+<n>.mcp.ts`). */
 export type McpName = keyof NamesPart<'mcp'> & string;
 /** The agent skill names (`src/agent/skill/+<n>.skill.md`). */

@@ -24,7 +24,7 @@ export type ArtifactJson = {
 	/** The schema fingerprint `plan`/`applyPlan` record (rule 69). */
 	schema: string;
 	/** Collections that attach a transform body (the manifest strips bodies). */
-	transforms: readonly string[];
+	transforms: readonly string[]; projections: readonly string[];
 	client: { entry: string; css: readonly string[] };
 	/** sha256 of manifest.json, guest.mjs and every client file; `hash` covers all of it. */
 	hashes: { manifest: string; guest: string; client: string };
@@ -32,7 +32,7 @@ export type ArtifactJson = {
 	snapshot?: { key: string; sha: string };
 	hash: string;
 };
-export type Artifact = { dir: string; artifact: ArtifactJson; manifest: EngineManifest; guest: GuestProgram; transforms: readonly string[]; client: string };
+export type Artifact = { dir: string; artifact: ArtifactJson; manifest: EngineManifest; guest: GuestProgram; transforms: readonly string[]; projections: readonly string[]; client: string };
 
 export const sha = (b: Uint8Array | string) => createHash('sha256').update(b).digest('hex');
 // hook:cli-kit — a path join: a DOM test environment's transform rewrites `new URL(…, import.meta.url)` to an asset
@@ -75,15 +75,15 @@ export function readArtifact(dir: string, contracts: readonly string[] = [CONTRA
 		if (sha(bytes) !== hash) throw new BoltError('corrupt', 'admission', `the artifact's server asset ${hash.slice(0, 12)}… does not match its sha256; rebuild it`);
 		return [hash, bytes];
 	}));
-	const { format, contract, handle, name, schema, transforms, client, hashes, snapshot } = artifact;
+	const { format, contract, handle, name, schema, transforms, projections, client, hashes, snapshot } = artifact;
 	// a snapshot built for another host is not read; this host evaluates guest.mjs per invocation instead
 	if (snapshot?.key === SNAPSHOT_KEY) guest.snapshot = new Uint8Array(readFileSync(join(dir, 'guest.snapshot')));
 	const actual = { manifest: sha(manifestText), guest: sha(guest.source), client: treeHash(join(dir, 'client')) };
 	const bad = (Object.keys(actual) as (keyof typeof actual)[]).find((k) => hashes?.[k] !== actual[k])
 		?? (guest.snapshot !== undefined && sha(guest.snapshot) !== snapshot?.sha ? 'snapshot' : undefined)
-		?? (artifactHash(dir, { format, contract, handle, name, schema, transforms, client, hashes, ...(snapshot === undefined ? {} : { snapshot }) }) === artifact.hash ? undefined : 'hash');
+		?? (artifactHash(dir, { format, contract, handle, name, schema, transforms, projections, client, hashes, ...(snapshot === undefined ? {} : { snapshot }) }) === artifact.hash ? undefined : 'hash');
 	if (bad !== undefined) throw new BoltError('artifactDigest', 'admission', `the artifact's ${bad} does not match its recorded digest; rebuild it`);
-	return { dir, artifact, manifest, guest, transforms: artifact.transforms, client: join(dir, 'client') };
+	return { dir, artifact, manifest, guest, transforms: artifact.transforms, projections: artifact.projections, client: join(dir, 'client') };
 }
 
 /**

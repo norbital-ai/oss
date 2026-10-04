@@ -12,12 +12,12 @@
 	import { Button, Drawer, Icon, Sheet, TAB_LEVEL, Toaster, cn, openRecord, provideBolt, provideKinds, provideRepresentations, setUiText, type ViewBolt } from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
-	import { based, isOpenRoute, logical, recordsOf, route, withRecords, type AppSpec, type ShellBoot } from './nav.ts';
+	import { based, isOpenRoute, logical, recordsOf, route, withRecords, type AppSpec, type NavNode, type ShellBoot } from './nav.ts';
 	import { chosenLocale, frameworkText, setLocale, uiTextFor } from './i18n.ts';
 	import type { SyncStatus } from '../client/bolt.ts';
 	import { activeApp, media, navigationModel, NORBIUS } from './model.ts';
 	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
-	import { agentPanel, challengeQueue, setCurrentBolt, shellApi, shellBolt, type AgentRequest, type ShellBolt } from './runtime.ts';
+	import { agentPanel, challengeQueue, setCurrentBolt, shellApi, shellBolt, type AgentRequest, type ShellBolt, type ShellError } from './runtime.ts';
 	import Access from './Access.svelte';
 	import SignIn from './SignIn.svelte';
 	import Invite from './Invite.svelte';
@@ -63,7 +63,7 @@
 	let guest = $state<ShellBoot['workspace'] | null>(null);
 	const workspace = $derived(boot?.workspace ?? guest);
 	let bolt = $state<ShellBolt | null>(null);
-	let failure = $state<string | null>(null);
+	let failure = $state<(ShellError & { status: number }) | null>(null);
 	let agentRequest = $state<AgentRequest | null>(null);
 	// Norbius is `?agent=<conversation>` (`new`: a new one) beside any `?record=` stack, as the record sheets are: opening
 	// it pushes the param, closing removes it, a switch of conversation replaces it; a reload, back, forward or a shared
@@ -122,7 +122,8 @@
 	// a `site: true` page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
 	const site = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.site === true);
 	const publicApp = $derived(current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined);
-	watch(() => failure !== null || boot !== null || current.kind === 'signIn' || current.kind === 'invite', (ready) => {
+	let firstPageReady = $state(false);
+	watch(() => failure !== null || (boot !== null && (current.kind !== 'page' || firstPageReady || page === null)) || current.kind === 'signIn' || current.kind === 'invite', (ready) => {
 		if (ready) void tick().then(() => document.getElementById('bolt-loading')?.remove());
 	});
 
@@ -167,12 +168,13 @@
 			guest = r.error.workspace ?? null;
 			if (r.status === 401 && !isOpenRoute(config.manifest, current))
 				navigate(`/sign-in?next=${encodeURIComponent(url.pathname + url.search)}`, true);
-			else if (r.status !== 401) failure = r.error.message;
+			else if (r.status !== 401 || isOpenRoute(config.manifest, current)) failure = { ...r.error, status: r.status };
 			return;
 		}
+		failure = null;
 		boot = r.value;
 		bolt?.close(); // the outgoing client retired here keeps its one stream open, and its views registered server-side
-		bolt = shellBolt(r.value, { ...(config.messages === undefined ? {} : { messages: config.messages }), challenge, agent,
+		bolt = shellBolt(r.value, { ...(config.messages === undefined ? {} : { messages: config.messages }), ...(config.facilities === undefined ? {} : { facilities: config.facilities }), challenge, agent,
 			...(config.fetch === undefined ? {} : { fetch: config.fetch }), ...(config.openStream === undefined ? {} : { openStream: config.openStream }) });
 		setCurrentBolt(bolt);
 		bolt.onSyncStatus((status) => (sync = status));
@@ -182,7 +184,7 @@
 
 	function pageOf(key: string): Promise<Component> | null {
 		const chunk = config.pages[key];
-		return chunk === undefined ? null : chunk().then((m) => m.default);
+		return chunk === undefined ? null : chunk().then((m) => { firstPageReady = true; return m.default; });
 	}
 	// keyed by a string: a query change (`?record=`) re-derives `current` but must not remount the page
 	const pageKey = $derived(current.kind === 'page' && bolt !== null ? `${current.app}/${current.page}` : null);
@@ -224,6 +226,8 @@
 	/** What waits on the viewer, as the inbox last counted it (boot's count until then). */
 	let waiting = $state<number | null>(null);
 	const model = $derived(boot === null ? null : navigationModel(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t));
+	const sessionApps = (nodes: readonly NavNode[]): string[] => nodes.flatMap((node) => node.kind === 'app' ? [node.name] : sessionApps(node.children));
+	const sessions = $derived(boot?.visitor === null ? sessionApps(boot.nav).flatMap((name) => config.sessions?.[name] === undefined ? [] : [{ name, component: config.sessions[name] }]) : []);
 	const app = $derived(model === null ? null : activeApp(model));
 	// the open app's pages strip is tab level 1 (ui's `TAB_LEVEL` context): a page's own Tabs nest under it as level 2
 	const strip = $derived(current.kind === 'page' && !site && boot?.visitor === null ? app?.pages ?? null : null);
@@ -249,6 +253,15 @@
 	// closing a sheet closes every sheet stacked on it
 	const closeRecord = (depth: number) => navigate(withRecords(url, depth).href);
 </script>
+
+{#if bolt !== null}
+	{#key bolt}
+		{#each sessions as session (session.name)}
+			{@const Session = session.component}
+			<Session />
+		{/each}
+	{/key}
+{/if}
 
 <svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
 
@@ -309,7 +322,17 @@
 <!-- hook:view-ui — the sidebar's width, the left bound of a maximised or widened right sheet (0 where no sidebar shows) -->
 <div class="contents" onclick={intercept} style="--shell-sidebar-width: {boot !== null && boot.visitor === null && !site && !narrow.current && failure === null ? (expanded.current ? '16rem' : '3rem') : '0px'}; --shell-header-height: {narrow.current && headerHeight > 0 ? `${headerHeight}px` : 'env(safe-area-inset-top)'}">
 	{#if failure !== null}
-		<Center><p role="alert">{failure}</p></Center>
+		<Access {t} environment={workspace?.environment} {locale} onLocale={setLocale} apex={workspace?.apex}
+			dark={dark} onTheme={() => chooseTheme(dark ? 'light' : 'dark')}>
+			<Stack gap="lg" role="alert">
+				<Stack gap="sm">
+					<p class="text-xs text-muted-foreground">{failure.status === 0 ? t('Connection error') : `HTTP ${failure.status}`} · {failure.code}</p>
+					<h1 class="text-title">{t('Unable to open the workspace')}</h1>
+					<p class="text-sm leading-relaxed text-muted-foreground">{t(failure.message)}</p>
+				</Stack>
+				<Button onclick={() => location.reload()}>{t('Try again')}</Button>
+			</Stack>
+		</Access>
 	{:else if current.kind === 'signIn' || current.kind === 'invite'}
 		<Access {t} environment={workspace?.environment} {locale} onLocale={setLocale} apex={workspace?.apex}
 			dark={dark} onTheme={() => chooseTheme(dark ? 'light' : 'dark')}>

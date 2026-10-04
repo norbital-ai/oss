@@ -13,14 +13,18 @@ const invalid = (message: string) => new BoltError('invalid', 'decode', message)
 const forbidden = (message: string) => new BoltError('forbidden', 'admission', message);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Engine-owned prospective model sources; names are quoted identifiers, never SQL fragments. */
+export type QuerySourceOptions = { readonly sources?: ReadonlyMap<string, string> };
+
 /** One statement being built: its parameters and alias counter. */
 class Build {
 	params: Json[] = [];
 	private n = 0;
 	readonly cat: Catalog; readonly bindings: Bindings; readonly authority: Authority | null; readonly caller: boolean;
-	constructor(cat: Catalog, bindings: Bindings, authority: Authority | null, caller: boolean) {
+	constructor(cat: Catalog, bindings: Bindings, authority: Authority | null, caller: boolean, private readonly options: QuerySourceOptions = {}) {
 		this.cat = cat; this.bindings = bindings; this.authority = authority; this.caller = caller;
 	}
+	from(model: string): string { return q(this.options.sources?.get(model) ?? model); }
 	alias(): string { return `a${this.n++}`; }
 	bind(v: Json, pg?: string): string {
 		this.params.push(v);
@@ -154,7 +158,7 @@ function pred(b: Build, c: CollectionInfo, a: string, p: Pred, lv: Level): strin
 		case 'one': case 'many': case 'count': case 'agg': {
 			const r = relation(b, c, p.rel, p.target, lv);
 			const t = b.alias();
-			const from = `FROM ${q(r.t.model.name)} ${t} WHERE ${conj(r.link(a, t), scope(b, r.t, t, lv))}`;
+			const from = `FROM ${b.from(r.t.model.name)} ${t} WHERE ${conj(r.link(a, t), scope(b, r.t, t, lv))}`;
 			if (p.t === 'agg') {
 				const f = fieldOf(r.t, p.of, lv);
 				if (maskOf(b, r.t, p.of, lv) !== undefined) throw forbidden(`'${p.of}' is masked to this caller and cannot be aggregated (rule 14)`);
@@ -206,13 +210,13 @@ function items(b: Build, c: CollectionInfo, a: string, s: SelectIR, lv: Level, o
 function arm(b: Build, c: CollectionInfo, a: string, rel: string, r: RelSelectIR, lv: Level): string {
 	const x = relation(b, c, rel, r.target, lv);
 	const t = b.alias();
-	if (!r.many) return `(SELECT to_jsonb(r) FROM (SELECT ${items(b, x.t, t, r.select, lv).join(', ')} FROM ${q(x.t.model.name)} ${t} WHERE ${conj(x.link(a, t), scope(b, x.t, t, lv))}) r)`;
+	if (!r.many) return `(SELECT to_jsonb(r) FROM (SELECT ${items(b, x.t, t, r.select, lv).join(', ')} FROM ${b.from(x.t.model.name)} ${t} WHERE ${conj(x.link(a, t), scope(b, x.t, t, lv))}) r)`;
 	const p = r.page ?? invalidPage();
 	if ('after' in p && p.after !== undefined) throw invalid(`relation arm '${rel}' takes no cursor`);
 	const limit = 'all' in p ? LIMITS.page.relationArm + 1 : p.limit;
 	const ord = orderBy(b, x.t, t, r.order ?? [], lv).map((k) => `${k.expr} ${k.dir}`).join(', ');
 	const where = conj(x.link(a, t), scope(b, x.t, t, lv), r.where === undefined ? null : pred(b, x.t, t, r.where, lv));
-	return `(SELECT COALESCE(jsonb_agg(to_jsonb(r) - '$n' ORDER BY r."$n"), '[]'::jsonb) FROM (SELECT ${items(b, x.t, t, r.select, lv).join(', ')}, row_number() OVER (ORDER BY ${ord}) AS "$n" FROM ${q(x.t.model.name)} ${t} WHERE ${where} ORDER BY ${ord} LIMIT ${limit}) r)`;
+	return `(SELECT COALESCE(jsonb_agg(to_jsonb(r) - '$n' ORDER BY r."$n"), '[]'::jsonb) FROM (SELECT ${items(b, x.t, t, r.select, lv).join(', ')}, row_number() OVER (ORDER BY ${ord}) AS "$n" FROM ${b.from(x.t.model.name)} ${t} WHERE ${where} ORDER BY ${ord} LIMIT ${limit}) r)`;
 }
 const invalidPage = (): never => { throw invalid('a many-relation arm states { limit } or { all: true } (rule 9)'); };
 
@@ -286,24 +290,24 @@ function seek(b: Build, keys: readonly Key[], values: readonly (string | null)[]
 
 // ── statements ──
 export type Compiled = { sql: Sql; kind: 'rows' | 'one' | 'agg'; limit: number | 'all' | null; hash: string; keys: number };
-function start(cat: Catalog, reader: Reader, bindings: Bindings, collection: string) {
+function start(cat: Catalog, reader: Reader, bindings: Bindings, collection: string, options: QuerySourceOptions = {}) {
 	const c = collectionOf(cat, collection);
 	const authority = reader.as === 'caller' ? reader.authority : null;
 	const caller = authority !== null;
 	const lv: Level = { scoped: caller && !authority.admin, exposed: caller };
 	if (lv.scoped && (authority!.collections[collection]?.read ?? []).length === 0)
 		throw forbidden(`no held policy grants reading '${collection}' (rule 33)`);
-	return { c, b: new Build(cat, bindings, authority, caller), lv };
+	return { c, b: new Build(cat, bindings, authority, caller, options), lv };
 }
 function pageLimit(p: PageIR): number | 'all' { return 'all' in p ? 'all' : p.limit; }
 
 /** `read`, `get`, `aggregate` or `similar` (with its probe resolved) as one statement. */
 export function compile(cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bindings,
-	probe?: { field: string; vector: readonly number[]; where?: Pred; take: number; from?: string }): Compiled {
+	probe?: { field: string; vector: readonly number[]; where?: Pred; take: number; from?: string }, options: QuerySourceOptions = {}): Compiled {
 	if (ir.kind !== 'read' && ir.kind !== 'get' && ir.kind !== 'aggregate' && ir.kind !== 'similar') throw invalid(`'${ir.kind}' is not a statement read`);
-	const { c, b, lv } = start(cat, reader, bindings, ir.collection);
+	const { c, b, lv } = start(cat, reader, bindings, ir.collection, options);
 	const a = b.alias();
-	const table = `${q(c.model.name)} ${a}`;
+	const table = `${b.from(c.model.name)} ${a}`;
 	if (ir.kind === 'get') {
 		const pg = c.model.fields.get('id')!.pg;
 		if (pg === 'uuid' && !UUID.test(ir.id)) return { sql: b.sql('SELECT NULL::jsonb AS j WHERE false'), kind: 'one', limit: null, hash: '', keys: 0 };
@@ -315,7 +319,7 @@ export function compile(cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bind
 		if (c.model.semantic === undefined) throw invalid(`'${c.name}' declares no search.semantic (rule 16)`);
 		const x = `${a}.${q(EMBEDDING_COLUMN)}`, s = b.alias();
 		const to = probe!.from === undefined ? `${b.bind(`[${probe!.vector.join(',')}]`, 'vector')}`
-			: `(SELECT ${s}.${q(EMBEDDING_COLUMN)} FROM ${q(c.model.name)} ${s} WHERE ${conj(`${s}."id" = ${b.bind(probe!.from, 'uuid')}`, scope(b, c, s, lv))})`;
+			: `(SELECT ${s}.${q(EMBEDDING_COLUMN)} FROM ${b.from(c.model.name)} ${s} WHERE ${conj(`${s}."id" = ${b.bind(probe!.from, 'uuid')}`, scope(b, c, s, lv))})`;
 		const dist = `(${x} <=> ${to})`;
 		const where = conj(scope(b, c, a, lv), `${dist} IS NOT NULL`, probe!.from === undefined ? null : `${a}."id" <> ${b.bind(probe!.from, 'uuid')}`,
 			ir.where === undefined ? null : pred(b, c, a, ir.where, lv));
@@ -383,12 +387,12 @@ export function compile(cat: Catalog, ir: ReadIR, reader: Reader, bindings: Bind
  * Rule 12: reads of one shape merge into one lateral statement. `get`s of one collection and select become the ids
  * unnested with their ordinal and each row as a lateral subquery: one row per id, in order, `j` null when not found.
  */
-export function compileGets(cat: Catalog, collection: string, ids: readonly string[], select: SelectIR, reader: Reader, bindings: Bindings): Sql {
-	const { c, b, lv } = start(cat, reader, bindings, collection);
+export function compileGets(cat: Catalog, collection: string, ids: readonly string[], select: SelectIR, reader: Reader, bindings: Bindings, options: QuerySourceOptions = {}): Sql {
+	const { c, b, lv } = start(cat, reader, bindings, collection, options);
 	const a = b.alias();
 	const pg = c.model.fields.get('id')!.pg;
 	const list = b.bind(ids.map((id) => pg !== 'uuid' || UUID.test(id) ? id : null), `${pg}[]`);
-	return b.sql(`SELECT (SELECT to_jsonb(r) FROM (SELECT ${items(b, c, a, select, lv, true).join(', ')} FROM ${q(c.model.name)} ${a} WHERE ${conj(`${a}."id" = v.id`, scope(b, c, a, lv))}) r) AS j
+	return b.sql(`SELECT (SELECT to_jsonb(r) FROM (SELECT ${items(b, c, a, select, lv, true).join(', ')} FROM ${b.from(c.model.name)} ${a} WHERE ${conj(`${a}."id" = v.id`, scope(b, c, a, lv))}) r) AS j
 	FROM unnest(${list}) WITH ORDINALITY v(id, n) ORDER BY v.n`);
 }
 
@@ -407,7 +411,7 @@ function path(b: Build, c: CollectionInfo, a: string, p: string, lv: Level): { e
 	const r = relation(b, c, head!, rel.targets[0]!, lv);
 	const t = b.alias();
 	const inner = path(b, r.t, t, tail.join('.'), lv);
-	return { expr: `(SELECT ${inner.expr} FROM ${q(r.t.model.name)} ${t} WHERE ${conj(r.link(a, t), scope(b, r.t, t, lv))})`, f: inner.f };
+	return { expr: `(SELECT ${inner.expr} FROM ${b.from(r.t.model.name)} ${t} WHERE ${conj(r.link(a, t), scope(b, r.t, t, lv))})`, f: inner.f };
 }
 function aggregate(b: Build, c: CollectionInfo, a: string, ir: Extract<ReadIR, { kind: 'aggregate' }>, lv: Level): Compiled {
 	const cols: string[] = [];
@@ -440,7 +444,7 @@ function aggregate(b: Build, c: CollectionInfo, a: string, ir: Extract<ReadIR, {
 	}
 	if (cols.length === 0) throw invalid('an aggregate asks for something');
 	const where = conj(scope(b, c, a, lv), ir.where === undefined ? null : pred(b, c, a, ir.where, lv));
-	if (groups.length === 0) return { sql: b.sql(`SELECT to_jsonb(r) AS j FROM (SELECT ${cols.join(', ')} FROM ${q(c.model.name)} ${a} WHERE ${where}) r`), kind: 'agg', limit: null, hash: '', keys: 0 };
+	if (groups.length === 0) return { sql: b.sql(`SELECT to_jsonb(r) AS j FROM (SELECT ${cols.join(', ')} FROM ${b.from(c.model.name)} ${a} WHERE ${where}) r`), kind: 'agg', limit: null, hash: '', keys: 0 };
 	const page = ir.page!;
 	const { page: _, ...rest } = ir;
 	const h = hash(rest);
@@ -448,18 +452,18 @@ function aggregate(b: Build, c: CollectionInfo, a: string, ir: Extract<ReadIR, {
 	const limit = pageLimit(page);
 	const take = limit === 'all' ? LIMITS.page.all + 1 : limit + 1;
 	const cursor = limit === 'all' ? '' : `, jsonb_build_array(${groups.map((k) => `${k.expr}::text`).join(', ')}) AS "$k"`;
-	return { sql: b.sql(`SELECT to_jsonb(r) AS j FROM (SELECT ${cols.join(', ')}${cursor} FROM ${q(c.model.name)} ${a} WHERE ${where} GROUP BY ${groups.map((g) => g.expr).join(', ')}${having} ORDER BY ${groups.map((g) => g.expr).join(', ')} LIMIT ${take}) r`),
+	return { sql: b.sql(`SELECT to_jsonb(r) AS j FROM (SELECT ${cols.join(', ')}${cursor} FROM ${b.from(c.model.name)} ${a} WHERE ${where} GROUP BY ${groups.map((g) => g.expr).join(', ')}${having} ORDER BY ${groups.map((g) => g.expr).join(', ')} LIMIT ${take}) r`),
 		kind: 'rows', limit, hash: h, keys: groups.length };
 }
 
 /** For tests and the live router: a predicate alone, as the WHERE of `SELECT id FROM <c>`. */
 /** The ids a grant predicate (rule 14 arm, mask) admits: compiled raw, as a scope is, but with `holder`'s actor operands. */
-export function grantSql(cat: Catalog, collection: string, p: Pred, holder: Authority, bindings: Bindings): Sql {
-	const c = collectionOf(cat, collection), b = new Build(cat, bindings, holder, false), a = b.alias();
-	return b.sql(`SELECT ${a}."id" AS id FROM ${q(c.model.name)} ${a} WHERE ${pred(b, c, a, p, RAW)} ORDER BY ${a}."id"`);
+export function grantSql(cat: Catalog, collection: string, p: Pred, holder: Authority, bindings: Bindings, options: QuerySourceOptions = {}): Sql {
+	const c = collectionOf(cat, collection), b = new Build(cat, bindings, holder, false, options), a = b.alias();
+	return b.sql(`SELECT ${a}."id" AS id FROM ${b.from(c.model.name)} ${a} WHERE ${pred(b, c, a, p, RAW)} ORDER BY ${a}."id"`);
 }
-export function whereSql(cat: Catalog, collection: string, p: Pred, reader: Reader, bindings: Bindings): Sql {
-	const { c, b, lv } = start(cat, reader, bindings, collection);
+export function whereSql(cat: Catalog, collection: string, p: Pred, reader: Reader, bindings: Bindings, options: QuerySourceOptions = {}): Sql {
+	const { c, b, lv } = start(cat, reader, bindings, collection, options);
 	const a = b.alias();
-	return b.sql(`SELECT ${a}."id" AS id FROM ${q(c.model.name)} ${a} WHERE ${conj(scope(b, c, a, lv), pred(b, c, a, p, lv))} ORDER BY ${a}."id"`);
+	return b.sql(`SELECT ${a}."id" AS id FROM ${b.from(c.model.name)} ${a} WHERE ${conj(scope(b, c, a, lv), pred(b, c, a, p, lv))} ORDER BY ${a}."id"`);
 }

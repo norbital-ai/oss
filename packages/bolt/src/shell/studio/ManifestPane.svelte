@@ -10,9 +10,9 @@
 
 	let { view, onopen, t }: { view: StudioView; onopen: (path: string) => void; t: (key: string) => string } = $props();
 	const SECTION_TITLES: { readonly [s in Section]: string } = { collections: 'Collections', pipelines: 'Pipelines', apps: 'Apps', policies: 'Policies',
-		envoys: 'Envoys', automations: 'Automations', remotes: 'Remotes', environment: 'Environment' };
+		channelTypes: 'Channel types', automations: 'Automations', remotes: 'Remotes', environment: 'Environment' };
 	const ICONS: { readonly [s in Section]: string } = { collections: 'lucide:database', pipelines: 'lucide:workflow', apps: 'lucide:layout-grid',
-		policies: 'lucide:shield-check', envoys: 'lucide:bot', automations: 'lucide:zap', remotes: 'lucide:plug', environment: 'lucide:key-round' };
+		policies: 'lucide:shield-check', channelTypes: 'lucide:radio', automations: 'lucide:zap', remotes: 'lucide:plug', environment: 'lucide:key-round' };
 	let section = $state<string>('collections');
 </script>
 

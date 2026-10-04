@@ -1,4 +1,4 @@
-// `channel()` (§3.3.8, rule 61): a transport plus an address. Record-driven outbound and delivery events are pure
+// `channel()` (§3.3.8, rule 61): a reusable channel implementation; instances are runtime records. Record-driven outbound and delivery events are pure
 // functions of their argument, typed from the `from` collection and the transport.
 import type { Handle } from '../access/actor.ts';
 import type { Patch } from '../ctx.ts';
@@ -129,7 +129,7 @@ type Outbound<T, O> = {
 	[N in keyof O]: {
 		from: O[N];
 		on: 'create';
-		message: (x: { record: Row<O[N]> }) => OutboundFor<T> | null;
+		message: (x: { record: Row<O[N]>; configuration: Json }) => OutboundFor<T> | null;
 	};
 };
 type Events<T, C> = [C] extends [never]
@@ -137,10 +137,6 @@ type Events<T, C> = [C] extends [never]
 	: { [E in DeliveryKind]?: (e: DeliveryEvent<E, T>) => Patch<C> };
 export type ChannelSpec<T = Transport, O = {}> = {
 	transport: T;
-	/** Allow independently sealed provider accounts. Administrators manage all accounts; members manage their own on a syncOnly channel. */
-	accounts?: boolean;
-	/** Personal ingestion only: import available provider history through integrations, never send or invoke an envoy. Cannot declare outbound. Only providers advertising supportsSync are offered; custom channels use their authored inbound or poll mapping. */
-	syncOnly?: boolean;
 	/**
 	 * custom: the connection outbound messages are POSTed to (`src/connection/+<name>.connection.ts`). A custom channel
 	 * also ships `src/channel/+<channel>.connect.svelte`; what that page pairs with is sealed as the channel's credential.
@@ -156,6 +152,7 @@ export type ChannelSpec<T = Transport, O = {}> = {
 		? {
 				verify: { scheme: WebhookScheme; secret: string };
 				messages: (request: {
+					configuration: Json;
 					body: Json;
 					headers: { readonly [lowercase: string]: string };
 				}) => readonly ReceivedMessage[];
@@ -169,7 +166,7 @@ export type ChannelSpec<T = Transport, O = {}> = {
 				tz?: IanaZone;
 				path: string;
 				query?: { readonly [name: string]: string };
-				messages: (response: { body: Json }) => readonly ReceivedMessage[];
+				messages: (response: { body: Json; configuration: Json }) => readonly ReceivedMessage[];
 			}
 		: 'error: only a custom channel polls';
 	/** The authority of the channel's own writes (delivery events, inbound rows). */
@@ -180,22 +177,8 @@ export type ChannelSpec<T = Transport, O = {}> = {
 };
 
 /**
- * `src/channel/+<c>.channel.ts`: a messaging channel on a transport (`email`, `whatsapp`, `telegram`, `slack`, `discord`,
- * `wechat`, or `custom` with `send` and its own `inbound` webhook or `poll`), with optional
- * collection-backed `outbound` messages and delivery `events`. Envoys answer on it; notifications may be sent through it.
- * @example
- * export default channel({ transport: 'telegram' });
- * @example
- * export default channel({ transport: 'whatsapp', accounts: true, syncOnly: true });
- *
- * Provider adapters supply setup descriptors (form, QR, code or OAuth), live state and webhook/session handlers through ChannelProvider. The shared runtime handles account ownership, sealed credentials and restoration for every transport, including tenant-authored custom mappings.
- *
- * Personal accounts register with POST /__bolt/transports/<channel>/accounts { id }; GET lists their public
- * connection states. Pair and observe each account with the standard /__bolt/transports/<channel>~<id>
- * endpoints. Credentials stay sealed on the host. Integrations receive message.sourceAccount; stored
- * sys_message.message.sourceAccount carries the same key. Imported sent messages retain outbound direction
- * without entering the send queue. WhatsApp Web imports the history the phone provides; mailbox sources
- * backfill their configured folder (INBOX by default). Add a separate Sent folder source to import sent mail.
+ * `src/custom_channels/<type>/+channel.ts`: a reusable channel implementation. Runtime connection records select
+ * this type. Its companion `+channel.configuration.svelte` configures an instance; secrets remain sealed by the host.
  */
 export function channel<
 	const T extends Transport,

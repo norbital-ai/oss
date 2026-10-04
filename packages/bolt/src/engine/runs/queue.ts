@@ -28,11 +28,11 @@ export type CronTrigger = { automation: string; key: string; cron: Cron; tz: str
 export type WebhookTrigger = { automation: string; path: string; scheme: string; secret: string };
 export type Triggers = { events: readonly EventTrigger[]; crons: readonly CronTrigger[]; webhooks: readonly WebhookTrigger[] };
 
-const cache = new WeakMap<EngineManifest, Triggers>();
+const cache = new WeakMap<EngineManifest, { channels: EngineManifest['channels']; triggers: Triggers }>();
 /** Every declared trigger, compiled once per manifest (`where` → Pred, cron parsed). */
 export function triggersOf(m: EngineManifest): Triggers {
-	let t = cache.get(m);
-	if (t !== undefined) return t;
+	const cached = cache.get(m);
+	if (cached?.channels === m.channels) return cached.triggers;
 	const events: EventTrigger[] = [], crons: CronTrigger[] = [], webhooks: WebhookTrigger[] = [];
 	for (const [automation, spec] of Object.entries(m.automations)) {
 		const on = spec.on === undefined ? [] : Array.isArray(spec.on) ? spec.on as readonly Data[] : [spec.on as Data];
@@ -61,8 +61,9 @@ export function triggersOf(m: EngineManifest): Triggers {
 		const cron = parseCron(p['cron']), tz = typeof p['tz'] === 'string' ? p['tz'] : m.workspace.tz;
 		crons.push({ automation: `${POLL}${channel}`, key: `poll:${channel}:${p['cron']}@${tz}`, cron, tz, bucket: periodAtLeast5Min(cron) });
 	}
-	cache.set(m, t = { events, crons, webhooks });
-	return t;
+	const triggers = { events, crons, webhooks };
+	cache.set(m, { channels: m.channels, triggers });
+	return triggers;
 }
 
 const OP = { created: 'create', updated: 'update', deleted: 'delete' } as const;

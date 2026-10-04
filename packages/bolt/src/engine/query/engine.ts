@@ -8,7 +8,7 @@ import { collectionOf, defaultFields, SEMANTIC, storedFields } from '../../proto
 import { catalogOf } from '../access/pred.ts';
 import { where } from '../../protocol/ir.ts';
 import type { Compiled } from './sql.ts';
-import { compile, compileGets, encodeCursor } from './sql.ts';
+import { compile as compileSource, compileGets as compileSourceGets, encodeCursor, type QuerySourceOptions } from './sql.ts';
 
 /** A declared similarity's attached bodies, run in the guest: `probe` picks the vector, `rerank` re-measures a page. */
 export type SimilarityBodies = {
@@ -16,6 +16,10 @@ export type SimilarityBodies = {
 	rerank?: (input: Json, rows: readonly RowData[]) => Promise<readonly (number | undefined)[]>;
 };
 export type ReadEngineConfig = {
+	/** Native write planning only: qualified prospective model sources. Never supplied by a guest. */
+	querySources?: QuerySourceOptions;
+	/** Trusted native projection after row/column authorization, before caller delivery. */
+	projection?: (read: ReadIR, answer: Json, reader: Reader, bindings: Bindings) => Promise<Json>;
 	db: TenantDb; manifest: EngineManifest;
 	similarity?: (collection: string, name: string) => SimilarityBodies | undefined;
 	/** Reads another area answers: `history` (§5.2), `query` (a guest invocation), `after` (the write compiler), `transcript` (the agent). */
@@ -30,8 +34,11 @@ const tooLarge = (message: string) => new BoltError('tooLarge', 'deliver', messa
 type Plan = { compiled?: Compiled; similar?: { bodies: SimilarityBodies; input: Json; limit: number; keep?: ReadonlySet<string> }; answer?: Promise<Json> };
 
 export function readEngine(config: ReadEngineConfig): ReadEngine & { catalog: Catalog } {
+	const compile:typeof compileSource=(cat,ir,reader,bindings,probe)=>compileSource(cat,ir,reader,bindings,probe,config.querySources);
+	const compileGets:typeof compileSourceGets=(cat,collection,ids,select,reader,bindings)=>compileSourceGets(cat,collection,ids,select,reader,bindings,config.querySources);
 	const cat = catalogOf(config.manifest);
 	const allBytes = config.allBytes ?? LIMITS.page.allBytes;
+	const requiresProjection = Object.values(config.manifest.collections).some(spec => (spec.read as { projection?: unknown }).projection !== undefined);
 
 	async function plan(ir: ReadIR, reader: Reader, bindings: Bindings): Promise<Plan> {
 		if (ir.kind === 'history' || ir.kind === 'query' || ir.kind === 'after' || ir.kind === 'transcript' || ir.kind === 'inbox' || ir.kind === 'conversations') {
@@ -64,6 +71,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & { catalog: Ca
 		const take = ir.limit * candidates;
 		if (take > LIMITS.page.max) throw tooLarge(`similar asks the index for ${take} rows (limit × candidates ≤ ${LIMITS.page.max})`);
 		const w: Pred | undefined = probe.where === undefined ? undefined : where(cat, ir.collection, probe.where);
+		if (reader.as === 'caller' && w !== undefined) guardProjectedOperands(config.manifest, { kind: 'read', collection: ir.collection, where: w, select: ir.select ?? { fields: null, relations: {} }, page: { limit: ir.limit } });
 		// a rerank measures the whole row: a narrowed select is widened for it and narrowed back after (hook:reads)
 		const want = bodies.rerank === undefined ? null : ir.select?.fields ?? null;
 		const c = collectionOf(cat, ir.collection);
@@ -102,9 +110,11 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & { catalog: Ca
 	return {
 		catalog: cat,
 		async run(batch, reader, bindings) {
+			if (reader.as === 'caller' && requiresProjection && config.projection === undefined) throw new BoltError('unavailable','deliver','This native reader must enforce its declared JSON projections.');
 			const keys = batch.map((ir) => JSON.stringify(ir));
 			const unique = [...new Set(keys)];
 			const irs = unique.map((k) => batch[keys.indexOf(k)]!);
+			if (reader.as === 'caller') for (const ir of irs) guardProjectedOperands(config.manifest, ir);
 			// rule 12: `get`s of one shape merge into one lateral statement
 			const merged = new Map<number, { s: number; n: number }>();
 			const mergedSql: Sql[] = [];
@@ -128,7 +138,9 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & { catalog: Ca
 				armsFit(irs[k]!, j === null ? [] : [j]);
 				return j;
 			}));
-			return keys.map((k) => answers[unique.indexOf(k)]!);
+			const delivered = reader.as !== 'caller' || config.projection === undefined ? answers
+				: await Promise.all(answers.map((answer, index) => config.projection!(irs[index]!, answer, reader, bindings)));
+			return keys.map((k) => delivered[unique.indexOf(k)]!);
 		},
 	};
 }
@@ -146,4 +158,30 @@ function armsFit(ir: ReadIR, rows: readonly { [k: string]: Json }[]): void {
 		}
 	};
 	walk(ir.select, rows);
+}
+
+/** Raw predicates and aggregates must not infer data withheld by a JSON projection. */
+function guardProjectedOperands(manifest: EngineManifest, read: ReadIR): void {
+ const protectedFields = (collection: string): readonly string[] => (manifest.collections[collection]?.read as { projection?: { fields: readonly string[] } } | undefined)?.projection?.fields ?? [];
+ const check = (collection: string, field: string) => {
+  if (protectedFields(collection).includes(field)) throw new BoltError('forbidden','decode','Projected JSON columns cannot be used as raw read operands.');
+ };
+ const predicate = (collection: string, value: import('../contracts.ts').Pred): void => {
+  if (value.t === 'and' || value.t === 'or') { for(const child of value.of)predicate(collection,child); }
+  else if(value.t==='not')predicate(collection,value.of);
+  else if(value.t==='one'||value.t==='many')predicate(value.target,value.pred);
+  else if('field' in value)check(collection,value.field);
+  else if(value.t==='agg')check(value.target,value.of);
+ };
+ if('where' in read && read.where!==undefined)predicate(read.collection,read.where);
+ if('order' in read && read.order!==undefined)for(const order of read.order)check(read.collection,order.field);
+ if(read.kind==='aggregate')for(const field of [...read.by.map(bucket=>bucket.field),...(read.sum??[]),...(read.avg??[]),...(read.min??[]),...(read.max??[])])check(read.collection,field);
+ const select = (selected: import('../contracts.ts').SelectIR): void => {
+  for(const relation of Object.values(selected.relations)) {
+   if(relation.where!==undefined)predicate(relation.target,relation.where);
+   for(const order of relation.order??[])check(relation.target,order.field);
+   select(relation.select);
+  }
+ };
+ if('select' in read && read.select!==undefined)select(read.select);
 }

@@ -219,6 +219,7 @@ export function agents(config: AgentConfig) {
 	/** Runs the conversation until nothing is queued. `force` continues without new input (after a confirmation). */
 	async function drain(id: string, options: { force?: boolean; child?: boolean; receipts?: readonly Receipt[];
 		/** Each row the turn writes or finishes, as it happens (the envoys ship chat replies while the turn works). */ onWrite?: (row: MessageRow) => Promise<unknown> } = {}): Promise<{ ran: boolean; reply: MessageRow | null }> {
+		await e.refreshMessaging();
 		if (!(await claim(id))) return { ran: false, reply: null };
 		const turn = randomUUID(), stop = new AbortController();
 		running.set(id, stop);

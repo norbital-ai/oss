@@ -7,7 +7,7 @@ describe('next declarations', () => {
 	it('exports only the declaration functions as values (P29)', () => {
 		// the closed list of §3.3.10 and Appendix D.2, exactly
 		const declarations = ['workspace', 'team', 'app', 'group', 'messages', 'model', 'relationship', 'customField', 'collection',
-			'integration', 'pipeline', 'policy', 'envoy', 'mcp', 'automation', 'channel', 'connection'];
+			'integration', 'pipeline', 'policy', 'mcp', 'automation', 'channel', 'connection'];
 		expect(Object.keys(bolt).sort()).toEqual([...declarations].sort());
 		for (const value of Object.values(bolt)) expect(typeof value).toBe('function');
 	});

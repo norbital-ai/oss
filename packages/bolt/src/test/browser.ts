@@ -17,6 +17,7 @@ import { boltHandler } from '../protocol/http.ts';
 import { PATHS, type Frame, type LiveReply } from '../protocol/wire.ts';
 import { devTurnstile, shellHost } from '../shell/host.ts';
 import { mountShell, type ShellMountConfig } from '../shell/mount.ts';
+export { mountShell, type ShellMountConfig };
 import { audienceOf, COOKIES, nav, surfaces, type AppSpec, type NavNode } from '../shell/nav.ts';
 import type { TestWorkspace } from './index.ts';
 

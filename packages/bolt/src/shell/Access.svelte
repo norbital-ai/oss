@@ -22,7 +22,7 @@
 <AccessFrame {environment} language={LANGUAGE[nextLocale]} onLanguage={() => onLocale(nextLocale)} {dark} {onTheme}
 	labels={{ switchLanguage: t('Switch language'), lightMode: t('Switch to light mode'), darkMode: t('Switch to dark mode'), secureAccess: t('Secure access') }}>
 	<Stack gap="none" class="w-full">
-		<div class="w-full rounded-lg border border-border/80 bg-card/95 p-5 shadow-xs backdrop-blur-sm sm:p-7">
+		<div class="access-panel w-full rounded-lg border border-border/80 bg-card/95 p-5 shadow-xs backdrop-blur-sm sm:p-7">
 			{@render children()}
 		</div>
 		{#if apex}

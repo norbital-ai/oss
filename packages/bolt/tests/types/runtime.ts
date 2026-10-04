@@ -1,7 +1,7 @@
 // Type corpus for the runtime roles (§3.3.1, §3.3.5, §3.3.6, §3.3.8, §3.4, rules 50–63b). Each `@ts-expect-error` line
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import {
-	app, automation, channel, collection, connection, envoy, group, integration, mcp, pipeline, workspace
+	app, automation, channel, collection, connection, group, integration, mcp, pipeline, workspace
 } from '../../src/index.ts';
 import type { FileRef, Id, Instant } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
@@ -112,7 +112,7 @@ trig.run(async (_, ctx) => {
 	await ctx.schedule('render', { order: 1 });
 	// @ts-expect-error B5 an input for an automation that declares none
 	await ctx.schedule('nightly', { force: true });
-	// @ts-expect-error B6 an email message to a WhatsApp channel
+	// Runtime connection types are checked when sending.
 	await ctx.send('whatsapp', { to: ['a@b.co'], subject: 'x' });
 	const either = Math.random() > 0.5 ? 'whatsapp' as const : 'support' as const;
 	// @ts-expect-error B7 a union-typed channel (§3.3.9)
@@ -193,24 +193,7 @@ connection({ baseUrl: 'ERP_URL', auth: { oauth2: { grant: 'client_credentials', 
 // @ts-expect-error CO5 an unknown auth kind
 connection({ baseUrl: 'ERP_URL', auth: { apiKey: 'ERP_TOKEN' } });
 
-// ── envoy(), mcp(), skills ──
-envoy({ channel: 'support', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'enabled', task: 'Answer order questions.' });
-// @ts-expect-error EN1 an undeclared channel
-envoy({ channel: 'telegram', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
-// @ts-expect-error EN2 the inbox is not an envoy channel
-envoy({ channel: 'inbox', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
-// @ts-expect-error EN3 groupMessages on an email channel (§5.9: email is always addressed)
-envoy({ channel: 'support', audience: 'public', name: 'Norbius', policies: ['sales_rep'], groupMessages: 'all', delegation: 'disabled', task: 'x' });
-// @ts-expect-error EN3a triage on an email channel (rule 60a: email is always addressed) — hook:triage
-envoy({ channel: 'support', audience: 'public', name: 'Norbius', policies: ['sales_rep'], triage: { scope: 'dm' }, delegation: 'disabled', task: 'x' });
-envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], triage: { scope: 'group' }, delegation: 'disabled', task: 'x' });
-envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], triage: false, delegation: 'disabled', task: 'x' });
-// @ts-expect-error EN4 no policies
-envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: [], delegation: 'disabled', task: 'x' });
-// @ts-expect-error EN5 an audience envoys do not have
-envoy({ channel: 'whatsapp', audience: 'members', policies: ['sales_rep'], delegation: 'disabled', task: 'x' });
-// @ts-expect-error EN6 delegation is required
-envoy({ channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], task: 'x' });
+// ── MCP source declarations (envoys are runtime records) ──
 // @ts-expect-error MC1 a literal URL where an env name belongs
 mcp({ description: 'x', url: 'https://mcp.example.com' });
 // @ts-expect-error MC2 oauth credentials must be env names

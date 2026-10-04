@@ -133,16 +133,19 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision` });
 	 * least constraining grant admits. Limits stay the envoy's. `null` when the linked member is no longer active.
 	 */
 	async envoy(db: TenantDb, o: { envoy: string; channel: string; sender: string; member: string | null; dm: boolean }): Promise<Authority | null> {
-		const policies = (this.m.envoys[o.envoy] as { policies?: readonly string[] } | undefined)?.policies ?? [];
+		const [rows] = await db.read([q('SELECT policies, revision, active FROM sys_envoy WHERE id = $1', o.envoy)]);
+		const record = rows!.rows[0];
+		const policies = record?.['active'] === true && Array.isArray(record['policies']) ? record['policies'] as string[] : [];
+		const revision = record?.['revision'];
 		if (policies.length === 0) throw new BoltError('unknownEnvoy', 'admission', `no envoy '${o.envoy}' with policies`);
 		const actor: EngineActor = { kind: 'envoy', envoy: o.envoy, channel: o.channel, sender: o.sender, member: o.member };
-		const own = this.compile({ actor, admin: false, policies }, `envoy:${o.envoy}:${o.channel}:${o.sender}:${o.member ?? ''}`);
+		const own = this.compile({ actor, admin: false, policies }, `envoy:${o.envoy}:${revision}:${o.channel}:${o.sender}:${o.member ?? ''}`);
 		if (!o.dm || o.member === null) return own;
 		const mine = await this.member(db, o.member);
 		if (mine === null || mine.actor.kind !== 'member') return null;
 		// ponytail: every arm's `actor` operands resolve against the linked member, the envoy's too; the member directory arms (rule 35a) do not join
 		const both = this.compile({ actor: { ...actor, linked: mine.actor }, admin: mine.admin, policies: [...new Set([...policies, ...mine.policies])],
-			teamTree: mine.teamTree, scopes: mine.scopes }, `envoy-dm:${o.envoy}:${o.channel}:${o.sender}:${mine.key}`);
+			teamTree: mine.teamTree, scopes: mine.scopes }, `envoy-dm:${o.envoy}:${revision}:${o.channel}:${o.sender}:${mine.key}`);
 		return { ...both, limits: own.limits };
 	}
 

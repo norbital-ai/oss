@@ -91,7 +91,7 @@ export async function devHost(a: Artifact, db: TenantDb, o: { port: number; pack
 
 	const activate = async (next: Artifact, pack?: Pack) => {
 		const m = next.manifest;
-		const e = engine({ manifest: m, db, guest: next.guest, transforms: next.transforms, deadlines, scope: SCOPE, files: o.files,
+		const e = engine({ manifest: m, db, guest: next.guest, transforms: next.transforms, projections: next.projections, deadlines, scope: SCOPE, files: o.files,
 			transports: { email: mail }, agent: { attachments: fileAttachments(db, o.files) }, console: (level, ...args) => o.log(`guest ${level}: ${args.map(String).join(' ')}`),
 			...(pack === undefined || pack.meta.start.length === 0 ? {} : { runs: { start: pack.meta.start } }) } as Parameters<typeof engine>[0]);
 		await e.migrate({ accept: true });

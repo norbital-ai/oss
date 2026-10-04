@@ -68,6 +68,7 @@ export type IdentityHost = {
 	 * their statement, and `announce` wakes the run queue for it (rule 52a).
 	 */
 	membership?: { announce(at: string): void };
+	messagingChanged?: (changes: readonly import('../contracts.ts').Captured[]) => void | Promise<void>;
 };
 export type Keys = { session: Buffer; ipMac: Buffer };
 export type IdentityRefusal = 'forbidden' | 'notFound' | 'rateLimited' | 'expired' | 'lastAdmin' | 'active' | 'check'

@@ -1,3 +1,4 @@
+import { messagingOp, refreshMessaging, type EnvoyRecord, BUILTIN_CHANNEL_TYPES } from '../engine/channels/registry.ts';
 // The shell's own reads and the settings verbs (§5.10, §5.11.1, §5.11.4, rules 46, 48): the inbox (open approval
 // requests the viewer takes part in, and `inbox` notices addressed to them), `/runs`, and the admin settings over the
 // identity tables. Every verb is an identity function (admin-only there); this file decodes and routes.
@@ -96,9 +97,10 @@ export async function channelMessages(db: TenantDb, auth: Authority, m: EngineMa
 }
 
 export type Settings = {
-	members: Row[]; teams: Row[]; assignments: Row[]; invitations: Row[]; keys: Row[];
+	channelTypes: string[]; members: Row[]; teams: Row[]; assignments: Row[]; invitations: Row[]; keys: Row[];
 	policies: string[]; secrets: { name: string; label: string; set: boolean | null }[];
-	channels: { name: string; transport: Json; delivery: ChannelDelivery }[]; connections: { name: string; auth: Json }[]; mcp: { name: string; url: Json }[];
+	envoys: (EnvoyRecord & { channels: string[] })[];
+	channels: { name: string; label: string; type: string; owner: string | null; transport: Json; delivery: ChannelDelivery }[]; connections: { name: string; auth: Json }[]; mcp: { name: string; url: Json }[];
 	/** Identity changes (`bolt_history` of the identity tables), newest first (L-BOLT-518). */
 	audit: { collection: string; record: string; revision: number; at: string; actor: string | null; op: string; changes: Json }[];
 	/** `<collection>.integration`s; an administrator pauses or resumes each (L-BOLT-365). */
@@ -119,6 +121,8 @@ const AUDIT_LIMIT = 200;
 export async function settings(h: IdentityHost, m: EngineManifest, auth: Authority, secrets?: SecretsPort): Promise<Result<Settings>> {
 	const denied = requireAdmin(auth);
 	if (denied) return denied;
+	await refreshMessaging(h.db, m);
+	const [envoyRows, bindings] = await h.db.read([q('SELECT * FROM sys_envoy ORDER BY name, id'), q('SELECT envoy, channel_connection FROM sys_envoy_channel')]);
 	const [users, teams, assignments, invitations, keys, audit, deliveries, signup] = await h.db.read([
 		// administrators first, then staff, then external members; by name, else address (L-BOLT-516)
 		q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
@@ -144,10 +148,11 @@ export async function settings(h: IdentityHost, m: EngineManifest, auth: Authori
 	const status = secrets === undefined ? null : await secrets.status('workspace');
 	const paused = await pausedIntegrations(h.db);
 	return { ok: true, value: {
-		members: [...users!.rows], teams: [...teams!.rows], assignments: [...assignments!.rows], invitations: [...invitations!.rows], keys: [...keys!.rows],
+		channelTypes: [...BUILTIN_CHANNEL_TYPES, ...Object.keys(m.channelTypes ?? {})], members: [...users!.rows], teams: [...teams!.rows], assignments: [...assignments!.rows], invitations: [...invitations!.rows], keys: [...keys!.rows],
 		policies: Object.keys(m.policies),
 		secrets: env.map(([name, d]) => ({ name, label: d.label, set: status === null ? null : status[name] === true })),
-		channels: Object.entries(m.channels).map(([name, c]) => ({ name, transport: (c as Row)['transport'] ?? null, delivery: delivery.get(name) ?? idle })),
+		envoys: envoyRows!.rows.map((e) => ({ ...e, channels: bindings!.rows.filter((b) => b['envoy'] === e['id']).map((b) => String(b['channel_connection'])) })) as Settings['envoys'],
+		channels: Object.entries(m.channels).map(([name, c]) => ({ name, label: String(c['name']), type: String(c['type']), owner: typeof c['owner'] === 'string' ? c['owner'] : null, transport: (c as Row)['transport'] ?? null, delivery: delivery.get(name) ?? idle })),
 		audit: audit!.rows as unknown as Settings['audit'],
 		connections: Object.entries(m.connections).map(([name, c]) => ({ name, auth: (c as { auth?: Json }).auth ?? null })),
 		mcp: Object.entries(m.mcp).map(([name, s]) => ({ name, url: (s as { url?: Json }).url ?? null })),
@@ -192,6 +197,10 @@ const bad = (op: string) => refuse('check', `The input of '${op}' is malformed.`
 export async function settingsOp(h: IdentityHost, m: EngineManifest, auth: Authority, op: string, x: Row, secrets?: SecretsPort): Promise<Result<Json>> {
 	const denied = requireAdmin(auth);
 	if (denied) return denied;
+	if (['saveChannel', 'deleteChannel', 'saveEnvoy', 'deleteEnvoy'].includes(op)) {
+		try { return { ok: true, value: await messagingOp(h.db, m, auth, op, x, h.messagingChanged) }; }
+		catch (e) { return refuse('check', e instanceof Error ? e.message : String(e)); }
+	}
 	const id = x['id'];
 	switch (op) {
 		case 'setSignup': return typeof x['open'] === 'boolean' ? members.setSignup(h, auth, x['open']) : bad(op);

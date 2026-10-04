@@ -46,6 +46,26 @@ function transform(body: (inv: Invocation) => GuestOutcome, collection = 'orders
 	return { transforms: new Set([collection]), guest: { invoke: async (inv) => (calls.push(inv), body(inv)) } };
 }
 
+describe('engine-owned staged transform identities',()=>{
+ it('exposes genuine root and owned child identities and persists those exact coordinates',async()=>{
+  const calls:Invocation[]=[];
+  const result=await run({verb:'create',input:{title:'staged',lines:{create:[{label:'contract',amount:'1'}]}}},transform(inv=>({kind:'ok',output:inv.input,cpuMs:1}),'orders',calls));
+  ok(result.outcome);
+  const staged=calls[0]!.ctx.staged!;
+  expect(staged).toHaveLength(2);
+  const parent=staged.find(row=>row.collection==='orders')!,child=staged.find(row=>row.collection==='lines')!;
+  expect(parent.parent).toBeUndefined();
+  expect(child.parent).toEqual({collection:'orders',id:parent.id,relation:'lines',field:'order'});
+  expect(child.path).toEqual(['lines','create',0]);
+  expect((await one('select id::text as id from orders')).id).toBe(parent.id);
+  expect(await one('select id::text as id, "order"::text as owner from lines')).toEqual({id:child.id,owner:parent.id});
+ });
+ it('refuses transformed mint-order changes before committing a staged owner capture',async()=>{
+  await expect(run({verb:'create',input:[{title:'first'},{title:'second'}]},transform(inv=>({kind:'ok',output:(inv.input as Record<string,Json>[]).map((row,index)=>index===0?{...row,lines:{create:[{label:'new',amount:'1'}]}}:row),cpuMs:1})))).rejects.toThrow(/engine-assigned identity/);
+  expect(await rows('select id from orders')).toEqual([]);
+ });
+});
+
 describe('engine/write: erase (rule 38e, §5.13)', () => {
 	it('remove deletes as a delete would, keeps one erased revision, and drops the rest of its history and its notices', async () => {
 		const id = await order('desk', [{ label: 'a', amount: '1' }, { label: 'b', amount: '2' }]);

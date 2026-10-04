@@ -46,7 +46,7 @@
 	const move = (i: number, d: -1 | 1) => { const o = [...view.order]; [o[i], o[i + d]] = [o[i + d]!, o[i]!]; view.setOrder(o); };
 	async function describe(e: SubmitEvent) {
 		e.preventDefault();
-		if (text.trim() === '') return;
+		if (busy || text.trim() === '') return;
 		busy = true;
 		applied = failed = false;
 		try { applied = await view.describe(text); failed = !applied; } finally { busy = false; }

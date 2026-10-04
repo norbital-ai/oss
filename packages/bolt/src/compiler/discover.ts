@@ -5,29 +5,29 @@ import { join, relative, sep } from 'node:path';
 import { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
 import { SYSTEM } from '../system/index.ts';
 
-/** The 24 file roles of §3.2. `dir` is under `src/`: `*` is one name segment, `**` one or more (app paths); `*` in `file` is the name. */
+/** The file roles of §3.2. `dir` is under `src/`: `*` is one name segment, `**` one or more (app paths); `*` in `file` is the name. */
 export const ROLES = [
 	{ role: 'workspace', dir: '', file: '+workspace.ts' },
 	{ role: 'relationship', dir: 'data', file: '+relationship.ts' },
-	{ role: 'model', dir: 'data/model/*', file: '+model.ts' },
+	{ role: 'model', dir: 'data/model/**', file: '+model.ts' },
 	{ role: 'custom_field', dir: 'data/custom_field/*', file: '+definition.ts' },
 	{ role: 'renderer', dir: 'data/custom_field/*', file: '+renderer.svelte' },
-	{ role: 'collection', dir: 'data/collection/*', file: '+collection.ts' },
-	{ role: 'representation', dir: 'data/collection/*', file: '+representation.svelte' },
-	{ role: 'integration', dir: 'data/collection/*', file: '+integration.ts' },
-	{ role: 'pipeline', dir: 'data/collection/*', file: '+pipeline.ts' },
+	{ role: 'collection', dir: 'data/collection/**', file: '+collection.ts' },
+	{ role: 'representation', dir: 'data/collection/**', file: '+representation.svelte' },
+	{ role: 'integration', dir: 'data/collection/**', file: '+integration.ts' },
+	{ role: 'pipeline', dir: 'data/collection/**', file: '+pipeline.ts' },
 	{ role: 'policy', dir: 'access', file: '+*.policy.ts' },
 	{ role: 'team', dir: 'access', file: '+team.ts' },
 	{ role: 'agent', dir: 'agent', file: '+agent.md' },
 	{ role: 'agent_external', dir: 'agent', file: '+agent.external.md' },
-	{ role: 'envoy', dir: 'agent/envoy', file: '+*.envoy.ts' },
 	{ role: 'skill', dir: 'agent/skill', file: '+*.skill.md' },
 	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts' },
 	{ role: 'automation', dir: 'automation', file: '+*.automation.ts' },
-	{ role: 'channel', dir: 'channel', file: '+*.channel.ts' },
-	{ role: 'connect', dir: 'channel', file: '+*.connect.svelte' },
+	{ role: 'channel', dir: 'custom_channels/*', file: '+channel.ts' },
+	{ role: 'connect', dir: 'custom_channels/*', file: '+channel.configuration.svelte' },
 	{ role: 'connection', dir: 'connection', file: '+*.connection.ts' },
 	{ role: 'app', dir: 'app/**', file: '+app.ts' },
+	{ role: 'session', dir: 'app/**', file: '+session.svelte' },
 	{ role: 'page', dir: 'app/**', file: '+*.page.svelte' },
 	{ role: 'messages', dir: 'i18n', file: '+messages.ts' },
 	{ role: 'locale', dir: 'i18n', file: '+*.messages.ts' },
@@ -115,7 +115,14 @@ export function discover(root: string, layer: 'workspace' | 'system' = 'workspac
 			fail('bad-name', path, `'${bad}' is not a name (${NAME.source})`);
 			continue;
 		}
-		const name = r.role === 'page' ? `${folder}/${fileName}` : (fileName ?? folder!);
+		const nested =
+			r.role === 'model' ||
+			r.role === 'collection' ||
+			r.role === 'representation' ||
+			r.role === 'integration' ||
+			r.role === 'pipeline';
+		const leaf = folder!.split('/').at(-1)!;
+		const name = r.role === 'page' ? `${folder}/${fileName}` : nested ? (fileName ?? leaf) : (fileName ?? folder!);
 		files.push({ role: r.role, name, path });
 	}
 
@@ -128,7 +135,8 @@ export function discover(root: string, layer: 'workspace' | 'system' = 'workspac
 		if ((f.role === 'representation' || f.role === 'integration' || f.role === 'pipeline') && !has('collection', f.name))
 			fail('without-collection', f.path, `no src/data/collection/${f.name}/+collection.ts beside it`);
 		if (f.role === 'renderer' && !has('custom_field', f.name)) fail('custom-field-without-definition', f.path, `no +definition.ts beside it`);
-		if (f.role === 'connect' && !has('channel', f.name)) fail('connect-without-channel', f.path, `no src/channel/+<name>.channel.ts beside it`);
+		if (f.role === 'connect' && !has('channel', f.name)) fail('connect-without-channel', f.path, `no +channel.ts beside this configuration component`);
+		if (f.role === 'session' && !has('app', f.name)) fail('session-without-app', f.path, 'a session sits in a folder with +app.ts');
 		if (f.role === 'page' && !has('app', f.name.slice(0, f.name.lastIndexOf('/')))) fail('page-without-app', f.path, 'a page sits in a folder with +app.ts');
 		if ((f.role === 'app' || f.role === 'group') && has(f.role === 'app' ? 'group' : 'app', f.name))
 			fail('app-and-group', f.path, 'a folder holds +app.ts or +group.ts, never both');

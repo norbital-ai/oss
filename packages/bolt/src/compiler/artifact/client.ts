@@ -71,6 +71,7 @@ ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 /** Builds `<out>/index.html` and `<out>/assets/**`; returns the entry chunk and stylesheets. */
 export async function buildClient(root: string, files: readonly Discovered[], m: EngineManifest, out: string, title: string): Promise<{ entry: string; css: string[] }> {
 	const pages = files.filter((f) => f.role === 'page').map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
+	const sessions = files.filter((f) => f.role === 'session');
 	const shell = { workspace: m.workspace, agent: m.agent, apps: m.apps, groups: m.groups ?? {} };
 	// hook:ui-kit — the client stylesheet: ui's tokens + Tailwind, scanning the shell and the workspace's pages
 	// generated inputs sit at a fixed path under the workspace, so a rebuild is byte for byte the same
@@ -94,10 +95,12 @@ export async function buildClient(root: string, files: readonly Discovered[], m:
 import { mountShell } from ${key(join(SHELL, `mount${EXT}`))};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
 ${locales.map((l, i) => `import L${i} from ${key(join(root, l.path))};`).join('\n')}
+${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('\n')}
 ${renderers.map((r, i) => `import F${i} from ${key(join(root, r.path))};`).join('\n')}
 const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`).join(', ')} };
 const tag = navigator.languages.map((l) => l.toLowerCase()).flatMap((l) => [l, l.split('-')[0]]).find((l) => l in locales);
 mountShell(document.getElementById('bolt'), { manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
+	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
 	representations: { ${reps.join(', ')} }, connects: { ${connects.join(', ')} }, customFields: { ${customFields.join(', ')} } });`;
 	const result = await build({

@@ -303,19 +303,28 @@ describe('system collections render in ui\'s Table (Settings, Automations, Inbox
 		expect(text).not.toMatch(/\d:\d\d:\d\d/);
 	});
 
-	it('Settings → Channels names a channel humanized, its transport by brand, and labels its counters', async () => {
-		const t = await testWorkspace({ manifest: { ...manifest, channels: { field_ops: { transport: 'telegram' } } } as unknown as EngineManifest });
+	it('Settings → Envoy edits the persisted envoy and its channel bindings', async () => {
+		const t = await testWorkspace({ manifest: { ...manifest, channels: { field_ops: { transport: 'telegram', name: 'Field ops' }, personal: { transport: 'email', owner: 'personal-user' } }, envoys: { field_bot: { name: 'Field assistant', channel: 'field_ops', audience: 'private', policies: ['clerk'], delegation: 'disabled', task: 'Help the team.' } } } as unknown as EngineManifest });
 		// the connection stream is the browser's own `EventSource` (runtime.ts), which happy-dom lacks: a silent one
 		vi.stubGlobal('EventSource', class { onmessage = null; onerror = null; addEventListener() {} close() {} });
-		const { target } = await open(t, '/settings/channels', {});
+		const { target } = await open(t, '/settings/envoy', {});
 		await until(() => (target.querySelector('[data-view=table]')?.textContent ?? '').includes('Field ops'));
-		expect(target.querySelector('[data-view=table] tbody tr')?.textContent).toContain('Telegram');
+		expect(target.querySelector('[data-view=table] tbody tr')?.textContent).toContain('Field assistant');
+		expect(target.querySelector('[data-view=table]')?.textContent).not.toContain('Personal');
 		target.querySelector<HTMLElement>('[data-view=table] tbody tr')!.click();
 		await until(() => document.body.querySelector('[role=dialog]') !== null);
 		const sheet = document.body.querySelector('[role=dialog]')!;
-		expect(sheet.querySelector('h2')?.textContent?.trim()).toBe('Field ops');
-		const terms = [...sheet.querySelectorAll('dt')].map((x) => x.textContent?.trim());
-		expect(terms).toEqual(expect.arrayContaining(['Sent', 'Queued', 'Retrying', 'Failed', 'Skipped']));
+		expect(sheet.textContent).toContain('Configure envoy');
+		expect(sheet.querySelector('textarea')?.value).toBe('Help the team.');
+		expect(sheet.textContent).toContain('Field ops');
+		expect(sheet.textContent).not.toContain('personal');
+		const textarea = sheet.querySelector('textarea')!;
+		textarea.value = 'Updated at runtime.'; textarea.dispatchEvent(new Event('input', { bubbles: true }));
+		sheet.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+		for (let i = 0; i < 20; i++) await tick();
+		expect(sheet.querySelector('[role=alert]')?.textContent ?? '').toBe('');
+		await until(() => document.body.querySelector('[role=dialog]') === null);
+		expect((await t.db.read([{ text: "SELECT task, revision FROM sys_envoy WHERE id = 'field_bot'", params: [] }]))[0]!.rows).toEqual([{ task: 'Updated at runtime.', revision: 2 }]);
 		vi.unstubAllGlobals();
 	});
 
@@ -328,5 +337,20 @@ describe('system collections render in ui\'s Table (Settings, Automations, Inbox
 		await until(() => target.querySelectorAll('.svelte-flow__node').length === 2);
 		(target.querySelector<HTMLElement>('.svelte-flow__node[data-id=hr]') ?? target.querySelectorAll<HTMLElement>('.svelte-flow__node')[1]!).click();
 		await until(() => (document.body.querySelector('[role=dialog]')?.textContent ?? '').includes('Parent team'));
+	});
+});
+
+
+describe('workspace boot error recovery', () => {
+	it.each([403, 404, 429, 500, 503])('shows the reason and retry control for HTTP %s', async (status) => {
+		history.replaceState(null, '', '/app/desk/hero');
+		const target = document.body.appendChild(document.createElement('div'));
+		const v = mountShell(target, { manifest: manifest as never, pages: {}, fetch: async () => new Response('proxy error', { status }) });
+		views.push(() => { void unmount(v); target.remove(); });
+		await until(() => target.querySelector('[role=alert]') !== null);
+		expect(target.textContent).toContain(`HTTP ${status}`);
+		expect(target.textContent).toContain('Unable to open the workspace');
+		expect(target.textContent).not.toContain('could not be reached');
+		expect([...target.querySelectorAll('button')].some((button) => button.textContent?.includes('Try again'))).toBe(true);
 	});
 });

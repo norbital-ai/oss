@@ -1,3 +1,4 @@
+import type { ChannelRecord } from './registry.ts';
 // Every host's channel links (rule 61): one live `ChannelLink` per declared channel, opened from the provider the
 // operator chose at setup and the credential the host sealed. A host registers its providers (`@norbital-ai/providers`)
 // and its sealed store; this file owns the rest — the per-transport ports the engine sends through (dispatching by
@@ -24,7 +25,9 @@ import { isReported } from './status.ts';
 import { isObj } from './store.ts';
 
 export type LinkHost = {
-	manifest: Pick<EngineManifest, 'channels'>;
+	manifest: Pick<EngineManifest, 'channels' | 'channelTypes'>;
+	/** Runtime records; the host binds the tenant database, including when the engine sleeps. */
+	registry?: { refresh(): Promise<void>; list(auth: Authority): Promise<ChannelRecord[]>; op(auth: Authority, op: string, input: Json): Promise<Json> };
 	providers: readonly ChannelProvider[];
 	/** The channel's sealed `{ provider, credential }`, or `null`. */
 	load(channel: string): Promise<Json | null>;
@@ -52,7 +55,7 @@ const workspaceProvider = (m: LinkHost['manifest']): ChannelProvider => ({
 	setup: { kind: 'none', steps: [] },
 	async open(ctx) {
 		let credential = ctx.credential;
-		const inbound = m.channels[ctx.channel.split('~')[0]!]?.['inbound'];
+		const inbound = m.channels[ctx.channel]?.['inbound'];
 		const verify = isObj(inbound) && isObj(inbound['verify']) ? inbound['verify'] : null;
 		return {
 			send: async () => {
@@ -118,32 +121,21 @@ export function channelLinks(h: LinkHost) {
 	const live = new Map<string, { provider: ChannelProvider; link: ChannelLink }>();
 	const watchers = new Map<string, Set<(c: ChannelConnection) => void>>();
 	const sinks = new Map<string, Set<(e: TransportEvent) => Promise<void>>>();
-	const baseOf = (channel: string) => channel.split('~')[0]!;
-	const accounts = new Map<string, Set<string>>();
-	const owners = new Map<string, Record<string, string>>();
-	// ponytail: account registration serializes in this host; use a tenant lease before adding replicas.
-	let registration = Promise.resolve();
 	const transportOf = (channel: string): string | undefined => {
-		const base = baseOf(channel);
-		if (
-			base !== channel &&
-			(h.manifest.channels[base]?.['accounts'] !== true ||
-				!accounts.get(base)?.has(channel.slice(base.length + 1)))
-		)
-			return undefined;
-		const t = h.manifest.channels[base]?.['transport'];
+		const t = h.manifest.channels[channel]?.['transport'];
 		return typeof t === 'string' ? t : undefined;
 	};
+	const personal = (channel: string) => typeof h.manifest.channels[channel]?.['owner'] === 'string';
 	const WORKSPACE = workspaceProvider(h.manifest);
 	const choices = (transport: string, channel: string): readonly ChannelProvider[] =>
 		[...h.providers, WORKSPACE].filter(
 			(p) =>
 				p.transport === transport &&
-				(h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true ||
+				(!personal(channel) ||
 					(p.supportsSync === true &&
 						(p !== WORKSPACE ||
-							isObj(h.manifest.channels[baseOf(channel)]?.['inbound']) ||
-							isObj(h.manifest.channels[baseOf(channel)]?.['poll']))))
+							isObj(h.manifest.channels[channel]?.['inbound']) ||
+							isObj(h.manifest.channels[channel]?.['poll']))))
 		);
 	const emit = async (transport: string, event: TransportEvent) => {
 		if (h.emit !== undefined) return h.emit(transport, event);
@@ -162,19 +154,19 @@ export function channelLinks(h: LinkHost) {
 			...(p.description === undefined ? {} : { description: p.description }),
 			...(p.icon === undefined ? {} : { icon: p.icon }),
 			...(p.describe?.({
-				syncOnly: h.manifest.channels[baseOf(channel)]?.['syncOnly'] === true
+				syncOnly: personal(channel)
 			}) ?? { label: p.label, setup: p.setup })
 		}));
 		const hook =
 			descriptions.some((p) => p.setup.webhook === true) ||
-			(transport === 'custom' && isObj(h.manifest.channels[baseOf(channel)]?.['inbound']))
+			(transport === 'custom' && isObj(h.manifest.channels[channel]?.['inbound']))
 				? { webhookUrl: h.webhookUrl(channel, transport) }
 				: {};
 		const redirect = descriptions.some((p) => p.setup.steps.some((s) => s.copy === 'redirectUrl'))
 			? { redirectUrl: `${h.webhookUrl(channel, transport)}${OAUTH_CALLBACK}` }
 			: {};
 		const test =
-			h.manifest.channels[baseOf(channel)]?.['syncOnly'] !== true &&
+			!personal(channel) &&
 			held?.provider.test !== undefined &&
 			base.state === 'connected'
 				? { test: held.provider.test }
@@ -212,37 +204,13 @@ export function channelLinks(h: LinkHost) {
 		const link = await provider.open({
 			channel,
 			credential,
-			...(h.manifest.channels[baseOf(channel)]?.['syncOnly'] === true ? { syncOnly: true } : {}),
+			...(personal(channel) ? { syncOnly: true } : {}),
 			webhookUrl: h.webhookUrl(channel, transport),
 			fetch: h.fetch ?? fetch,
 			save: (c) => h.store(channel, c === null ? null : { provider: provider.id, credential: c }),
-			emit: (e) => {
-				const base = baseOf(channel),
-					account = channel === base ? null : channel.slice(base.length + 1);
-				return emit(
-					transport,
-					account === null
-						? { ...e, channel }
-						: e.kind === 'inbound' && isObj(e.message)
-							? {
-									...e,
-									channel: base,
-									message: {
-										...e.message,
-										sourceAccount: account,
-										// Attribution comes from the registry, never from the provider's payload.
-										sourceUser: owners.get(base)?.[account] ?? null,
-										...(transport === 'custom'
-											? {}
-											: {
-													thread: `${account}:${String(e.message['thread'] ?? e.message['id'])}`,
-													id: `${account}:${String(e.message['id'])}`
-												})
-									}
-								}
-							: { ...e, channel: base }
-				);
-			},
+			emit: (e) => emit(transport, e.kind === 'inbound' && isObj(e.message)
+				? { ...e, channel, message: { ...e.message, sourceAccount: channel, sourceUser: personal(channel) ? String(h.manifest.channels[channel]!['owner']) : null } }
+				: { ...e, channel }),
 			changed: () => changed(channel)
 		});
 		live.set(channel, { provider, link });
@@ -291,7 +259,7 @@ export function channelLinks(h: LinkHost) {
 
 	/** A short test message through the connected link: to `to`, or to the connected account itself when the provider names no target. */
 	async function test(channel: string, to: string | null): Promise<unknown> {
-		if (h.manifest.channels[baseOf(channel)]?.['syncOnly'] === true)
+		if (personal(channel))
 			throw new Error('Personal activity channels cannot send test messages.');
 		const held = live.get(channel),
 			c = held?.link.connection();
@@ -313,7 +281,7 @@ export function channelLinks(h: LinkHost) {
 
 	/** The engine's ports: one per declared transport, sending through the named channel's link. */
 	const transports: Transports = Object.fromEntries(
-		[...new Set(Object.keys(h.manifest.channels).map(transportOf))]
+		[...new Set([...h.providers.map((p) => p.transport), 'custom', ...Object.keys(h.manifest.channels).map(transportOf)])]
 			.filter((t): t is string => t !== undefined && t !== 'inbox')
 			.map((t): [string, TransportPort] => [
 				t,
@@ -346,37 +314,15 @@ export function channelLinks(h: LinkHost) {
 		transportOf,
 		/** Reopens every channel whose sealed credential names a provider this host registers; one failure is logged. */
 		async resume(): Promise<void> {
-			for (const [channel, spec] of Object.entries(h.manifest.channels)) {
-				if (spec['accounts'] !== true) continue;
-				const saved = await h.load(`accounts:${channel}`);
-				const savedOwners = await h.load(`account_owners:${channel}`);
-				owners.set(
-					channel,
-					isObj(savedOwners)
-						? Object.fromEntries(
-								Object.entries(savedOwners).filter(
-									(entry): entry is [string, string] => typeof entry[1] === 'string'
-								)
-							)
-						: {}
-				);
-				accounts.set(
-					channel,
-					new Set(
-						Array.isArray(saved)
-							? saved.filter(
-									(id): id is string => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(id)
-								)
-							: []
-					)
-				);
+			await h.registry?.refresh();
+			for (const [id, held] of live) if (h.manifest.channels[id] === undefined) {
+				await held.link.close(); live.delete(id);
 			}
+
 			await Promise.all(
-				[
-					...Object.keys(h.manifest.channels),
-					...[...accounts].flatMap(([base, ids]) => [...ids].map((id) => `${base}~${id}`))
-				].map(async (channel) => {
+				Object.keys(h.manifest.channels).map(async (channel) => {
 					try {
+						if (live.has(channel)) return;
 						const sealed = await h.load(channel);
 						if (!isObj(sealed)) return;
 						const p = choices(transportOf(channel) ?? '', channel).find(
@@ -428,75 +374,29 @@ export function channelLinks(h: LinkHost) {
 					? authority.actor
 					: undefined;
 			const administrator = authority === undefined || (member !== undefined && authority.admin);
-			const base = baseOf(channel),
-				spec = h.manifest.channels[base];
-			if (
-				!administrator &&
-				(member === undefined ||
-					spec?.['accounts'] !== true ||
-					spec['syncOnly'] !== true ||
-					(verb !== 'accounts' &&
-						verb !== 'providers' &&
-						owners.get(base)?.[channel.slice(base.length + 1)] !== member.id))
-			)
-				return refuse(
-					403,
-					'forbidden',
-					'Only the account owner or an administrator manages a personal channel account.'
-				);
-			if (verb === 'providers' && channel === base && request.method === 'GET')
-				return spec === undefined
-					? refuse(404, 'notFound', 'Unknown channel.')
-					: Response.json({ value: state(channel).providers ?? [] });
-			if (verb === 'accounts' && h.manifest.channels[channel]?.['accounts'] === true) {
-				const previous = registration;
-				let release = () => {};
-				registration = new Promise<void>((resolve) => {
-					release = resolve;
-				});
-				await previous;
+			await h.registry?.refresh();
+			if (channel === '') {
+				if (h.registry === undefined || authority === undefined) return refuse(503, 'unavailable', 'Runtime connection records are unavailable.');
 				try {
-					const ids = new Set(accounts.get(channel));
-					if (request.method === 'POST') {
-						const body: unknown = await request.json().catch(() => null);
-						if (
-							!isObj(body) ||
-							typeof body['id'] !== 'string' ||
-							!/^[a-zA-Z0-9_-]{1,80}$/.test(body['id'])
-						)
-							return refuse(
-								400,
-								'invalid',
-								'Account id must contain 1–80 letters, digits, underscores or hyphens.'
-							);
-						if (
-							ids.has(body['id']) &&
-							!administrator &&
-							owners.get(channel)?.[body['id']] !== member!.id
-						)
-							return refuse(403, 'forbidden', 'This account belongs to another member.');
-						if (!ids.has(body['id']) && member !== undefined) {
-							const owned = { ...owners.get(channel), [body['id']]: member.id };
-							await h.store(`account_owners:${channel}`, owned);
-							owners.set(channel, owned);
-						}
-						ids.add(body['id']);
-						await h.store(`accounts:${channel}`, [...ids]);
-						accounts.set(channel, ids);
-					} else if (request.method !== 'GET') return refuse(405, 'invalid', 'Use GET or POST.');
-					return Response.json({
-						value: [...ids]
-							.filter((id) => administrator || owners.get(channel)?.[id] === member!.id)
-							.map((id) => ({
-								id,
-								owner: owners.get(channel)?.[id] ?? null,
-								connection: state(`${channel}~${id}`)
-							}))
-					});
-				} finally {
-					release();
-				}
+					if (request.method === 'GET') return Response.json({ value: await h.registry.list(authority) });
+					if (request.method === 'POST') return Response.json({ value: await h.registry.op(authority, 'saveChannel', await request.json() as Json) });
+				} catch (e) { return refuse(400, 'invalid', messageOf(e)); }
 			}
+			if (channel === 'types' && verb && request.method === 'GET') {
+				return Response.json({ value: h.providers.filter((p) => p.transport === verb && p.supportsSync === true).map((p) => ({ id: p.id, ...(p.describe?.({ syncOnly: true }) ?? { label: p.label, setup: p.setup }), name: p.name, description: p.description, icon: p.icon })) });
+			}
+			const spec = h.manifest.channels[channel];
+			if (!administrator && (member === undefined || spec?.['owner'] !== member.id))
+				return refuse(403, 'forbidden', 'Only the connection owner or an administrator can configure it.');
+			if (verb === 'providers' && request.method === 'GET') return Response.json({ value: state(channel).providers ?? [] });
+			if (request.method === 'DELETE' && h.registry !== undefined && authority !== undefined) {
+				try {
+					await h.registry.op(authority, 'deleteChannel', { id: channel });
+					await unpair(channel);
+					return Response.json({ value: null });
+				} catch (e) { return refuse(400, 'invalid', messageOf(e)); }
+			}
+
 			const transport = transportOf(channel);
 			if (transport === undefined)
 				return refuse(404, 'notFound', `this workspace declares no channel '${channel}'`);

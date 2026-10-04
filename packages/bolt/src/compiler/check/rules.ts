@@ -256,23 +256,7 @@ export function buildChecks(
 	}
 
 	// rule 61: a custom channel is the workspace's own provider — it names the connection it sends through and ships its setup page
-	for (const [name, ch] of Object.entries(m.channels ?? {})) {
-		for (const flag of ['accounts', 'syncOnly'])
-			if (ch[flag] !== undefined && typeof ch[flag] !== 'boolean')
-				at('channel/flag', 'channel', name, `${flag} must be boolean`);
-		if (
-			ch['syncOnly'] === true &&
-			(ch['outbound'] !== undefined ||
-				Object.values(m.envoys ?? {}).some((e) => e['channel'] === name))
-		)
-			at(
-				'channel/sync-only',
-				'channel',
-				name,
-				'personal sync channels cannot declare outbound or an envoy'
-			);
-		if (ch['accounts'] === true && ch['syncOnly'] !== true && Object.values(m.envoys ?? {}).some((e) => e['channel'] === name))
-			at('channel/accounts-envoy', 'channel', name, 'an envoy cannot bind a channel with multiple accounts');
+	for (const [name, ch] of Object.entries(m.channelTypes ?? {})) {
 		const send = ch['send'];
 		const inbound = ch['inbound'],
 			poll = ch['poll'];
@@ -293,7 +277,7 @@ export function buildChecks(
 				);
 			continue;
 		}
-		if (ch['syncOnly'] !== true && (typeof send !== 'string' || m.connections?.[send] === undefined))
+		if (send !== undefined ? typeof send !== 'string' || m.connections?.[send] === undefined : ch['inbound'] === undefined && ch['poll'] === undefined)
 			at(
 				'channel/custom-send',
 				'channel',
@@ -305,7 +289,7 @@ export function buildChecks(
 				'channel/custom-connect',
 				'channel',
 				name,
-				`a custom channel ships its setup page: add src/channel/+${name}.connect.svelte`
+				`a custom channel ships its setup page: add src/custom_channels/${name}/+channel.configuration.svelte`
 			);
 		// its inbound is one path: the channel's own webhook, verified with the sealed credential, and/or a poll of a connection
 		if (inbound !== undefined) {
@@ -359,6 +343,15 @@ export function buildChecks(
 	}
 
 	for (const [name, a] of Object.entries(m.automations)) {
+        const delegated = new Set<string>();
+        for (const declaration of a.delegations ?? []) {
+            const dot=declaration.verb.lastIndexOf('.'), collection=declaration.verb.slice(0,dot), verb=declaration.verb.slice(dot+1);
+            const grant=m.policies[declaration.policy]?.grants[collection];
+            const key=declaration.verb+'\0'+declaration.policy;
+            if(!['create','update','delete'].includes(verb)||m.collections[collection]===undefined||grant===undefined||Reflect.get(grant,verb)===undefined||delegated.has(key))
+                at('automation/delegation','automation',name,'Delegation requires one unique existing policy and its exact native target verb grant.');
+            delegated.add(key);
+        }
 		if (!bodies.automations.includes(name))
 			at('automation/no-body', 'automation', name, 'attach the run body with a.run(…)');
 		for (const on of list(a.on) as Obj[]) {

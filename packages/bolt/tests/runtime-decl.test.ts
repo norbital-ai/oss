@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import * as bolt from '../src/index.ts';
-import { app, automation, channel, connection, envoy, group, integration, mcp, pipeline, workspace } from '../src/index.ts';
+import { app, automation, channel, connection, group, integration, mcp, pipeline, workspace } from '../src/index.ts';
 import * as rt from './types/fixture/runtime.ts';
 import './types/registry.ts';
 
 describe('next runtime declarations', () => {
 	it('exports the runtime declaration functions (P29)', () => {
-		for (const name of ['workspace', 'app', 'group', 'integration', 'pipeline', 'envoy', 'mcp', 'automation', 'channel', 'connection'])
+		for (const name of ['workspace', 'app', 'group', 'integration', 'pipeline', 'mcp', 'automation', 'channel', 'connection'])
 			expect(typeof (bolt as Record<string, unknown>)[name]).toBe('function');
 	});
 
@@ -17,8 +17,6 @@ describe('next runtime declarations', () => {
 		expect(connection(conn)).toBe(conn);
 		const ch = { transport: 'whatsapp' } as const;
 		expect(channel(ch)).toBe(ch);
-		const en = { channel: 'whatsapp', audience: 'public', name: 'Norbius', policies: ['sales_rep'], delegation: 'disabled', task: 't' } as const;
-		expect(envoy(en)).toBe(en);
 		const m = { description: 'docs', url: 'MCP_URL' } as const;
 		expect(mcp(m)).toBe(m);
 	});
@@ -48,7 +46,7 @@ describe('next runtime declarations', () => {
 		const outbound = rt.support.outbound?.confirmations;
 		expect(outbound?.from).toBe('orders');
 		const record = { number: 'SO-0001', note: null, id: 'o1' } as unknown as Parameters<NonNullable<typeof outbound>['message']>[0]['record'];
-		expect(outbound?.message({ record })).toEqual({ to: ['sales@example.com'], subject: 'Order SO-0001', text: '', thread: 'o1' });
+		expect(outbound?.message({ record, configuration: {} })).toEqual({ to: ['sales@example.com'], subject: 'Order SO-0001', text: '', thread: 'o1' });
 		const events = rt.support.events;
 		const bounced = typeof events === 'object' ? events.bounced : undefined;
 		expect(bounced?.({ at: 'now', message: 'm', reason: 'mailbox full' } as unknown as Parameters<NonNullable<typeof bounced>>[0])).toEqual({ note: 'mailbox full' });

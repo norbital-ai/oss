@@ -91,6 +91,7 @@ function directory(actor: EngineActor): { [c: string]: Arm } {
 		: { t: 'cmp', field: 'kind', op: 'eq', arg: { lit: 'staff' } };
 	return {
 		sys_user: { policy: KERNEL, where: user, fields },
+		...(actor.external ? {} : { sys_channel_connection: { policy: KERNEL, where: { t: 'cmp' as const, field: 'owner', op: 'eq' as const, arg: { actor: 'id' as const } }, fields: 'all' as const } }),
 		...(actor.external ? {} : { sys_team: { policy: KERNEL, where: TRUE, fields } }),
 		sys_assignment: { policy: KERNEL, where: { t: 'cmp', field: 'principal', op: 'eq', arg: { actor: 'id' } }, fields: 'all' },
 	};

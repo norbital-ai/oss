@@ -17,7 +17,7 @@ describe('next compiler: discover', () => {
 		expect(errors).toEqual([]);
 		expect(files.map((f) => `${f.role} ${f.name}`).sort()).toEqual([
 			'agent ', 'app hr/kiosk', 'app sales', 'automation nightly', 'channel mail', 'collection customers', 'collection notices',
-			'collection orders', 'connection erp', 'custom_field rating', 'envoy desk', 'group hr', 'integration notices', 'locale ms',
+			'collection orders', 'connection erp', 'custom_field rating', 'group hr', 'integration notices', 'locale ms',
 			'mcp hq', 'messages ', 'model customers', 'model notices', 'model orders', 'page hr/kiosk/clock', 'page sales/board',
 			'page sales/list', 'policy sales_rep', 'relationship ', 'renderer rating', 'representation orders', 'skill triage',
 			'team ', 'workspace '
@@ -35,10 +35,10 @@ describe('next compiler: discover', () => {
 			'discover/custom-field-without-definition src/data/custom_field/stars/+renderer.svelte',
 			'discover/messages-missing src/i18n/+ms.messages.ts',
 			'discover/name-clash src/automation/+orders.automation.ts',
+			'discover/one-per-folder src/channel/+inbox.channel.ts',
 			'discover/one-per-folder src/data/collection/orders/+erp.integration.ts',
 			'discover/page-without-app src/app/empty/+board.page.svelte',
 			'discover/plural-folder src/automations/+sync.automation.ts',
-			'discover/reserved-name src/channel/+inbox.channel.ts',
 			'discover/reserved-name src/data/custom_field/phone/+definition.ts',
 			'discover/reserved-name src/data/model/sys_thing/+model.ts',
 			'discover/seed-unknown-collection seed/nope.json',

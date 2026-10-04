@@ -1,68 +1,7 @@
 // Agent roles under `src/agent/` (§3.3.6, §3.9, rules 57–63b): envoys, MCP servers and the skill frontmatter.
 // Envoy behaviour is today's exactly (P22); the literal carries no authority beyond its `policies`.
 import type { Checked, Exact } from '../fields.ts';
-import type { ChannelName, PolicyName } from '../names.ts';
-import type { NonEmpty } from '../values.ts';
-import type { EnvName, TransportOf } from './names.ts';
-
-type EnvoyBase = {
-	/** The channel it answers. */
-	channel: string;
-	/** `private`: only members whose registered handle is the sender's; `public`: anyone, under `policies` alone. */
-	audience: 'public' | 'private';
-	/** The authority of every turn (a member sender's own joins it in a DM). */
-	policies: NonEmpty<string>;
-	/** What the envoy is called on its channel: the name a person says when they mean it (`Norbital`). */
-	name: string;
-	/** Which group messages it answers; default `disabled`. */
-	groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
-	/** Whether it may delegate to sub-agents. */
-	delegation: 'enabled' | 'disabled';
-	/** A standing directive on top of `+agent.md`. */
-	task: string;
-	/** System 1 triage of inbound messages; `false` answers every addressed message at once. */
-	triage?: false | { scope?: 'dm' | 'group' | 'all' }; // hook:triage
-};
-type EnvoyFor<S> = {
-	channel: ChannelName;
-	/**
-	 * 'private': only a sender whose handle is registered on a member (phone on WhatsApp, email on email,
-	 * `telegram` on Telegram) is admitted; anyone else gets one fixed "not recognised" reply and no turn. 'public': anyone;
-	 * an unknown sender's DM runs under `policies` alone (P32).
-	 */
-	audience: 'public' | 'private';
-	/** Required: every group turn's whole authority, joined in a DM by a member sender's own (P32); the source of every envoy limit. */
-	policies: NonEmpty<PolicyName>;
-	/** What people call it on the channel; a message that says this name is addressed to it, mention or not. */
-	name: string;
-	/** Default 'disabled'. Email is always addressed, so an email channel's envoy takes none. */
-	groupMessages?: TransportOf<S extends { channel: infer C } ? C : never> extends 'email'
-		? 'error: email is always addressed; groupMessages does not apply' : 'disabled' | 'mention_or_reply' | 'all';
-	delegation: 'enabled' | 'disabled';
-	/** Rule 60a (hook:triage): on where the host binds the triage port; `false` opts out; `scope` default 'all'. Not on email. */
-	triage?: TransportOf<S extends { channel: infer C } ? C : never> extends 'email'
-		? 'error: email is always addressed; triage does not apply' : false | { scope?: 'dm' | 'group' | 'all' };
-	/** A standing directive on top of `+agent.md`; never who may do what. */
-	task: string;
-};
-
-/**
- * `src/agent/envoy/+<e>.envoy.ts`: the workspace agent answering a channel: who may reach it (`audience`), the policies its
- * turns hold, how it treats group messages, delegation, triage and its standing `task`.
- * @example
- * export default envoy({
- * 	channel: 'sales_desk',
- * 	audience: 'public',
- * 	name: 'Norbital',
- * 	policies: ['products_read'],
- * 	groupMessages: 'disabled',
- * 	delegation: 'disabled',
- * 	task: 'Answer questions about products and prices.'
- * });
- */
-export function envoy<const S extends EnvoyBase>(spec: S & Checked<EnvoyBase, S, Exact<S, EnvoyFor<S>>>): S {
-	return spec;
-}
+import type { EnvName } from './names.ts';
 
 type McpBase = {
 	description: string;

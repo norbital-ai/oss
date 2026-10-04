@@ -5,7 +5,7 @@ export { model } from './decl/model.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
 export { relationship } from './decl/relationship.ts';
-export { envoy, mcp } from './decl/runtime/agent.ts';
+export { mcp } from './decl/runtime/agent.ts';
 export { app, group, messages, workspace } from './decl/runtime/app.ts';
 export { automation } from './decl/runtime/automation.ts';
 export { channel } from './decl/runtime/channel.ts';
@@ -50,3 +50,5 @@ export type { ConflictRule, IntegrationCtx, IntegrationSource, Remote, RemoteKey
 export type { AiModelClass, ChildName, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, EnvName, PageName, Transport } from './decl/runtime/names.ts';
 export type { BankReader, SeedSource } from './compiler/artifact/seed.ts'; // hook:cli — X-15's seed reader types (§3.3.10)
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
+
+export type { ProjectReadCtx, ReadProjection } from './decl/collection.ts';

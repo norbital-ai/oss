@@ -43,7 +43,7 @@
 	}
 </script>
 
-<Stack gap="sm">
+<Stack gap="sm" class="access-sign-in">
 	{#if handle || workspace}
 		<Stack as="header" gap="xs" class="min-w-0">
 			<p class="text-overline">{t('Signing in to')}</p>
@@ -59,7 +59,7 @@
 		<!-- a workspace people sign up to by number opens on the number -->
 		{@const current = mode ?? (byPhone && m.value.signup.includes('phone') ? 'phone' : byEmail ? 'email' : 'phone')}
 		{@const joins = m.ok && m.value.signup.includes(current)}
-		<Stack as="section" gap="lg">
+		<Stack as="section" gap="lg" class="access-sign-in-content">
 			<Stack as="header" gap="sm">
 				<h1 class="text-title text-balance">{sent ? t('Enter your code') : joins ? t('Sign in or sign up') : t('Sign in')}</h1>
 				{#if sent}
@@ -125,3 +125,13 @@
 		</Stack>
 	{/await}
 </Stack>
+
+<style>
+	@media (orientation: landscape) and (max-height: 500px) and (min-width: 640px) and (pointer: coarse) {
+		:global(.access-sign-in-content) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.75rem 1.5rem; align-items: start; }
+		:global(.access-sign-in-content > header) { grid-column: 1; }
+		:global(.access-sign-in-content > header h1) { font-size: 1.5rem; line-height: 1.2; }
+		:global(.access-sign-in-content > form) { grid-column: 2; grid-row: 1 / span 2; }
+		:global(.access-sign-in-content > p) { grid-column: 1; grid-row: 2; padding-top: 0.5rem; }
+	}
+</style>

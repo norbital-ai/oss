@@ -50,6 +50,8 @@ export type AutomationSpec = {
 	on?: Trigger | readonly Trigger[];
 	/** The policies the run holds, or `'trigger'` (the starter's authority) for an automation with no `on`. */
 	runAs: NonEmpty<string> | 'trigger';
+	/** Native generated verbs delegated to this authenticated run and its child action lineage only. */
+	delegations?: readonly { verb: `${string}.${'create'|'update'|'delete'}`; policy: string }[];
 	/** Retries of a failed run, with backoff. */
 	retry?: { attempts: Attempts; backoff?: Duration };
 	/** At most `max` runs at once. */
@@ -65,6 +67,7 @@ type AutomationFor<S> = {
 	on?: S extends { on: infer O } ? O extends readonly unknown[] ? { [I in keyof O]: ValidTrigger<O[I]> } : ValidTrigger<O> : never;
 	/** 'trigger' (the starter's authority) only when nothing triggers it (rule 53). */
 	runAs: NonEmpty<PolicyName> | (S extends { on: unknown } ? 'error: runAs trigger needs an automation without on' : 'trigger');
+	delegations?: readonly { verb: `${CollectionName}.${'create'|'update'|'delete'}`; policy: PolicyName }[];
 	retry?: { attempts: Attempts; backoff?: Duration };
 	concurrency?: { max: Max };
 	agent?: AgentUse;

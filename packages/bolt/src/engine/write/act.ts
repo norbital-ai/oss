@@ -3,7 +3,7 @@
 // model rules → post-image scope and the approval route → one write statement (rule 20), or the outcome record.
 import type { Json } from '../../decl/values.ts';
 import type {
-	ApprovalRoute, Arm, Authority, Bindings, Bridge, Captured, EngineManifest, GuestPort, Invocation, InputPath, Lock, NoticeRow, Outcome, Pred, RowData, Sql, TenantDb, WriteArm
+ApprovalRoute, Arm, Authority, Bindings, Bridge, Captured, CrossAnswer, EngineManifest, GuestPort, Invocation, InputPath, Lock, NoticeRow, Outcome, Pred, RowData, Sql, TenantDb, WriteArm
 } from '../contracts.ts';
 import { BoltError, LIMITS } from '../contracts.ts';
 import { admitMove, readScope } from '../access/authority.ts';
@@ -11,6 +11,7 @@ import { catalogOf } from '../access/pred.ts';
 import { q, type Catalog } from '../../protocol/catalog.ts';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 import { compileGets } from '../query/sql.ts';
+import { readEngine } from '../query/engine.ts';
 import { constraintIndex, type ConstraintMeta } from '../schema/ddl.ts';
 import { schemaSlice } from '../schema/plan.ts';
 import { compileCommit, compileOutcomeRecord, type Commit, type OwnedLock, type RateCharge, type Write } from './commit.ts';
@@ -24,6 +25,10 @@ import { embedQueued, embedWrites } from '../integrations/embed.ts'; // hook:int
 /** The generated verbs (X-24): `import` (rule 30) and `erase` (rule 38e) included. */
 type Obj = { readonly [k: string]: Json };
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** Configured planning may add fields; every already reserved leaf remains immutable. */
+const retainsPrepared=(actual:unknown,reserved:unknown):boolean=>isObj(reserved)&&isObj(actual)
+	?Object.entries(reserved).every(([field,value])=>Object.hasOwn(actual,field)&&retainsPrepared(actual[field],value))
+	:canonical(actual)===canonical(reserved);
 export type Verb = 'create' | 'update' | 'delete' | 'upsert' | 'import' | 'erase';
 export type ActRequest = {
 	collection: string; verb: Verb; input: Json;
@@ -401,6 +406,8 @@ type Planned = { guest: boolean } & ({ outcome: Outcome } | { commit: Omit<Commi
 async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: readonly Item[], pre: Map<string, RowData>, imp?: ImportPlan, upserted?: (string | null)[]): Promise<Planned> {
 	const m = e.manifest, auth = env.authority!, b = r.bindings, cat = env.cat; // hook:integrations — the act's judged authority
 	let items = submitted, readTables: readonly string[] = [], fingerprints: readonly Fingerprint[] = [];
+	const identities=new Map(submitted.map(item=>[JSON.stringify([item.change.collection,item.change.path]),item.change.id]));
+	const preparedCreates=new Map<string,Item>();
 	const deleteGuard = r.verb === 'delete' && m.collections[r.collection]?.delete !== undefined && 'transform' in m.collections[r.collection]!.delete!;
 	const runs = e.transforms?.has(r.collection) === true && (r.verb !== 'delete' || (deleteGuard && !auth.admin));
 
@@ -416,11 +423,101 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 				const input = it.change.op === 'delete' ? { $delete: true } : r.verb === 'update' ? (inputs[i] as { set: Json }).set : inputs[i]!;
 				return r.verb === 'upsert' && !r.integration && isObj(input) ? Object.fromEntries(Object.entries(input).filter(([field]) => field !== 'id')) : input;
 			}),
-			ctx: { actor: auth.actor, now: b.now, today: b.today, tz: b.tz, seed: r.invocationId,
+			ctx: { actor: auth.actor, policies: auth.policies, admin: auth.admin, now: b.now, today: b.today, tz: b.tz, seed: r.invocationId,
+				staged:submitted.map(item=>({collection:item.change.collection,id:item.change.id,path:item.change.path,operation:item.change.op,...(item.parent===undefined?{}:{parent:{collection:item.parent.collection,id:item.parent.id,relation:item.parent.rel,field:item.parent.fk}})})),
 				existing: await wireRows(e.db, cat, r.collection, roots.map((it) => pre.has(k(it.change.collection, it.change.id)) ? it.change.id : null), b) },
 			budget: { cpuMs: LIMITS.guestCpuMs, crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes },
 		};
-		const bridge = e.bridge?.(invocation) ?? { cross: () => Promise.reject(new BoltError('noBridge', 'guest', 'this host gives the transform no reads')) };
+		const originalBridge = e.bridge?.(invocation) ?? { cross: () => Promise.reject(new BoltError('noBridge', 'guest', 'this host gives the transform no reads')) };
+		const bridge={...originalBridge,cross:async(calls:Parameters<Bridge['cross']>[0],signal:AbortSignal):Promise<readonly CrossAnswer[]>=>{
+			const answers:CrossAnswer[]=[];
+			const forwarded=calls.filter(call=>call.op!=='prepareCreate'&&!(call.op==='read'&&call.read.kind==='after'));
+			const readAnswers=forwarded.length?await originalBridge.cross(forwarded,signal):[];let forwardedIndex=0;
+			for(const call of calls){
+				if(call.op==='read'&&call.read.kind==='after'){
+					const nativeRead=call.read.query??{kind:'read' as const,collection:call.read.collection,where:call.read.where,select:{fields:[...cat.collections.get(call.read.collection)!.model.fields.keys()],relations:{}},page:{all:true as const}};
+					// The original bridge captures the stored source baseline for the act's native lock/fingerprint contract.
+					const baseline=await originalBridge.cross([{op:'read',read:nativeRead,params:call.params}],signal);
+					if(baseline.length!==1)throw new BoltError('preparedRead','guest','a prospective read requires its actual native source baseline');
+					if(baseline[0]?.ok!==true){answers.push(baseline[0]!);continue;}
+					const prospective=new Map(submitted.map(item=>[JSON.stringify([item.change.collection,item.change.path]),item]));
+					for(const [token,item]of preparedCreates)prospective.set(token,item);
+					const groups=Map.groupBy([...prospective.values()],item=>cat.collections.get(item.change.collection)!.model.name);
+					const sources=new Map([...groups.keys()].map((model,index)=>[model,`__bolt_prepared_${index}`]));
+					const nativeRows=new Map<string,RowData[]>();
+					for(const [model,group]of groups){
+						const spec=m.models[model]!;
+						if(Object.keys(spec.computed??{}).length||Object.values(spec.fields).some(field=>['seq','sum','count'].includes(field.kind)))throw new BoltError('preparedComputed','guest','prospective reads require native generated fields to be materialized before they can be read');
+						const rows:RowData[]=[];
+						for(const item of group){
+							if(item.change.op==='delete')continue;
+							if(item.change.op!=='create'&&item.change.op!=='update')throw new BoltError('preparedUpsert','guest','prospective sources require resolved native row identities');
+							const old=item.change.op==='update'?pre.get(k(item.change.collection,item.change.id)):undefined;
+							if(item.change.op==='update'&&old===undefined)throw new BoltError('preparedPrevious','guest','a prospective update requires its actual stored pre-image');
+							const values={...old,...(item.change.op==='create'?item.change.values:item.change.set)};
+							// A private prepared routing phase can precede derived required fields.
+							// Final emission still passes the ordinary complete model admission.
+							if(item.change.op==='create')withDefaults(m,cat,model,values,auth.actor,b);
+							rows.push({id:item.change.id,...Object.fromEntries(Object.entries(values).map(([field,value])=>[field,untag(value,cat.models.get(model)?.fields.get(field))]))});
+						}
+						nativeRows.set(model,rows);
+					}
+					const db:TenantDb={...e.db,read:statements=>e.db.read(statements.map(statement=>{
+						const params=[...statement.params];
+						const ctes=[...nativeRows].map(([model,rows])=>{params.push(JSON.stringify(rows));const argument=`$${params.length}::jsonb`;params.push(groups.get(model)!.map(item=>item.change.id));const identities=`$${params.length}::text[]`;return `${q(sources.get(model)!)} AS (SELECT original.* FROM ${q(model)} original WHERE NOT (original.id::text=ANY(${identities})) UNION ALL SELECT * FROM jsonb_populate_recordset(null::${q(model)},${argument}))`;});
+						const text=ctes.length?`WITH ${ctes.join(', ')} ${statement.text}`:statement.text;
+						if(params.length>LIMITS.statement.params)throw new BoltError('tooLarge','guest','the prospective native read exceeds its statement parameter budget');
+						if(new TextEncoder().encode(text).length+new TextEncoder().encode(JSON.stringify(params)).length>LIMITS.readBytes)throw new BoltError('tooLarge','guest','the prospective native source statement exceeds the guest read byte budget');
+						return {text,params};
+					}))};
+					const reader=readEngine({manifest:m,db,querySources:{sources},allBytes:LIMITS.readBytes});
+					const result=await reader.run([nativeRead],{as:'workspace'},b);
+					const answer=result[0];
+					if(!isObj(answer)||!Array.isArray(answer.rows))throw new BoltError('preparedRead','guest','the native prospective reader returned an invalid row envelope');
+					answers.push({ok:true,value:call.read.query===undefined?answer.rows:answer});continue;
+				}
+				if(call.op!=='prepareCreate'){answers.push(readAnswers[forwardedIndex++]!);continue;}
+				const path=call.path,parentPath=path.slice(0,-3),relation=path.at(-3),index=path.at(-1);
+				const staged=submitted.find(item=>item.change.collection===call.collection&&canonical(item.change.path)===canonical(path));
+				const root=staged?.parent===undefined&&staged?.change.op==='create'?staged:undefined;
+				if(!isObj(call.values)||(root===undefined&&(path.length<3||typeof relation!=='string'||path.at(-2)!=='create'||typeof index!=='number'||!Number.isSafeInteger(index)||index<0)))throw new BoltError('preparedPath','guest','prepareCreate requires an actual staged create or nested native create path');
+				const parent=[...submitted,...preparedCreates.values()].find(item=>canonical(item.change.path)===canonical(parentPath));
+				const rel=parent===undefined||typeof relation!=='string'?undefined:cat.models.get(parent.change.collection)?.many.get(relation);
+				if(root===undefined&&(parent===undefined||!['create','update'].includes(parent.change.op)||rel===undefined||rel.child!==call.collection||m.relationships[`${rel.child}.${rel.column}`]?.inverse!==relation))throw new BoltError('preparedOwnership','guest','prepareCreate requires an actual declared native relationship under its staged parent');
+				const token=JSON.stringify([call.collection,path]),previous=preparedCreates.get(token);
+				if(identities.has(token)&&previous===undefined&&root===undefined)throw new BoltError('preparedConflict','guest','a prepared create cannot replace a submitted native path');
+				const id=previous?.change.id??root?.change.id??(await minter(`${r.invocationId}:prepared:${token}`,b.now))();
+				const reservedIdentities=new Map(identities);reservedIdentities.set(token,id);
+				const flattened=new Flattener(m,cat,await minter(`${r.invocationId}:prepared:${token}:${hex(await sha256(canonical(call.values)))}`,b.now),reservedIdentities);
+				flattened.create(call.collection,'any',call.values,path,root!==undefined?undefined:{collection:parent!.change.collection,id:parent!.change.id,rel:relation as string,fk:rel!.column});
+				const candidate=flattened.items[0];
+				const paths=new Set([...preparedCreates.keys(),...flattened.items.map(item=>JSON.stringify([item.change.collection,item.change.path]))]);
+				if(flattened.problems.length||candidate?.change.op!=='create'||paths.size>LIMITS.changesPerAct)throw new BoltError('preparedValues','guest','prepareCreate accepts admitted native rows and declared relationship actions within the act row budget');
+				if(root?.change.op==='create'&&Object.entries(root.change.values).some(([field,value])=>canonical(candidate.change.op==='create'?candidate.change.values[field]:undefined)!==canonical(value)))throw new BoltError('preparedValues','guest','a prepared root must preserve every submitted native value');
+				if(previous?.change.op==='create'&&!retainsPrepared(candidate.change.values,previous.change.values))throw new BoltError('preparedConflict','guest','a prepared native path cannot change its original values');
+				const wanted=flattened.items.flatMap(item=>item.change.op==='update'||item.change.op==='delete'?[[item.change.collection,item.change.id] as const]:[]);
+				const stored=await readRows(e.db,wanted);for(const [key,row]of stored)if(!pre.has(key))pre.set(key,row);
+				for(const item of flattened.items){
+					if(item.change.op==='upsert')throw new BoltError('preparedUpsert','guest','prepared native actions require resolved row identities');
+					const itemToken=JSON.stringify([item.change.collection,item.change.path]),prior=preparedCreates.get(itemToken);
+					const before=item.change.op==='create'?null:pre.get(k(item.change.collection,item.change.id))??null;
+					if(item.change.op!=='create'&&before===null)throw new BoltError('preparedPrevious','guest','prepared native relationship changes require their actual stored pre-image');
+					const supplied=submitted.find(original=>original.change.collection===item.change.collection&&canonical(original.change.path)===canonical(item.change.path))?.supplied??[];
+					if(!auth.admin&&judgePre(auth,env,item.change.collection,item.change.op,before,supplied)!==true)throw new BoltError('forbidden','guest','the actor has no native authority for the prepared relationship action');
+					const values=item.change.op==='create'?item.change.values:item.change.op==='update'?item.change.set:null;
+					if(prior!==undefined){const previousValues=prior.change.op==='create'?prior.change.values:prior.change.op==='update'?prior.change.set:null;if(prior.change.op!==item.change.op||prior.change.id!==item.change.id||!retainsPrepared(values,previousValues))throw new BoltError('preparedConflict','guest','a prepared relationship path cannot change its original operation, identity or values');}
+					preparedCreates.set(itemToken,item);identities.set(itemToken,item.change.id);
+				}
+				const related_sources=flattened.items.slice(1).flatMap(item=>item.change.op==='create'?[{collection:item.change.collection,id:item.change.id,path:item.change.path,values:item.change.values,committed:false,phase:'PREPARED_NATIVE_CREATE',invocation_id:r.invocationId,related_sources:[],related_actions:[]}]:[]);
+				const related_actions=await Promise.all(flattened.items.slice(1).map(async item=>{
+					const previous=item.change.op==='update'?(await wireRows(e.db,cat,item.change.collection,[item.change.id],b))[0]:undefined;
+					if(item.change.op==='update'&&previous==null)throw new BoltError('preparedPrevious','guest','a prospective mutation requires its actual native pre-image');
+					return {collection:item.change.collection,id:item.change.id,path:item.change.path,operation:item.change.op,...(item.change.op==='update'?{set:item.change.set,previous_revision:previous?.revision??null,previous}:{}),committed:false,phase:'PREPARED_NATIVE_MUTATION',invocation_id:r.invocationId};
+				}));
+				answers.push({ok:true,value:{collection:call.collection,id,path,values:candidate.change.values,committed:false,phase:'PREPARED_NATIVE_CREATE',invocation_id:r.invocationId,related_sources,related_actions}});
+			}
+			return answers;
+		}};
 		const g = await e.guest.invoke(invocation, bridge);
 		readTables = bridge.tables?.() ?? [];
 		fingerprints = bridge.fingerprints?.() ?? [];
@@ -429,13 +526,15 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 		if (r.verb !== 'delete') {
 			const out = g.output;
 			if (!Array.isArray(out) || out.length !== roots.length) throw new BoltError('transformShape', 'guest', 'a transform returns one payload per input');
-			const again = new Flattener(m, cat, await minter(r.invocationId, b.now));
+			const again = new Flattener(m, cat, await minter(r.invocationId, b.now),identities);
 			roots.forEach((it, i) => {
 				const c = it.change;
 				if (c.op === 'update') again.update(c.collection, 'any', c.id, out[i], c.revision, c.path);
 				else again.create(c.collection, 'any', out[i], c.path, undefined, c.op === 'upsert' ? { on: c.on, onConflict: c.onConflict } : undefined);
 			});
 			if (again.problems.length > 0) throw new BoltError('transformPayload', 'guest', again.problems.map((p) => `${p.path.join('.')}: ${p.message}`).join('; '));
+			for(const item of again.items){const assigned=identities.get(JSON.stringify([item.change.collection,item.change.path]));if(assigned!==undefined&&assigned!==item.change.id)throw new BoltError('transformIdentity','guest','a transform must preserve the engine-assigned identity of each submitted native path');}
+			for(const [token,reservation]of preparedCreates){const final=again.items.find(item=>JSON.stringify([item.change.collection,item.change.path])===token);const values=final?.change.op==='create'?final.change.values:final?.change.op==='update'?final.change.set:null;const reserved=reservation.change.op==='create'?reservation.change.values:reservation.change.op==='update'?reservation.change.set:null;if(final===undefined||final.change.op!==reservation.change.op||final.change.id!==reservation.change.id||!retainsPrepared(values,reserved))throw new BoltError('preparedValues','guest','every prepared native action must retain its reserved operation, identity and values at its reserved path');}
 			// the caller's supplied fields are what grants admit; the transform's own additions need no `fields` entry (rule 35)
 			const supplied = new Map(submitted.map((s) => [s.change.path.join('.'), s.supplied]));
 			items = [...again.items.map((it) => ({ ...it, supplied: supplied.get(it.change.path.join('.')) ?? [] })),

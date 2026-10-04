@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import { watch } from 'runed';
 	import { Button, Checkbox, Combobox, Dialog, format, formatHandle, Input, PhoneInput, StateBadge, Table, Tabs } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
@@ -19,6 +19,7 @@
 	import type { Act } from './Acts.svelte';
 	import Acts from './Acts.svelte';
 	import Connection from './channels/Connection.svelte';
+	import Envoys from './Envoys.svelte';
 	import { chosenLocale } from './i18n.ts';
 	import { channelLabel, connectionLabel, transportLabel, type ConnectLoader } from './channels/connect.ts';
 	import DetailSheet from './DetailSheet.svelte';
@@ -35,7 +36,7 @@
 	} = $props();
 
 	const TITLES: { readonly [k in SettingsTab]: string } = { people: 'People', organization: 'Organization', audit: 'Audit', automations: 'Automations',
-		channels: 'Channels', integrations: 'Integrations', secrets: 'Environment secrets' };
+		envoy: 'Envoy', integrations: 'Integrations', secrets: 'Environment secrets' };
 	let s = $state<Settings | null>(null);
 	let error = $state<string | null>(null);
 	async function load(): Promise<void> {
@@ -44,6 +45,16 @@
 		else error = r.error.message;
 	}
 	void load();
+	onMount(() => {
+		let pending = false, disposed = false;
+		const stops = ['sys_channel_connection', 'sys_envoy', 'sys_envoy_channel'].map((collection) =>
+			bolt.live(bolt.read(collection, { select: { id: true, revision: true }, all: true })).subscribe((value) => {
+				if (value === undefined || pending) return;
+				pending = true;
+				queueMicrotask(() => { pending = false; if (!disposed) void load(); });
+			}));
+		return () => { disposed = true; for (const stop of stops) stop(); };
+	});
 	/** One settings verb; the page re-reads after it. The answer's value (a new key) is returned. */
 	async function op(name: string, input: { [k: string]: Json | undefined }): Promise<Json | undefined> {
 		error = null;
@@ -100,7 +111,7 @@
 	watch(
 		// a joined key, not the array: the getter builds a new array each time it runs, and a stream per re-render is a
 		// socket per keystroke somewhere else
-		() => (tab === 'channels' ? (s?.channels ?? []).map((c) => c.name).join(',') : ''),
+		() => (tab === 'envoy' ? (s?.envoys ?? []).flatMap((e) => e.channels).join(',') : tab === 'integrations' ? standaloneChannels.map((c) => c.name).join(',') : ''),
 		(key) => {
 			const streams = key === '' ? [] : key.split(',').map((name) => api.transport.watch(name,
 				(c) => { connections[name] = c; delete connectionErrors[name]; },
@@ -125,9 +136,10 @@
 	const test = (name: string, to?: string) => transportOp(name, () => api.transport.test(name, to));
 
 	// the catalog's `channels.<name>.label`, else the name humanized with brand casing (`site_whatsapp` → `Site WhatsApp`)
-	const channels = $derived((s?.channels ?? []).map((c) => ({ id: c.name, name: c.name, label: channelLabel(c.name, t), transport: str(c.transport), via: transportLabel(str(c.transport)), sent: c.delivery.sent,
+	const channels = $derived((s?.channels ?? []).map((c) => ({ id: c.name, name: c.name, label: c.label, type: c.type, transport: str(c.transport), via: transportLabel(str(c.transport)), sent: c.delivery.sent,
 		queued: c.delivery.pending, retrying: c.delivery.retrying, failed: c.delivery.failed, skipped: c.delivery.skipped, next_retry: c.delivery.nextRetry, last_error: c.delivery.lastError,
 		connection: connectionLabel(connections[c.name] ?? null, t) })));
+	const standaloneChannels = $derived(channels.filter((c) => s?.channels.find((x) => x.name === c.name)?.owner === null));
 	const remotes = $derived(s === null ? [] : [
 		...s.integrations.map((i) => ({ id: `integration:${i.name}`, name: i.name, kind: t('Integration'), detail: str(i.direction), status: i.paused ? t('paused') : t('active'), paused: i.paused })),
 		...s.connections.map((c) => ({ id: `connection:${c.name}`, name: c.name, kind: t('Connection'), detail: typeof c.auth === 'object' && c.auth !== null ? Object.keys(c.auth).join(', ') : t('no auth'), status: '', paused: null })),
@@ -178,15 +190,15 @@
 		if ((await op('setHandles', { id, ...handles })) !== undefined) handles = {};
 	}
 	let peopleTab = $state('members');
-	type Creating = 'invite' | 'assign' | 'team' | 'key';
+	type Creating = 'invite' | 'assign' | 'team' | 'key' | 'channel';
 	let creating = $state<Creating | null>(null);
-	let form = $state({ email: '', phone: null as string | null, team: '', external: false, teamName: '', parent: '', keyName: '', type: 'sys_user', principal: '', policy: '' });
+	let form = $state({ channelName: '', channelType: 'email', email: '', phone: null as string | null, team: '', external: false, teamName: '', parent: '', keyName: '', type: 'sys_user', principal: '', policy: '' });
 	/** A new or rotated key, shown once in the dialog. */
 	let issued = $state<string | null>(null);
 	const keyOf = (v: Json | undefined) => { const k = typeof v === 'object' && v !== null && 'key' in v ? v.key : null; return typeof k === 'string' ? k : null; };
 	async function create(): Promise<void> {
 		const c = creating;
-		const v = c === 'invite' ? await op('invite', { email: form.email || undefined, phone: form.phone ?? undefined, team: form.team || undefined, external: form.external })
+		const v = c === 'channel' ? await op('saveChannel', { name: form.channelName, type: form.channelType }) : c === 'invite' ? await op('invite', { email: form.email || undefined, phone: form.phone ?? undefined, team: form.team || undefined, external: form.external })
 			: c === 'assign' ? await op('assign', { type: form.type, principal: form.principal, policy: form.policy })
 			: c === 'team' ? await op('createTeam', { name: form.teamName, parent: form.parent || null })
 			: await op('issueKey', { name: form.keyName });
@@ -203,7 +215,7 @@
 		issued = null;
 		form = { ...form, email: '', phone: null, teamName: '', parent: '', keyName: '', principal: '', policy: '' };
 	}
-	const CREATE_TITLES: { readonly [k in Creating]: string } = { invite: 'Invite', assign: 'Assign a policy', team: 'Create team', key: 'Issue key' };
+	const CREATE_TITLES: { readonly [k in Creating]: string } = { invite: 'Invite', assign: 'Assign a policy', team: 'Create team', key: 'Issue key', channel: 'Create channel connection' };
 
 	// L-COL-199: the workspace's name and logo, when the host lets an administrator edit them; a saved change reloads the shell's branding
 	// svelte-ignore state_referenced_locally
@@ -323,13 +335,8 @@
 			columns={[{ field: 'at', label: t('When'), cell: at }, { field: 'who', label: t('Who') }, { field: 'change', label: t('Change') }, { field: 'fields', label: t('Fields') }]}>
 			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('No identity changes yet.')}</p>{/snippet}
 		</Table>
-	{:else if tab === 'channels'}
-		<Table of={channels} key="channels" onOpen={show('channel')} toolbar={{ description: t('Open a channel to pair it with its provider and to see its outbound deliveries; an automatic retry is progress, only a settled failure is terminal.'), export: true }}
-			columns={[{ field: 'label', label: t('Name') }, { field: 'via', label: t('Transport') },
-				{ field: 'connection', label: t('Connection') }, { field: 'sent', label: t('Sent') },
-				{ field: 'queued', label: t('Queued') }, { field: 'retrying', label: t('Retrying') }, { field: 'failed', label: t('Failed') }, { field: 'skipped', label: t('Skipped') }, { field: 'last_error', label: t('Error') }]}>
-			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('The workspace declares no channels.')}</p>{/snippet}
-		</Table>
+	{:else if tab === 'envoy'}
+		{#if s}<Envoys settings={s} {api} {t} onSaved={load} onConnection={(id) => open = { kind: 'channel', id }} />{/if}
 	{:else if tab === 'integrations'}
 		<Table of={keys} key="keys" onOpen={show('key')}
 			toolbar={{ title: t('API keys'), description: t('Keys for programmatic access. A new key is shown once.'), new: () => (creating = 'key') }}
@@ -337,6 +344,10 @@
 				{ field: 'created_at', label: t('Created'), cell: at }, { field: 'last_used_at', label: t('Last used'), cell: at }, { field: 'revoked', label: t('revoked') },
 				{ field: 'id', label: t('Actions'), hide: 'narrow', cell: keyCell }]}>
 			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('No API keys yet.')}</p>{/snippet}
+		</Table>
+		<Table of={standaloneChannels} key="shared-channels" onOpen={show('channel')} toolbar={{ title: t('Channel connections'), new: () => creating = 'channel', description: t('Pair shared mailboxes and messaging accounts used by integrations and notifications.') }}
+			columns={[{ field: 'label', label: t('Name') }, { field: 'via', label: t('Transport') }, { field: 'connection', label: t('Connection') }]}>
+			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('The workspace declares no shared channels.')}</p>{/snippet}
 		</Table>
 		<Table of={remotes} key="integrations" onOpen={show('remote')} toolbar={{ title: t('Integrations'), description: t('Collection integrations, connections and MCP servers the workspace declares.') }}
 			columns={[{ field: 'name', label: t('Name') }, { field: 'kind', label: t('Kind') }, { field: 'detail', label: t('Detail') }, { field: 'status', label: t('Status') },
@@ -436,7 +447,7 @@
 				{ label: t('Next retry'), value: c.next_retry === null ? undefined : when(c.next_retry) }, { label: t('Error'), value: c.last_error ?? undefined }]}>
 				<div class="border-t pt-3">
 				{#snippet connectionTab()}
-					<Connection channel={c.name} transport={c.transport} connection={connections[c.name] ?? null} error={connectionErrors[c.name] ?? null}
+					<Connection channel={c.name} type={c.type} transport={c.transport} connection={connections[c.name] ?? null} error={connectionErrors[c.name] ?? null}
 						busy={pairing[c.name] === true} pair={(input) => pair(c.name, input)} unpair={() => unpair(c.name)} test={(to) => test(c.name, to)} {t}
 						locale={chosenLocale(workspace.locale)} workspace={connects} />
 				{/snippet}
@@ -529,7 +540,10 @@
 			<Dialog.Footer><Button onclick={closeDialog}>{t('Done')}</Button></Dialog.Footer>
 		{:else if s !== null}
 			<form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); void create(); }}>
-				{#if creating === 'invite'}
+				{#if creating === 'channel'}
+					<label>{t('Name')}<Input required bind:value={form.channelName} /></label>
+					<label>{t('Channel type')}<select class="rounded-md border bg-background p-2" bind:value={form.channelType}>{#each s.channelTypes as type}<option value={type}>{transportLabel(type)}</option>{/each}</select></label>
+				{:else if creating === 'invite'}
 					<Input class="h-8" type="email" placeholder={t('Email')} aria-label={t('Email')} required={form.phone === null} bind:value={form.email} />
 					<PhoneInput value={form.phone} onChange={(v) => (form.phone = typeof v === 'string' ? v : null)} />
 					<Combobox size="sm" clearable placeholder={t('No team')} aria-label={t('Team')} options={named(s.teams)} value={form.team || null} onChange={(v) => (form.team = v ?? '')} />

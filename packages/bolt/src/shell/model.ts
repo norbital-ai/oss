@@ -77,7 +77,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 			leaf('organization', 'Organization', 'lucide:building-2', '/settings/organization'), leaf('audit', 'Audit', 'lucide:history', '/settings/audit'),
 			leaf('automations', 'Automations', 'lucide:refresh-cw', '/settings/automations')] : []),
 		...group('system', 'System', [
-			...(s.settings ? [leaf('channels', 'Channels', 'lucide:radio-tower', '/settings/channels'), leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations'),
+			...(s.settings ? [leaf('envoy', 'Envoy', 'lucide:radio-tower', '/settings/envoy'), leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations'),
 				leaf('secrets', 'Environment secrets', 'lucide:key-round', '/settings/secrets')] : []),
 			...(s.studio ? [leaf('studio', 'Workspace Studio', 'lucide:code-xml', '/studio')] : []),
 		]),

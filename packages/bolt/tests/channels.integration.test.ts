@@ -166,7 +166,7 @@ describe('record-driven outbound (G12 (3))', () => {
 		// the channel's day in Settings counts it on its own, neutral: never a failure, never the last error
 		const s = await settings(
 			{ db: t.db, now: () => new Date(t.clock.now()) } as unknown as IdentityHost,
-			manifest,
+			t.engine.manifest,
 			{ admin: true, actor: t.admin.actor } as unknown as Authority
 		);
 		expect(
@@ -556,7 +556,7 @@ describe('inbound history', () => {
 				...t.engine,
 				manifest: {
 					...t.engine.manifest,
-					channels: { desk_wa: { transport: 'whatsapp', syncOnly: true } }
+					channels: { desk_wa: { transport: 'whatsapp', owner: 'alice-user' } }
 				}
 			},
 			clock: () => t.clock.now(),
@@ -600,7 +600,7 @@ describe('inbound history', () => {
 		);
 	});
 	it('stores personal group membership once per conversation and keeps sync conversations outside envoys', async () => {
-		const personal = channels({ engine: { ...t.engine, manifest: { ...t.engine.manifest, channels: { desk_wa: { transport: 'whatsapp', syncOnly: true } } } }, clock: () => t.clock.now() });
+		const personal = channels({ engine: { ...t.engine, manifest: { ...t.engine.manifest, channels: { desk_wa: { transport: 'whatsapp', owner: 'alice-user' } } } }, clock: () => t.clock.now() });
 		const message = inbound({ id: 'group-history', thread: 'alice:group', group: true, history: true, sourceAccount: 'alice', sourceUser: 'alice-user', title: 'Customer group', participants: [{ handle: '6591009037@s.whatsapp.net', name: 'POC' }, { handle: 123 }] });
 		await personal.receive({ kind: 'inbound', channel: 'desk_wa', message });
 		expect((await t.db.read([{ text: 'SELECT title, envoy, participants FROM sys_conversation', params: [] }]))[0]!.rows).toEqual([{ title: 'Customer group', envoy: null, participants: [{ handle: '6591009037@s.whatsapp.net', name: 'POC' }] }]);

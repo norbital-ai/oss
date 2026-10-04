@@ -3,14 +3,14 @@
 // tree by the template's `seed/seed.ts` (or, without one, every `<collection>.json` of the tree). A pack is a sibling of
 // the artifact with its own hash: `pack.json`, `rows/<collection>.jsonl`, `assets/**`. Loading one is a restore.
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, type Rollup } from 'vite';
 import type { AutomationName } from '../../decl/names.ts';
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest, RowData, TenantDb } from '../../engine/contracts.ts';
-import { decodeSeed, type SeedPack } from '../../engine/write/seed.ts';
+import { decodeSeed, MESSAGING_SEED, type SeedPack } from '../../engine/write/seed.ts';
 import { IDENTITY, type PackJson, type SeedAsset } from '../../engine/write/pack.ts';
 import type { CheckDiagnostic } from '../check/index.ts';
 import { assetPath } from './read.ts';
@@ -134,13 +134,13 @@ function writePack(out: string, name: string, m: EngineManifest, rows: SeedRows,
 	const path = `seed (${name} pack)`;
 	for (const a of start) if (m.automations[a] === undefined) errors.push({ code: 'seed/start', path, message: `${path}: start names '${a}', which is no automation of the workspace` });
 	try {
-		decodeSeed(m, Object.fromEntries(Object.entries(rows).filter(([c]) => !c.startsWith('sys_'))) as SeedPack);
+		decodeSeed(m, Object.fromEntries(Object.entries(rows).filter(([c]) => !(IDENTITY as readonly string[]).includes(c))) as SeedPack);
 	} catch (e) {
 		errors.push({ code: 'seed/decode', path, message: `${path}: ${e instanceof Error ? e.message : String(e)}` });
 		return undefined;
 	}
-	for (const c of Object.keys(rows)) if (c.startsWith('sys_') && !(IDENTITY as readonly string[]).includes(c))
-		errors.push({ code: 'seed/decode', path, message: `${path}: only ${IDENTITY.join(' and ')} are seeded among system collections, not '${c}'` });
+	for (const c of Object.keys(rows)) if (c.startsWith('sys_') && !([...IDENTITY, ...MESSAGING_SEED] as readonly string[]).includes(c))
+		errors.push({ code: 'seed/decode', path, message: `${path}: only ${[...IDENTITY, ...MESSAGING_SEED].join(', ')} are seeded among system collections, not '${c}'` });
 	for (const p of assetRefs(m, rows)) if (!assets.some((a) => a.path === p))
 		errors.push({ code: 'seed/asset', path, message: `${path}: a row names the asset '${p}', which the pack does not carry` });
 	const dir = join(out, name);
@@ -149,9 +149,19 @@ function writePack(out: string, name: string, m: EngineManifest, rows: SeedRows,
 	const h = createHash('sha256');
 	const counts: { [c: string]: number } = {};
 	for (const c of Object.keys(rows).sort()) {
-		const text = rows[c]!.map((r) => JSON.stringify(r)).join('\n') + '\n';
-		writeFileSync(join(dir, 'rows', `${c}.jsonl`), text);
-		h.update(`rows/${c}\0${text}\0`);
+		const file = join(dir, 'rows', `${c}.jsonl`);
+		const fd = openSync(file, 'w');
+		try {
+			// One row at a time: a collection whose rows exceed the engine's string limit still materializes, and the
+			// digest stays the same as the joined text would produce.
+			h.update(`rows/${c}\0`);
+			for (const r of rows[c]!) {
+				const line = `${JSON.stringify(r)}\n`;
+				writeSync(fd, line);
+				h.update(line);
+			}
+			h.update('\0');
+		} finally { closeSync(fd); }
 		counts[c] = rows[c]!.length;
 	}
 	for (const a of assets) {

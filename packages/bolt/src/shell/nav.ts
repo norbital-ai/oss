@@ -291,7 +291,7 @@ export type Route =
 	| { kind: 'signIn'; next?: string } | { kind: 'invite'; id: string }
 	| { kind: 'notFound' };
 /** Settings proper (people, organization, audit, automation runs), then the System pages (channels, integrations, environment secrets). */
-export const SETTINGS_TABS = ['people', 'organization', 'audit', 'automations', 'channels', 'integrations', 'secrets'] as const;
+export const SETTINGS_TABS = ['people', 'organization', 'audit', 'automations', 'envoy', 'integrations', 'secrets'] as const;
 export type SettingsTab = typeof SETTINGS_TABS[number];
 /** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
 export const STUDIO_TABS = ['workbench', 'changes', 'live', 'mrs', 'runtime', 'operations'] as const;
@@ -305,7 +305,7 @@ export function route(m: ShellManifest, url: URL): Route {
 		case '': return { kind: 'home' };
 		case 'inbox': return seg.length === 1 ? { kind: 'inbox' } : { kind: 'notFound' };
 		case 'runs': return seg.length <= 2 ? { kind: 'redirect', to: `/settings/automations${seg[1] === undefined ? '' : `?run=${encodeURIComponent(seg[1])}`}` } : { kind: 'notFound' };
-		case 'settings': return { kind: 'settings', tab: SETTINGS_TABS.includes(seg[1] as never) ? seg[1] as SettingsTab : 'people' };
+		case 'settings': if (seg[1] === 'channels') return { kind: 'redirect', to: '/settings/envoy' }; return { kind: 'settings', tab: SETTINGS_TABS.includes(seg[1] as never) ? seg[1] as SettingsTab : 'people' };
 		case 'logs': return seg.length === 1 ? { kind: 'redirect', to: '/studio/runtime' } : { kind: 'notFound' };
 		case 'studio': return seg.length === 1 ? { kind: 'studio' }
 			: seg.length === 2 && STUDIO_TABS.includes(seg[1] as never) ? { kind: 'studio', tab: seg[1] as StudioTab } : { kind: 'notFound' };

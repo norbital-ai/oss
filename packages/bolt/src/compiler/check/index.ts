@@ -29,7 +29,7 @@ export type CheckResult = {
 	stages: Stage[]; errors: CheckDiagnostic[];
 	manifest?: EngineManifest; guest?: GuestProgram;
 	/** Collections that attach a transform body. */
-	transforms: string[]; seed?: SeedPack;
+	transforms: string[]; projections: string[]; seed?: SeedPack;
 };
 
 const GUEST_BYTES = 8 * 1024 * 1024, EVAL_CPU_MS = 100, FROZEN = Date.UTC(2000, 0, 1);
@@ -37,14 +37,14 @@ const GUEST_BYTES = 8 * 1024 * 1024, EVAL_CPU_MS = 100, FROZEN = Date.UTC(2000, 
 const BOLT = join(dirname(fileURLToPath(import.meta.url)), '../..', `index${extname(fileURLToPath(import.meta.url))}`);
 const ENTRY = 'virtual:bolt-guest', BYTES = '?bytes', BYTES_ID = '\0bolt-bytes:';
 const NODE = new Set([...builtinModules, ...builtinModules.map((b) => `node:${b}`)]);
-type Bodies = { transforms: string[]; automations: string[] };
+type Bodies = { transforms: string[]; projections: string[]; automations: string[] };
 
 /** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
 export async function check(dir: string, options: { bolt?: string } = {}): Promise<CheckResult> {
 	const root = realpathSync(dir);   // importers arrive resolved; relative paths need the same spelling
 	const stages: Stage[] = [], errors: CheckDiagnostic[] = [];
 	const stage = (s: Stage) => stages.push(s);
-	const out: CheckResult = { stages, errors, transforms: [] };
+	const out: CheckResult = { stages, errors, transforms: [], projections: [] };
 
 	stage('discover');
 	const { files, errors: layout } = discover(root);
@@ -82,6 +82,18 @@ export async function check(dir: string, options: { bolt?: string } = {}): Promi
 	}
 	out.manifest = m;
 	out.transforms = bodies.transforms;
+	out.projections = bodies.projections;
+	for (const [name, collection] of Object.entries(m.collections)) {
+		const projection = collection.read.projection;
+		const attached = bodies.projections.includes(name);
+		const invalid = projection === undefined ? attached : !attached ||
+			projection.fields.length === 0 || new Set(projection.fields).size !== projection.fields.length ||
+			new Set(projection.context).size !== projection.context.length ||
+			projection.fields.some((field) => !['json', 'file'].includes(m.models[name]?.fields[field]?.kind ?? '')) ||
+			projection.context.some((field) => m.models[name]?.fields[field] === undefined && !['id','revision','approval_id','created_at','updated_at','created_by','updated_by'].includes(field));
+		if (invalid) errors.push({ code: 'collection/projection', path: `src/data/collection/${name}/+collection.ts`, message: 'A read projection requires one attached project body, unique declared JSON fields and valid trusted context columns.' });
+	}
+
 
 	stage('seed');
 	const pack = seedPack(root, errors);
@@ -163,8 +175,9 @@ const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;
 // Declarations are data (functions drop out of JSON); which bodies are attached is read beside them.
-const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], automations: [] };
+const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], projections: [], automations: [] };
 	for (const [n, c] of Object.entries(d.collection ?? {})) if (typeof c?.bodies?.transform === 'function') bodies.transforms.push(n);
+	for (const [n, c] of Object.entries(d.collection ?? {})) if (typeof c?.bodies?.project === 'function') bodies.projections.push(n);
 	for (const [n, a] of Object.entries(d.automation ?? {})) if (typeof a?.body === 'function') bodies.automations.push(n);
 	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function') f.spec.check = true; // the write path calls an attached validate
 	for (const i of Object.values(d.integration ?? {})) { const s = i?.spec ?? i; if (typeof s?.resolve === 'function') s.resolve = true; } // hook:runtime — the runner calls a declared resolve

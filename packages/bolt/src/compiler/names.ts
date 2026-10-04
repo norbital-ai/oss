@@ -8,9 +8,9 @@ import { type Manifest, spec } from './load.ts';
 
 /** `Names` part → the role it indexes; `one` parts are the singleton file's own type. */
 const PARTS: { part: string; role: Role; one?: true }[] = [
-	{ part: 'apps', role: 'app' }, { part: 'automations', role: 'automation' }, { part: 'channels', role: 'channel' },
+	{ part: 'apps', role: 'app' }, { part: 'automations', role: 'automation' }, { part: 'channelTypes', role: 'channel' },
 	{ part: 'collections', role: 'collection' }, { part: 'connections', role: 'connection' },
-	{ part: 'customFields', role: 'custom_field' }, { part: 'envoys', role: 'envoy' }, { part: 'mcp', role: 'mcp' },
+	{ part: 'customFields', role: 'custom_field' }, { part: 'mcp', role: 'mcp' },
 	{ part: 'locales', role: 'locale' }, { part: 'messages', role: 'messages', one: true }, { part: 'models', role: 'model' },
 	{ part: 'policies', role: 'policy' }, { part: 'relationships', role: 'relationship', one: true },
 	{ part: 'teams', role: 'team', one: true }, { part: 'workspace', role: 'workspace', one: true },

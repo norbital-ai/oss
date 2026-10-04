@@ -1,3 +1,4 @@
+import { refreshMessaging } from './channels/registry.ts';
 // The engine entry (§2, P2-INTEGRATE): one manifest and one `TenantDb` wired through every area — schema apply, the
 // read engine, compiled authorities, the act pipeline, and the guest runner behind the transform's workspace reads.
 // Hosts (bolt-server, the test kit) build one per activation; nothing here names a host (P18).
@@ -8,6 +9,7 @@ import { compileAuthority, type Holder } from './access/authority.ts';
 import { catalogOf } from './access/pred.ts';
 import { guestRunner, type GuestOptions, type GuestProgram } from './guest/runner.ts';
 import { readEngine, type SimilarityBodies } from './query/engine.ts';
+import { readProjector } from './query/read-projector.ts';
 import { readHistory } from './query/history.ts'; // hook:write — rule 17
 import { fingerprinting, type Fingerprint } from './write/sql.ts'; // hook:write — rule 26
 import * as ir from '../protocol/ir.ts';
@@ -36,7 +38,7 @@ export type EngineConfig = {
 	/** The built `guest.mjs`; without it no body runs. */
 	guest?: GuestProgram;
 	/** Collections that attach a transform body (the manifest strips bodies). */
-	transforms?: Iterable<string>;
+	transforms?: Iterable<string>; projections?: Iterable<string>;
 	approval?: WriteEngine['approval']; admit?: WriteEngine['admit']; console?: GuestOptions['console'];
 	/** hook:metering — every guest invocation's CPU ms, for the host's compute meter. */
 	cpu?: GuestOptions['cpu'];
@@ -69,6 +71,7 @@ export type EngineConfig = {
 };
 export type Engine = {
 	manifest: EngineManifest; db: TenantDb;
+	refreshMessaging(): Promise<void>;
 	/** Engine tables, then the manifest's schema plan (destructive steps only when `accept`). */
 	migrate(options?: { accept?: true | readonly string[] }): Promise<void>;
 	/** Rule 37: the caller caches by `key`. */
@@ -114,7 +117,7 @@ export function lowerRead(m: EngineManifest, member: string, args: readonly Json
 		case 'get': return ir.get(cat, c, String(a), obj(b));
 		case 'aggregate': return ir.aggregate(cat, c, obj(a));
 		case 'similar': return a !== null && typeof a === 'object' ? ir.semantic(cat, c, obj(a)) : ir.similar(cat, c, String(a), (b ?? null) as Json, obj(d)); // L-BOLT-123: `{ to }` is search.semantic
-		case 'after': return { kind: 'after', collection: c, where: ir.where(cat, c, a) };
+		case 'after': return { kind: 'after', collection: c, where: ir.where(cat, c, a),...(b===undefined?{}:{query:ir.read(cat,c,{...obj(b),where:a})}) };
 		case 'history': return { kind: 'history', collection: c, id: String(a), ...(b === undefined || b === null ? {} : { at: historyAt(b) }) }; // hook:reads — the browser's `at` may be null
 		case 'query': return { kind: 'query', collection: c, query: String(a), input: (b ?? null) as Json };
 	}
@@ -204,7 +207,45 @@ export function engine(config: EngineConfig): Engine {
 		assertWidth(v, sem);
 		return v[0]!;
 	};
-	const reads = readEngine({ db, manifest: m, delegate: { ...delegate, query, transcript, inbox, conversations }, ...(similarity === undefined ? {} : { similarity }), ...(embed === undefined ? {} : { embed }) });
+	const callerReads = (readDb: TenantDb, stack: ReadonlySet<string> = new Set()) => {
+		const raw = readEngine({ db: readDb, manifest: m, delegate: { history: (r, reader, b) => readHistory(readDb, m, r as Extract<ReadIR,{kind:'history'}>, reader, b) } });
+		const projection = readProjector({ manifest: m,
+			async context(collection, id, columns, revision, b) {
+				const source: ReadIR = revision === undefined
+					? { kind: 'get', collection, id, select: { fields: [...new Set(['id','revision',...columns])], relations: {} } }
+					: { kind: 'history', collection, id, at: { revision }, full: true };
+				const [answer] = await raw.run([source], { as: 'workspace' }, b);
+				if (answer === null || answer === undefined) return null;
+				const keep = new Set(['id','revision',...columns]);
+				return Object.fromEntries(Object.entries(answer as RowData).filter(([field]) => keep.has(field)));
+			},
+			async invoke(collection, row, fields, reader, b) {
+				if (guest === undefined) throw new BoltError('unavailable','deliver','Native read projection requires its compiled guest body.');
+				const key = collection + '/' + String(row['id']);
+				if (stack.has(key)) throw new BoltError('forbidden','deliver','Recursive protected input reads are refused.');
+				const nested = callerReads(readDb, new Set([...stack,key]));
+				const id = crypto.randomUUID();
+				const outcome = await guest.invoke({ id, kind: 'projection', target: collection, input: row,
+					ctx: { actor: reader.authority.actor, now: b.now, today: b.today, tz: b.tz, seed: id, policies: reader.authority.policies, fields, admin: reader.authority.admin },
+					budget: { cpuMs: LIMITS.guestCpuMs, crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes } }, {
+					async cross(calls) {
+						if (calls.some(call => call.op !== 'read')) throw new BoltError('forbidden','deliver','Read projections are read-only.');
+						return Promise.all(calls.map(async call => {
+							if (call.op !== 'read') throw new BoltError('forbidden','deliver','Read projections are read-only.');
+							const [value] = await nested.run([call.read], reader, { ...b, params: call.params });
+							return { ok: true as const, value: value ?? null };
+						}));
+					}
+				});
+				if (outcome.kind === 'failed') throw outcome.error;
+				if (outcome.kind === 'refused') throw new BoltError('forbidden','deliver',outcome.message);
+				return outcome.output;
+			}
+		});
+		return readEngine({ db: readDb, manifest: m, projection, delegate: { ...delegate,
+			history: (r, reader, b) => readHistory(readDb, m, r as Extract<ReadIR, { kind: 'history' }>, reader, b), query, transcript, inbox, conversations }, ...(similarity === undefined ? {} : { similarity }), ...(embed === undefined ? {} : { embed }) });
+	};
+	const reads = callerReads(db);
 	/** The transform's bridge: its reads, as the workspace (rule 15), one round trip per crossing (rule 12). */
 	const bridge = (inv: Invocation): Bridge & { tables(): readonly string[]; fingerprints(): readonly Fingerprint[] } => {
 		const tables = new Set<string>();
@@ -253,7 +294,7 @@ export function engine(config: EngineConfig): Engine {
 		e.runs?.nudge(at);
 	}
 	const e: Engine = {
-		manifest: m, db, live, read, ...(guest === undefined ? {} : { guest }), ...(config.files === undefined ? {} : { files: config.files }),
+		manifest: m, db, live, read, refreshMessaging: () => refreshMessaging(db, m), ...(guest === undefined ? {} : { guest }), ...(config.files === undefined ? {} : { files: config.files }),
 		...(config.convert === undefined ? {} : { convert: config.convert }), ...(config.speech === undefined ? {} : { speech: config.speech }),
 		async migrate(options = {}) {
 			await applyPlan(db, plan(await readApplied(db), m), options);
@@ -271,7 +312,7 @@ export function engine(config: EngineConfig): Engine {
 		calls: undefined as never, integrations: undefined as never, pipelines: undefined as never,
 		agents: undefined as never, channels: undefined as never, envoys: undefined as never, triage: undefined as never,
 	};
-	const calls = callables({ engine: e, ...(guest === undefined ? {} : { guest }), // hook:metering, hook:drains — one runner, one pool
+	const calls = callables({ engine: e, reads: (readDb) => callerReads(readDb).run, ...(guest === undefined ? {} : { guest }), // hook:metering, hook:drains — one runner, one pool
 		...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }), scope: config.scope ?? '' });
 	e.calls = { ...calls, action: async (r) => { const x = await calls.action(r); return { ...x, v: committed(x.captured, r.bindings) }; } };
 	e.integrations = integrations({ engine: e, ...(guest === undefined ? {} : { guest }), ...(http === undefined ? {} : { http }), now: clock,
@@ -347,3 +388,5 @@ export type { HttpPort } from './integrations/runner.ts';
 export * as ir from '../protocol/ir.ts';
 export { statusOf } from '../protocol/wire.ts';
 export { studioOp, type StudioMergeRequest, type StudioOp, type StudioPort, type StudioState } from '../shell/studio.ts'; // hook:shell (the host's Studio port)
+
+export { refreshMessaging, messagingOp, channelRecords, BUILTIN_CHANNEL_TYPES, type ChannelRecord, type EnvoyRecord } from './channels/registry.ts';

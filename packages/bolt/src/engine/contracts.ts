@@ -84,6 +84,7 @@ export type PolicyData = {
 };
 export type AutomationData = {
 	description: string; input?: Data; output?: Data; on?: Data | readonly Data[]; runAs: readonly string[] | 'trigger';
+	delegations?: readonly { verb: string; policy: string }[];
 	retry?: { attempts: number; backoff?: string }; concurrency?: { max: number }; agent?: string;
 };
 export type WorkspaceData = { tz: string; locale: string; currency?: string; env?: Data; ai?: Data; apps?: readonly string[];
@@ -100,6 +101,8 @@ export type EngineManifest = {
 	teams: { readonly [team: string]: readonly string[] };
 	automations: { readonly [automation: string]: AutomationData };
 	channels: { readonly [channel: string]: Data };
+	/** Source-defined custom implementations; connections and envoys are runtime projections. */
+	channelTypes?: { readonly [type: string]: Data };
 	connections: { readonly [connection: string]: Data };
 	envoys: { readonly [envoy: string]: Data };
 	mcp: { readonly [server: string]: Data };
@@ -121,7 +124,7 @@ export function engineManifest(m: Manifest): EngineManifest {
 		models: specs(m.model), relationships: (one(m.relationship) ?? {}) as EngineManifest['relationships'],
 		collections: specs(m.collection), integrations: specs(m.integration), pipelines: specs(m.pipeline),
 		policies: specs(m.policy), teams: (one(m.team) ?? {}) as EngineManifest['teams'], automations: specs(m.automation),
-		channels: specs(m.channel), connections: specs(m.connection), envoys: specs(m.envoy), mcp: specs(m.mcp),
+		channelTypes: specs(m.channel), channels: {}, connections: specs(m.connection), envoys: {}, mcp: specs(m.mcp),
 		apps: specs(m.app), groups: specs(m.group), customFields: specs(m.custom_field), // hook:shell (groups)
 		agent: { ...(m.agent[''] === undefined ? {} : { internal: m.agent[''] as string }),
 			...(m.agent_external[''] === undefined ? {} : { external: m.agent_external[''] as string }), skills: specs(m.skill) },
@@ -193,7 +196,7 @@ export type ReadIR =
 	/** A collection query: a guest invocation reading as its caller. */
 	| { kind: 'query'; collection: string; query: string; input: Json }
 	/** The transform's `db.after`: stored rows overlaid with this batch (PH GAP-5). */
-	| { kind: 'after'; collection: string; where: Pred }
+	| { kind: 'after'; collection: string; where: Pred; query?: {kind:'read';collection:string;where?:Pred;select:SelectIR;order?:Order;search?:string;page:PageIR} }
 	/** The in-app agent panel's messages of one conversation in `seq` order; `thread`: a channel thread keeps its ambient rows;
 	 * `from`: only messages from that `seq` on (the panel's latest window; older ones are read once, by page). */
 	| { kind: 'transcript'; collection: 'sys_message'; conversation: string; thread: boolean; from?: number }
@@ -271,18 +274,20 @@ export type Authority = {
 };
 
 // ── the guest (C2, A10) ──
-export type InvocationKind = 'transform' | 'query' | 'action' | 'similarity' | 'rerank' | 'automation' | 'mapping' | 'validation' | 'tool'; // hook:reads (rerank)
+export type InvocationKind = 'projection' | 'transform' | 'query' | 'action' | 'similarity' | 'rerank' | 'automation' | 'mapping' | 'validation' | 'tool'; // hook:reads (rerank)
 /** One fresh-isolate run of one body. `target` names it: `'<c>'` (transform), `'<c>.<query|action|similarity>'`, `'<a>'`. */
 export type Invocation = {
 	id: string; kind: InvocationKind; target: string; input: Json;
 	ctx: { actor: EngineActor; now: string; today: string; tz: string; seed: string;
 		/** transform: stored root rows per input (`null` on a create); record action: its row. */
-		existing?: readonly (RowData | null)[]; row?: RowData };
+		existing?: readonly (RowData | null)[]; staged?:readonly {collection:string;id:string;path:InputPath;operation:string;parent?:{collection:string;id:string;relation:string;field:string}}[]; row?: RowData; admin?: boolean; policies?: readonly string[]; fields?: readonly string[] };
 	budget: { cpuMs: number; crossings: number; readBytes: number };
 };
 /** A guest request to the host. Calls issued before the microtask queue drains cross together (rule 12). */
 export type CrossCall =
 	| { op: 'read'; read: ReadIR; params: { readonly [name: string]: Json } }
+	/** Transform-only: reserve a native owned child create path without writing or approving it. */
+	| { op:'prepareCreate';collection:string;values:Json;path:InputPath }
 	| { op: 'act'; callable: string; input: Json; options?: { key?: string; once?: string; onConflict?: 'update' | 'keep' } } // hook:ctx-types (onConflict, rule 28)
 	| { op: 'schedule'; automation: string; input: Json; at?: string | { now: Offset }; key?: string }
 	| { op: 'notify'; notices: Json }

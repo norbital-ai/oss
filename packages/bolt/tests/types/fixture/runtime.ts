@@ -1,6 +1,6 @@
 // The runtime roles of the type corpus workspace: what a template puts in +workspace.ts, src/channel, src/connection,
 // src/automation, src/agent and the collections' +integration.ts / +pipeline.ts files.
-import { automation, channel, connection, envoy, integration, mcp, pipeline, workspace } from '../../../src/index.ts';
+import { automation, channel, connection, integration, mcp, pipeline, workspace } from '../../../src/index.ts';
 
 export const ws = workspace({
 	tz: 'Asia/Singapore', locale: 'en-SG', currency: 'SGD', apps: ['sales', 'portal'],
@@ -30,8 +30,6 @@ export const whatsapp = channel({ transport: 'whatsapp', policies: ['sales_rep']
 export const erp = connection({ baseUrl: 'ERP_URL', auth: { bearer: 'ERP_TOKEN' } });
 export const erp_mcp = mcp({ description: 'Product documentation', url: 'MCP_URL', tools: ['search_docs'] });
 
-export const desk = envoy({ channel: 'whatsapp', audience: 'private', name: 'Norbius', policies: ['sales_rep'],
-	groupMessages: 'mention_or_reply', delegation: 'disabled', task: 'Keep orders up to date from what people report.' });
 
 export const nightly = automation({ description: 'Nightly order digest', runAs: ['sales_rep'], on: { cron: '0 2 * * *' },
 	output: { kind: 'int' } });
@@ -67,7 +65,7 @@ inbound_hook.run(async ({ order }, ctx) => {
 
 export const notices_integration = integration('notices', {
 	direction: 'one_way', policies: ['sales_rep'], source: { channel: 'support', inbound: true }, identity: 'message_id',
-	fields: { message_id: 'id', received_at: 'sentAt', subject: { in: (mail) => mail.subject || '(no subject)' } },
+	fields: { message_id: 'id', received_at: 'sentAt', subject: { in: (mail) => ('subject' in mail ? mail.subject : '') || '(no subject)' } },
 });
 
 export const customers_integration = integration('customers', {

@@ -66,7 +66,7 @@ export async function writeArtifact(root: string, c: CheckResult & { manifest: E
 	if (types !== undefined) writeFileSync(join(out, 'workspace', 'types.json'), `${JSON.stringify(types, null, '\t')}\n`);
 	const hashes = { manifest: sha(manifestText), guest: sha(c.guest.source), client: treeHash(join(out, 'client')) };
 	const body = { format: 1 as const, contract: CONTRACT, handle: meta.handle, name: meta.name, schema: fingerprint(schemaSlice(c.manifest)),
-		transforms: [...c.transforms].sort(), client, hashes, ...('bytes' in snap ? { snapshot: { key: SNAPSHOT_KEY, sha: sha(snap.bytes) } } : {}) };
+		transforms: [...c.transforms].sort(), projections: [...c.projections].sort(), client, hashes, ...('bytes' in snap ? { snapshot: { key: SNAPSHOT_KEY, sha: sha(snap.bytes) } } : {}) };
 	const artifact: ArtifactJson = { ...body, hash: artifactHash(out, body) };
 	writeFileSync(join(out, 'artifact.json'), `${JSON.stringify(artifact, null, '\t')}\n`);
 	return artifact;

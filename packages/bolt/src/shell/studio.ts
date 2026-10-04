@@ -83,7 +83,7 @@ export type StudioPort = {
 	watch?(auth: Authority, send: (frame: StudioFrame) => void): () => void;
 };
 
-export const SECTIONS = ['collections', 'pipelines', 'apps', 'policies', 'envoys', 'automations', 'remotes', 'environment'] as const;
+export const SECTIONS = ['collections', 'pipelines', 'apps', 'policies', 'channelTypes', 'automations', 'remotes', 'environment'] as const;
 export type Section = typeof SECTIONS[number];
 /** A declaration: its path-derived name, the source file it comes from (rule 1), and where it opens (an app). */
 export type StudioEntry = { name: string; path: string; href?: string };
@@ -103,7 +103,7 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 		pipelines: at(m.pipelines, (n) => `src/data/collection/${n}/+pipeline.ts`),
 		apps: at(m.apps, (n) => `src/app/${n}/+app.ts`).map((e) => ({ ...e, href: href(e.name) })),
 		policies: at(m.policies, (n) => `src/access/+${n}.policy.ts`),
-		envoys: at(m.envoys, (n) => `src/agent/envoy/+${n}.envoy.ts`),
+		channelTypes: at(m.channelTypes, (n) => `src/custom_channels/${n}/+channel.ts`),
 		automations: at(m.automations, (n) => `src/automation/+${n}.automation.ts`),
 		remotes: [...at(m.connections, (n) => `src/connection/+${n}.connection.ts`), ...at(m.mcp, (n) => `src/agent/mcp/+${n}.mcp.ts`),
 			...at(m.integrations, (n) => `src/data/collection/${n}/+integration.ts`)],

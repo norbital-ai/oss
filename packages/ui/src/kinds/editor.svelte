@@ -4,10 +4,13 @@ The editor of one value by its field kind: every kind's input in one component (
 -->
 <script lang="ts" module>
 	import type { Json, Kind } from './kind.js';
+	import type { JsonSchema } from './json-schema.js';
 
 	/** The editor of one value by its kind (every §3.3.2 kind; derived kinds render read-only). */
 	export type EditorProps = {
 		kind: Kind;
+		/** JSON Schema for the next-generation JSON editor; omitted retains the raw editor. */
+		jsonSchema?: JsonSchema;
 		value: Json;
 		onChange(next: Json): void;
 		/** The field's name (file uploads, custom renderers) and the dotted path errors are keyed by. */
@@ -52,11 +55,12 @@ The editor of one value by its field kind: every kind's input in one component (
 	import Picker from './picker.svelte';
 	import ReadValue from './read-value.svelte';
 	import SchemaEditor from './schema-editor.svelte';
+	import JsonSchemaForm from './json-schema-form.svelte';
 	import Show from './show.svelte';
 	import TagsInput from './tags-input.svelte';
 	import TypedInput from './typed-input.svelte';
 
-	let { kind, value, onChange, name, id, labelledby, readonly, disabled: ownDisabled, errors, row = {}, address, onAddress, relation }: EditorProps = $props();
+	let { kind, jsonSchema, value, onChange, name, id, labelledby, readonly, disabled: ownDisabled, errors, row = {}, address, onAddress, relation }: EditorProps = $props();
 	const host = useKinds();
 	// an explicit mode here reaches every control of a structured value too
 	const controls = provideControls(() => ({ readonly, disabled: ownDisabled }));
@@ -79,7 +83,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	});
 	let jsonText = $state(''), jsonError = $state<string | null>(null), jsonLast: Json | undefined;
 	$effect.pre(() => {
-		if (kind.kind === 'json' && value !== jsonLast) { jsonText = v === null ? '' : JSON.stringify(v, null, 2); jsonError = null; jsonLast = value; }
+		if ((kind.kind === 'json' || kind.kind === 'custom') && value !== jsonLast) { jsonText = v === null ? '' : JSON.stringify(v, null, 2); jsonError = null; jsonLast = value; }
 	});
 </script>
 
@@ -129,6 +133,8 @@ The editor of one value by its field kind: every kind's input in one component (
 	<Picker of={kind.of} value={str(v)} {onChange} where={kind.where as { readonly [key: string]: Json } | undefined} {id} {disabled} {invalid} />
 {:else if kind.kind === 'custom' && custom}
 	<SchemaEditor kind={custom.shape} {value} {onChange} {name} {disabled} {errors} />
+{:else if kind.kind === 'json' && jsonSchema !== undefined}
+	<JsonSchemaForm schema={jsonSchema} {value} {onChange} {name} {id} {disabled} {errors} />
 {:else if kind.kind === 'json' && kind.shape}
 	<SchemaEditor kind={kind.shape} {value} {onChange} {name} {disabled} {errors} />
 {:else if STRUCTURED.has(kind.kind)}

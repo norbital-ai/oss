@@ -39,6 +39,7 @@ import {
 	shellHost,
 	signupOf,
 	channelLinks,
+	refreshMessaging, messagingOp, channelRecords,
 	type Authority,
 	type Bindings,
 	type ChannelProvider,
@@ -401,6 +402,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 	// channels (rule 61): one link per declared channel, from the provider and credentials an administrator chose at setup,
 	// sealed in the secrets store (owner `transport`). No channel reads host env or rides on the host's mail.
 	const links = channelLinks({
+		registry: { refresh: () => refreshMessaging(db, m), list: (auth) => channelRecords(db, auth), op: (auth, op, input) => messagingOp(db, m, auth, op, input, async (changes) => { e?.live.publish(changes); await e?.runs?.reconfigure(); }) },
 		manifest: m,
 		providers: o.channelProviders ?? [
 			baileys(),
@@ -507,6 +509,7 @@ export async function start(c: Config, o: StartOptions = {}): Promise<Server> {
 		const signup = signupOf(m);
 		const identity: IdentityHost = {
 			db,
+			messagingChanged: async (changes) => { e?.live.publish(changes); await e?.runs?.reconfigure(); },
 			now,
 			windows: new RateWindows(),
 			keys,

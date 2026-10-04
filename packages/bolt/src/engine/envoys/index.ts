@@ -1,3 +1,4 @@
+import { refreshMessaging, envoyOn as boundEnvoy } from '../channels/registry.ts';
 // Envoys (P22's triggers and admission, rules 57–60; today's `runtime/envoys/envoys.ts`; authority by P32).
 // An envoy binds the agent to a channel, and every turn runs as the `envoy` actor. Senders are resolved to members by the
 // handle registered on the member (`senders.ts`) under both audiences. A group turn holds exactly the envoy's `policies`;
@@ -46,7 +47,7 @@ export function envoys(cfg: EnvoysConfig) {
 	/** One limited-message notice per sender per window, so a flood is never answered by a flood. */
 	const warned = new Set<string>();
 	const inflight = new Set<Promise<unknown>>();
-	const envoyOn = (channel: string): [string, Obj] | undefined => Object.entries(m.envoys).find(([, e]) => e['channel'] === channel) as [string, Obj] | undefined;
+	const envoyOn = (channel: string): [string, Obj] | undefined => boundEnvoy(m, channel) as [string, Obj] | undefined;
 	const transportOf = (channel: string) => String(m.channels[channel]?.['transport']);
 
 	/**
@@ -80,6 +81,7 @@ export function envoys(cfg: EnvoysConfig) {
 
 	/** The envoy's half of ingest: one new live inbound row. */
 	async function admit(row: Ingested): Promise<Admission> {
+		await refreshMessaging(db, m);
 		const found = envoyOn(row.channel);
 		if (found === undefined || row.history || row.deleted) return 'ignored';
 		const [envoy, spec] = found;

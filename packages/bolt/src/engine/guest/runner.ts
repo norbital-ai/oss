@@ -46,6 +46,7 @@ export function bodyPath(kind: InvocationKind, target: string): string[] {
 	const dot = target.indexOf('.');
 	const collection = target.slice(0, dot), member = target.slice(dot + 1);
 	switch (kind) {
+		case 'projection': return ['collection', target, 'bodies', 'project'];
 		case 'transform': return ['collection', target, 'bodies', 'transform'];
 		case 'query': return ['collection', collection, 'bodies', 'queries', member];
 		case 'action': return ['collection', collection, 'bodies', 'actions', member];
@@ -61,6 +62,11 @@ const object = (v: Json | undefined): { readonly [key: string]: Json } => v !== 
 
 /** A guest `ctx` member call as the contract's `CrossCall`. */
 export function lower(member: string, args: readonly Json[], bins: readonly Uint8Array[], lowerRead: GuestOptions['lowerRead']): CrossCall {
+	if(member==='db.prepareCreate'){
+		const options=object(args[2]);
+		if(typeof args[0]!=='string'||args[1]===undefined||!Array.isArray(options.path)||options.path.some(part=>typeof part!=='string'&&typeof part!=='number'))throw new BoltError('invalidInput','guest','prepareCreate requires an actual collection, native values and owned create path');
+		return {op:'prepareCreate',collection:args[0],values:args[1],path:options.path as (string|number)[]};
+	}
 	const dot = member.indexOf('.');
 	const head = dot < 0 ? member : member.slice(0, dot), method = dot < 0 ? '' : member.slice(dot + 1);
 	switch (head) {

@@ -55,7 +55,7 @@ it('Studio keeps the tab hierarchy and restores live to a recorded commit throug
 	const view: StudioView = { commit: 'c2', files: { 'src/a.ts': 'x' }, changes: [], log: [], preview: null,
 		releases: [{ commit: 'c2', at: '2026-09-25T00:00:00Z', message: 'two', current: true }, { commit: 'c1', at: '2026-09-24T00:00:00Z', message: 'one', current: false }],
 		environments: [{ name: 'preview', release: 'r2', url: 'https://acme--preview.example' }, { name: 'live', release: 'r1', url: 'https://acme.example' }],
-		sections: { collections: [{ name: 'tasks', path: 'src/data/collection/tasks/+collection.ts' }], pipelines: [], apps: [], policies: [], envoys: [], automations: [], remotes: [], environment: [] } };
+		sections: { collections: [{ name: 'tasks', path: 'src/data/collection/tasks/+collection.ts' }], pipelines: [], apps: [], policies: [], channelTypes: [], automations: [], remotes: [], environment: [] } };
 	const ran: StudioOp[] = [];
 	vi.stubGlobal('confirm', () => true);
 	const el = show(Studio, { logs, studio: async () => ({ ok: true, value: view }), studioRun: async (op) => (ran.push(op), { ok: true, value: view }) });

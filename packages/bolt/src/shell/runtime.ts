@@ -5,6 +5,7 @@ import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { CollectionName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
 import { createBolt, type BoltConfig } from '../client/bolt.ts';
+import { clientFacilities, type ClientFacilities } from '../client/facilities.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
 import {
 	decodeConnection,
@@ -18,6 +19,31 @@ import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts'
 export type ShellError = { code: string; message: string; workspace?: ShellBoot['workspace'] };
 export type Answer<T> = { ok: true; value: T } | { ok: false; error: ShellError; status: number };
 
+/** A refused HTTP response remains an HTTP error even when a proxy returns HTML or an empty body. */
+async function responseBody<T>(res: Response): Promise<{ value?: T; outcome?: Outcome; error?: ShellError }> {
+	try {
+		const body: unknown = await res.json();
+		if (body !== null && typeof body === 'object') {
+			const parsed = body as { value?: T; outcome?: Outcome; error?: ShellError };
+			if (parsed.error !== undefined && (parsed.error === null || typeof parsed.error.code !== 'string' || typeof parsed.error.message !== 'string')) delete parsed.error;
+			return parsed;
+		}
+	} catch { /* a proxy's error page is not the shell protocol */ }
+	return {};
+}
+
+const requestFailure = (status: number): ShellError => ({
+	code: status === 429 ? 'busy' : status >= 500 ? 'unavailable' : 'refused',
+	message: status === 429 ? 'Too many requests. Wait a moment and try again.'
+		: status === 503 ? 'The workspace is temporarily unavailable. Wait a moment and try again.'
+		: status === 502 || status === 504 ? 'The workspace server did not respond in time. Try again shortly.'
+		: status >= 500 ? 'The workspace server could not complete the request. Try again shortly.'
+		: status === 403 ? 'You do not have permission to open this workspace.'
+		: status === 404 ? 'The requested workspace or page could not be found.'
+		: status === 410 ? 'This link has expired. Choose your workspace and sign in again.'
+		: 'The server refused the request.'
+});
+
 /** A stream frame the host did not write as JSON: nothing to show, and nothing to fail the page over. */
 const safeJson = (text: string): Json => {
 	try {
@@ -29,7 +55,7 @@ const safeJson = (text: string): Json => {
 
 /** The shell routes over one `fetch`; every call answers, none rejects on a refusal. */
 export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
-	async function call<T>(method: 'GET' | 'POST', path: string, body?: Json): Promise<Answer<T>> {
+	async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: Json): Promise<Answer<T>> {
 		try {
 			const res = await f(based(path), {
 				method,
@@ -39,13 +65,14 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 					: { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 			});
 			if (res.status === 204) return { ok: true, value: null as T };
-			const b = (await res.json()) as { value?: T; error?: ShellError };
+			const b = await responseBody<T>(res);
 			if (!res.ok)
 				return {
 					ok: false,
-					error: b.error ?? { code: 'internal', message: 'The request failed.' },
+					error: b.error !== undefined && !['The request failed.', 'Internal Error', 'Internal Server Error'].includes(b.error.message) ? b.error : requestFailure(res.status),
 					status: res.status
 				};
+			if (!('value' in b)) return { ok: false, error: { code: 'protocol', message: 'The server returned an unexpected response. Reload the page and try again.' }, status: res.status };
 			return { ok: true, value: b.value as T };
 		} catch {
 			return {
@@ -65,12 +92,12 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 				headers: { 'content-type': 'application/json', [HEADERS.key]: uuidv7() },
 				body: JSON.stringify({ callable, input, issuedAt: new Date().toISOString() })
 			});
-			const b = (await res.json()) as { outcome?: Outcome; error?: ShellError };
+			const b = await responseBody<never>(res);
 			return b.outcome !== undefined
 				? { ok: true, value: b.outcome }
 				: {
 						ok: false,
-						error: b.error ?? { code: 'internal', message: 'The request failed.' },
+						error: b.error !== undefined && !['The request failed.', 'Internal Error', 'Internal Server Error'].includes(b.error.message) ? b.error : requestFailure(res.status),
 						status: res.status
 					};
 		} catch {
@@ -132,17 +159,10 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 					'GET',
 					`${BOLT}/transports/${encodeURIComponent(channel)}/providers`
 				),
-			accounts: (channel: string) =>
-				call<{ id: string; owner: string | null; connection: ChannelConnection }[]>(
-					'GET',
-					`${BOLT}/transports/${encodeURIComponent(channel)}/accounts`
-				),
-			addAccount: (channel: string, id: string) =>
-				call<{ id: string; owner: string | null; connection: ChannelConnection }[]>(
-					'POST',
-					`${BOLT}/transports/${encodeURIComponent(channel)}/accounts`,
-					{ id }
-				),
+			connections: () => call<import('../engine/channels/registry.ts').ChannelRecord[]>('GET', `${BOLT}/transports/`),
+			saveConnection: (input: Json) => call<Json>('POST', `${BOLT}/transports/`, input),
+			deleteConnection: (id: string) => call<Json>('DELETE', `${BOLT}/transports/${encodeURIComponent(id)}`),
+			types: (type: string) => call<ProviderChoice[]>('GET', `${BOLT}/transports/types/${encodeURIComponent(type)}`),
 			path: (channel: string) => `${BOLT}/transports/${encodeURIComponent(channel)}`,
 			state: (channel: string) =>
 				call<ChannelConnection>('GET', `${BOLT}/transports/${encodeURIComponent(channel)}`),
@@ -504,6 +524,7 @@ export function shellBolt(
 		fetch?: typeof fetch;
 		openStream?: BoltConfig['openStream'];
 		models?: () => readonly string[];
+		facilities?: ClientFacilities;
 	} = {}
 ) {
 	const visitor = boot.visitor;
@@ -531,6 +552,7 @@ export function shellBolt(
 	const agent = options.agent ?? agentPanel();
 	const api = shellApi(options.fetch);
 	return Object.assign(client, {
+		facilities: clientFacilities(options.facilities),
 		/** The path of an app page, optionally opening a record: `bolt.href(app, page?, record?)`. */
 		href: (...a: Parameters<typeof href>) => based(href(...a)),
 		/** The page's organization: the workspace name and its brand logo (the host's first icon), or `null`. */

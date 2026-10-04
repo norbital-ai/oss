@@ -1,5 +1,6 @@
 /** Provider-authored pairing UI, reusable by tenant account configuration surfaces. */
 export { default as ChannelSetup } from './shell/channels/Setup.svelte';
+export type { ChannelRecord, EnvoyRecord } from './engine/channels/registry.ts';
 export type { ChannelConnection } from './engine/channels/connection.ts';
 export { localText, type ProviderChoice } from './engine/channels/connection.ts';
 import { shellApi } from './shell/runtime.ts';

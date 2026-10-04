@@ -29,3 +29,5 @@ export {
 } from './context.js';
 export type { DatePrecision, Precision, TimePrecision } from './precision.js';
 export { enumText, fieldsText, format, fieldName, pickerRead, type EnumScope, type ShowOptions, type Fields, type FileRef, type Json, type Kind, type KindOf, type Point } from './kind.js';
+export { default as JsonSchemaForm, type JsonSchemaFormProps } from './json-schema-form.svelte';
+export { jsonSchemaKind, resolveJsonSchema, type JsonSchema } from './json-schema.js';

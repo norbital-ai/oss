@@ -142,7 +142,7 @@ describe('channel links', () => {
 		});
 		expect((await links.webhook('b', post({ id: '1' }))).status).toBe(200);
 		expect((await links.webhook('a', post({ id: '2' }))).status).toBe(404);
-		expect(seen).toEqual([{ kind: 'inbound', channel: 'b', message: { id: '1' } }]);
+		expect(seen).toEqual([{ kind: 'inbound', channel: 'b', message: { id: '1', sourceAccount: 'b', sourceUser: null } }]);
 	});
 
 	it('answers the admin routes with the one ChannelConnection; a transport with no provider is Unavailable', async () => {
@@ -356,7 +356,7 @@ describe('personal channel accounts', () => {
 		const make = () =>
 			channelLinks({
 				manifest: {
-					channels: { personal: { transport: 'whatsapp', accounts: true, syncOnly: true } }
+					channels: { alice: { transport: 'whatsapp', owner: 'alice' }, bob: { transport: 'whatsapp', owner: 'bob' } }
 				},
 				providers: [fake('baileys')],
 				load: async (key) => sealed.get(key) ?? null,
@@ -371,36 +371,34 @@ describe('personal channel accounts', () => {
 			});
 		const links = make();
 		for (const id of ['alice', 'bob']) {
-			expect((await links.admin(post({ id }), 'personal', 'accounts')).status).toBe(200);
-			await links.pair(`personal~${id}`, { key: id });
+			await links.pair(id, { key: id });
 		}
-		expect((await links.admin(post({ id: '../bad' }), 'personal', 'accounts')).status).toBe(400);
-		await expect(links.pair('personal~missing', { key: 'missing' })).rejects.toThrow(/no channel/);
-		await links.webhook('personal~alice', post({ id: 'same', thread: 'customer', text: 'Hi' }));
-		await links.webhook('personal~bob', post({ id: 'same', thread: 'customer', text: 'Hi' }));
+		await expect(links.pair('missing', { key: 'missing' })).rejects.toThrow(/no channel/);
+		await links.webhook('alice', post({ id: 'same', thread: 'customer', text: 'Hi' }));
+		await links.webhook('bob', post({ id: 'same', thread: 'customer', text: 'Hi' }));
 		expect(seen).toEqual(
 			['alice', 'bob'].map((id) => ({
 				kind: 'inbound',
-				channel: 'personal',
+				channel: id,
 				message: {
-					id: `${id}:same`,
-					thread: `${id}:customer`,
+					id: 'same',
+					thread: 'customer',
 					text: 'Hi',
 					sourceAccount: id,
-					sourceUser: null
+					sourceUser: id
 				}
 			}))
 		);
 		await links.close();
 		const resumed = make();
 		await resumed.resume();
-		expect(resumed.state('personal~alice')).toMatchObject({
+		expect(resumed.state('alice')).toMatchObject({
 			state: 'connected',
 			pairedAs: 'alice'
 		});
-		await resumed.unpair('personal~alice');
-		expect(resumed.state('personal~bob')).toMatchObject({ state: 'connected', pairedAs: 'bob' });
-		expect(sealed.has('personal~alice')).toBe(false);
+		await resumed.unpair('alice');
+		expect(resumed.state('bob')).toMatchObject({ state: 'connected', pairedAs: 'bob' });
+		expect(sealed.has('alice')).toBe(false);
 		await resumed.close();
 	});
 });
@@ -435,8 +433,8 @@ describe('personal channel account authorization', () => {
 			channelLinks({
 				manifest: {
 					channels: {
-						personal: { transport: 'whatsapp', accounts: true, syncOnly: true },
-						shared: { transport: 'whatsapp', accounts: true }
+						phone: { transport: 'whatsapp', owner: 'alice' },
+						shared: { transport: 'whatsapp', owner: null }
 					}
 				},
 				providers: [fake('fake')],
@@ -452,28 +450,12 @@ describe('personal channel account authorization', () => {
 			});
 		const links = make();
 		await links.resume();
-		expect(
-			(await links.admin(post({ id: 'phone' }), 'personal', 'accounts', member('alice'))).status
-		).toBe(200);
-		expect(
-			(await links.admin(post({ id: 'phone' }), 'personal', 'accounts', member('bob'))).status
-		).toBe(403);
-		expect(
-			(
-				await links.admin(
-					post({ id: 'phone2' }),
-					'personal',
-					'accounts',
-					member('alice', false, true)
-				)
-			).status
-		).toBe(403);
-		expect(
-			(await links.admin(post({ id: 'shared' }), 'shared', 'accounts', member('alice'))).status
-		).toBe(403);
-		await links.pair('personal~phone', { key: 'alice' });
+		expect((await links.admin(post({key: 'alice'}), 'phone', 'pair', member('bob'))).status).toBe(403);
+		expect((await links.admin(post({key: 'alice'}), 'phone', 'pair', member('alice', false, true))).status).toBe(403);
+		expect((await links.admin(post({key: 'alice'}), 'shared', 'pair', member('alice'))).status).toBe(403);
+		await links.pair('phone', { key: 'alice' });
 		await links.webhook(
-			'personal~phone',
+			'phone',
 			post({ id: 'one', thread: 'chat', sourceUser: 'forged' })
 		);
 		expect(events).toMatchObject([{ message: { sourceAccount: 'phone', sourceUser: 'alice' } }]);
@@ -481,7 +463,7 @@ describe('personal channel account authorization', () => {
 			(
 				await links.admin(
 					new Request('https://ws.example'),
-					'personal',
+					'phone',
 					'providers',
 					member('alice')
 				)
@@ -490,15 +472,12 @@ describe('personal channel account authorization', () => {
 		const resumed = make();
 		await resumed.resume();
 		const get = () => new Request('https://ws.example/x');
-		expect(
-			await (await resumed.admin(get(), 'personal', 'accounts', member('bob'))).json()
-		).toEqual({ value: [] });
-		expect((await resumed.admin(get(), 'personal~phone', '', member('bob'))).status).toBe(403);
-		expect((await resumed.admin(get(), 'personal~phone', '', member('alice'))).status).toBe(200);
-		expect((await resumed.admin(get(), 'personal~phone', '', member('admin', true))).status).toBe(
+		expect((await resumed.admin(get(), 'phone', '', member('bob'))).status).toBe(403);
+		expect((await resumed.admin(get(), 'phone', '', member('alice'))).status).toBe(200);
+		expect((await resumed.admin(get(), 'phone', '', member('admin', true))).status).toBe(
 			200
 		);
-		expect((await resumed.admin(post({}), 'personal~phone', 'test', member('alice'))).status).toBe(
+		expect((await resumed.admin(post({}), 'phone', 'test', member('alice'))).status).toBe(
 			400
 		);
 	});
@@ -520,21 +499,20 @@ describe('provider-defined personal account transports', () => {
 		};
 		const links = channelLinks({
 			manifest: {
-				channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } }
+				channels: { source: { transport: 'telegram', owner: 'alice' } }
 			},
 			providers: [provider],
 			load: async () => null,
 			store: async () => {},
 			webhookUrl: () => 'https://ws.example/hook'
 		});
-		await links.admin(post({ id: 'source' }), 'personal', 'accounts');
-		await links.pair('personal~source', { key: 'private' });
-		expect(links.state('personal~source')).toMatchObject({
+		await links.pair('source', { key: 'private' });
+		expect(links.state('source')).toMatchObject({
 			providers: [
 				{ id: 'adapter', label: 'Import account', setup: { fields: [{ name: 'readToken' }] } }
 			]
 		});
-		expect(links.state('personal~source').test).toBeUndefined();
+		expect(links.state('source').test).toBeUndefined();
 		await links.close();
 	});
 
@@ -544,7 +522,7 @@ describe('provider-defined personal account transports', () => {
 		const make = () =>
 			channelLinks({
 				manifest: {
-					channels: { personal: { transport: 'telegram', accounts: true, syncOnly: true } }
+					channels: { source: { transport: 'telegram', owner: 'alice' } }
 				},
 				providers: [fake('custom-telegram', [], 'telegram')],
 				load: async (name) => sealed.get(name) ?? null,
@@ -558,30 +536,29 @@ describe('provider-defined personal account transports', () => {
 				}
 			});
 		const links = make();
-		await links.admin(post({ id: 'source' }), 'personal', 'accounts');
-		await links.pair('personal~source', { key: 'private' });
+		await links.pair('source', { key: 'private' });
 		await links.close();
 		const resumed = make();
 		await resumed.resume();
-		expect(resumed.state('personal~source')).toMatchObject({
+		expect(resumed.state('source')).toMatchObject({
 			transport: 'telegram',
 			pairedAs: 'private'
 		});
-		await resumed.webhook('personal~source', post({ id: 'one', thread: 'chat' }));
+		await resumed.webhook('source', post({ id: 'one', thread: 'chat' }));
 		expect(events).toEqual([
 			{
 				kind: 'inbound',
-				channel: 'personal',
+				channel: 'source',
 				message: {
-					id: 'source:one',
-					thread: 'source:chat',
+					id: 'one',
+					thread: 'chat',
 					sourceAccount: 'source',
-					sourceUser: null
+					sourceUser: 'alice'
 				}
 			}
 		]);
-		await resumed.unpair('personal~source');
-		expect(sealed.has('personal~source')).toBe(false);
+		await resumed.unpair('source');
+		expect(sealed.has('source')).toBe(false);
 		await resumed.close();
 	});
 	it('uses the authored custom inbound signature with each account own sealed credential', async () => {
@@ -592,8 +569,7 @@ describe('provider-defined personal account transports', () => {
 				channels: {
 					own: {
 						transport: 'custom',
-						accounts: true,
-						syncOnly: true,
+						owner: 'alice',
 						inbound: { verify: { scheme: 'bearer', secret: 'token' } }
 					}
 				}
@@ -609,20 +585,19 @@ describe('provider-defined personal account transports', () => {
 				events.push(event);
 			}
 		});
-		await links.admin(post({ id: 'source' }), 'own', 'accounts');
-		await links.pair('own~source', { token: 'secret' });
-		expect(links.state('own~source')).toMatchObject({
-			about: { webhookUrl: 'https://ws.example/hooks/bolt.custom/own~source' }
+		await links.pair('own', { token: 'secret' });
+		expect(links.state('own')).toMatchObject({
+			about: { webhookUrl: 'https://ws.example/hooks/bolt.custom/own' }
 		});
-		expect((await links.webhook('own~source', post({ item: 1 }))).status).toBe(401);
+		expect((await links.webhook('own', post({ item: 1 }))).status).toBe(401);
 		const request = new Request('https://ws.example/x', {
 			method: 'POST',
 			headers: { authorization: 'Bearer secret' },
 			body: '{"item":1}'
 		});
-		expect((await links.webhook('own~source', request)).status).toBe(200);
+		expect((await links.webhook('own', request)).status).toBe(200);
 		expect(events).toMatchObject([
-			{ channel: 'own', message: { sourceAccount: 'source', body: { item: 1 } } }
+			{ channel: 'own', message: { sourceAccount: 'own', body: { item: 1 } } }
 		]);
 		expect((events[0] as Extract<TransportEvent, { kind: 'inbound' }>).message).not.toHaveProperty(
 			'id'

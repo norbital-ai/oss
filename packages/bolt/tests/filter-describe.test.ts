@@ -271,3 +271,90 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		expect(port.requests).toHaveLength(1);
 	});
 });
+
+describe('described selection must fit the exposed grammar', () => {
+	const fields = [
+		{ name: 'kind', label: 'Kind', kind: 'text' as const },
+		{ name: 'version', label: 'Version', kind: 'number' as const }
+	];
+	it('refuses per-group latest selection instead of silently using global max or descending sort', async () => {
+		const records = [
+			{ kind: 'nda', version: 2 },
+			{ kind: 'nda', version: 3 },
+			{ kind: 'msa', version: 5 },
+			{ kind: 'sow', version: 2 }
+		];
+		expect(records.filter((r) => r.version === 5)).toEqual([{ kind: 'msa', version: 5 }]);
+		expect(
+			[...new Set(records.map((r) => r.kind))].map((kind) =>
+				records.filter((r) => r.kind === kind).reduce((a, b) => (a.version > b.version ? a : b))
+			)
+		).toEqual([
+			{ kind: 'nda', version: 3 },
+			{ kind: 'msa', version: 5 },
+			{ kind: 'sow', version: 2 }
+		]);
+		const port = system1(
+			byField(
+				{ Version: { op: 'is', value: '5' } },
+				{
+					'selection.unsupported': true,
+					'sort.yes': true,
+					'sort.field': 'Version',
+					'sort.dir': 'descending (newest, highest, Z→A first)'
+				}
+			)
+		);
+		const r = await describer(port).describe({
+			collection: '$local',
+			text: 'show latest version only for each kind, not merely the global version 5',
+			localFields: fields,
+			authority: caller({}),
+			bindings
+		});
+		expect(r).toMatchObject({
+			ok: false,
+			code: 'invalid',
+			message: expect.stringMatching(/comparing|ranking/)
+		});
+		expect(port.requests[0]!.questions['selection.unsupported']).toMatchObject({
+			type: 'noul',
+			instructions: expect.stringMatching(/top-level records/)
+		});
+	});
+	it('allows ordinary newest-first sorting because ordering does not exclude versions', async () => {
+		const port = system1(
+			byField(
+				{},
+				{
+					'selection.unsupported': false,
+					'sort.yes': true,
+					'sort.field': 'Version',
+					'sort.dir': 'descending (newest, highest, Z→A first)'
+				}
+			)
+		);
+		expect(
+			await describer(port).describe({
+				collection: '$local',
+				text: 'sort versions newest first',
+				localFields: fields,
+				authority: caller({}),
+				bindings
+			})
+		).toMatchObject({ ok: true, orderBy: { version: 'desc' } });
+	});
+	it('admits an explicitly exposed current flag instead of refusing latest wording by keyword', async () => {
+		const port = system1(
+			byField({ 'Is current': { op: 'is', value: 'yes' } }, { 'selection.unsupported': false })
+		);
+		const r = await describer(port).describe({
+			collection: '$local',
+			text: 'latest versions only: current is true',
+			localFields: [{ name: 'is_current', label: 'Is current', kind: 'bool' }],
+			authority: caller({}),
+			bindings
+		});
+		expect(r).toMatchObject({ ok: true, where: { is_current: { eq: true } } });
+	});
+});

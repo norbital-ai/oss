@@ -146,7 +146,7 @@ describe('the built-in layer is compiled as a workspace is', () => {
 
 describe('the schema plan renders each system table as today\'s hand DDL did (L-BOLT-100 withdrawn)', () => {
 	const now = rendered();
-	it('renders exactly the system tables', () => expect(Object.keys(now).sort()).toEqual(Object.keys(TODAY).sort()));
+	it('renders exactly the system tables', () => expect(Object.keys(now).sort()).toEqual([...Object.keys(TODAY), 'sys_channel_connection', 'sys_envoy', 'sys_envoy_channel'].sort()));
 	for (const [table, shape] of Object.entries(TODAY)) it(table, () => {
 		const sorted = Object.fromEntries((['unique', 'indexes', 'fks', 'checks'] as const).flatMap((x) => (shape[x] === undefined ? [] : [[x, [...shape[x]!].sort()]])));
 		expect(now[table]).toEqual({ ...shape, ...sorted });

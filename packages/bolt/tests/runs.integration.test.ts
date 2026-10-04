@@ -162,7 +162,8 @@ describe('the deadlines port and the idle workspace (rule 52a)', () => {
 		const w = await world(base, { classify: async () => {} });
 		await w.sql(`INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts) VALUES ('lost', 'classify', '{}', now(), 'start', 0, 'running', 1)`);
 		await w.r.boot();
-		expect(w.statements).toHaveLength(1);
+		expect(w.statements.filter((s) => !s.text.startsWith('SELECT'))).toHaveLength(1);
+		expect(w.statements.filter((s) => s.text.startsWith('SELECT'))).toHaveLength(3);
 		await w.until(T0);
 		expect(w.wakes).toEqual([T0]);
 		expect(await w.sql(`SELECT state, leases FROM sys_run WHERE id = 'lost'`)).toEqual([{ state: 'succeeded', leases: 1 }]);

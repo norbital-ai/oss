@@ -319,36 +319,6 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };`
 		]);
 	});
 
-	it('rejects personal channel outbound and envoys while allowing provider-defined transports', () => {
-		const m = {
-			workspace: {},
-			models: {},
-			relationships: {},
-			automations: {},
-			apps: {},
-			policies: {},
-			collections: {},
-			connections: {},
-			channels: {
-				sent: { transport: 'email', syncOnly: true, outbound: {} },
-				answered: { transport: 'whatsapp', syncOnly: true },
-				provider_defined: { transport: 'slack', accounts: true, syncOnly: true },
-				multiple_envoy: { transport: 'telegram', accounts: true },
-				custom_sync: { transport: 'custom', accounts: true, syncOnly: true, inbound: { verify: { scheme: 'bearer', secret: 'token' }, messages: true } }
-			},
-			envoys: { agent: { channel: 'answered' }, invalid: { channel: 'multiple_envoy' } }
-		} as unknown as EngineManifest;
-		expect(
-			buildChecks(m, { automations: [], connects: ['custom_sync'] }, (_r, n) => n)
-				.filter((f) => f.code.startsWith('channel/'))
-				.map((f) => f.code + ' ' + f.path)
-		).toEqual([
-			'channel/sync-only sent',
-			'channel/sync-only answered',
-			'channel/accounts-envoy multiple_envoy'
-		]);
-	});
-
 	it('refuses a custom channel without its connect page or its send connection, and send on a provider channel (channel/*)', () => {
 		const m = {
 			workspace: {},
@@ -359,7 +329,7 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };`
 			policies: {},
 			collections: {},
 			connections: { partner_api: { baseUrl: 'PARTNER_URL' } },
-			channels: {
+			channelTypes: {
 				partner: { transport: 'custom', send: 'partner_api' },
 				bare: { transport: 'custom' },
 				desk: { transport: 'slack', send: 'partner_api' }
@@ -390,7 +360,7 @@ export default { tz: 'UTC', locale: 'en', n: blob.length };`
 			policies: {},
 			collections: {},
 			connections: { api: { baseUrl: 'API_URL' } },
-			channels: {
+			channelTypes: {
 				good: {
 					transport: 'custom',
 					send: 'api',

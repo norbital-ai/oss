@@ -4,10 +4,11 @@
 // and is recorded, not written (`sink`), and the recorded writes, `ctx.schedule` runs and `ctx.notify` rows commit in the
 // action's one statement under its idempotency key; a refusal after guest code is the outcome record (rule 20). `start`
 // is one `sys_run` insert keyed by the client-minted run id.
+import { delegatedVerbAuthority, type AutomationDelegation } from '../access/delegation.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	BoltError, LIMITS, type Authority, type Bindings, type Bridge, type Captured, type CrossAnswer, type CrossCall, type DeadlinesPort,
-	type EngineActor, type EngineManifest, type GuestPort, type Invocation, type NoticeRow, type Outcome, type ReadIR, type RowData
+	type EngineActor, type EngineManifest, type GuestPort, type Invocation, type NoticeRow, type Outcome, type ReadIR, type RowData, type ReadEngine, type TenantDb
 } from '../contracts.ts';
 import { catalogOf, durationMs } from '../access/pred.ts';
 import type { Engine } from '../index.ts';
@@ -16,18 +17,20 @@ import { constraintIndex } from '../schema/ddl.ts';
 import { schemaSlice } from '../schema/plan.ts';
 import type { ActRequest, Verb } from '../write/act.ts';
 import { actorId, actorRef, compileCommit, compileOutcomeRecord, type Commit, type RateCharge } from '../write/commit.ts';
-import { canonical, decided, hex, KEY_REUSE, minter, sha256, storedOutcome } from '../write/sql.ts';
+import { canonical, decided, fingerprinting, hex, KEY_REUSE, minter, sha256, storedOutcome, type Fingerprint } from '../write/sql.ts';
 import { decodeInput, type Decoded, type InputSpec } from './decode.ts';
 
 export type CallablesConfig = {
 	/** The engine's own runner (its console, metering and generation scope; one prepared-isolate pool per program). */
 	engine: Engine; guest?: GuestPort;
+	/** The caller read engine, backed by the action dependency recorder. */
+	reads: (db: TenantDb) => ReadEngine['run'];
 	/** Rule 52a: a statement that queues a run announces its `due_at` first. */
 	deadlines?: DeadlinesPort; scope?: string;
 };
 /** Rule 33a: `server` is `ctx.act`/`ctx.query` from server code; everything else (`/act`, `/q`, `$bolt`, HTTP, agent) is `client`. */
 export type Entry = 'client' | 'server';
-type Caller = { authority: Authority; bindings: Bindings; invocationId: string; from: Entry };
+type Caller = { delegation?: AutomationDelegation; authority: Authority; bindings: Bindings; invocationId: string; from: Entry };
 export type QueryRequest = Caller & { collection: string; query: string; input: Json };
 export type ActionRequest = Caller & { collection: string; action: string; input: Json; key: string; issuedAt: string; retry?: boolean;
 	rate?: readonly RateCharge[] };
@@ -45,6 +48,7 @@ type Planned = Parameters<NonNullable<ActRequest['sink']>>[0];
 /** What one action act has recorded so far; nested `ctx.act` actions record into their caller's. */
 type Recorder = { commits: Planned[]; runs: Commit['runs'][number][]; notices: (NoticeRow & { id: string })[];
 	refusals: Map<string, Outcome>; issuedAt: string;
+	reads: ReadEngine['run']; fingerprints: () => readonly Fingerprint[]; tables: Set<string>;
 	/** Rows created by earlier `ctx.act` calls of this act, readable as refs by later ones (keyed `collection␀id`). */
 	pending: Map<string, RowData> };
 type Performed = { output: Json } | { outcome: Outcome; guest: boolean } | { error: BoltError };
@@ -82,12 +86,17 @@ export function callables(config: CallablesConfig): Callables {
 	const guest = config.guest;
 	const constraints = constraintIndex(schemaSlice(m));
 
+	async function read(batch: readonly ReadIR[], c: Caller, rec: Recorder | null): Promise<readonly Json[]> {
+		for (const r of batch) if (rec !== null && 'collection' in r) rec.tables.add(r.collection);
+		return (rec?.reads ?? e.read)(batch, { as: 'caller', authority: c.authority }, c.bindings);
+	}
+
 	/** Rule 36: every ref the input names must be readable by the caller, before any guest code. */
-	async function unreadable(refs: Decoded['refs'], c: Caller): Promise<Refused | null> {
+	async function unreadable(refs: Decoded['refs'], c: Caller, rec: Recorder | null = null): Promise<Refused | null> {
 		if (refs.length === 0) return null;
 		let rows: readonly Json[];
 		try {
-			rows = await e.read(refs.map((r) => ir.get(cat, r.collection, r.id, {})), { as: 'caller', authority: c.authority }, c.bindings);
+			rows = await read(refs.map((r) => ir.get(cat, r.collection, r.id, {})), c, rec);
 		} catch {
 			rows = refs.map(() => null);
 		}
@@ -98,21 +107,21 @@ export function callables(config: CallablesConfig): Callables {
 	async function invoke(kind: 'query' | 'action', target: string, input: Json, c: Caller, id: string, rec: Recorder | null, row?: Json) {
 		if (guest === undefined) throw new BoltError('noGuest', 'guest', 'this host runs no guest code');
 		const inv: Invocation = { id, kind, target, input,
-			ctx: { actor: c.authority.actor, now: c.bindings.now, today: c.bindings.today, tz: c.bindings.tz, seed: id,
+			ctx: { actor: c.authority.actor, policies: c.authority.policies, admin: c.authority.admin, now: c.bindings.now, today: c.bindings.today, tz: c.bindings.tz, seed: id,
 				...(row === undefined ? {} : { row: row as never }) },
 			budget: { cpuMs: LIMITS.guestCpuMs, crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes } };
-		return guest.invoke(inv, bridge(c, id, rec));
+		return guest.invoke(inv, bridge(c, id, rec, kind === 'action'));
 	}
 
 	/** Reads as the caller (rule 15), one round trip per crossing; inside an action, `act`/`schedule`/`notify` are recorded. */
-	function bridge(c: Caller, id: string, rec: Recorder | null): Bridge {
+	function bridge(c: Caller, id: string, rec: Recorder | null, writable: boolean): Bridge {
 		let n = 0;
 		return {
 			async cross(calls) {
 				const reads = calls.flatMap((x) => x.op === 'read' && x.read.kind !== 'query' ? [x.read] : []);
 				let answers: CrossAnswer[] = [];
 				try {
-					answers = (await e.read(reads, { as: 'caller', authority: c.authority }, c.bindings)).map((value): CrossAnswer => ({ ok: true, value }));
+					answers = (await read(reads, c, rec)).map((value): CrossAnswer => ({ ok: true, value }));
 				} catch (err) {
 					answers = reads.map(() => failed(err));
 				}
@@ -126,10 +135,10 @@ export function callables(config: CallablesConfig): Callables {
 			try {
 				if (x.op === 'read') {
 					const q = x.read as Extract<ReadIR, { kind: 'query' }>;
-					return { ok: true, value: await query({ ...c, from: 'server', invocationId: sub, collection: q.collection, query: q.query, input: q.input }) };
+					return { ok: true, value: await query({ ...c, from: 'server', invocationId: sub, collection: q.collection, query: q.query, input: q.input }, rec) };
 				}
-				if (rec === null || x.op === 'send' || x.op === 'facility' || x.op === 'progress') // hook:runtime (progress)
-					return fail('unsupported', `a collection ${rec === null ? 'query' : 'action'} cannot ${x.op === 'facility' ? `call ${x.facility}` : x.op}; queue an automation (rule 31)`);
+				if (rec === null || !writable || x.op === 'send' || x.op === 'facility' || x.op === 'progress'||x.op==='prepareCreate') // hook:runtime (progress)
+					return fail('unsupported', `a collection ${!writable ? 'query' : 'action'} cannot ${x.op === 'facility' ? `call ${x.facility}` : x.op}; queue an automation (rule 31)`);
 				if (x.op === 'act') return { ok: true, value: await recordAct(x.callable, x.input, { ...c, from: 'server', invocationId: sub }, rec, x.options?.onConflict) };
 				if (x.op === 'notify') {
 					const mint = await minter(sub, c.bindings.now);
@@ -181,7 +190,7 @@ export function callables(config: CallablesConfig): Callables {
 		const [collection, verb] = split(callable);
 		let outcome: Outcome;
 		if (VERBS.includes(verb)) {
-			outcome = (await e.act({ collection, verb: verb as Verb, input, key: `${c.invocationId}`, issuedAt: rec.issuedAt, authority: c.authority,
+			outcome = (await e.act({ collection, verb: verb as Verb, input, key: `${c.invocationId}`, issuedAt: rec.issuedAt, authority: delegatedVerbAuthority(m,c.authority,c.delegation,callable),
 				bindings: c.bindings, invocationId: c.invocationId, pending: rec.pending, ...(onConflict === undefined ? {} : { onConflict }), sink: (p) => {
 					rec.commits.push(p);
 					for (const w of p.commit.writes) if (w.op === 'create')
@@ -205,14 +214,14 @@ export function callables(config: CallablesConfig): Callables {
 		const arg = (record ? (r.input as { input?: Json } | null)?.input : r.input) ?? null;
 		const d = decodeInput(spec.input as InputSpec, arg);
 		if (d.problems.length > 0) return { outcome: refused('invalidInput', problems(d), d.problems[0]!.path), guest: false };
-		const bad = await unreadable(d.refs, r);
+		const bad = await unreadable(d.refs, r, rec);
 		if (bad !== null) return { outcome: bad, guest: false };
 		const target = record ? (r.input as { target?: Json } | null)?.target : undefined;
 		const ids = record ? [target].flat() : [undefined];
 		let rows: readonly Json[] = [];
 		if (record) {
 			if (ids.length === 0 || ids.some((id) => typeof id !== 'string')) return { outcome: refused('invalidInput', 'target: expected an id or a list of ids', 'target'), guest: false };
-			rows = await e.read(ids.map((id) => ir.get(cat, r.collection, id as string, {})), { as: 'caller', authority: r.authority }, r.bindings)
+			rows = await read(ids.map((id) => ir.get(cat, r.collection, id as string, {})), r, rec)
 				.catch(() => ids.map(() => null));
 			if (rows.includes(null)) return { outcome: refused('notFound', 'The record does not exist.', 'target'), guest: false };
 		}
@@ -227,15 +236,15 @@ export function callables(config: CallablesConfig): Callables {
 		return { output: record && Array.isArray(target) ? outputs : outputs[0] ?? null };
 	}
 
-	async function query(r: QueryRequest): Promise<Json> {
+	async function query(r: QueryRequest, rec: Recorder | null = null): Promise<Json> {
 		const no = reach(m, r.authority, r.collection, 'queries', r.query, r.from);
 		if (no !== null) throw new BoltError(no.code, 'admission', no.message);
 		const spec = m.collections[r.collection]!.queries![r.query]!;
 		const d = decodeInput(spec.input as InputSpec, r.input);
 		if (d.problems.length > 0) throw new BoltError('invalidInput', 'decode', problems(d));
-		const bad = await unreadable(d.refs, r);
+		const bad = await unreadable(d.refs, r, rec);
 		if (bad !== null) throw new BoltError('notFound', 'admission', `${bad.field}: ${bad.message}`);
-		const g = await invoke('query', `${r.collection}.${r.query}`, r.input ?? {}, r, r.invocationId, null);
+		const g = await invoke('query', `${r.collection}.${r.query}`, r.input ?? {}, r, r.invocationId, rec);
 		if (g.kind === 'ok') return g.output;
 		throw g.kind === 'failed' ? g.error : new BoltError('refused', 'guest', g.message);
 	}
@@ -256,7 +265,9 @@ export function callables(config: CallablesConfig): Callables {
 
 		// rule 26: a serialization failure replays the body once with the same clock and minted ids
 		for (let attempt = 0; ; attempt++) {
-			const rec: Recorder = { commits: [], runs: [], notices: [], refusals: new Map(), issuedAt: r.issuedAt, pending: new Map() };
+			const fp = fingerprinting(e.db);
+			const rec: Recorder = { commits: [], runs: [], notices: [], refusals: new Map(), issuedAt: r.issuedAt, pending: new Map(),
+				reads: config.reads(fp.db), fingerprints: fp.fingerprints, tables: new Set() };
 			const p = await perform(r, rec);
 			if ('error' in p) return none({ kind: 'unknown', invocation: r.invocationId }, p.error);
 			if ('outcome' in p) return p.guest ? record(p.outcome) : none(p.outcome);
@@ -267,8 +278,9 @@ export function callables(config: CallablesConfig): Callables {
 			const approvals = rec.commits.flatMap((x) => x.commit.approval === undefined ? [] : [x.commit.approval]);
 			// ponytail: one approval route per action act; a second needs the approval area to merge requests
 			if (approvals.length > 1) throw new BoltError('unsupported', 'admission', 'an action routes at most one write to approval');
-			const tables = [...new Set(rec.commits.flatMap((x) => x.lock?.tables ?? []))].sort();
+			const tables = [...new Set([...rec.tables, ...rec.commits.flatMap((x) => x.lock?.tables ?? [])])].sort();
 			const commit: Commit = { ...common, now: r.bindings.now, today: r.bindings.today, actor, writes, owned: rec.commits.flatMap((x) => x.commit.owned),
+				fingerprints: [...rec.fingerprints(), ...rec.commits.flatMap((x) => x.commit.fingerprints ?? [])],
 				runs: rec.runs, notices: [...rec.notices, ...rec.commits.flatMap((x) => x.commit.notices)], outbox: [], output: p.output, ...(approvals[0] === undefined ? {} : { approval: approvals[0] }) };
 			const first = rec.runs.map((x) => x.dueAt).sort()[0];
 			if (first !== undefined) config.deadlines?.announce(config.scope ?? '', first);

@@ -10,8 +10,9 @@
 	import Frame from './Frame.svelte';
 	import Setup from './Setup.svelte';
 
-	let { channel, transport, connection, error, pair, unpair, test, busy, t, locale, workspace }: Omit<ConnectProps, 'channel'> & {
+	let { channel, type = channel, transport, connection, error, pair, unpair, test, busy, t, locale, workspace }: Omit<ConnectProps, 'channel'> & {
 		channel: string;
+		type?: string;
 		/** Sends a test message through the connected channel (`connection.test` says whether and where to). */
 		test: (to?: string) => Promise<void>;
 		transport: string;
@@ -20,7 +21,7 @@
 	} = $props();
 
 	// the component is a module, so the same chunk is fetched once however often this is re-derived
-	const own = $derived(transport === 'custom' ? workspace?.[channel.split('~')[0]!] ?? null : null);
+	const own = $derived(transport === 'custom' ? workspace?.[type] ?? null : null);
 	const chunk = $derived(own?.().then((m) => m.default) ?? null);
 	// a reconnect is a connected channel catching its breath: it keeps its summary, not a setup form
 	const connected = $derived(connection?.state === 'connected' || connection?.state === 'reconnecting');
@@ -34,7 +35,7 @@
 	{/if}
 	{#if chunk === null}
 		<p role="alert" class="text-sm text-destructive" data-custom-missing>
-			{t('This custom channel has no setup screen. Add src/channel/+{channel}.connect.svelte to the workspace.').replace('{channel}', channel)}
+			{t('This custom channel has no setup screen. Add src/custom_channels/{channel}/+channel.configuration.svelte to the workspace.').replace('{channel}', channel)}
 		</p>
 	{:else}
 		{#await chunk}

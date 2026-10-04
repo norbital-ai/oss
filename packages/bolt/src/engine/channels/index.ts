@@ -1,3 +1,4 @@
+import { envoyOn } from './registry.ts';
 // Channels (rule 61, §3.3.8, §5.9, P24): the gateway for envoys, integrations and notifications. Inbound is durable
 // before the provider is acknowledged and deduplicated by `(channel, provider_id)`; edits converge a row, revokes
 // tombstone it. Outbound is at least once, serially per conversation in `seq` order, with outcome `sent | failed |
@@ -134,7 +135,7 @@ export function channels(cfg: ChannelsConfig) {
 				admin: false,
 				policies: (specOf(channel)['policies'] as readonly string[] | undefined) ?? []
 			},
-			`channel:${channel}`
+			`channel:${String(specOf(channel)['type'] ?? channel)}`
 		);
 	};
 	const body = (channel: string) =>
@@ -142,7 +143,7 @@ export function channels(cfg: ChannelsConfig) {
 			{ engine: cfg.engine, ...(cfg.guest === undefined ? {} : { guest: cfg.guest }) },
 			actorOf(channel),
 			bindings(),
-			`channel:${channel}`
+			`channel:${String(specOf(channel)['type'] ?? channel)}`
 		);
 
 	// ── inbound ──
@@ -226,18 +227,18 @@ export function channels(cfg: ChannelsConfig) {
 			return null;
 		}
 		const stored = inbound.deleted ? [] : await files(inbound, bins, c, now);
-		const envoy = specOf(channel)['syncOnly'] === true ? null : Object.entries(m.envoys).find(([, e]) => e['channel'] === channel)?.[0] ?? null;
+		const envoy = envoyOn(m, channel)?.[0] ?? null;
 		// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it
 		c.cte(
 			'conv',
 			`INSERT INTO sys_conversation (id, channel, thread, kind, envoy, title, participants) VALUES (${c.p(conv)}, ${c.p(channel)}, ${c.p(inbound.thread)},
-			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(envoy)}, ${c.p(inbound.title)}, ${c.p(specOf(channel)['syncOnly'] === true ? inbound.participants ?? null : null)}::jsonb) ON CONFLICT (id) DO UPDATE SET
-			title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants)
-			WHERE (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
+			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(envoy)}, ${c.p(inbound.title)}, ${c.p(typeof specOf(channel)['owner'] === 'string' ? inbound.participants ?? null : null)}::jsonb) ON CONFLICT (id) DO UPDATE SET
+			envoy = excluded.envoy, title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants)
+			WHERE sys_conversation.envoy IS DISTINCT FROM excluded.envoy OR (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
 			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) RETURNING id`
 		);
 		const text = inbound.deleted ? '' : inbound.text;
-		const source = specOf(channel)['syncOnly'] === true && isObj(message) ? {
+		const source = typeof specOf(channel)['owner'] === 'string' && isObj(message) ? {
 			sourceAccount: message['sourceAccount'] ?? null, sourceUser: message['sourceUser'] ?? null,
 			thread: inbound.thread, group: inbound.group, title: inbound.title
 		} : null;
@@ -245,7 +246,7 @@ export function channels(cfg: ChannelsConfig) {
 			'msg',
 			`INSERT INTO sys_message (id, conversation, channel, direction, origin, provider_id, version, sender, sender_name, sent_at, invocation,
 			preview, text, email, files, reply_to, deleted_at, message, created_at)
-		VALUES (${c.p(id)}, ${c.p(conv)}, ${c.p(channel)}, ${c.p(specOf(channel)['syncOnly'] === true && isObj(message) && message['direction'] === 'outbound' ? 'outbound' : 'inbound')}, ${c.p(inbound.history || specOf(channel)['syncOnly'] === true ? 'sync' : 'live')}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
+		VALUES (${c.p(id)}, ${c.p(conv)}, ${c.p(channel)}, ${c.p(typeof specOf(channel)['owner'] === 'string' && isObj(message) && message['direction'] === 'outbound' ? 'outbound' : 'inbound')}, ${c.p(inbound.history || typeof specOf(channel)['owner'] === 'string' ? 'sync' : 'live')}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
 			${c.p(inbound.sender)}, ${c.p(inbound.senderName)}, ${c.p(inbound.sentAt)}::timestamptz, ${c.p(inbound.invocation)}, ${c.p(preview(text))}, ${c.p(text)},
 			${c.p(inbound.email)}::jsonb, ${c.p(stored)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'},
 			${c.p(source)}::jsonb, ${c.p(now)}::timestamptz)
@@ -262,7 +263,7 @@ export function channels(cfg: ChannelsConfig) {
 		const integrationTargets = Object.entries(m.integrations).filter(([, spec]) => isObj(spec['source']) && spec['source']['channel'] === channel);
 		const integrationJobs: { automation: string; key: string; input: Json }[] = integrationTargets.map(([collection]) => ({ automation: `${collection}.integration`, key: `channel:${channel}:${id}:${inbound.version}:${collection}`, input: { mode: 'deliver', message: isObj(message) ? { ...message, attachments: stored } : message } }));
 		if (cfg.integrations !== undefined) integrationJobs.push({ automation: INTEGRATE, key: `channel:${channel}:${id}:${inbound.version}:integrations`, input: { mode: 'deliver', message: isObj(message) ? { ...message, attachments: stored } : message, channel, run: `channel:${channel}:${id}` } });
-		if (!inbound.deleted && (specOf(channel)['syncOnly'] === true || !inbound.history) && integrationJobs.length > 0) {
+		if (!inbound.deleted && (typeof specOf(channel)['owner'] === 'string' || !inbound.history) && integrationJobs.length > 0) {
 			c.cte('integrations', `INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth)
 				SELECT v.id, v.automation, v.input, ${c.p(now)}::timestamptz, v.key, 'inbound', 0
 				FROM jsonb_to_recordset(${c.p(integrationJobs.map((job) => ({ id: crypto.randomUUID(), ...job })))}::jsonb) AS v(id text, automation text, input jsonb, key text)
@@ -297,7 +298,7 @@ export function channels(cfg: ChannelsConfig) {
 			for (const message of await mapped(event.channel, 'inbound', event.message)) {
 				const account = isObj(event.message) ? event.message['sourceAccount'] : undefined;
 				await arrived({ kind: 'inbound', channel: event.channel, message: typeof account === 'string' && isObj(message)
-					? { ...message, sourceAccount: account, id: `${account}:${String(message['id'])}`, thread: `${account}:${String(message['thread'] ?? message['id'])}` } : message });
+					? { ...message, sourceAccount: account, sourceUser: specOf(event.channel)['owner'] ?? null } : message });
 			}
 			return;
 		}
@@ -307,7 +308,7 @@ export function channels(cfg: ChannelsConfig) {
 	async function arrived(event: Extract<TransportEvent, { kind: 'inbound' }>): Promise<void> {
 		const got = await ingest(event.channel, event.message, event.bins);
 		if (got === null || !got.inserted || got.deleted) return;
-		const syncOnly = specOf(event.channel)['syncOnly'] === true;
+		const syncOnly = typeof specOf(event.channel)['owner'] === 'string';
 		if (syncOnly) return;
 		if (got.email !== null ? got.references.length > 0 : got.replyTo !== null) await replied(got);
 		if (!got.history) await cfg.admit?.(got);
@@ -319,7 +320,7 @@ export function channels(cfg: ChannelsConfig) {
 		from: 'inbound' | 'poll',
 		payload: Json
 	): Promise<readonly Json[]> {
-		const out = await body(channel)(`channel.${channel}.${from}.messages`, [payload]);
+		const out = await body(channel)(`channel.${String(specOf(channel)['type'] ?? channel)}.${from}.messages`, [{ ...(isObj(payload) ? payload : {}), configuration: specOf(channel)['configuration'] ?? {} }]);
 		if (!Array.isArray(out))
 			throw new BoltError(
 				'invalidInput',
@@ -469,7 +470,7 @@ export function channels(cfg: ChannelsConfig) {
 			return null;
 		let set: Json;
 		try {
-			set = await body(channel)(`channel.${channel}.events.${kind}`, [event]);
+			set = await body(channel)(`channel.${String(specOf(channel)['type'] ?? channel)}.events.${kind}`, [event]);
 		} catch (e) {
 			if (e instanceof BoltError && e.code === 'missingBody') return null;
 			return {
@@ -509,7 +510,7 @@ export function channels(cfg: ChannelsConfig) {
 		message: Json,
 		options: { kind?: 'dm' | 'group'; id?: string } = {}
 	): Promise<string> {
-		if (specOf(channel)['syncOnly'] === true)
+		if (typeof specOf(channel)['owner'] === 'string')
 			throw new BoltError(
 				'invalidInput',
 				'decode',
@@ -568,8 +569,8 @@ export function channels(cfg: ChannelsConfig) {
 		if ((row as Obj)['approval_id'] != null) return false;
 		let built: Json;
 		try {
-			built = await body(channel)(`channel.${channel}.outbound.${String(r['rule'])}.message`, [
-				{ record: row }
+			built = await body(channel)(`channel.${String(specOf(channel)['type'] ?? channel)}.outbound.${String(r['rule'])}.message`, [
+				{ record: row, configuration: specOf(channel)['configuration'] ?? {} }
 			]);
 		} catch (e) {
 			return fail('failed', `the ${String(r['rule'])} message failed: ${(e as Error).message}`);

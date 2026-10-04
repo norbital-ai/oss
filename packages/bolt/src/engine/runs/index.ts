@@ -2,6 +2,7 @@
 // The runs area (A8, rules 48–56, 70): the tick a deadline wakes, the run's bridge and journal, attempts, starts, the
 // boot read, run visibility and the daily prune. Every queued run is a `sys_run` row with a `due_at` (queue.ts); the
 // host's `deadlines` port wakes a scope once per due instant and nothing else asks the database anything.
+import { issueAutomationDelegation, delegatedVerbAuthority } from '../access/delegation.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Holder } from '../access/authority.ts';
 import { durationMs } from '../access/pred.ts';
@@ -16,7 +17,7 @@ import type { Verb } from '../write/act.ts';
 import { actorRef } from '../write/commit.ts';
 import { answer, canonical, Chain, GATED, hex, noticeCaptures, noticeInsert, sha256 } from '../write/sql.ts';
 import { nextSlot } from './cron.ts';
-import { BUCKET_MS, dueAt, iso, REPLACE_QUEUED, triggersOf, type NewRun } from './queue.ts';
+import { BUCKET_MS, POLL, dueAt, iso, REPLACE_QUEUED, triggersOf, type NewRun } from './queue.ts';
 import { deliverWebhook, type WebhookRequest, type WebhookResponse } from './webhook.ts';
 import { authorDecide, authorEmbed, readableFile, storedFiles, type AuthorDecideConfig } from '../decisions/index.ts';
 import { isObj } from '../channels/store.ts';
@@ -58,6 +59,8 @@ export type RunView = { id: string; automation: string; cause: string; status: s
 export type Runs = {
 	/** Restart recovery and release install: one statement, then `settle` (rule 52a). */
 	boot(): Promise<void>;
+	/** Refresh runtime channel cron slots without recovering active runs. */
+	reconfigure(): Promise<void>;
 	/**
 	 * One wake: claim every due run, run them, settle with the next due time. Workspace automations run one at a
 	 * time, platform runs beside them, and the wake stays open while any runs: a run queued meanwhile and
@@ -133,12 +136,13 @@ export function runs(cfg: RunsConfig): Runs {
 	};
 
 	// ── boot (rule 52a restart recovery; rule 54 lost leases; rule 52 cron slots; rule 70 first admission) ──
-	async function boot(): Promise<void> {
+	async function boot(recover = true): Promise<void> {
+		await e.refreshMessaging();
 		const now = clock(), c = new Chain();
 		c.cte('lost', `UPDATE sys_run SET leases = leases + 1, due_at = ${c.p(iso(now))}::timestamptz,
 			state = CASE WHEN leases < 3 THEN 'queued' ELSE 'failed' END,
 			error = CASE WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END
-		WHERE state = 'running' RETURNING id, state, due_at`);
+		WHERE state = 'running' AND ${c.p(recover)} RETURNING id, state, due_at`);
 		const crons = triggersOf(m).crons;
 		c.cte('gone', `DELETE FROM sys_run WHERE state = 'queued' AND cause = 'cron'
 			AND NOT (jsonb_build_array(automation, key) IN (SELECT e.value FROM jsonb_array_elements(${c.p(crons.map((t) => [t.automation, t.key]))}::jsonb) e)) RETURNING id`);
@@ -293,7 +297,7 @@ export function runs(cfg: RunsConfig): Runs {
 		} : head.input;
 		let outcome: GuestOutcome;
 		let holder: Holder | undefined;
-		const handler = head.automation === PRUNE ? async () => (await prune(now)) as unknown as Json : cfg.platform?.[head.automation];
+		const handler = head.automation === PRUNE ? async () => (await prune(now)) as unknown as Json : cfg.platform?.[head.automation] ?? (head.automation.startsWith(POLL) ? e.channels.handlers()[head.automation] : undefined);
 		if (spec === undefined && handler !== undefined) outcome = await handler(input, head).then((output): GuestOutcome => ({ kind: 'ok', output, cpuMs: 0 }),
 			(err: unknown): GuestOutcome => ({ kind: 'failed', error: err instanceof BoltError ? err : new BoltError('internal', 'guest', String(err)), cpuMs: 0 }));
 		else if (spec === undefined) outcome = { kind: 'failed', error: new BoltError('unknownAutomation', 'admission', `no automation '${head.automation}'`), cpuMs: 0 };
@@ -361,6 +365,7 @@ export function runs(cfg: RunsConfig): Runs {
 		const now = clock(), tz = m.workspace.tz;
 		const b: Bindings = { now: iso(now), today: todayIn(now, tz), tz, params: {} };
 		const authority = e.authority(holder);
+		const delegation = issueAutomationDelegation(m,authority,run.id,run.automation);
 		const replaying = run.attempts > 1 || run.leases > 0;
 		const journal = new Map<string, Json>();
 		if (replaying) {
@@ -435,7 +440,8 @@ export function runs(cfg: RunsConfig): Runs {
 
 		/** Each facility call ends by its own wall or the crossing's (rule 72), or when the generation drains (rule 71a). */
 		const effect = async (call: Exact, signal: AbortSignal): Promise<CrossAnswer> => {
-			switch (call.op) {
+			 switch (call.op) {
+				case 'prepareCreate':return fail('unsupported','native create preparation is available only inside a collection transform');
 				case 'progress': { // L-BOLT-336: not journalled (a replay reports again); the answer carries a stop recorded by any process
 					const p = call.progress as { ratio?: unknown; text?: unknown } | null;
 					const ratio = p?.ratio ?? null, text = p?.text ?? null;
@@ -454,11 +460,11 @@ export function runs(cfg: RunsConfig): Runs {
 					// hook:callables — X-24: a collection action is one act (its recorded writes one statement), keyed like any act
 					if (!['create', 'update', 'delete', 'upsert'].includes(verb)) {
 						const r = await e.calls.action({ collection: call.callable.slice(0, dot), action: verb, input: call.input, key: k, issuedAt: b.now,
-							retry: replaying, authority, bindings: b, invocationId: k, from: 'server' });
+							retry: replaying, authority, delegation, bindings: b, invocationId: k, from: 'server' });
 						return { ok: true, value: r.outcome as Json };
 					}
 					const r = await e.act({ collection: call.callable.slice(0, dot), verb: verb as Verb, input: call.input, key: k, issuedAt: b.now,
-						retry: replaying, authority, bindings: b, invocationId: k,
+						retry: replaying, authority: delegatedVerbAuthority(m,authority,delegation,call.callable), bindings: b, invocationId: k,
 						...(call.options?.onConflict === undefined ? {} : { onConflict: call.options.onConflict }) }); // hook:ctx-types (rule 28)
 					return { ok: true, value: r.outcome as Json };
 				}
@@ -598,7 +604,7 @@ export function runs(cfg: RunsConfig): Runs {
 	}
 
 	return {
-		boot, tick, view, stop,
+		boot: () => boot(), reconfigure: () => boot(false), tick, view, stop,
 		nudge: (at) => nudged?.(Date.parse(at)),
 		webhook: (path, request) => deliverWebhook({ manifest: m, db, env: cfg.env ?? (() => undefined), now: clock,
 			queued: (due) => deadlines.announce(scope, due) }, path, request),
@@ -622,4 +628,3 @@ export function runView(auth: Authority, r: { readonly [c: string]: Json }): Run
 
 export { announceTriggered, queueTriggered } from './queue.ts';
 export { inProcessDeadlines } from './scheduler.ts';
-

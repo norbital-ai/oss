@@ -100,15 +100,15 @@ export function createBolt(config: BoltConfig) {
 	/** The client ledger: the revision of every row this page last read (rule 25). */
 	const revisions = new Map<string, number>();
 	const waiters = new Set<{ v: number; done(): void }>();
-	let conn: string | null = null, applied = 0, n = 0;
+	let conn: string | null = null, applied = 0, n = 0, generation = 0;
 	let closed: string | null = null;
 	/** L-BOLT-499: the link's state for the shell's banner; `closed` once a release closed the stream (rule 66). */
 	const statusReaders = new Set<(s: SyncStatus) => void>();
 	const syncStatus = (): SyncStatus => closed !== null ? 'closed' : conn !== null ? 'live' : stream.open || stream.retrying ? 'connecting' : 'idle';
 	const emitStatus = () => { const now = syncStatus(); for (const run of statusReaders) run(now); };
 
-	async function post<T>(path: string, body: unknown, headers: { readonly [h: string]: string } = {}): Promise<{ status: number; body: T | WireError }> {
-		const res = await f(`${base}${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+	async function post<T>(path: string, body: unknown, headers: { readonly [h: string]: string } = {}, signal?: AbortSignal): Promise<{ status: number; body: T | WireError }> {
+		const res = await f(`${base}${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), ...(signal === undefined ? {} : { signal }) });
 		return { status: res.status, body: await res.json() as T | WireError };
 	}
 	const said = async (path: string, body: unknown): Promise<{ ok: true } | { ok: false; message: string }> => {
@@ -146,6 +146,7 @@ export function createBolt(config: BoltConfig) {
 	};
 	const stream = liveStream(() => config.openStream?.(`${base}${PATHS.live}`) ?? new EventSource(`${base}${PATHS.live}`, { withCredentials: true }), onFrame, () => {
 		conn = null;
+		generation++;
 		emitStatus();
 		for (const s of views.values()) s.registered = false;
 		for (const w of waiters) w.done();
@@ -153,16 +154,23 @@ export function createBolt(config: BoltConfig) {
 
 	async function register(add: readonly View[], drop: readonly string[] = []): Promise<void> {
 		if (conn === null || (add.length === 0 && drop.length === 0)) return;
+		const registeredGeneration = generation;
 		for (const s of add) s.registered = true;
 		const body: LiveBody = { conn, drop, add: add.map((s) => ({ view: s.id, read: s.read, ...(s.every === undefined ? {} : { every: s.every }), ...(s.on === undefined ? {} : { on: s.on }) })) };
 		let reply: LiveReply | WireError;
 		try {
 			reply = (await post<LiveReply>(PATHS.live, body)).body;
 		} catch {
+			if (generation !== registeredGeneration) return;
 			for (const s of add) s.registered = false; // the next `hello` registers it again
 			return;
 		}
+		if (generation !== registeredGeneration) return; // a reply from a retired stream cannot change the new stream's views
 		const errors = 'error' in reply ? add.map((s) => ({ view: s.id, ...(reply as WireError).error })) : reply.errors;
+		if (errors.some((e) => e.code === 'notFound' && e.message === 'the live connection is gone')) {
+			stream.restart();
+			return;
+		}
 		for (const e of errors) {
 			const s = views.get(e.view);
 			if (s !== undefined) { s.error = { code: e.code, message: e.message }; notify(s); }
@@ -256,10 +264,10 @@ export function createBolt(config: BoltConfig) {
 	}
 
 	// ── acts: never reject (rule 32) ──
-	async function send(callable: string, input: Json, key: string, observed?: { [id: string]: number }): Promise<Outcome> {
+	async function send(callable: string, input: Json, key: string, observed?: { [id: string]: number }, signal?: AbortSignal): Promise<Outcome> {
 		try {
 			const body: ActBody = { callable, input, issuedAt: now(), ...(observed === undefined ? {} : { observed }) };
-			const { status, body: reply } = await post<ActReply>(PATHS.act, body, { [HEADERS.key]: key, ...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract }) });
+			const { status, body: reply } = await post<ActReply>(PATHS.act, body, { [HEADERS.key]: key, ...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract }) }, signal);
 			if ('error' in reply) {
 				const code = status === 400 ? 'invalidInput' : status === 401 || status === 403 ? 'forbidden' : status === 404 ? 'notFound' : status === 429 ? 'rateLimited' : null;
 				return code === null ? { kind: 'unknown', invocation: key } : { kind: 'refused', code, message: reply.error.message };
@@ -312,7 +320,20 @@ export function createBolt(config: BoltConfig) {
 		},
 		/** Rule 16a `filter.describe` as the caller: a description → `{ where, orderBy? }`; rejects when no filter could be built. */
 		...(config.describe === true ? { async describe(collection: string, text: string, fields?: readonly { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean }[]): Promise<{ where: Json; orderBy?: Json }> {
-			const o = await send('filter.describe', { collection, text, ...(fields === undefined ? {} : { fields }) }, uuid());
+			// This read-like request can be cancelled; mutating acts retain unknown-commit semantics.
+			const controller = new AbortController();
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const deadline = new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => {
+					const error = Object.assign(new Error('Describing this filter took too long. Try again.'), { name: 'TimeoutError', code: 'timeout' });
+					controller.abort(error);
+					reject(error);
+				}, 15_000);
+			});
+			let o: Outcome;
+			try {
+				o = await Promise.race([send('filter.describe', { collection, text, ...(fields === undefined ? {} : { fields }) }, uuid(), undefined, controller.signal), deadline]);
+			} finally { clearTimeout(timer); }
 			if (o.kind !== 'committed') throw new Error(o.kind === 'refused' ? o.message : 'Could not build a filter from that description.');
 			return o.output as { where: Json; orderBy?: Json };
 		} } : {}),

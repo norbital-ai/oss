@@ -9,7 +9,7 @@ import type {
 import type { Notify, Schedule, StartInput } from './runtime/facilities.ts';
 import type { StartableName } from './access/policy.ts';
 import type { ModelWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
-import type { DatePeriod, Decimal, IanaZone, Id, Instant, InstantPeriod, PlainDate, FileRef, RequestId } from './values.ts';
+import type { DatePeriod, Decimal, IanaZone, Id, Instant, InstantPeriod, PlainDate, FileRef, RequestId, Json } from './values.ts';
 import type { WireRead } from '../protocol/wire.ts';
 
 // ── reads ──
@@ -85,6 +85,7 @@ export interface WorkspaceReads {
 	get<C extends string>(collection: Is<C, ReadableName>, id: NoInfer<Id<C>>, q?: { revision?: number }): Promise<StoredRow<C> | null>;
 	/** Stored rows overlaid with this batch's inputs (PH GAP-5). */
 	after<C extends string>(collection: Is<C, ReadableName>, where: NoInfer<ModelWhere<C>>): Promise<readonly StoredRow<C>[]>;
+	after<C extends string, const S extends {readonly [P in keyof StoredRow<C>]?:true}={}>(collection:Is<C,ReadableName>,where:NoInfer<ModelWhere<C>>,query:{select?:S;orderBy?:NoInfer<OrderBy<C>>}&Paged):Promise<Page<[keyof S] extends [never]?StoredRow<C>:Pick<StoredRow<C>,(keyof S|'id')&keyof StoredRow<C>>>>;
 }
 interface Clock { actor: Actor; now: Instant; today: PlainDate; tz: IanaZone; todayIn(zone: IanaZone): PlainDate }
 
@@ -206,6 +207,8 @@ type InputField<X> = keyof (X extends { input: infer I } ? I : {}) & string;
  * transform, which sees the whole batch and `db.after`).
  */
 export interface ActionCtx<in out C, in out X = {}> extends QueryCtx {
+	readonly policies: readonly string[];
+	readonly admin: boolean;
 	act: Act; schedule: Schedule; notify: Notify;
 	refuse(message: string, at?: { field?: InputField<X> }): never;
 	/** The row a `target: 'record'` action runs on; `never` on any other action. */
@@ -227,15 +230,30 @@ type TransformRelations<T, Fk> = T extends TargetName ? {
 	link?: readonly Id<T & string>[]; unlink?: readonly Id<T & string>[]; delete?: readonly Id<T & string>[];
 } : never;
 export type DeleteInput = { readonly $delete: true };
+/** Native planning evidence; a reservation is never a claim that the row was committed or approved. */
+export type PreparedCreateReceipt={
+	readonly collection:string;readonly id:string;readonly path:readonly (string|number)[];
+	readonly values:Readonly<Record<string,Json>>;readonly committed:false;
+	readonly phase:'PREPARED_NATIVE_CREATE';readonly invocation_id:string;
+	readonly related_sources:readonly PreparedCreateReceipt[];
+	readonly related_actions:readonly Json[];
+};
 /**
  * What the collection transform sees: the clock, `existing[i]` (the stored row of `inputs[i]`, `undefined` on create), the
  * workspace reads in `db` (unmasked, including `db.after`) and `refuse`.
  */
 export interface TransformCtx<in out M> extends Clock {
+	readonly policies: readonly string[];
+	readonly admin: boolean;
 	refuse(message: string, at?: { field?: WritableField<M> }): never;
 	/** `existing[i]` is the stored row of `inputs[i]`, `undefined` for a create. */
 	existing: readonly (StoredRow<M> | undefined)[];
-	db: WorkspaceReads;
+	/** Engine-assigned identities for submitted roots and native relation children; never caller fields. */
+	readonly staged: readonly { readonly collection:string; readonly id:string; readonly path:readonly (string|number)[]; readonly operation:string; readonly parent?:{readonly collection:string;readonly id:string;readonly relation:string;readonly field:string} }[];
+	db: WorkspaceReads & {
+		/** Reserve an engine identity for a generated owned child path. No write or approval occurs here. */
+		prepareCreate(collection:CollectionName,values:Readonly<Record<string,Json>>,options:{readonly path:readonly (string|number)[]}):Promise<PreparedCreateReceipt>;
+	};
 }
 
 // ── the page client (§3.5): `$bolt`'s reads and writes over the same names, rows and inputs as the `ctx` above ──

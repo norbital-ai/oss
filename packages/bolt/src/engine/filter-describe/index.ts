@@ -648,8 +648,20 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			'sort.yes': { type: 'noul', instructions: 'Does the description ask for an order?', criteria: { true: 'it asks for an order', false: 'it asks for no order' } },
 			'sort.field': { type: 'choice', instructions: 'Which field orders the records?', criteria: own(sortable.slice(0, max).map((f) => f.label)) },
 			'sort.dir': { type: 'choice', instructions: 'Which direction?', criteria: { [DIRS.asc]: 'smallest or earliest first', [DIRS.desc]: 'largest or latest first' } } });
+		// Admission is semantic, not a keyword guard: an explicit current flag or a related aggregate
+		// can express a selection that otherwise needs unsupported comparisons across root records.
+		first['selection.unsupported'] = {
+			type: 'noul',
+			instructions: 'Does satisfying the requested selection require comparing top-level records with other top-level records, selecting a ranked subset or a maximum/minimum per group, or limiting the record count, rather than testing the offered field and relation conditions? A descending sort changes order only; it does not select latest-only or one record per group. Answer false when an exposed current/latest flag or an offered related aggregate directly represents the requested selection.',
+			criteria: {
+				true: 'the requested selection requires unsupported cross-record comparisons or ranking',
+				false: 'the requested selection is represented by the offered conditions and ordering'
+			}
+		};
 		const r1 = await call(state, first);
 		if ('ok' in r1) return r1;
+		if (noulOf(r1, 'selection.unsupported') > 0.5)
+			return { ok: false, code: 'invalid', message: 'This selection requires comparing or ranking records across groups, which the available filters cannot express. Choose a field condition or sort instead.' };
 		const conds: Json[] = [];
 		const unbuilt: Field[] = [];
 		// the spans' readings first; a field one already decided, or an echoed word one already used, is not asked again

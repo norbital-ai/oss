@@ -154,7 +154,7 @@ const run: Actor = { kind: 'system', run: '' as Id<'sys_run'>, by: { platform: '
 void member; void envoy; void run;
 // @ts-expect-error A41 a teamPath naming an unknown team
 const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], teamPath: ['Sails'], admin: false, party: null };
-// @ts-expect-error A42 an envoy actor of an unknown envoy
+// Envoy identifiers come from runtime records.
 const a2: Actor = { kind: 'envoy', envoy: 'dsk', channel: 'whatsapp', sender: 'x', member: null };
 // @ts-expect-error A43 a visitor of an unknown app
 const a3: Actor = { kind: 'visitor', app: 'careers', visitor: 'v' };

@@ -364,10 +364,11 @@ function ctxFor(kind, c, invocationId) {
 	const reads = { read: fn('read'), get: fn('get'), aggregate: fn('aggregate'), similar: fn('similar'), history: fn('history'), query: fn('query') };
 	const writes = { act: Object.assign(fn('act', 'act'), { try: fn('act', 'try') }), schedule: fn('schedule'), notify: fn('notify') };
 	switch (kind) {
-		case 'transform': return { ...clock, actor: c.actor, existing: (c.existing || []).map((r) => r === null ? undefined : r), refuse,
-			db: { read: fn('db.read'), get: fn('db.get'), aggregate: fn('db.aggregate'), after: fn('db.after') } };
+		case 'transform': return { ...clock, actor: c.actor, policies: Object.freeze([...(c.policies || [])]), admin: c.admin === true, existing: (c.existing || []).map((r) => r === null ? undefined : r), staged: Object.freeze((c.staged || []).map((row) => Object.freeze({...row,path:Object.freeze([...row.path]),...(row.parent ? {parent:Object.freeze({...row.parent})} : {})}))), refuse,
+			db: { read: fn('db.read'), get: fn('db.get'), aggregate: fn('db.aggregate'), after: fn('db.after'),prepareCreate:fn('db.prepareCreate') } };
+		case 'projection': return { ...clock, actor: c.actor, invocationId, ...reads, refuse, admin: c.admin === true, policies: Object.freeze([...(c.policies || [])]), fields: Object.freeze([...(c.fields || [])]) };
 		case 'query': return { ...clock, actor: c.actor, invocationId, ...reads, refuse }; // hook:ctx-types (refuse)
-		case 'action': case 'tool': return { ...clock, actor: c.actor, invocationId, ...reads, ...writes, target: c.row, refuse };
+		case 'action': case 'tool': return { ...clock, actor: c.actor, policies: Object.freeze([...(c.policies || [])]), admin: c.admin === true, invocationId, ...reads, ...writes, target: c.row, refuse };
 		case 'automation': return { ...clock, actor: c.actor, invocationId, ...reads, ...writes, send: fn('send'), progress: fn('progress'),
 			http: (connection) => Object.fromEntries(['get', 'post', 'put', 'patch', 'delete'].map((m) => [m,
 				Object.assign((path, request) => call('http.' + m, [connection, path, request], 'throw'),

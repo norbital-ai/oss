@@ -120,7 +120,7 @@ function sortable(v: Json | undefined): string | number | boolean | null | undef
 export function liveHub(config: LiveConfig) {
 	const cat = catalogOf(config.manifest);
 	// an envoy declared `public` serves anyone, so its threads are in every member's list (the `conversations` read)
-	const publicEnvoys = Object.entries(config.manifest.envoys ?? {}).filter(([, e]) => (e as { audience?: unknown }).audience === 'public').map(([n]) => n);
+	const publicEnvoys = () => Object.entries(config.manifest.envoys ?? {}).filter(([, e]) => (e as { audience?: unknown }).audience === 'public').map(([n]) => n);
 	const conns = new Map<string, Conn>();
 	// `v`: the last commit's sequence; `routed`: the last one whose views were answered (frames are stamped with it)
 	let v = 0, routed = 0, retained = 0, conservative = 0, n = 0, reads = 0;
@@ -164,7 +164,7 @@ export function liveHub(config: LiveConfig) {
 		if (r.kind === 'transcript') return c.collection === r.collection && (c.new ?? c.old)?.['conversation'] === r.conversation
 			&& (r.from === undefined || Number((c.new ?? c.old)?.['seq']) >= r.from) ? 'hit' : 'skip';
 		if (r.kind === 'inbox') return c.collection === r.collection && (c.new ?? c.old)?.['member'] === r.member ? 'hit' : 'skip';
-		if (r.kind === 'conversations') return c.collection === r.collection && listed(c.new ?? c.old, r.member, publicEnvoys) ? 'hit' : 'skip';
+		if (r.kind === 'conversations') return c.collection === r.collection && listed(c.new ?? c.old, r.member, publicEnvoys()) ? 'hit' : 'skip';
 		if (r.kind === 'similar' || r.kind === 'after') return 'unknown';
 		// a commit to a related sort key's target (a renamed account) may reorder rows it does not carry: re-read
 		if (r.kind === 'read' && sortTargets(cat, r.collection, r.order).has(c.collection)) return 'unknown';

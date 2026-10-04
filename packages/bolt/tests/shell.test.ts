@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import { canOpen, crossSite, framePolicy, holdsPublic, exposure, href, isOpenRoute, nav, route, surfaces, type ShellManifest } from '../src/shell/nav.ts';
-import { challengeQueue, visitorFetch } from '../src/shell/runtime.ts';
+import { challengeQueue, visitorFetch, shellApi } from '../src/shell/runtime.ts';
 import { activeApp, media, navigationModel, NORBIUS } from '../src/shell/model.ts';
 import { fileAttachments } from '../src/shell/data.ts';
 import { layoutTeams, searchTeams, subtree } from '../src/shell/teams.ts';
@@ -213,7 +213,7 @@ describe('sidebar model', () => {
 	});
 	it('the account popover: Settings (People, Organization, Audit, Automations) apart from System (no Logs: Studio holds the log); a member has neither', () => {
 		expect(tree(navigationModel(bootOf(member([], {}, true), true), '/', (k) => k).utilities)).toEqual([
-			['settings', ['people', 'organization', 'audit', 'automations']], ['system', ['channels', 'integrations', 'secrets', 'studio']], ['sites', ['hr/kiosk/clock']]]);
+			['settings', ['people', 'organization', 'audit', 'automations']], ['system', ['envoy', 'integrations', 'secrets', 'studio']], ['sites', ['hr/kiosk/clock']]]);
 		const settings = navigationModel(bootOf(member([], {}, true)), '/settings/automations', (k) => k).utilities?.[0];
 		expect(settings).toMatchObject({ key: 'settings', active: true });
 		expect(settings?.children?.find((c) => c.key === 'automations')).toMatchObject({ href: '/settings/automations', active: true });
@@ -279,7 +279,7 @@ describe('Studio port boundary', () => {
 		const state: StudioState = { commit: 'h', files, changes: [], manifest, log: [], preview: null, releases: [] };
 		const v = studioView(state);
 		const names = Object.fromEntries(Object.entries(v.sections!).map(([s, es]) => [s, es.map((e) => e.name)]));
-		expect(names).toEqual({ collections: ['a', 'b'], pipelines: ['a'], apps: ['x'], policies: [], envoys: [], automations: ['nightly'], remotes: ['stripe', 'docs'], environment: ['API'] });
+		expect(names).toEqual({ collections: ['a', 'b'], pipelines: ['a'], apps: ['x'], policies: [], channelTypes: [], automations: ['nightly'], remotes: ['stripe', 'docs'], environment: ['API'] });
 		expect(v.sections!.apps).toEqual([{ name: 'x', path: 'src/app/x/+app.ts', href: '/app/x' }]);
 		expect(v.sections!.remotes.map((e) => e.path)).toEqual(['src/connection/+stripe.connection.ts', 'src/agent/mcp/+docs.mcp.ts']);
 		expect('manifest' in v).toBe(false);
@@ -367,4 +367,27 @@ describe('embedding', () => {
 		expect(crossSite(post({}), 'https://acme.example')).toBe(false);                                   // a server's webhook
 		expect(crossSite(new Request('https://acme.example/app/x', { headers: { 'sec-fetch-site': 'cross-site' } }), 'https://acme.example')).toBe(false);
 	});
+});
+
+
+describe('shell HTTP failures', () => {
+	it.each([403, 404, 429, 500, 502, 503, 504])('preserves HTTP %s when the server answers HTML', async (status) => {
+		const api = shellApi(async () => new Response('<html>proxy error</html>', { status }));
+		const result = await api.boot();
+		expect(result).toMatchObject({ ok: false, status });
+		if (!result.ok) expect(result.error.code).not.toBe('offline');
+	});
+	it('keeps the safe refusal reason', async () => {
+		const api = shellApi(async () => Response.json({ error: { code: 'expired', message: 'The link expired.' } }, { status: 410 }));
+		expect(await api.boot()).toMatchObject({ ok: false, status: 410, error: { message: 'The link expired.' } });
+	});
+	it('distinguishes a connection failure from an invalid successful response', async () => {
+		expect(await shellApi(async () => { throw new TypeError('fetch failed'); }).boot()).toMatchObject({ ok: false, status: 0, error: { code: 'offline' } });
+		expect(await shellApi(async () => new Response('not JSON')).boot()).toMatchObject({ ok: false, status: 200, error: { code: 'protocol' } });
+	});
+});
+
+it('explains a generic internal refusal using its HTTP status', async () => {
+	const result = await shellApi(async () => Response.json({ error: { code: 'internal', message: 'The request failed.' } }, { status: 500 })).boot();
+	expect(result).toMatchObject({ ok: false, status: 500, error: { code: 'unavailable', message: 'The workspace server could not complete the request. Try again shortly.' } });
 });

@@ -2,6 +2,7 @@
 // `seq` values, sealed rows) in relationship order, one statement per collection per ≤ 4 MiB chunk, in one transaction;
 // the database's constraints apply; roll-ups are derived and compared with any given value (`SeedDrift`); each `seq`
 // counter is raised to the highest seeded value. No transform, trigger, run, outbox row, approval route or rate limit.
+import { SYSTEM } from '../../system/index.ts';
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest, RowData, TenantDb } from '../contracts.ts';
 import { BoltError, DbError } from '../contracts.ts';
@@ -14,10 +15,16 @@ import { cells, decided, ownPredSql, Chain, untag } from './sql.ts';
 
 /** Rows per collection, as a seed pack's `seed/<collection>.json` holds them. */
 export type SeedPack = { readonly [collection: string]: readonly RowData[] };
+export const MESSAGING_SEED = ['sys_channel_connection', 'sys_envoy', 'sys_envoy_channel'] as const;
+const seedManifest = (m: EngineManifest): EngineManifest => ({ ...m,
+	models: { ...Object.fromEntries(MESSAGING_SEED.map((c) => [c, SYSTEM.models[c]!])), ...m.models },
+	relationships: { ...Object.fromEntries(Object.entries(SYSTEM.relationships).filter(([key]) => MESSAGING_SEED.some((c) => key.startsWith(`${c}.`)))), ...m.relationships }
+});
 const CHUNK = 4 * 1024 * 1024;
 
 /** Seed decode (rule 70): throws `seedDecode` on the first bad row. hook:callables — `bolt check` runs it at build. */
 export function decodeSeed(m: EngineManifest, pack: SeedPack): void {
+	m = seedManifest(m);
 	const cat = catalogOf(m);
 	// decode: every key a stored field, FK or system column; computed values are the database's (GENERATED)
 	for (const [c, rows] of Object.entries(pack)) {
@@ -36,6 +43,7 @@ export function decodeSeed(m: EngineManifest, pack: SeedPack): void {
 }
 
 export async function seed(m: EngineManifest, db: TenantDb, pack: SeedPack, now: string): Promise<{ inserted: number }> {
+	m = seedManifest(m);
 	const cat = catalogOf(m);
 	decodeSeed(m, pack);
 	const order = topological(m, Object.keys(pack));
@@ -53,15 +61,16 @@ export async function seed(m: EngineManifest, db: TenantDb, pack: SeedPack, now:
 					const shapes = new Map<string, Record<string, Json>[]>();
 					for (const r of chunk) { const k = Object.keys(r).sort().join('\0'); shapes.set(k, [...shapes.get(k) ?? [], r]); }
 					const lists = [...shapes.values()];
+					const audit = !(MESSAGING_SEED as readonly string[]).includes(c);
 					const inserts = lists.map((list, i) => { const cols = Object.keys(list[0]!);
 						return `ins${i} AS (INSERT INTO ${q(c)} (${cols.map(q).join(', ')})
-						SELECT ${cols.map((f) => `r.${q(f)}`).join(', ')} FROM jsonb_populate_recordset(null::${q(c)}, $${i + 3}::jsonb) r
+						SELECT ${cols.map((f) => `r.${q(f)}`).join(', ')} FROM jsonb_populate_recordset(null::${q(c)}, $${i + (audit ? 3 : 1)}::jsonb) r
 						ON CONFLICT (id) DO NOTHING RETURNING *)`; });
 					const res = await tx.query({ text: `WITH ${inserts.join(', ')}
 					, ins AS (${lists.map((_, i) => `SELECT * FROM ins${i}`).join(' UNION ALL ')})
-					, hist AS (INSERT INTO bolt_history (collection, record, revision, at, actor, op, cause, changes)
-						SELECT $1, id, revision, $2::timestamptz, 'system:seed', 'create', 'seed', to_jsonb(ins) FROM ins)
-					SELECT count(*)::int AS n FROM ins`, params: [c, now, ...lists.map((l) => JSON.stringify(l))] });
+					${audit ? `, hist AS (INSERT INTO bolt_history (collection, record, revision, at, actor, op, cause, changes)
+						SELECT $1, id, revision, $2::timestamptz, 'system:seed', 'create', 'seed', to_jsonb(ins) FROM ins)` : ''}
+					SELECT count(*)::int AS n FROM ins`, params: [...(audit ? [c, now] : []), ...lists.map((l) => JSON.stringify(l))] });
 					inserted += Number(res.rows[0]!['n']);
 				}
 			}

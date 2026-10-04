@@ -11,18 +11,10 @@ export const DELIVER = 'channels.deliver';
 /** Every transport that takes a chat message (`{ to, text, attachments? }`): the chat providers and a custom channel. */
 const CHAT = new Set(['whatsapp', 'telegram', 'slack', 'discord', 'wechat', 'custom']);
 type Rule = { channel: string; rule: string; from: string };
-const cache = new WeakMap<EngineManifest, readonly Rule[]>();
 export function outboundRules(m: EngineManifest): readonly Rule[] {
-	let r = cache.get(m);
-	if (r === undefined) {
-		r = Object.entries(m.channels).flatMap(([channel, spec]) =>
-			Object.entries(isObj(spec['outbound']) ? spec['outbound'] : {}).flatMap(([rule, o]) =>
-				isObj(o) && typeof o['from'] === 'string' ? [{ channel, rule, from: o['from'] }] : []
-			)
-		);
-		cache.set(m, r);
-	}
-	return r;
+	return Object.entries(m.channels).flatMap(([channel, spec]) =>
+		Object.entries(isObj(spec['outbound']) ? spec['outbound'] : {}).flatMap(([rule, o]) =>
+			isObj(o) && typeof o['from'] === 'string' ? [{ channel, rule, from: o['from'] }] : []));
 }
 /** hook:envoys (engine/index.ts) — whether a commit's captured rows queued a delivery, for the deadlines port. */
 export const queuesOutbound = (
@@ -130,7 +122,7 @@ export async function prepareSend(
 ): Promise<Omit<Send, 'id'> | { error: string }> {
 	const spec = m.channels[channel];
 	if (spec === undefined) return { error: `no channel '${channel}'` };
-	if (spec['syncOnly'] === true)
+	if (typeof spec['owner'] === 'string')
 		return { error: `the ${channel} channel imports personal activity and cannot send` };
 	const checked = checkOutbound(String(spec['transport']), message);
 	if ('error' in checked) return checked;

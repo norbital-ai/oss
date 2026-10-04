@@ -8,8 +8,11 @@ import m_requestor from "./data/model/requestor/+model.ts";
 import m_sys_api_key from "./data/model/sys_api_key/+model.ts";
 import m_sys_assignment from "./data/model/sys_assignment/+model.ts";
 import m_sys_challenge from "./data/model/sys_challenge/+model.ts";
+import m_sys_channel_connection from "./data/model/sys_channel_connection/+model.ts";
 import m_sys_config from "./data/model/sys_config/+model.ts";
 import m_sys_conversation from "./data/model/sys_conversation/+model.ts";
+import m_sys_envoy from "./data/model/sys_envoy/+model.ts";
+import m_sys_envoy_channel from "./data/model/sys_envoy_channel/+model.ts";
 import m_sys_event from "./data/model/sys_event/+model.ts";
 import m_sys_file from "./data/model/sys_file/+model.ts";
 import m_sys_invitation from "./data/model/sys_invitation/+model.ts";
@@ -24,7 +27,10 @@ import c_approval_request from "./data/collection/approval_request/+collection.t
 import c_requestor from "./data/collection/requestor/+collection.ts";
 import c_sys_api_key from "./data/collection/sys_api_key/+collection.ts";
 import c_sys_assignment from "./data/collection/sys_assignment/+collection.ts";
+import c_sys_channel_connection from "./data/collection/sys_channel_connection/+collection.ts";
 import c_sys_conversation from "./data/collection/sys_conversation/+collection.ts";
+import c_sys_envoy from "./data/collection/sys_envoy/+collection.ts";
+import c_sys_envoy_channel from "./data/collection/sys_envoy_channel/+collection.ts";
 import c_sys_event from "./data/collection/sys_event/+collection.ts";
 import c_sys_file from "./data/collection/sys_file/+collection.ts";
 import c_sys_invitation from "./data/collection/sys_invitation/+collection.ts";
@@ -42,8 +48,11 @@ export type SystemNames = {
 		sys_api_key: typeof m_sys_api_key;
 		sys_assignment: typeof m_sys_assignment;
 		sys_challenge: typeof m_sys_challenge;
+		sys_channel_connection: typeof m_sys_channel_connection;
 		sys_config: typeof m_sys_config;
 		sys_conversation: typeof m_sys_conversation;
+		sys_envoy: typeof m_sys_envoy;
+		sys_envoy_channel: typeof m_sys_envoy_channel;
 		sys_event: typeof m_sys_event;
 		sys_file: typeof m_sys_file;
 		sys_invitation: typeof m_sys_invitation;
@@ -60,7 +69,10 @@ export type SystemNames = {
 		requestor: typeof c_requestor;
 		sys_api_key: typeof c_sys_api_key;
 		sys_assignment: typeof c_sys_assignment;
+		sys_channel_connection: typeof c_sys_channel_connection;
 		sys_conversation: typeof c_sys_conversation;
+		sys_envoy: typeof c_sys_envoy;
+		sys_envoy_channel: typeof c_sys_envoy_channel;
 		sys_event: typeof c_sys_event;
 		sys_file: typeof c_sys_file;
 		sys_invitation: typeof c_sys_invitation;
@@ -83,8 +95,11 @@ export const SYSTEM: {
 		sys_api_key: m_sys_api_key,
 		sys_assignment: m_sys_assignment,
 		sys_challenge: m_sys_challenge,
+		sys_channel_connection: m_sys_channel_connection,
 		sys_config: m_sys_config,
 		sys_conversation: m_sys_conversation,
+		sys_envoy: m_sys_envoy,
+		sys_envoy_channel: m_sys_envoy_channel,
 		sys_event: m_sys_event,
 		sys_file: m_sys_file,
 		sys_invitation: m_sys_invitation,
@@ -101,7 +116,10 @@ export const SYSTEM: {
 		requestor: c_requestor.spec,
 		sys_api_key: c_sys_api_key.spec,
 		sys_assignment: c_sys_assignment.spec,
+		sys_channel_connection: c_sys_channel_connection.spec,
 		sys_conversation: c_sys_conversation.spec,
+		sys_envoy: c_sys_envoy.spec,
+		sys_envoy_channel: c_sys_envoy_channel.spec,
 		sys_event: c_sys_event.spec,
 		sys_file: c_sys_file.spec,
 		sys_invitation: c_sys_invitation.spec,

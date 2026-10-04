@@ -59,6 +59,7 @@
 		}
 
 		function draw(): void {
+			if (canvas.getClientRects().length === 0) return;
 			const dark = document.documentElement.classList.contains('dark');
 			const ink = getComputedStyle(inkSwatch).color, brand = getComputedStyle(brandSwatch).color;
 			if (ink + brand !== themeKey) { themeKey = ink + brand; styles = ramp(ink, brand); }

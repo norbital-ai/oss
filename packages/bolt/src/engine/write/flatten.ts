@@ -35,8 +35,9 @@ export class Flattener {
 	private readonly m: EngineManifest;
 	private readonly cat: Catalog;
 	private readonly mint: () => string;
-	constructor(m: EngineManifest, cat: Catalog, mint: () => string) {
-		this.m = m; this.cat = cat; this.mint = mint;
+	private readonly identities: ReadonlyMap<string,string>;
+	constructor(m: EngineManifest, cat: Catalog, mint: () => string, identities:ReadonlyMap<string,string>=new Map()) {
+		this.m = m; this.cat = cat; this.mint = mint;this.identities=identities;
 	}
 
 	private model(name: string): ModelInfo {
@@ -95,7 +96,8 @@ export class Flattener {
 		// the parent key a relation action implies is not a caller-supplied ref (rule 36)
 		const refs = this.refsOf(model, d.values);
 		if (parent !== undefined) d.values[parent.fk] = parent.id;
-		const id = this.mint();
+		const minted = this.mint();
+		const id = this.identities.get(JSON.stringify([model,path])) ?? minted;
 		const change: Change = upsert === undefined ? { collection: model, id, path, op: 'create', values: d.values }
 			: { collection: model, id, path, op: 'upsert', values: d.values, on: upsert.on, onConflict: upsert.onConflict };
 		this.items.push({ change, supplied: d.supplied, refs, ...(parent === undefined ? {} : { parent }) });

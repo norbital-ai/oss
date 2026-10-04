@@ -7,7 +7,7 @@ import type { Authority, Captured, EngineActor, ReadIR } from '../src/engine/con
 import { LIVE, liveHub } from '../src/engine/live/hub.ts';
 import * as ir from '../src/protocol/ir.ts';
 import { createBolt, type SyncStatus } from '../src/client/bolt.ts';
-import { HIDDEN_CLOSE_MS, type EventSourceLike } from '../src/client/stream.ts';
+import { type EventSourceLike } from '../src/client/stream.ts';
 import { redact, statusOf, type Frame, type LiveBody } from '../src/protocol/wire.ts';
 import { manifest } from './engine-fixture.ts';
 
@@ -384,7 +384,7 @@ describe('$bolt client without a server', () => {
 		} finally { random.mockRestore(); vi.useRealTimers(); }
 	});
 
-	it('a drop backs off from 0.5 s ±50% and wakes on `online`; a hidden tab rides out a quick switch, then the link closes',
+	it('a drop backs off from 0.5 s ±50% and wakes on `online`; background tabs keep retrying',
 		async () => {
 		vi.useFakeTimers();
 		const random = vi.spyOn(Math, 'random').mockReturnValue(0.5); // the jitter, mid: exact waits
@@ -432,14 +432,13 @@ describe('$bolt client without a server', () => {
 			const slept = drop();
 			listeners['online']!();
 			expect(sources).toHaveLength(slept + 1);
-			// hidden with a capped wait pending: the grace and the wait re-derive the same verdict independently, so whichever
-			// runs first stands the link down and neither opens a connection the reader cannot see, nor strands it
+			// A hidden tab keeps retrying even at the maximum backoff.
 			const capped = drop();
 			signals.hidden = true;
 			listeners['visibilitychange']!();
-			await after(30_000, capped);
+			await after(30_000, capped + 1);
 			expect(closed).toHaveLength(capped);
-			expect(bolt.syncStatus).toBe('idle'); // deliberately down, not a drop being retried
+			expect(bolt.syncStatus).toBe('connecting');
 			// shown: the one connection is back and re-answers every view, with nothing re-subscribed
 			signals.hidden = false;
 			listeners['visibilitychange']!();
@@ -452,7 +451,7 @@ describe('$bolt client without a server', () => {
 		} finally { random.mockRestore(); vi.useRealTimers(); }
 	});
 
-	it('a new view in a hidden tab opens the link and restarts the grace: a background load, and a page hidden past it', async () => {
+	it('all queries share one connection that remains live in a hidden tab', async () => {
 		vi.useFakeTimers();
 		try {
 			const sources: EventSourceLike[] = [];
@@ -465,16 +464,56 @@ describe('$bolt client without a server', () => {
 			} });
 			const stop = bolt.live(bolt.read('orders', { all: true })).subscribe(() => {});
 			expect(sources).toHaveLength(1); // was 0: a never-shown tab counted as hidden since the epoch, so its reads never answered
-			await vi.advanceTimersByTimeAsync(HIDDEN_CLOSE_MS);
-			expect(bolt.syncStatus).toBe('idle');
-			// still hidden, long past the grace: the next page's view was left loading until the tab was shown
+			await vi.advanceTimersByTimeAsync(300_000);
+			expect(sources).toHaveLength(1);
+			// More queries in a hidden tab use the existing connection.
 			const next = bolt.live(bolt.read('orders', { where: { region: 'north' } })).subscribe(() => {});
-			expect(sources).toHaveLength(2);
-			await vi.advanceTimersByTimeAsync(HIDDEN_CLOSE_MS);
-			expect(bolt.syncStatus).toBe('idle');
+			expect(sources).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(300_000);
+			expect(sources).toHaveLength(1);
 			stop();
 			next();
 		} finally { vi.useRealTimers(); }
+	});
+
+	it('a missing server connection reconnects, and a late old registration cannot poison recovered views', async () => {
+		const sources: EventSourceLike[] = [];
+		const pending: ((r: Response) => void)[] = [];
+		const bolt = createBolt({ actor: null, locale: 'en',
+			fetch: (() => new Promise<Response>((resolve) => pending.push(resolve))) as typeof fetch,
+			openStream: () => { const source: EventSourceLike = { onmessage: null, onerror: null, close() {} }; sources.push(source); return source; } });
+		const push = (frame: Frame) => sources.at(-1)!.onmessage!(new MessageEvent('message', { data: JSON.stringify(frame) }));
+		const view = bolt.live(bolt.read('orders', { all: true }));
+		view.subscribe(() => {});
+		push({ t: 'hello', conn: 'c1', v: 0 });
+		const another = bolt.live(bolt.read('orders', { where: { region: 'north' } }));
+		another.subscribe(() => {});
+		const gone = () => Response.json({ errors: [{ view: 'v1', code: 'notFound', message: 'the live connection is gone' }] });
+		pending[0]!(gone());
+		await vi.waitFor(() => expect(sources).toHaveLength(2));
+		expect(view.error).toBeUndefined();
+		push({ t: 'hello', conn: 'c1', v: 1 }); // a restarted server may reuse its connection ids
+		push({ t: 'answer', view: 'v1', v: 1, value: { rows: [order()], next: null } });
+		pending[1]!(gone());
+		pending[2]!(Response.json({ errors: [] }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(view.error).toBeUndefined();
+		expect(sources).toHaveLength(2);
+		expect(bolt.syncStatus).toBe('live');
+		bolt.close();
+	});
+
+	it('one committed change reaches subscriptions on both tab connections', async () => {
+		const { hub } = setup(() => ({ rows: [order()], next: null }));
+		const tabs: Frame[][] = [[], []];
+		for (const frames of tabs) {
+			const conn = hub.connect(admin, (frame) => frames.push(frame), () => {});
+			await hub.register(conn, 'v1', { read: ir.read(cat, 'orders', { all: true }) });
+			frames.length = 0;
+		}
+		hub.publish([cap(order(), order({ title: 'updated in another tab' }))]);
+		await hub.settled();
+		for (const frames of tabs) expect(frames).toContainEqual(expect.objectContaining({ t: 'patch', view: 'v1' }));
 	});
 
 });
