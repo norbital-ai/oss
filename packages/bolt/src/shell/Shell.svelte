@@ -32,6 +32,9 @@
 	import Finder from './Finder.svelte';
 	import Home from './Home.svelte';
 	import Bell from './Bell.svelte';
+	import DeviceWall from './DeviceWall.svelte';
+	import { device } from './device.ts';
+	import { clientFacilities } from '../client/facilities.ts';
 
 	let { config }: { config: ShellMountConfig } = $props();
 
@@ -95,23 +98,23 @@
 	}
 	// ui's generated forms and record views: the caller's exposure from the boot, pickers paging through `bolt.read`
 	provideKinds({
-		get catalog() { return boot?.catalog as never; },
-		get locale() { return boot?.workspace.locale as string; },
-		get zone() { return boot?.workspace.tz as string; },
+		get catalog() { return boot?.catalog; },
+		get locale() { return boot?.workspace.locale; },
+		get zone() { return boot?.workspace.tz; },
 		// a money field without its own currency reads in the workspace's (X-8)
-		get currency() { return config.manifest.workspace.currency as string; },
-		read: (collection, options) => bolt!.read(collection, options as never) as never,
+		get currency() { return config.manifest.workspace.currency; },
+		read: (collection, options) => bolt!.read(collection, options),
 		// a generated form's file field: bytes to `<collection>.<field>`, links to the stored file
-		upload: (file, target) => bolt!.upload(file, target) as never,
-		fileUrl: (ref) => bolt!.fileUrl(ref as never),
-		get customFields() { return config.customFields as never; },
+		upload: (file, target) => bolt!.upload(file, target).then((ref) => ({ id: ref.id, name: ref.name, mime: ref.mime })),
+		fileUrl: (ref) => bolt!.fileUrl(ref),
+		get customFields() { return config.customFields; },
 	});
 	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
 	// a page's AppShell publishes its identity and actions here; the hero above the page renders them
 	const identity = $state<AppIdentitySlot>({ current: null });
 	setAppIdentitySlot(identity);
 	// svelte-ignore state_referenced_locally
-	provideRepresentations((config.representations ?? {}) as never);
+	provideRepresentations(config.representations ?? {});
 
 	// ui's views on a page (`Table`, `Board`, …) read `$bolt` from context; pages render only after the boot sets it
 	provideBolt(new Proxy({} as ViewBolt, { get: (_, k) => Reflect.get(bolt!, k), has: (_, k) => bolt !== null && k in bolt }));
@@ -119,8 +122,12 @@
 	const current = $derived(route(config.manifest, url));
 	// the record-sheet stack (rule 10): every `?record=`, the last on top
 	const records = $derived(recordsOf(url));
-	// a `site: true` page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
-	const site = $derived(current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.site === true);
+	// a `portal: true` page or any kiosk page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
+	// the device access the open app declares (`requires`); its pages wait behind the wall until it is granted
+	const requires = $derived(current.kind === 'page' ? (config.manifest.apps[current.app] as AppSpec | undefined)?.requires ?? [] : []);
+	const facilities = $derived(bolt?.facilities ?? clientFacilities(config.facilities));
+	const access = $derived(device(facilities));
+	const portal = $derived(current.kind === 'kiosk' || (current.kind === 'page' && (config.manifest.apps[current.app] as AppSpec | undefined)?.pages[current.page]?.portal === true));
 	const publicApp = $derived(current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined);
 	let firstPageReady = $state(false);
 	watch(() => failure !== null || (boot !== null && (current.kind !== 'page' || firstPageReady || page === null)) || current.kind === 'signIn' || current.kind === 'invite', (ready) => {
@@ -159,35 +166,37 @@
 	 * and close — the newer one, and its `boot` would describe a route the reader has left.
 	 */
 	let booting = 0;
-	async function load(app: string | undefined): Promise<void> {
+	async function load(app: string | undefined, kiosk: string | null): Promise<void> {
 		const ticket = ++booting;
-		const r = await api.boot(app);
+		const r = await api.boot(app, kiosk ?? undefined);
 		if (ticket !== booting) return;
 		if (!r.ok) {
 			boot = null;
 			guest = r.error.workspace ?? null;
 			if (r.status === 401 && !isOpenRoute(config.manifest, current))
 				navigate(`/sign-in?next=${encodeURIComponent(url.pathname + url.search)}`, true);
-			else if (r.status !== 401 || isOpenRoute(config.manifest, current)) failure = { ...r.error, status: r.status };
+			else if (r.status !== 401 || (current.kind !== 'signIn' && current.kind !== 'invite')) failure = { ...r.error, status: r.status };
 			return;
 		}
 		failure = null;
 		boot = r.value;
 		bolt?.close(); // the outgoing client retired here keeps its one stream open, and its views registered server-side
 		bolt = shellBolt(r.value, { ...(config.messages === undefined ? {} : { messages: config.messages }), ...(config.facilities === undefined ? {} : { facilities: config.facilities }), challenge, agent,
+			kiosk: () => { const r = route(config.manifest, url); return r.kind === 'kiosk' ? r.kiosk : null; },
 			...(config.fetch === undefined ? {} : { fetch: config.fetch }), ...(config.openStream === undefined ? {} : { openStream: config.openStream }) });
 		setCurrentBolt(bolt);
 		bolt.onSyncStatus((status) => (sync = status));
 	}
-	// the boot follows the audience: a public page boots its visitor, everything else the session
-	watch(() => publicApp, (app) => void load(app));
+	// the boot follows the audience: a public page boots its visitor, a kiosk its kiosk, everything else the session
+	const kioskRoute = $derived(current.kind === 'kiosk' ? current.kiosk : null);
+	watch(() => [publicApp, kioskRoute] as const, ([app, kiosk]) => void load(app, kiosk));
 
 	function pageOf(key: string): Promise<Component> | null {
 		const chunk = config.pages[key];
 		return chunk === undefined ? null : chunk().then((m) => { firstPageReady = true; return m.default; });
 	}
 	// keyed by a string: a query change (`?record=`) re-derives `current` but must not remount the page
-	const pageKey = $derived(current.kind === 'page' && bolt !== null ? `${current.app}/${current.page}` : null);
+	const pageKey = $derived(bolt === null ? null : current.kind === 'page' ? `${current.app}/${current.page}` : current.kind === 'kiosk' ? `kiosk/${current.kiosk}/${current.page}` : null);
 	const page = $derived(pageKey === null ? null : pageOf(pageKey));
 
 	async function signOut(): Promise<void> {
@@ -230,7 +239,7 @@
 	const sessions = $derived(boot?.visitor === null ? sessionApps(boot.nav).flatMap((name) => config.sessions?.[name] === undefined ? [] : [{ name, component: config.sessions[name] }]) : []);
 	const app = $derived(model === null ? null : activeApp(model));
 	// the open app's pages strip is tab level 1 (ui's `TAB_LEVEL` context): a page's own Tabs nest under it as level 2
-	const strip = $derived(current.kind === 'page' && !site && boot?.visitor === null ? app?.pages ?? null : null);
+	const strip = $derived(current.kind === 'page' && !portal && boot?.visitor === null ? app?.pages ?? null : null);
 	setContext(TAB_LEVEL, { get level() { return strip === null ? undefined : 1; }, get shown() { return strip?.map((p) => p.label) ?? []; } });
 	const mobileTitle = $derived(identity.current?.title ?? app?.label ?? model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ?? boot?.workspace.name ?? '');
 	const mobileDescription = $derived(identity.current?.description ?? app?.description ?? null);
@@ -268,7 +277,7 @@
 {#snippet content()}
 	{#if current.kind === 'home' && model !== null}
 		<Home {model} {t} onNavigate={navigate} />
-	{:else if current.kind === 'page'}
+	{:else if current.kind === 'page' || current.kind === 'kiosk'}
 		{#if page === null}
 			<Center><p>{t('Not found or no access')}</p></Center>
 		{:else}
@@ -276,7 +285,7 @@
 				<Center><p>{t('Loading…')}</p></Center>
 			{:then Page}
 				<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
-				{#if !site && (identity.current !== null || (app !== null && boot?.visitor === null))}
+				{#if !portal && (identity.current !== null || (app !== null && boot?.visitor === null))}
 					<MediaHeader src={identity.current?.banner === undefined || identity.current.banner === null ? app?.thumbnail ?? null : media(identity.current.banner)} icon={identity.current?.icon ?? app?.icon ?? null}
 						title={narrow.current ? null : identity.current?.title ?? app?.label ?? null} description={narrow.current ? null : identity.current?.description ?? app?.description ?? null}
 						{...identity.current?.actions === undefined ? {} : { actions: identity.current.actions }} />
@@ -294,7 +303,13 @@
 					</nav>
 				{/if}
 				<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
-				<Bound size="full" inset><Page /></Bound>
+				{#if requires.length === 0}
+					<Bound size="full" inset><Page /></Bound>
+				{:else}
+					<DeviceWall {requires} device={access} native={facilities.geolocation?.source === 'native'} {t}>
+						<Bound size="full" inset><Page /></Bound>
+					</DeviceWall>
+				{/if}
 			{:catch cause}
 				<!-- a page chunk that fails to load says which page and why (final-ui §7.2, L-BOLT-515) -->
 				<Center><p role="alert">{t('The page {page} could not be loaded:').replace('{page}', pageKey ?? '')} {cause instanceof Error ? cause.message : String(cause)}</p></Center>
@@ -320,7 +335,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <!-- hook:view-ui — the sidebar's width, the left bound of a maximised or widened right sheet (0 where no sidebar shows) -->
-<div class="contents" onclick={intercept} style="--shell-sidebar-width: {boot !== null && boot.visitor === null && !site && !narrow.current && failure === null ? (expanded.current ? '16rem' : '3rem') : '0px'}; --shell-header-height: {narrow.current && headerHeight > 0 ? `${headerHeight}px` : 'env(safe-area-inset-top)'}">
+<div class="contents" onclick={intercept} style="--shell-sidebar-width: {boot !== null && boot.visitor === null && !portal && !narrow.current && failure === null ? (expanded.current ? '16rem' : '3rem') : '0px'}; --shell-header-height: {narrow.current && headerHeight > 0 ? `${headerHeight}px` : 'env(safe-area-inset-top)'}">
 	{#if failure !== null}
 		<Access {t} environment={workspace?.environment} {locale} onLocale={setLocale} apex={workspace?.apex}
 			dark={dark} onTheme={() => chooseTheme(dark ? 'light' : 'dark')}>
@@ -352,7 +367,7 @@
 				<Turnstile siteKey={boot.visitor.siteKey} queue={challenge} />
 			{/if}
 		</Cover>
-	{:else if site}
+	{:else if portal}
 		<Toaster />
 		<div class="h-dvh min-h-0 overflow-clip">{@render content()}</div>
 	{:else}
@@ -362,7 +377,7 @@
 				{...boot?.admin && boot.surfaces.settings && boot.preview === null ? { loadTeams: teams, onPreviewTeam: previewTeam } : {}}
 				onSearch={() => { navOpen = false; finding = true; }} onNavigate={go} onSignOut={signOut} notice={boot?.notice}
 				{...narrow.current ? {} : { onToggle: () => (expanded.current = !expanded.current) }}>
-				{#snippet bell(wide)}{#if bolt !== null}<Bell {api} {bolt} {t} expanded={wide} onNavigate={(href) => { navOpen = false; navigate(href); }} />{/if}{/snippet}
+				{#snippet bell(wide)}{#if bolt !== null && !narrow.current}<Bell {api} {bolt} {t} expanded={wide} onNavigate={(href) => { navOpen = false; navigate(href); }} />{/if}{/snippet}
 			</Nav>
 		{/snippet}
 		<Toaster />
@@ -389,7 +404,7 @@
 							{#if mobileDescription}<p class="line-clamp-2 text-xs leading-snug text-muted-foreground">{mobileDescription}</p>{/if}
 						</Stack>
 						<Inline gap="xs" shrink={false} class="pr-[env(safe-area-inset-right)]">
-							{#if bolt !== null}<Bell {api} {bolt} {t} expanded={false} onNavigate={navigate} />{/if}
+							{#if bolt !== null}<Bell {api} {bolt} {t} expanded={false} header onNavigate={navigate} />{/if}
 							{#if boot.surfaces.agent}
 								<Button variant="ghost" size="icon" class="size-11" aria-label={t('Norbius')} aria-haspopup="dialog" onclick={() => agent.open()}>
 									<NorbiusStrip size={20} />

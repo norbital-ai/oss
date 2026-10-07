@@ -16,6 +16,8 @@ export type DeclaredConvertTarget = ConvertDecl & ConvertTarget;
 /** A `sys_2` model class an agent or `ctx.ai.sys_2.infer` asks for; the host maps each to a model. */
 export type AiModelClass = 'default' | 'fast' | 'strong'; // every sys_2 model takes images (P39): no 'vision' class
 export type GroupName = keyof NamesPart<'groups'> & string;
+/** The `+<page>.page.svelte` files in kiosk `K`'s folder. */
+export type KioskPageName<K> = K extends keyof NamesPart<'kioskPages'> ? NamesPart<'kioskPages'>[K] & string : never;
 /** The `+<page>.page.svelte` files in app `A`'s folder. */
 export type PageName<A> = A extends keyof NamesPart<'pages'> ? NamesPart<'pages'>[A] & string : never;
 /** The app and group folders directly in group `G`. */

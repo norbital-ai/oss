@@ -109,8 +109,9 @@ export function shellApi(f: typeof fetch = (i, o) => fetch(i, o)) {
 		}
 	}
 	return {
-		boot: (app?: string) =>
-			call<ShellBoot>('GET', app === undefined ? SHELL : `${SHELL}${q('app', app)}`),
+		boot: (app?: string, kiosk?: string) =>
+			call<ShellBoot>('GET', app === undefined && kiosk === undefined ? SHELL
+				: `${SHELL}?${new URLSearchParams({ ...(app === undefined ? {} : { app }), ...(kiosk === undefined ? {} : { kiosk }) })}`),
 		methods: () => call<import('./host.ts').SignInMethods>('GET', PATHS.session.methods),
 		sendCode: (address: string, via: 'sms' | 'whatsapp' = 'sms') =>
 			call<null>('POST', PATHS.session.code, { address, via }),
@@ -353,6 +354,22 @@ export function challengeQueue(reset: () => void = () => {}) {
 }
 export type ChallengeQueue = ReturnType<typeof challengeQueue>;
 
+/** A kiosk page's fetch: every `/__bolt` request names the kiosk, whose assigned policies it runs as. */
+export function kioskFetch(
+	kiosk: () => string | null,
+	f: typeof fetch = (i, o) => fetch(i, o)
+): typeof fetch {
+	return async (input, init = {}) => {
+		const k = kiosk();
+		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+		const path = new URL(url, 'http://x').pathname.slice(BASE.length);
+		if (k === null || !path.startsWith(`${BOLT}/`)) return f(input, init);
+		const headers = new Headers(init.headers);
+		headers.set(HEADERS.kiosk, k);
+		return f(input, { ...init, headers });
+	};
+}
+
 /** A visitor page's fetch: every `/__bolt` request names the app; an upload and a final act carry a fresh token. */
 export function visitorFetch(
 	app: string,
@@ -525,16 +542,26 @@ export function shellBolt(
 		openStream?: BoltConfig['openStream'];
 		models?: () => readonly string[];
 		facilities?: ClientFacilities;
+		/** A kiosk page's client names its kiosk on every request (header) and stream (query). */
+		kiosk?: () => string | null;
 	} = {}
 ) {
 	const visitor = boot.visitor;
+	const scoped = options.kiosk === undefined ? options.fetch : kioskFetch(options.kiosk, options.fetch);
+	const openStream =
+		options.kiosk === undefined ? options.openStream
+		: (url: string) => {
+			const k = options.kiosk!();
+			const u = k === null ? url : `${url}${url.includes('?') ? '&' : '?'}kiosk=${encodeURIComponent(k)}`;
+			return options.openStream?.(u) ?? new EventSource(u, { withCredentials: true });
+		};
 	const f =
 		visitor === null
-			? options.fetch
+			? scoped
 			: visitorFetch(
 					visitor.app,
 					visitor.siteKey === undefined ? null : (options.challenge ?? null),
-					options.fetch
+					scoped
 				);
 	const client = createBolt({
 		base: BASE,
@@ -546,7 +573,7 @@ export function shellBolt(
 			? {}
 			: { messages: options.messages }),
 		...(f === undefined ? {} : { fetch: f }),
-		...(options.openStream === undefined ? {} : { openStream: options.openStream }),
+		...(openStream === undefined ? {} : { openStream }),
 		...(boot.contract === undefined ? {} : { contract: boot.contract })
 	});
 	const agent = options.agent ?? agentPanel();

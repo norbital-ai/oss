@@ -77,6 +77,8 @@ export function operand(o: Operand, bindings: Bindings, authority: Authority | n
 		if (k === 'id') return a?.id ?? null;
 		if (k === 'email') return a?.email ?? null;
 		if (k === 'phone') return a?.phone ?? null;
+		/** The anonymous identity: the visitor id for visitors, `null` for anyone signed in. */
+		if (k === 'visitor') return authority.actor.kind === 'visitor' ? authority.actor.visitor : null;
 		return a?.party?.id ?? null;
 	}
 	throw invalid('a field operand has no value of its own');

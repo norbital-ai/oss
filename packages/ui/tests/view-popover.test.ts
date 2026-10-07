@@ -255,6 +255,21 @@ test('Table: a described relation filter and sort are editable rows ANDed under 
 	v.done();
 });
 
+test('Table: a described OR of a relation condition reaches the read as one group', async () => {
+	const s = scripted({ describe: async () => ({ where: { or: [{ account: { is: { name: { like: '%acme%' } } } }, { status: { eq: 'done' } }] } }) });
+	const v = await show('table', { of: 'jobs', columns: ['title'] }, s.bolt);
+	document.querySelector('[data-view-trigger]').click();
+	flushSync();
+	const form = document.querySelector('[data-describe]');
+	form.querySelector('input').value = 'acme jobs or done jobs';
+	form.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+	form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	await settle();
+	assert.deepEqual(s.last().where, { or: [{ account: { is: { name: { like: '%acme%' } } } }, { status: { eq: 'done' } }] });
+	assert.ok(document.querySelector('[data-filter-rows] [data-group=or]'), 'OR stays one editable group');
+	v.done();
+});
+
 test('a local array offers its fields to System 1 and keeps manual controls collapsed', async () => {
 	let input;
 	const s = scripted({ describe: async (collection, text, fields) => {

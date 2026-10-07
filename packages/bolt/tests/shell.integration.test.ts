@@ -27,11 +27,18 @@ const manifest = {
 	policies: {
 		applicant: { description: 'Apply', grants: { openings: { read: { where: { status: { eq: 'open' } }, fields: ['title'] } },
 			applications: { create: { opening: { is: { status: { eq: 'open' } } } } } } },
-		rep: { description: 'Rep', capabilities: { apps: ['sales'] }, grants: { openings: { read: true } } },
+		lobby: { description: 'Lobby kiosk', grants: { openings: { read: { where: { status: { eq: 'open' } }, fields: ['title'] } },
+			applications: { create: { where: { opening: { is: { status: { eq: 'open' } } } }, fields: ['opening', 'name'] } } } },
+		rep: { description: 'Rep', capabilities: { apps: ['sales'], kiosks: ['desk'] }, grants: { openings: { read: true } } },
 	},
 	apps: {
 		sales: { title: 'Sales', description: 'd', icon: 'i', pages: { deals: { title: 'Deals' } } },
 		careers: { title: 'Careers', description: 'Jobs', icon: 'i', audience: { public: ['applicant'], challenge: 'turnstile' }, pages: { apply: { title: 'Apply' } } },
+	},
+	kiosks: {
+		lobby: { title: 'Lobby', description: 'd', icon: 'i', auth: 'none', policies: ['lobby'], pages: { welcome: { title: 'Welcome' } } },
+		desk: { title: 'Desk', description: 'd', icon: 'i', auth: 'members', policies: ['lobby'], pages: { home: { title: 'Home' } } },
+		vault: { title: 'Vault', description: 'd', icon: 'i', auth: 'members', policies: ['lobby'], pages: { home: { title: 'Home' } } },
 	},
 	teams: { Sales: ['rep'] }, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, customFields: {},
 	agent: { internal: 'You help.', skills: {} },
@@ -40,7 +47,7 @@ const manifest = {
 let t: TestWorkspace;
 // a host's Studio: one workbench head; a save over a stale head is refused
 const sources = ['src/data/collection/openings/+collection.ts', 'src/data/collection/applications/+collection.ts', 'src/access/+applicant.policy.ts',
-	'src/access/+rep.policy.ts', 'src/app/sales/+app.ts', 'src/app/careers/+app.ts'];
+	'src/access/+lobby.policy.ts', 'src/access/+rep.policy.ts', 'src/app/sales/+app.ts', 'src/app/careers/+app.ts', 'src/kiosk/lobby/+kiosk.ts', 'src/kiosk/desk/+kiosk.ts', 'src/kiosk/vault/+kiosk.ts'];
 const studioState: StudioState = { commit: 'c2', files: { 'src/a.ts': 'x', ...Object.fromEntries(sources.map((p) => [p, ''])) }, changes: [], manifest, log: [], preview: null,
 	releases: [{ commit: 'c2', at: '2026-09-25T00:00:00Z', message: 'two', current: true }, { commit: 'c1', at: '2026-09-24T00:00:00Z', message: 'one', current: false }] };
 const studioOps: StudioOp[] = [];
@@ -84,8 +91,8 @@ async function signIn(email: string): Promise<Jar> {
 	expect(j.has('nb_s')).toBe(true);
 	return j;
 }
-const boot = async (j: Jar, app?: string) => {
-	const r = await call(j, 'GET', `/__bolt/shell${app === undefined ? '' : `?app=${app}`}`);
+const boot = async (j: Jar, app?: string, kiosk?: string) => {
+	const r = await call(j, 'GET', `/__bolt/shell${app === undefined && kiosk === undefined ? '' : `?${new URLSearchParams({ ...(app === undefined ? {} : { app }), ...(kiosk === undefined ? {} : { kiosk }) })}`}`);
 	return { status: r.status, boot: r.body?.value as ShellBoot };
 };
 
@@ -327,5 +334,68 @@ describe('visitor pages (§5.10, rule 38d)', () => {
 		expect(ok.body!['outcome']).toMatchObject({ kind: 'committed' });
 		expect((await call(j, 'POST', '/__bolt/act', { callable: 'openings.update', input: { target: OPEN, set: {} }, issuedAt: t.clock.now() },
 			{ ...V, 'Idempotency-Key': crypto.randomUUID(), 'Bolt-Challenge': 'dev-pass' })).status).toBe(403);
+	});
+});
+
+describe('kiosks (standalone surfaces running as their assigned policies)', () => {
+	const K = (kiosk: string) => ({ 'Bolt-Kiosk': kiosk });
+	const read = (j: Jar, collection: string, headers: Record<string, string> = {}) =>
+		call(j, 'POST', '/__bolt/q', { reads: [{ m: 'read', a: [collection, { all: true }] }] }, headers);
+	const act = (j: Jar, callable: string, input: unknown, headers: Record<string, string> = {}) =>
+		call(j, 'POST', '/__bolt/act', { callable, input, issuedAt: t.clock.now() }, { 'Idempotency-Key': crypto.randomUUID(), ...headers });
+
+	it('boots a public kiosk without sign-in; members kiosks need sign-in, unknown ones 404', async () => {
+		const j = jar();
+		const { status, boot: b } = await boot(j, undefined, 'lobby');
+		expect(status).toBe(200);
+		expect(j.has('__bolt_v')).toBe(true);
+		expect(b).toMatchObject({ actor: { kind: 'visitor', app: 'lobby' }, admin: false, visitor: { app: 'lobby' } });
+		expect(b.catalog['openings']!.fields).toEqual({ title: { kind: 'text' } });
+		expect(b.kiosks.map((k) => k.name)).toContain('lobby');
+		expect((await boot(jar(), undefined, 'desk')).status).toBe(401);
+		expect((await boot(jar(), undefined, 'nope')).status).toBe(404);
+		const rep = await signIn('rep@acme.example');
+		expect((await boot(rep, undefined, 'desk')).status).toBe(200);
+		expect((await boot(rep, undefined, 'vault')).status).toBe(403);
+		expect((await boot(rep, undefined, 'nope')).status).toBe(404);
+		// the member boot catalog is cut to what the kiosk may read (plus the member directory)
+		expect(Object.keys((await boot(rep, undefined, 'desk')).boot.catalog).sort()).toEqual(['applications', 'openings', 'sys_team', 'sys_user']);
+	});
+
+	it('runs every kiosk request as the assigned policies, never the caller — public or admin alike', async () => {
+		const j = jar();
+		await boot(j, undefined, 'lobby');
+		// no sign-in, no requestor policy: the kiosk policy answers
+		const rows = async (jj: Jar, headers: Record<string, string>) =>
+			((await read(jj, 'openings', headers)).body!['answers'] as { rows: Record<string, unknown>[] }[])[0]!.rows;
+		expect((await read(jar(), 'openings')).status).toBe(401);
+		expect((await read(j, 'openings', K('nope'))).status).toBe(403);
+		expect(await rows(j, K('lobby'))).toEqual([expect.objectContaining({ title: 'Engineer' })]);
+		expect((await rows(j, K('lobby')))[0]).toEqual(expect.objectContaining({ title: 'Engineer', status: { $masked: true } }));
+		// the kiosk creates through its own grant, and nothing beyond it
+		expect((await act(j, 'applications.create', { opening: OPEN, name: 'Kay' }, K('lobby'))).body!['outcome']).toMatchObject({ kind: 'committed' });
+		expect((await act(j, 'openings.create', { title: 'Nope' }, K('lobby'))).status).toBe(403);
+		// a member's broader grants are replaced inside, not joined — and no admin bypass applies
+		const rep = await signIn('rep@acme.example');
+		const admin = await signIn('boss@acme.example');
+		expect((await rows(rep, {})).map((r) => r['status'])).toEqual(['open']);
+		expect((await rows(rep, K('desk')))[0]).toEqual(expect.objectContaining({ title: 'Engineer', status: { $masked: true } }));
+		expect((await rows(admin, K('desk')))[0]).toEqual(expect.objectContaining({ title: 'Engineer', status: { $masked: true } }));
+		expect((await read(rep, 'openings', K('vault'))).status).toBe(403);
+	});
+
+	it('a kiosk visitor streams live reads but registers nothing beyond them', async () => {
+		const j = jar();
+		await boot(j, undefined, 'lobby');
+		const cookie = [...j].map(([k, v]) => `${k}=${v}`).join('; ');
+		const stream = await handle(new Request(`${ORIGIN}/__bolt/live?kiosk=lobby`, { headers: { cookie } }));
+		expect(stream.headers.get('content-type')).toBe('text/event-stream');
+		const reader = stream.body!.getReader();
+		expect(new TextDecoder().decode((await reader.read()).value)).toContain('"hello"');
+		await reader.cancel();
+		// an app visitor's stream stays shut
+		const v = jar();
+		await boot(v, 'careers');
+		expect((await call(v, 'GET', '/__bolt/live', undefined, { 'Bolt-App': 'careers' })).status).toBe(403);
 	});
 });

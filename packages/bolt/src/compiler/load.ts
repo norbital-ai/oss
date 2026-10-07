@@ -52,8 +52,8 @@ export function manifestErrors(manifest: Manifest, layer: 'workspace' | 'system'
 	const fail = (code: Diagnostic['code'], path: string, message: string) => errors.push({ code, path, message: `${path}: ${message}` });
 	// A role typed against its own folder takes its name (`collection('<m>', …)`), which must be the folder's.
 	for (const [role, dir] of [['collection', 'data/collection'], ['integration', 'data/collection'], ['pipeline', 'data/collection'],
-		['app', 'app'], ['group', 'app']] as const) {
-		for (const [name, d] of Object.entries(manifest[role])) {
+		['app', 'app'], ['group', 'app'], ['kiosk', 'kiosk']] as const) {
+		for (const [name, d] of Object.entries(manifest[role] ?? {})) {
 			const declared = (d as { name?: unknown }).name;
 			if (declared !== name) fail(`load/${role}-name`, `src/${dir}/${name}/+${role}.ts`, `declares ${role}('${String(declared)}'); the folder names it '${name}'`);
 		}
@@ -77,11 +77,18 @@ export function manifestErrors(manifest: Manifest, layer: 'workspace' | 'system'
 		if (direction !== 'one_way' && direction !== 'two_way') fail('load/integration-direction', `src/data/collection/${name}/+integration.ts`, "direction is 'one_way' or 'two_way'");
 	}
 	// `app/page-unlisted` (§3.3.1): every page file has an entry in its app's `pages`, whose key order is nav order.
-	for (const page of Object.keys(manifest.page)) {
+	for (const page of Object.keys(manifest.page ?? {})) {
 		const at = page.lastIndexOf('/');
 		const app = manifest.app[page.slice(0, at)];
 		if (app && !Object.hasOwn(spec(app).pages ?? {}, page.slice(at + 1)))
 			fail('app/page-unlisted', String(manifest.page[page]), `app '${page.slice(0, at)}' lists no page '${page.slice(at + 1)}' in pages`);
+	}
+	// every kiosk page file has an entry in its kiosk's `pages`, whose key order is nav order.
+	for (const page of Object.keys(manifest.kiosk_page ?? {})) {
+		const at = page.lastIndexOf('/');
+		const kiosk = (manifest.kiosk ?? {})[page.slice(0, at)];
+		if (kiosk && !Object.hasOwn(spec(kiosk).pages ?? {}, page.slice(at + 1)))
+			fail('app/page-unlisted', String(manifest.kiosk_page[page]), `kiosk '${page.slice(0, at)}' lists no page '${page.slice(at + 1)}' in pages`);
 	}
 	return errors;
 }

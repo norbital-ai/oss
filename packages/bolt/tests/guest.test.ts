@@ -224,7 +224,7 @@ describe('next guest runner', () => {
 describe('next guest globals (rule 6)', () => {
 	// tsc holds this literal to exactly the keys of IsolateGlobals; the test holds the isolate to exactly this literal.
 	const surface = { console: true, URL: true, URLSearchParams: true, TextEncoder: true, TextDecoder: true, crypto: true, structuredClone: true, atob: true, btoa: true,
-		queueMicrotask: true, setTimeout: true, clearTimeout: true, AbortController: true, AbortSignal: true } as const satisfies Record<keyof IsolateGlobals, true>;
+		queueMicrotask: true, setTimeout: true, clearTimeout: true, AbortController: true, AbortSignal: true, fileRef: true } as const satisfies Record<keyof IsolateGlobals, true>;
 	const guest = async (body: string) => ok(await runIn(automation(`async () => { ${body} }`)));
 
 	it('installs exactly the IsolateGlobals surface, and nothing of the host', async () => {
@@ -236,6 +236,14 @@ describe('next guest globals (rule 6)', () => {
 		expect(await guest('return [Object.keys(crypto).sort(), Object.keys(crypto.subtle), typeof setInterval, typeof fetch, typeof Buffer, typeof process];'))
 			.toEqual([['getRandomValues', 'randomUUID', 'subtle'], ['digest'], 'undefined', 'undefined', 'undefined', 'undefined']);
 		expect(PRELUDE).not.toContain('`');
+	});
+
+	it('fileRef brands stored-file metadata for guest writes', async () => {
+		expect(await guest(`return fileRef({ id: 'f1', name: 'a.pdf', mime: 'application/pdf' });`)).toEqual({
+			id: 'f1',
+			name: 'a.pdf',
+			mime: 'application/pdf'
+		});
 	});
 
 	it('keeps a URL query written through searchParams in href (memory guest-url-shim-froze-href)', async () => {
@@ -361,6 +369,28 @@ a.run(snapshotBody); export default a;`);
 			expect(buildSnapshot(withAsset.guest!)).toEqual({ refused: 'Error: guest.mjs calls the host while it evaluates' });
 			expect(ok(await guestRunner(withAsset.guest!, { lowerRead, console: () => {} }).invoke(invocation({ value: 42 }), recorder().bridge))).toEqual(evaluated);
 		} finally { rmSync(root, { recursive: true, force: true }); }
+	});
+
+	it('idle snapshot isolates stay under 100 MiB heap (G3 guest bound)', () => {
+		const source = `const d = { automation: { a: { body: async () => 1 } } };\nexport { d as default };\n`;
+		const snap = buildSnapshot({ source });
+		if (!('bytes' in snap)) throw new Error(snap.refused);
+		const copy = new ivm.ExternalCopy(
+			snap.bytes.buffer.slice(snap.bytes.byteOffset, snap.bytes.byteOffset + snap.bytes.byteLength) as ArrayBuffer
+		);
+		const isolates = Array.from(
+			{ length: 10 },
+			() => new ivm.Isolate({ memoryLimit: LIMITS.guestMemoryMiB, snapshot: copy })
+		);
+		try {
+			expect(LIMITS.guestMemoryMiB).toBe(256);
+			for (const isolate of isolates) {
+				const heap = isolate.getHeapStatisticsSync();
+				expect(heap.used_heap_size + heap.externally_allocated_size).toBeLessThan(100 * 1024 * 1024);
+			}
+		} finally {
+			for (const isolate of isolates) isolate.dispose();
+		}
 	});
 
 	it('labels guest console lines for the host', async () => {

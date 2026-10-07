@@ -62,7 +62,7 @@ function writeFixture(): void {
 	writeFileSync(join(artifact, 'guest.mjs'), guest);
 	writeFileSync(join(artifact, 'client', 'index.html'), '<!doctype html>');
 	const body = { format: 1, contract: CONTRACT, handle: 'acme', name: 'Acme', schema: fingerprint(schemaSlice(manifest)),
-		transforms: [], client: { entry: '', css: [] }, hashes: { manifest: sha(text), guest: sha(guest), client: treeHash(join(artifact, 'client')) } };
+		transforms: [], projections: [], client: { entry: '', css: [] }, hashes: { manifest: sha(text), guest: sha(guest), client: treeHash(join(artifact, 'client')) } };
 	writeFileSync(join(artifact, 'artifact.json'), JSON.stringify({ ...body, hash: artifactHash(artifact, body as Parameters<typeof artifactHash>[1]) }));
 }
 const FOUNDER = 'boss@acme.example';

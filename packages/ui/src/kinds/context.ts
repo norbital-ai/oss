@@ -52,15 +52,16 @@ export type CustomFieldView<V = Json> =
 export type CustomFieldEntry = { shape: Kind; label?: string; renderer?: Component<{ view: CustomFieldView }> };
 /** The host's address search (and reverse lookup) a `PointInput` uses when present. */
 export type Geocoder = {
-	search(query: string): Promise<readonly { point: Point; address: string }[]>;
+	/** `region`: the workspace's country (ISO 3166 alpha-2, from its locale); its places rank first. */
+	search(query: string, options?: { region?: string }): Promise<readonly { point: Point; address: string }[]>;
 	reverse?(point: Point): Promise<string | null>;
 };
 /**
  * What the kind editors take from the host: the catalog, custom fields, uploads and file URLs, the geocoder and basemap, the picker's read, locale, zone and default currency.
  */
 export type KindsHost = {
-	catalog?: { readonly [collection: string]: CollectionExposure };
-	customFields?: { readonly [name: string]: CustomFieldEntry };
+	catalog?: { readonly [collection: string]: CollectionExposure } | undefined;
+	customFields?: { readonly [name: string]: CustomFieldEntry } | undefined;
 	/** `bolt.upload`; without it a file field is read-only. */
 	upload?(file: File, field: string): Promise<FileRef>;
 	fileUrl?(ref: FileRef): string;
@@ -70,10 +71,10 @@ export type KindsHost = {
 	basemap?: { url: string; attribution: string };
 	/** The `read` a picker pages through: `bolt.read`. Without it an `id` is typed. */
 	read?(collection: string, options: Json): PromiseLike<{ rows: readonly { readonly [f: string]: Json }[]; next: string | null }>;
-	locale?: string;
-	zone?: string;
+	locale?: string | undefined;
+	zone?: string | undefined;
 	/** The workspace default currency for a money field without one (X-8). */
-	currency?: string;
+	currency?: string | undefined;
 };
 
 const KEY = Symbol.for('norbital.ui.kinds');
@@ -84,21 +85,45 @@ export const useKinds = (): KindsHost => getContext<KindsHost | undefined>(KEY) 
 /** The keyless OpenStreetMap tile template used when the host names no basemap. */
 export const DEFAULT_BASEMAP = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; OpenStreetMap contributors' };
 
+/** A region code's English name (`SG` → `Singapore`), or `null` when there is none or the runtime cannot name it. */
+const regionName = (region: string | undefined): string | null => {
+	if (region === undefined) return null;
+	try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(region) ?? null; } catch { return null; }
+};
+/** The region of a locale tag (`en-SG` → `SG`), or `undefined` when the tag names none. */
+export const regionOf = (locale: string | undefined): string | undefined => {
+	try { return locale === undefined ? undefined : new Intl.Locale(locale).region; } catch { return undefined; }
+};
 // Photon (OpenStreetMap data) answers search-as-you-type without a key; Nominatim's policy forbids that use.
 const PHOTON = 'https://photon.komoot.io';
 type PhotonFeature = { geometry: { coordinates: [number, number] }; properties: { [k: string]: string | undefined } };
-const photon = async (path: string): Promise<readonly { point: Point; address: string }[]> => {
+const photon = async (path: string): Promise<readonly { point: Point; address: string; country?: string }[]> => {
 	const res = await fetch(`${PHOTON}${path}`);
 	if (!res.ok) throw new Error(`geocoder ${res.status}`);
 	const { features } = (await res.json()) as { features: readonly PhotonFeature[] };
 	return features.map(({ geometry: { coordinates: [lng, lat] }, properties: p }) => ({
 		point: { lat, lng },
+		...(p['countrycode'] === undefined ? {} : { country: p['countrycode'] }),
 		address: [...new Set([p['name'], [p['housenumber'], p['street']].filter(Boolean).join(' '), p['district'], [p['postcode'], p['city']].filter(Boolean).join(' '), p['state'], p['country']])]
 			.filter((x) => x !== undefined && x !== '').join(', ')
 	}));
 };
 /** The keyless geocoder a `point` field searches with when the host names none. */
 export const DEFAULT_GEOCODER: Geocoder = {
-	search: (q) => photon(`/api/?q=${encodeURIComponent(q)}&limit=5`),
+	// A worldwide search ranks a famous street abroad above the one next door ("40 Wilkinson Road" is London's first). With
+	// the workspace's region, the query is also asked with that country's name, and its places come first.
+	search: async (q, options) => {
+		const name = regionName(options?.region);
+		const [near, all] = await Promise.all([
+			name === null || q.toLowerCase().includes(name.toLowerCase()) ? [] : photon(`/api/?q=${encodeURIComponent(`${q}, ${name}`)}&limit=5`),
+			photon(`/api/?q=${encodeURIComponent(q)}&limit=5`)
+		]);
+		const home = (h: { country?: string }) => h.country !== undefined && h.country === options?.region;
+		const seen = new Set<string>();
+		return [...near.filter(home), ...all.filter(home), ...all.filter((h) => !home(h))]
+			.filter((h) => !seen.has(h.address) && seen.add(h.address))
+			.slice(0, 5)
+			.map(({ point, address }) => ({ point, address }));
+	},
 	reverse: async ({ lat, lng }) => (await photon(`/reverse?lat=${lat}&lon=${lng}`))[0]?.address ?? null
 };

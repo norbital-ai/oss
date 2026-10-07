@@ -17,9 +17,9 @@ describe('next compiler: discover', () => {
 		expect(errors).toEqual([]);
 		expect(files.map((f) => `${f.role} ${f.name}`).sort()).toEqual([
 			'agent ', 'app hr/kiosk', 'app sales', 'automation nightly', 'channel mail', 'collection customers', 'collection notices',
-			'collection orders', 'connection erp', 'custom_field rating', 'group hr', 'integration notices', 'locale ms',
+			'collection orders', 'connection erp', 'custom_field rating', 'group hr', 'integration notices', 'kiosk clock', 'kiosk_page clock/clock', 'locale ms',
 			'mcp hq', 'messages ', 'model customers', 'model notices', 'model orders', 'page hr/kiosk/clock', 'page sales/board',
-			'page sales/list', 'policy sales_rep', 'relationship ', 'renderer rating', 'representation orders', 'skill triage',
+			'page sales/list', 'policy kiosk_reader', 'policy sales_rep', 'relationship ', 'renderer rating', 'representation orders', 'skill triage',
 			'team ', 'workspace '
 		]);
 	});
@@ -49,7 +49,7 @@ describe('next compiler: discover', () => {
 			'discover/wrong-folder src/access/+late.automation.ts'
 		]);
 		expect(errors.every((e) => e.help === LAYOUT_HELP)).toBe(true);
-		expect(LAYOUT_HELP).toContain('src/data/collection/<name>/+integration.ts');
+		expect(LAYOUT_HELP).toContain('src/data/collection/<app>/+integration.ts');
 		expect(LAYOUT_HELP).toContain('src/access/+<name>.policy.ts');
 		expect(errors.find((e) => e.code === 'discover/plural-folder')?.message).toContain("'automations' is 'automation'");
 	});

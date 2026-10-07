@@ -27,6 +27,8 @@ export const ROLES = [
 	{ role: 'connect', dir: 'custom_channels/*', file: '+channel.configuration.svelte' },
 	{ role: 'connection', dir: 'connection', file: '+*.connection.ts' },
 	{ role: 'app', dir: 'app/**', file: '+app.ts' },
+	{ role: 'kiosk', dir: 'kiosk/**', file: '+kiosk.ts' },
+	{ role: 'kiosk_page', dir: 'kiosk/**', file: '+*.page.svelte' },
 	{ role: 'session', dir: 'app/**', file: '+session.svelte' },
 	{ role: 'page', dir: 'app/**', file: '+*.page.svelte' },
 	{ role: 'messages', dir: 'i18n', file: '+messages.ts' },
@@ -122,7 +124,7 @@ export function discover(root: string, layer: 'workspace' | 'system' = 'workspac
 			r.role === 'integration' ||
 			r.role === 'pipeline';
 		const leaf = folder!.split('/').at(-1)!;
-		const name = r.role === 'page' ? `${folder}/${fileName}` : nested ? (fileName ?? leaf) : (fileName ?? folder!);
+		const name = r.role === 'page' || r.role === 'kiosk_page' ? `${folder}/${fileName}` : nested ? (fileName ?? leaf) : (fileName ?? folder!);
 		files.push({ role: r.role, name, path });
 	}
 
@@ -138,6 +140,8 @@ export function discover(root: string, layer: 'workspace' | 'system' = 'workspac
 		if (f.role === 'connect' && !has('channel', f.name)) fail('connect-without-channel', f.path, `no +channel.ts beside this configuration component`);
 		if (f.role === 'session' && !has('app', f.name)) fail('session-without-app', f.path, 'a session sits in a folder with +app.ts');
 		if (f.role === 'page' && !has('app', f.name.slice(0, f.name.lastIndexOf('/')))) fail('page-without-app', f.path, 'a page sits in a folder with +app.ts');
+		if (f.role === 'kiosk_page' && !has('kiosk', f.name.slice(0, f.name.lastIndexOf('/')))) fail('kiosk-page-without-kiosk', f.path, 'a kiosk page sits in a folder with +kiosk.ts');
+		if (f.role === 'kiosk' && f.name.includes('/')) fail('kiosk-nesting', f.path, 'a kiosk is top-level: src/kiosk/<name>/ holds +kiosk.ts, never a nested path');
 		if ((f.role === 'app' || f.role === 'group') && has(f.role === 'app' ? 'group' : 'app', f.name))
 			fail('app-and-group', f.path, 'a folder holds +app.ts or +group.ts, never both');
 		if (f.role === 'app' || f.role === 'group') {

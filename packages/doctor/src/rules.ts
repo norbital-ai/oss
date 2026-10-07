@@ -1,22 +1,7 @@
-/**
- * The compiled rule object the runner executes.
- *
- * Pack rules are declared as YAML (`packs/<name>/<id>.yaml`). This module is the runtime shape
- * after that document is compiled: an id, a summary, and a `check`. Consumer extensions are the
- * same YAML dialect under `.norbital/config/doctor/`.
- *
- * Rules run in the syntactic tier: one file at a time, no cross-file state, no type checker. That
- * restriction is what makes them cheap enough to run on every save and safe to run in parallel.
- */
+/** Compiled pack YAML (`packs/<name>/<id>.yaml` or `.norbital/config/doctor/`): id, summary, `check`. One file, no type checker. */
 import ts from 'typescript';
 
-/**
- * Health is strict: a finding is either something to fix or inventory to read.
- *
- * There is no middle tier. A "warning" is a finding nobody is accountable for — it accumulates,
- * and a gate that tolerates a growing pile of them is not a gate. Rules that describe real debt
- * are errors; rules that only nominate candidates for review are hints and never fail a run.
- */
+/** Findings are errors (must fix) or hints (inventory). No warning tier. */
 export type Severity = 'error' | 'hint';
 export type Confidence = 'high' | 'medium';
 

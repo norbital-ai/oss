@@ -4,7 +4,7 @@ Edits a `point`: a compact trigger opens address suggestions and the map. Typed 
 and the browser's location also set the point.
 -->
 <script lang="ts" module>
-	import type { Json } from './kind.js';
+	import type { Json, Point } from './kind.js';
 
 	/**
 	 * A `point` field (P19, rule 69). Typing an address geocodes it (the host's geocoder, else the keyless default) and the
@@ -14,7 +14,7 @@ and the browser's location also set the point.
 	 */
 	export type PointInputProps = {
 		value: Json;
-		onChange(next: Json): void;
+		onChange(next: Point | null): void;
 		address?: string | null;
 		onAddress?(address: string | null): void;
 		id?: string;
@@ -31,8 +31,8 @@ and the browser's location also set the point.
 	import * as Popover from '../primitives/popover/index.js';
 	import { CONTROL } from './classes.js';
 	import { cn, uiText } from '../primitives/utils.js';
-	import { DEFAULT_GEOCODER, useKinds, type Geocoder } from './context.js';
-	import { formatPoint, isPoint, parsePoint, untag, type Point } from './kind.js';
+	import { DEFAULT_GEOCODER, regionOf, useKinds, type Geocoder } from './context.js';
+	import { formatPoint, isPoint, parsePoint, untag } from './kind.js';
 	import PointMap from './point-map.svelte';
 
 	let { value, onChange, address = null, onAddress, id, disabled = false, invalid = false, map = true }: PointInputProps = $props();
@@ -73,7 +73,8 @@ and the browser's location also set the point.
 		timer = setTimeout(async () => {
 			searching = true;
 			try {
-				const found = await geocoder.search(q.trim());
+				const region = regionOf(host.locale);
+				const found = await geocoder.search(q.trim(), region === undefined ? {} : { region });
 				if (n !== asked) return;
 				hits = found.slice(0, 5);
 				failed = false;

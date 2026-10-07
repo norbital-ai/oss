@@ -1,12 +1,4 @@
-/**
- * Run authored rules over a repository's sources.
- *
- * This is the syntactic tier: rules here are per-file and pure, so they parallelise and cache by
- * construction, and a repository that loads no packs pays nothing.
- *
- * Dispatch is by syntax kind. Every node is visited once and only the rules that asked for that
- * kind are consulted, rather than every rule's guard running against every node.
- */
+/** Syntactic tier: per-file, kind-dispatched, empty packs cost nothing. */
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import { execFileSync } from 'node:child_process';

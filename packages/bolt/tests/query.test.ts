@@ -64,5 +64,10 @@ describe('next query: decode', () => {
 		expect(is(where(cat, 'orders', { placed: { gte: { today: '-7d' } }, total: { gt: { param: 'min' } } }))).toBe(false);
 		expect(is(where(cat, 'orders', { total: { lt: '10.6' }, tags: { hasAll: ['a'] }, status: { nin: ['closed'] } }))).toBe(true);
 		expect(likeRegex('a\\%b%').test('A%bcd')).toBe(true);
+		// the anonymous identity: a visitor matches their own guest rows; a member matches none
+		const guest = { ...rep, key: 'guest', actor: { kind: 'visitor', app: 'lobby', visitor: 'v-1' } } as typeof rep;
+		const guestIs = (p: Pred) => evaluate({ cat, bindings, authority: guest }, 'orders', p, { ...row, note: 'v-1' });
+		expect(guestIs(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } }))).toBe(true);
+		expect(is(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } }))).toBe(false);
 	});
 });

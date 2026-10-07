@@ -8,7 +8,7 @@ import { type Manifest, spec } from './load.ts';
 
 /** `Names` part → the role it indexes; `one` parts are the singleton file's own type. */
 const PARTS: { part: string; role: Role; one?: true }[] = [
-	{ part: 'apps', role: 'app' }, { part: 'automations', role: 'automation' }, { part: 'channelTypes', role: 'channel' },
+	{ part: 'apps', role: 'app' }, { part: 'kiosks', role: 'kiosk' }, { part: 'automations', role: 'automation' }, { part: 'channelTypes', role: 'channel' },
 	{ part: 'collections', role: 'collection' }, { part: 'connections', role: 'connection' },
 	{ part: 'customFields', role: 'custom_field' }, { part: 'mcp', role: 'mcp' },
 	{ part: 'locales', role: 'locale' }, { part: 'messages', role: 'messages', one: true }, { part: 'models', role: 'model' },
@@ -45,6 +45,8 @@ export function namesIndex(files: readonly Discovered[], manifest: Manifest, bol
 	const leaf = (f: Discovered) => f.name.slice(f.name.lastIndexOf('/') + 1);
 	const apps = files.filter((f) => f.role === 'app');
 	if (files.some((f) => f.role === 'page')) lines.set('pages', record(apps.map((a) => [a.name, children(['page'], a.name, leaf)])));
+	const kiosks = files.filter((f) => f.role === 'kiosk');
+	if (files.some((f) => f.role === 'kiosk_page')) lines.set('kioskPages', record(kiosks.map((k) => [k.name, children(['kiosk_page'], k.name, leaf)])));
 	const groups = files.filter((f) => f.role === 'group');
 	if (groups.length > 0) lines.set('groups', record(groups.map((g) => [g.name, children(['app', 'group'], g.name, leaf)])));
 	const skills = files.filter((f) => f.role === 'skill');
@@ -143,6 +145,8 @@ declare module '*?bytes' {
 	const bytes: Uint8Array;
 	export default bytes;
 }
+/** Brands \`{ id, name, mime }\` as a stored-file handle for guest writes (prelude; not \`/client\`). */
+declare function fileRef(file: { readonly id: string; readonly name: string; readonly mime: string }): import('@norbital-ai/bolt').FileRef;
 `;
 export function writeTypeSetup(root: string): void {
 	const dir = join(root, '.norbital');

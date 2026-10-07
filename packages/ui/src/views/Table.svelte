@@ -474,7 +474,7 @@
 												{/if}
 												{#if ci === 0 && opens}
 													<!-- the open button (staging's expand): shown on hover or focus, beside the row's own click -->
-													<button type="button" class="bg-card text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm border opacity-0 shadow-xs outline-none group-hover/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2"
+													<button type="button" class="bg-card text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm border opacity-0 shadow-xs outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
 														aria-label={msg(bolt, 'table.openRow', 'Open')} title={msg(bolt, 'table.openRow', 'Open')} onclick={() => open(row)} data-row-open><Glyph name="expand" class="size-3.5" /></button>
 												{/if}
 											</td>

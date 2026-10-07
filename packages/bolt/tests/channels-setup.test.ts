@@ -128,11 +128,12 @@ it('an OAuth mailbox: the redirect URI to register, a choice field, then a sign-
 	const { el, state, paired } = show({ connection: base({ transport: 'email', providers: [ms], about: { redirectUrl: REDIRECT } }), transport: 'email' });
 	await settle();
 	expect(el.querySelector('[data-setup-steps]')!.textContent).toContain(REDIRECT);
-	const select = el.querySelector<HTMLSelectElement>('select[name=tracking]')!;
-	expect([...select.options].map((o) => o.value)).toEqual(['off', 'on']);
 	type(el.querySelector<HTMLInputElement>('input[name=clientId]')!, 'app-1');
-	select.value = 'on';
-	select.dispatchEvent(new Event('change', { bubbles: true }));
+	el.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Open tracking"]')!.click();
+	await settle();
+	expect([...document.querySelectorAll('[role=listbox] [role=option]')].map((o) => o.getAttribute('data-value'))).toEqual(['off', 'on']);
+	document.querySelector<HTMLButtonElement>('[role=listbox] [data-value=on] button')!.click();
+	await settle();
 	el.querySelector<HTMLFormElement>('[data-setup-form]')!.requestSubmit();
 	await settle();
 	expect(paired).toEqual([{ clientId: 'app-1', tracking: 'on' }]);

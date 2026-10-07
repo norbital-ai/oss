@@ -27,7 +27,8 @@ the route changes. It has no header: the navigation, flush to its edges in the s
 	watch(() => path, () => close(), { lazy: true });
 </script>
 
-<Sheet bind:open {onOpenChange} side="left" class={cn('bg-sidebar md:w-72 [&>header]:hidden [&>[data-sheet-body]]:p-0', className)} {...rest}>
+<!-- a phone: as tall as the navigation until dragged or expanded (not a fixed 90%), the grabber clear of the first row, and one safe-area inset (the nav's own footer pads it) -->
+<Sheet bind:open {onOpenChange} side="left" class={cn('bg-sidebar [&:not([data-fullscreen])]:h-[var(--sheet-h,auto)] pt-4 pb-0 md:w-72 md:pt-0 [&>header]:hidden [&>[data-sheet-body]]:p-0', className)} {...rest}>
 	<!-- a tapped nav link closes the drawer even when the route does not change -->
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div class="contents" onclick={(e) => navigates(e) && close()}>{@render children()}</div>

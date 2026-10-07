@@ -145,8 +145,8 @@ async function fixture(mutateSource = false) {
 		moved: () => moved,
 		count: async () =>
 			Number(
-				(await db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0].rows[0]
-					.n
+				(await db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0]?.rows[0]
+					?.n
 			)
 	};
 }
@@ -175,7 +175,7 @@ test('final large transform refuses without partial rows; late action refusal al
 	for (const [callable, title] of [
 		['orders.place', 'giant'],
 		['orders.fail', 'small']
-	]) {
+	] as const) {
 		const f = await fixture();
 		try {
 			const outcome = await f.caller.act(callable, { title });
@@ -232,8 +232,8 @@ test('action dependency recording retains caller row scope and monetary-style fi
 		if (typeof outcome.output !== 'string') throw new Error('Missing caller evidence');
 		const rows: readonly { name: string; cap: unknown }[] = JSON.parse(outcome.output);
 		assert.equal(rows.length, 1);
-		assert.equal(rows[0].name, 'quota');
-		assert.deepEqual(rows[0].cap, { $masked: true });
+		assert.equal(rows[0]?.name, 'quota');
+		assert.deepEqual(rows[0]?.cap, { $masked: true });
 		assert.equal(outcome.output.includes('999'), false);
 		assert.equal(await f.count(), 0);
 	} finally {

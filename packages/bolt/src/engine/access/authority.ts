@@ -169,12 +169,12 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		a.queries = [...new Set(a.queries)]; a.actions = [...new Set(a.actions)];
 		if (!bypass) a.masks = masks(m, c, a.read);
 	}
-	const caps = { apps: new Set<string>(), tools: new Set<string>(), mcp: new Set<string>(), skills: new Set<string>() };
+	const caps = { apps: new Set<string>(), kiosks: new Set<string>(), tools: new Set<string>(), mcp: new Set<string>(), skills: new Set<string>() };
 	const automations = new Set<string>();
 	const declared: LimitRule[] = [];
 	for (const p of policies) {
 		const spec = m.policies[p]!;
-		for (const k of ['apps', 'tools', 'mcp', 'skills'] as const) for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
+		for (const k of ['apps', 'kiosks', 'tools', 'mcp', 'skills'] as const) for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
 		for (const x of spec.automations ?? []) automations.add(x);
 		for (const [k, v] of Object.entries(spec.limits ?? {})) declared.push(...limitRules(k, v));
 	}
@@ -184,7 +184,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 	return {
 		key, actor: holder.actor, admin: holder.admin, policies, collections: cols,
 		automations: bypass ? Object.keys(m.automations) : list(automations),
-		capabilities: { apps: list(caps.apps), tools: list(caps.tools), mcp: list(caps.mcp), skills: list(caps.skills) },
+		capabilities: { apps: list(caps.apps), kiosks: list(caps.kiosks), tools: list(caps.tools), mcp: list(caps.mcp), skills: list(caps.skills) },
 		limits, teamTree: holder.teamTree ?? [], scopes: holder.scopes ?? {},
 	};
 }
@@ -198,6 +198,7 @@ export function envFor(auth: Authority, b: Bindings, masks?: Env['masks']): Env 
 		actor: (op) => {
 			if (typeof op === 'object') return auth.scopes[op.scopes] ?? [];
 			if (op === 'teamTree') return auth.teamTree;
+			if (op === 'visitor') return a.kind === 'visitor' ? a.visitor : null;
 			if (a.kind !== 'member') return op === 'teams' ? [] : a.kind === 'apiKey' && op === 'id' ? a.key : null;
 			return op === 'id' ? a.id : op === 'email' ? a.email : op === 'phone' ? a.phone : op === 'teams' ? a.teams : a.party?.id ?? null;
 		},

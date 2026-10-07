@@ -7,7 +7,7 @@
 // The C2 guest ABI: `guest.mjs` is one ES module whose default export holds the code roles by name,
 // `{ collection, automation, custom_field, integration, pipeline, … }`, each declaration as its role file exports it.
 // A body is found by `bodyPath`; reads are lowered to `ReadIR` host-side (`lowerRead`), so the guest spends no CPU on it.
-import { INFER_MS } from '../agent/ai.ts';
+import { inferMs } from '../agent/ai.ts';
 import { createHash } from 'node:crypto';
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
 import ivm from 'isolated-vm';
@@ -388,7 +388,7 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 		const wallOf = (part: readonly (CrossCall | CrossAnswer)[]): number => {
 			const [only] = part;
 			if (part.length !== 1 || only === undefined || !isCall(only) || only.op !== 'facility' || only.facility !== 'ai') return wallMs;
-			return only.method === 'sys_2.infer' ? INFER_MS : only.method === 'transcribe' || only.method === 'speak' ? LIMITS.callMs.speech : wallMs;
+			return only.method === 'sys_2.infer' ? inferMs(only.args) : only.method === 'transcribe' || only.method === 'speak' ? LIMITS.callMs.speech : wallMs;
 		};
 		// batches in flight: each drain's calls cross together, and whichever batch answers first is given back first,
 		// so a body's concurrent branches (`Promise.all` over slow AI calls) proceed as each answer lands, not in lockstep

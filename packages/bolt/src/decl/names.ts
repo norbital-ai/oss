@@ -26,12 +26,16 @@ export type NamesShape = {
 	policies: { [policy: string]: unknown };
 	channelTypes: { [type: string]: unknown };
 	apps: { [app: string]: unknown };
+	/** Each `src/kiosk/<k>/+kiosk.ts`, by its folder path. */
+	kiosks: { [kiosk: string]: unknown };
 	automations: { [automation: string]: unknown };
 	mcp: { [server: string]: unknown };
 	skills: { [skill: string]: unknown };
 	connections: { [connection: string]: unknown };
 	/** Each app (its folder path) → the union of its `+<page>.page.svelte` names. */
 	pages: { [app: string]: string };
+	/** Each kiosk (its folder path) → the union of its `+<page>.page.svelte` names. */
+	kioskPages: { [kiosk: string]: string };
 	/** Each group (its folder path) → the union of its child app and group folder names. */
 	groups: { [group: string]: string };
 	/** The tools the host advertises (rule 58), written by the build from the host it compiles for. */
@@ -69,6 +73,7 @@ export type TargetName = ModelName | SystemName;
 export type CollectionName = (keyof Colls & string) | SystemName;
 /** Ledgers (X-18): an `Id<>` target, never granted, read by server code, written or triggered on. */
 export type Ledger = 'sys_run' | 'sys_event';
+/** A collection a trigger or a read may name: every collection but the ledgers. */
 export type ReadableName = Exclude<CollectionName, Ledger>;
 /** Every custom field: the built-ins (`money`, `file`, `point`, `phone`) and the workspace's (`src/data/custom_field/<f>/`), one namespace. */
 type CustomFields = BuiltinFields & NamesPart<'customFields'>;
@@ -84,6 +89,8 @@ export type ChannelName = string;
 export type PersonChannelName = 'inbox' | ChannelName;
 /** The app names (`src/app/<a>/+app.ts`). */
 export type AppName = keyof NamesPart<'apps'> & string;
+/** The kiosk names (`src/kiosk/<k>/+kiosk.ts`). */
+export type KioskName = keyof NamesPart<'kiosks'> & string;
 /** The automation names (`src/automation/+<a>.automation.ts`). */
 export type AutomationName = keyof NamesPart<'automations'> & string;
 /** Runtime envoy identifiers (`sys_envoy`). */

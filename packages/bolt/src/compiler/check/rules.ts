@@ -398,6 +398,13 @@ export function buildChecks(
 		if (isObj(aud) && Array.isArray(aud.public))
 			for (const p of aud.public as string[]) publicOf.set(p, [...(publicOf.get(p) ?? []), app]);
 	}
+	// a kiosk open with no authentication runs its requests as its assigned policies, so those count as
+	// public for per-ip limits just like an app's visitor policies.
+	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {})) {
+		if ((spec as { auth?: unknown }).auth !== 'none') continue;
+		for (const p of (spec as { policies?: readonly string[] }).policies ?? [])
+			publicOf.set(p, [...(publicOf.get(p) ?? []), `kiosk:${kiosk}`]);
+	}
 	for (const [p, spec] of Object.entries(m.policies)) {
 		for (const [c, g] of Object.entries(spec.grants)) {
 			for (const op of ['create', 'update', 'delete'] as const)
@@ -519,6 +526,68 @@ export function buildChecks(
 									`${c}.${col}: no public policy of app '${app}' reads ${to}, so every submission would be refused (rule 36)`
 								);
 					}
+			}
+		}
+	}
+
+	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {})) {
+		const s = spec as { auth?: unknown; policies?: unknown; pages?: unknown };
+		const policies = Array.isArray(s.policies) ? s.policies as string[] : [];
+		for (const p of policies)
+			if (m.policies[p] === undefined)
+				at('kiosk/policy', 'kiosk', kiosk, `policies: there is no policy '${p}'`);
+		if (s.auth !== undefined && s.auth !== 'members' && s.auth !== 'external' && s.auth !== 'all' && s.auth !== 'none')
+			at('kiosk/auth', 'kiosk', kiosk, `auth is 'members', 'external', 'all' or 'none'`);
+		if (Object.keys((s.pages ?? {}) as object).length === 0)
+			at('kiosk/pages', 'kiosk', kiosk, 'a kiosk has at least one page');
+		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every read,
+		// history, create and update lists its fields, and nothing deletes — a removal is an action whose
+		// transform refuses outside its scope. Broad grants are unrepresentable here by construction.
+		const explicit = (c: string, g: unknown): boolean => {
+			const fields = scopeObject(m, c, g)?.fields as readonly string[] | undefined;
+			return Array.isArray(fields) && fields.length > 0;
+		};
+		for (const p of policies) {
+			const held = m.policies[p];
+			if (held === undefined) continue;
+			const narrow = (message: string) => at('access/kiosk-grant', 'policy', p, `kiosk '${kiosk}': ${message}`);
+			for (const [c, g] of Object.entries(held.grants)) {
+				if (c.startsWith('sys_')) continue;
+				for (const op of ['read', 'history', 'create', 'update'] as const)
+					if (g[op] !== undefined && !explicit(c, g[op]))
+						narrow(`${c}.${op} lists its fields explicitly; a kiosk takes no open grant`);
+				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes; write an action instead`);
+			}
+		}
+		// auth 'none': the kiosk is open with no requestor policy, so its assigned policies run
+		// envoy-style inside — they hold the same visitor shape as a public app's policies.
+		if (s.auth === 'none') {
+			const held = policies.flatMap((p) => m.policies[p] === undefined ? [] : [[p, m.policies[p]!] as const]);
+			const creates = new Set(held.flatMap(([, x]) => Object.entries(x.grants).filter(([, g]) => g.create !== undefined).map(([c]) => c)));
+			const reads = new Set(held.flatMap(([, x]) => Object.entries(x.grants).filter(([, g]) => g.read !== undefined).map(([c]) => c)));
+			for (const [p, x] of held) {
+				const bad = (message: string) => at('access/kiosk-grant', 'policy', p, `kiosk '${kiosk}' (auth 'none'): ${message}`);
+				for (const k of ['automations', 'capabilities'] as const)
+					if (x[k] !== undefined) bad(`a public kiosk policy holds no ${k}`);
+				for (const [c, g] of Object.entries(x.grants)) {
+					if (c.startsWith('sys_')) { bad(`no grant on ${c}`); continue; }
+					for (const k of Object.keys(g))
+						if (k !== 'read' && k !== 'create') bad(`${c}: a public kiosk may only read or create, never ${k}`);
+					if (g.read !== undefined) {
+						const fields = scopeObject(m, c, g.read)?.fields as readonly string[] | undefined;
+						const label = list(m.models[c]?.label as string | readonly string[] | undefined);
+						if (fields === undefined) bad(`${c}: a public kiosk read grant lists its fields`);
+						else if (label.some((l) => !fields.includes(l))) bad(`${c}: the read fields include the label (${label.join(', ')})`);
+						if (creates.has(c)) bad(`${c}: a public kiosk never reads a collection a policy of the kiosk creates`);
+					}
+					if (g.create !== undefined)
+						for (const col of m.collections[c]?.create?.input.columns ?? []) {
+							const rel = m.relationships[`${c}.${col}`];
+							if (rel === undefined || rel.default !== undefined) continue;
+							for (const to of list(rel.to))
+								if (!reads.has(to)) at('access/kiosk-ref', 'policy', p, `${c}.${col}: no policy of kiosk '${kiosk}' reads ${to}, so every submission would be refused (rule 36)`);
+						}
+				}
 			}
 		}
 	}

@@ -2,7 +2,13 @@
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here (§5.10).
 import { getContext, setContext } from 'svelte';
 import type { Json } from '../kinds/kind.js';
+import type { IdOf } from '../views/bolt.js';
 import { changed, check, payload, settle, startValues, type FormSpec, type NoticeText, type Outcome, type Row } from './draft.js';
+
+/** Narrows string ids to a collection's id type (e.g. for `where: { id: { in: … } }`). */
+export function idsOf<C extends string>(ids: readonly string[]): readonly IdOf<C>[] {
+	return ids as readonly IdOf<C>[];
+}
 
 export type Act = (callable: string, input: Json, options?: { key?: string }) => Promise<Outcome>;
 
@@ -42,6 +48,10 @@ export class FormState {
 
 	get(name: string): Json {
 		return this.values[name] ?? null;
+	}
+	id<C extends string>(name: string): IdOf<C> | null {
+		const v = this.get(name);
+		return typeof v === 'string' ? (v as IdOf<C>) : null;
 	}
 	set(name: string, value: Json): void {
 		this.values[name] = value;

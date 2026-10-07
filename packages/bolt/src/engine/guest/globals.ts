@@ -42,4 +42,10 @@ export type IsolateGlobals = {
 	/** Runs `task` as a later task of the same invocation; any `delay` above 0 throws a `BoltError` coded `timerDelay`. */
 	setTimeout<A extends unknown[]>(task: (...args: A) => void, delay?: 0, ...args: A): number;
 	clearTimeout(id: number | undefined): void;
+	/** Brands `{ id, name, mime }` as a stored-file handle for writes (no `/client` in the isolate). */
+	fileRef(file: { readonly id: string; readonly name: string; readonly mime: string }): {
+		readonly id: string;
+		readonly name: string;
+		readonly mime: string;
+	};
 };

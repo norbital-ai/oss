@@ -4,7 +4,7 @@
 import type { Json } from '../decl/values.ts';
 import type { Authority, EngineManifest } from '../engine/contracts.ts';
 import type { CheckDiagnostic } from '../compiler/check/index.ts';
-import { href } from './nav.ts';
+import { href, kioskHref } from './nav.ts';
 
 export type StudioChange = { path: string; change: 'added' | 'modified' | 'deleted' };
 export type StudioLogLine = { at: string; level: 'info' | 'warn' | 'error'; message: string };
@@ -83,7 +83,7 @@ export type StudioPort = {
 	watch?(auth: Authority, send: (frame: StudioFrame) => void): () => void;
 };
 
-export const SECTIONS = ['collections', 'pipelines', 'apps', 'policies', 'channelTypes', 'automations', 'remotes', 'environment'] as const;
+export const SECTIONS = ['collections', 'pipelines', 'apps', 'kiosks', 'policies', 'channelTypes', 'automations', 'remotes', 'environment'] as const;
 export type Section = typeof SECTIONS[number];
 /** A declaration: its path-derived name, the source file it comes from (rule 1), and where it opens (an app). */
 export type StudioEntry = { name: string; path: string; href?: string };
@@ -102,6 +102,7 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 		collections: at(m.collections, (n) => `src/data/collection/${n}/+collection.ts`),
 		pipelines: at(m.pipelines, (n) => `src/data/collection/${n}/+pipeline.ts`),
 		apps: at(m.apps, (n) => `src/app/${n}/+app.ts`).map((e) => ({ ...e, href: href(e.name) })),
+		kiosks: at(m.kiosks, (n) => `src/kiosk/${n}/+kiosk.ts`).map((e) => ({ ...e, href: kioskHref(e.name) })),
 		policies: at(m.policies, (n) => `src/access/+${n}.policy.ts`),
 		channelTypes: at(m.channelTypes, (n) => `src/custom_channels/${n}/+channel.ts`),
 		automations: at(m.automations, (n) => `src/automation/+${n}.automation.ts`),

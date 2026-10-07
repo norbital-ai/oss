@@ -18,7 +18,7 @@ import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import { channelMessages, events, inbox, runList, settings, settingsOp, type LogLevel, type SecretsPort } from './data.ts';
 import { studioOp, studioView, type StudioPort } from './studio.ts';
 import { CALLBACK, type OAuth } from '../engine/connections.ts';
-import { audienceOf, challengeOf, holdsPublic, COOKIES, cookieSite, crossSite, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type ShellBoot, type ShellNotice, type WorkspaceLink } from './nav.ts';
+import { audienceOf, canOpenKiosk, challengeOf, holdsPublic, kioskAuthOf, kioskNav, kioskSpecOf, COOKIES, cookieSite, crossSite, environmentLabel, exposure, nav, SHELL, surfaces, VISITOR_APP, type AppSpec, type KioskSpec, type ShellBoot, type ShellNotice, type WorkspaceLink } from './nav.ts';
 
 const SESSION_S = 7 * 86_400, VISITOR_S = 30 * 86_400;
 /** The service worker's source: it shows a pushed notice and opens its link. */
@@ -149,7 +149,48 @@ export function shellHost(c: ShellHostConfig) {
 		return null;
 	}
 
+	/**
+	 * A kiosk page's requests name their kiosk. POSTs carry the `Bolt-Kiosk` header; the live stream's
+	 * `EventSource` sends no headers, so its GET takes `?kiosk=` instead (and only there — a query value
+	 * on any other route is not a kiosk request, so boots and data calls never mix the two up).
+	 * Malformed values are not kiosks (ignored); unknown ones fail closed downstream.
+	 */
+	const kioskParam = (request: Request, query: boolean): string | null => {
+		const h = request.headers.get(HEADERS.kiosk);
+		const q = query ? new URL(request.url).searchParams.get('kiosk') : null;
+		const v = h ?? q;
+		return v !== null && /^[a-z][a-z0-9_]*$/.test(v) ? v : null;
+	};
+	/**
+	 * A kiosk's requests run as its assigned policies (envoy-style override, never an administrator): the
+	 * requestor's own grants are replaced, not joined, so a public kiosk whose requestor holds no policy
+	 * still reads and writes through them. `null` when closed to this caller — unknown kiosk, undeclared
+	 * policy, or not open (fail closed: the request is refused, never run as the caller).
+	 */
+	const kioskAuthority = (kiosk: string, me: Authority | null, visitorId: string): Authority | null => {
+		const spec = kioskSpecOf(m, kiosk);
+		const policies = Array.isArray(spec?.policies) ? spec.policies.filter((p) => m.policies[p] !== undefined) : [];
+		if (spec === undefined || policies.length === 0 || policies.length !== spec.policies.length) return null;
+		if (me !== null) {
+			if (!canOpenKiosk(m, me, kiosk)) return null;
+			return { ...c.authorities.compile({ actor: me.actor, admin: false, policies, teamTree: me.teamTree, scopes: me.scopes }, `kiosk:${kiosk}:${me.key}`), kiosk };
+		}
+		if (kioskAuthOf(spec) !== 'none') return null;
+		return { ...c.authorities.compile({ actor: { kind: 'visitor', app: kiosk, visitor: visitorId }, admin: false, policies }, `kiosk:${kiosk}:visitor:${visitorId}`), kiosk };
+	};
+
 	async function caller(request: Request): Promise<Caller> {
+		const x = await baseCaller(request);
+		const url = new URL(request.url);
+		const kiosk = kioskParam(request, url.pathname === PATHS.live && request.method === 'GET');
+		if (kiosk === null) return x;
+		const me = x.authority !== null && x.authority.actor.kind === 'member' ? x.authority : null;
+		const authority = kioskAuthority(kiosk, me, cookies(request).get(COOKIES.visitor) ?? uuid());
+		if (authority === null) throw new BoltError('forbidden', 'admission', `no kiosk '${kiosk}' is open to this caller`);
+		return { ...x, authority };
+	}
+
+	async function baseCaller(request: Request): Promise<Caller> {
 		const jar = cookies(request);
 		const app = publicApp(request.headers.get(VISITOR_APP));
 		if (app !== null) {
@@ -181,6 +222,12 @@ export function shellHost(c: ShellHostConfig) {
 	/** Rule 38d (a, b): per-IP limits, then the Turnstile token, both before decode; only `read`/`get` and generated `create`. */
 	async function visitorGate(request: Request, auth: Authority, path: string): Promise<Response | null> {
 		const ip = c.ip(request), app = (auth.actor as Extract<EngineActor, { kind: 'visitor' }>).app;
+		// a kiosk visitor's stream: the connection carries no data until views register, and `register`
+		// admits each view like a one-shot read (read/get of a granted read); everything else stays shut.
+		if (auth.kiosk !== undefined && path === PATHS.live) {
+			const v = windows.charge(chargesFor(auth, ['read'], { ip: macKey(h.keys.ipMac, addressBucket(ip)) }), Date.now());
+			return v.ok ? null : refused('rateLimited', 'rateLimited', 429, v.retryAfter);
+		}
 		const charge = (kind: RateKind) => {
 			const v = windows.charge(chargesFor(auth, [kind], { ip: macKey(h.keys.ipMac, addressBucket(ip)) }), Date.now());
 			return v.ok ? null : refused('rateLimited', 'rateLimited', 429, v.retryAfter);
@@ -219,6 +266,32 @@ export function shellHost(c: ShellHostConfig) {
 		const env = environmentLabel(c.environment);
 		const ws: ShellBoot['workspace'] = { name: c.workspace.name, handle: c.workspace.handle, locale: m.workspace.locale, tz: m.workspace.tz, ...(logo === undefined ? {} : { logo }),
 			...(env === null ? {} : { environment: env }), ...(c.apex === undefined ? {} : { apex: c.apex }), ...(c.organization === undefined ? {} : { organization: true as const }) };
+		// a kiosk boot names its kiosk: signed-out callers boot only `auth: 'none'` kiosks (no sign-in, the
+		// requests run as the assigned policies); members boot any kiosk they may open, with the boot catalog
+		// cut to what the kiosk may read. Anything else is unauthenticated (signed-out) or forbidden.
+		const kioskName = kioskParam(request, true);
+		if (kioskName !== null) {
+			const spec = kioskSpecOf(m, kioskName);
+			if (spec === undefined) return refused('notFound', 'No such kiosk.', 404);
+			const jar = cookies(request), id = jar.get(COOKIES.visitor) ?? uuid();
+			const actor = x.authority?.actor;
+			const me = x.authority !== null && actor !== undefined && actor.kind === 'member' ? { auth: x.authority, actor } : null;
+			if (me !== null) {
+				const kioskAuth = kioskAuthority(kioskName, me.auth, id);
+				if (kioskAuth === null) return refused('forbidden', 'This kiosk is not open to you.', 403);
+				const b: ShellBoot = { workspace: ws, actor: me.actor, name: (await h.db.read([{ text: 'SELECT name FROM sys_user WHERE id = $1', params: [me.actor.id] }]))[0]!.rows[0]?.['name'] as string | null ?? null, admin: me.auth.admin,
+					preview: x.preview, nav: nav(m, me.auth), kiosks: kioskNav(m, me.auth), surfaces: surfaces(m, me.actor, me.auth.admin, c.studio !== undefined), inbox: 0,
+					push: null, visitor: null, catalog: exposure(m, kioskAuth), contract: fingerprint(schemaSlice(m)) };
+				return json({ value: b });
+			}
+			if (kioskAuthOf(spec) !== 'none') return json({ error: { code: 'unauthenticated', message: 'Sign in first.', workspace: ws } }, 401);
+			const auth = kioskAuthority(kioskName, null, id);
+			if (auth === null) return refused('forbidden', 'This kiosk is not open.', 403);
+			const b: ShellBoot = { workspace: ws, actor: auth.actor, name: null, admin: false, preview: null, nav: [], kiosks: kioskNav(m, auth),
+				surfaces: surfaces(m, auth.actor, false), inbox: 0, push: null, visitor: { app: kioskName },
+				catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)) };
+			return json({ value: b }, 200, jar.has(COOKIES.visitor) ? {} : { 'set-cookie': cookie(COOKIES.visitor, id, VISITOR_S) });
+		}
 		// a visitor page (unless the member signed in holds it): the visitor cookie is minted when absent, and the page sees only its own app
 		if (app !== null && !(x.authority !== null && holdsPublic(x.authority, app))) {
 			const jar = cookies(request), id = jar.get(COOKIES.visitor) ?? uuid();
@@ -226,6 +299,7 @@ export function shellHost(c: ShellHostConfig) {
 			const siteKey = challengeOf(m, app) === undefined ? undefined : c.turnstile?.siteKey;
 			const b: ShellBoot = { workspace: ws, actor: auth.actor, name: null, admin: false, preview: null, nav: nav(m, auth),
 				surfaces: surfaces(m, auth.actor, false), inbox: 0, push: null, visitor: { app, ...(siteKey === undefined ? {} : { siteKey }) },
+				kiosks: kioskNav(m, auth),
 				catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)) };
 			return json({ value: b }, 200, jar.has(COOKIES.visitor) ? {} : { 'set-cookie': cookie(COOKIES.visitor, id, VISITOR_S) });
 		}
@@ -239,7 +313,7 @@ export function shellHost(c: ShellHostConfig) {
 		// never while previewing: the switcher would carry the previewed member's workspaces
 		const workspaces = x.preview === null ? await c.workspaces?.(auth) ?? [] : [];
 		const b: ShellBoot = { workspace: ws, actor: auth.actor, name: (users!.rows[0]?.['name'] ?? null) as string | null, admin: auth.admin,
-			preview: x.preview, nav: nav(m, auth), surfaces: s, inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length + box.notices.filter((n) => !n.read).length,
+			preview: x.preview, nav: nav(m, auth), kiosks: kioskNav(m, auth), surfaces: s, inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length + box.notices.filter((n) => !n.read).length,
 			push: s.inbox ? c.push?.publicKey ?? null : null, visitor: null, catalog: exposure(m, auth), contract: fingerprint(schemaSlice(m)), ...(c.ai === false ? { aiUnconfigured: true as const } : {}), ...(notice === null ? {} : { notice }), ...(workspaces.length === 0 ? {} : { workspaces }), // hook:decisions — also hides the Describe input (rule 16a)
 			envoys: Object.fromEntries(Object.entries(m.envoys ?? {}).flatMap(([k, e]) => typeof (e as { name?: unknown }).name === 'string' ? [[k, (e as { name: string }).name]] : [])) };
 		// the session slides in the database (a day at most between refreshes); every boot carries it to the cookie too, so a

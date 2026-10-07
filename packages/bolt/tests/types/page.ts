@@ -7,7 +7,7 @@ import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 const is = <T extends true>(): T => true as T;
-declare const order: Id<'orders'>, since: PlainDate;
+declare const order: Id<'orders'>, customer: Id<'customers'>, since: PlainDate;
 
 // ── reads ──
 bolt.read('orders', { where: { status: { eq: 'draft' } }, orderBy: { due: 'asc' }, limit: 10 });
@@ -33,7 +33,10 @@ bolt.query('orders.nope', {});
 bolt.live(bolt.read('customers', { all: true }));
 
 // ── acts ──
-void bolt.act('orders.renote', { ids: [order], note: 'x' }).then((o) => is<Eq<typeof o, Outcome<number>>>());
+void bolt.act('orders.renote', { ids: [order], note: 'x' }).then((o) => is<Eq<typeof o, Outcome<number, 'orders.renote'>>>());
+void bolt.act('orders.create', { customer, note: 'x' }).then((o) => {
+	if (o.kind === 'committed') is<Eq<(typeof o.records)[number]['id'], Id<'orders'>>>();
+});
 // @ts-expect-error P8 an action's input
 bolt.act('orders.renote', { ids: [order], note: 5 });
 // @ts-expect-error P9 an unknown callable

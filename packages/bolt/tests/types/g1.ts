@@ -72,6 +72,10 @@ c.orders.action('renote', async (_, ctx) => {
 	if (out.kind === 'error') return 2;
 	return 0;
 });
+c.orders.action('submit', async (_, ctx) => {
+	const { records } = await ctx.act('customers.create', { name: 'Acme' });
+	is<Eq<(typeof records)[number]['id'], Id<'customers'>>>();
+});
 
 // ── rule 10: caller rows mask what some grant does not admit (`Value | Masked`); stored rows are never masked ──
 is<Eq<Row<'customers'>['email'], string | null | Masked>>();      // sales_rep reads customers' name and tier only
@@ -112,6 +116,13 @@ policy({ description: 'x', grants: { order_lines: { read: { qty: { eq: { actor: 
 policy({ description: 'x', grants: { customers: { read: { email: { eq: { actor: 'mail' } } } } } });
 // @ts-expect-error E4 not in a static position (`check`, rule 4)
 model({ description: 'x', label: 'e', fields: { e: { kind: 'text', format: 'email' } }, check: { mine: { e: { eq: { actor: 'email' } } } } });
+
+// ── the `{ actor: 'visitor' }` operand (anonymous identity) ──
+const guest: Where<'customers'> = { name: { eq: { actor: 'visitor' } } };
+void guest;
+policy({ description: 'Guests read their own rows', grants: { customers: { read: { name: { eq: { actor: 'visitor' } } } } } });
+// @ts-expect-error V1 on a number
+policy({ description: 'x', grants: { order_lines: { read: { qty: { eq: { actor: 'visitor' } } } } } });
 
 // ── the run ledger (rule 56, X-18): an `Id<>` target, never granted, read or written ──
 const run: Id<'sys_run'> | undefined = undefined;

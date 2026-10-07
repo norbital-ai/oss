@@ -5,6 +5,7 @@
 import type { PageBolt, ViewNames } from '../decl/ctx.ts';
 import { bolt as shell, type ShellBolt } from '../shell/runtime.ts';
 export { clientFacilities, type ClientFacilities } from './facilities.ts';
+export { fileRef } from './file-ref.ts';
 
 /** The shell client typed by the workspace's names: the same rows, inputs and outcomes as `ctx` (§3.5). */
 export const bolt = shell as unknown as Omit<ShellBolt, keyof PageBolt> & PageBolt;

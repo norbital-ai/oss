@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { admitMove, admitWrite, compileAuthority, readScope, skipsDeleteGuard, type Holder } from '../src/engine/access/authority.ts';
+import { admitMove, admitWrite, compileAuthority, envFor, readScope, skipsDeleteGuard, type Holder } from '../src/engine/access/authority.ts';
 import { addressBucket, chargesFor, clientAddress, parseRate, RateWindows } from '../src/engine/access/rate.ts';
 import type { Bindings, EngineActor, EngineManifest } from '../src/engine/contracts.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -115,6 +115,14 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		expect(ext.collections.sys_team).toBeUndefined();
 		const visitor = compileAuthority(m, { actor: { kind: 'visitor', app: 'careers', visitor: 'v' }, admin: false, policies: [] }, 'k');
 		expect(visitor.collections.sys_user).toBeUndefined();
+	});
+
+	it('the anonymous identity resolves for visitors and to null for anyone signed in', () => {
+		const b: Bindings = { now: '2026-09-25T04:00:00.000Z', today: '2026-09-25', tz: 'UTC', params: {} };
+		const guest = compileAuthority(m, { actor: { kind: 'visitor', app: 'lobby', visitor: 'v-1' }, admin: false, policies: [] }, 'k');
+		expect(envFor(guest, b).actor('visitor')).toBe('v-1');
+		expect(envFor(auth(['rep']), b).actor('visitor')).toBeNull();
+		expect(envFor(auth(['rep']), b).actor('id')).toBe('u1');
 	});
 
 	it('limits: declared buckets replace the default of their key; visitors default per IP (rule 38, 72)', () => {

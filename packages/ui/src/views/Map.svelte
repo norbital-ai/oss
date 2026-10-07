@@ -1,8 +1,14 @@
 <script lang="ts" module>
 	import type { CollectionKey, FieldOf, RecordFieldOf, RowOf, WhereOf } from './bolt.js';
 	import type { Toolbar } from './ViewToolbar.svelte';
+	/** Extra marks drawn over the rows: a labelled point, and optionally a dashed line to it from `from`. */
+	export type MapOverlay = { lat: number; lng: number; text?: string; from?: { lat: number; lng: number } };
 	/** Rows of `of` with a `point` field `at`, on the host's keyless basemap; a click opens the record. */
 	export type MapProps<C = CollectionKey> = { of: C; at: FieldOf<C>; where?: WhereOf<C>; label?: RecordFieldOf<C>; interactive?: boolean; limit?: number;
+		/** `always`: each row's label sits beside its point instead of appearing on hover. */
+		labels?: 'hover' | 'always';
+		/** Marks the page computes (a destination, the route to it); they also widen the view to fit. */
+		overlays?: readonly MapOverlay[];
 		/** The chrome (`ViewToolbar`); search and filter narrow the places. */
 		toolbar?: Toolbar<RowOf<C>>; key?: string };
 </script>
@@ -18,7 +24,7 @@
 	import { viewState } from './view-state.svelte.js';
 	import ViewToolbar from './ViewToolbar.svelte';
 
-	let { of, at, where, label, interactive = true, limit = 500, toolbar = {}, key }: MapProps = $props();
+	let { of, at, where, label, interactive = true, limit = 500, toolbar = {}, key, labels = 'hover', overlays = [] }: MapProps = $props();
 	const bolt = useBolt();
 	const host = useKinds();
 	const catalog = $derived(host.catalog ?? {});
@@ -37,15 +43,21 @@
 	function draw() {
 		if (map === undefined || layer === undefined || L === undefined) return;
 		layer.clearLayers();
+		for (const o of overlays) {
+			if (o.from) L.polyline([[o.from.lat, o.from.lng], [o.lat, o.lng]], { weight: 2, dashArray: '6 6', opacity: 0.7 }).addTo(layer);
+			const m = L.circleMarker([o.lat, o.lng], { radius: 5, fillOpacity: 0.15, dashArray: '2 3' }).addTo(layer);
+			if (o.text) m.bindTooltip(o.text, { direction: 'bottom', opacity: 0.85 });
+		}
 		for (const p of points) {
-			const m = L.circleMarker([p.lat, p.lng], { radius: 7 }).addTo(layer);
-			if (p.text) m.bindTooltip(p.text);
+			const m = L.circleMarker([p.lat, p.lng], { radius: 7, fillOpacity: 0.6 }).addTo(layer);
+			if (p.text) m.bindTooltip(p.text, labels === 'always' ? { permanent: true, direction: 'right', offset: [8, 0] } : {});
 			if (interactive) m.on('click', () => openRecord(of, p.id));
 		}
+		const all = [...points, ...overlays].map((p) => [p.lat, p.lng] as [number, number]);
 		// unanimated: a zoom animation still running when the view unmounts writes to panes Leaflet has already removed
-		if (points.length > 0) map.fitBounds(L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number])), { maxZoom: 15, padding: [24, 24], animate: false });
+		if (all.length > 0) map.fitBounds(L.latLngBounds(all), { maxZoom: 15, padding: [24, 24], animate: false });
 	}
-	$effect(() => { void points; draw(); });
+	$effect(() => { void points; void overlays; draw(); });
 	function mount(node: HTMLElement) {
 		let cancelled = false, own: LeafletMap | undefined;
 		const basemap = host.basemap ?? DEFAULT_BASEMAP;

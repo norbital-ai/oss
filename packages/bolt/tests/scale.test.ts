@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// G1 (§11.2): the 120-model scale fixture (RFC/realm-0.0.1/probes/g5-probe/scale) ported onto the next declarations and
+// G1 (§11.2): the 120-model scale fixture ported onto the next declarations and
 // measured with tsc. Each model carries what makes checking expensive: a state with edges and `edit`, roll-ups over an
 // owned inverse, computed trees, a collection with relation actions, union/record inputs, a transform, a query and a
 // record action whose bodies read with `select` and `Paged` arms and write with `act`, a policy with a masked field,

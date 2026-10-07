@@ -1,17 +1,5 @@
 // repository-health:allow SEM_PARALLEL -- pattern forms the rule authoring surface carrying rules; provider/consumer of the same algebra.
-/**
- * How a YAML rule document is compiled.
- *
- * Pack rules are declared as YAML. `defineRule` is the compiler: a `rule` field becomes a matcher,
- * and a `visitor` field is bound to a named check.
- *
- * Both forms compile to an ordinary `Rule`, so the runner, the ignore file, the allowance comments
- * and the catalogue treat them identically.
- *
- * Examples are mandatory on a matcher, and a composite must carry a negative. A rule with no
- * counter-example is the usual way a detector becomes noise: `QRY1` had no example of the defect
- * spelled a second way, so nobody noticed it recognised only the first.
- */
+/** YAML `rule`/`visitor` compile to the same `Rule`. Matchers require examples; composites require a negative. */
 import ts from 'typescript';
 import { projectFile } from './frontend/markup.js';
 import {

@@ -3,17 +3,51 @@
 import type { Actor } from '../access/actor.ts';
 import type { AgentUse } from '../collection.ts';
 import type { Act, QueryCtx } from '../ctx.ts';
-import type { Checked, Exact, InputFields, InputKind, InputOf, Simplify, ValidInput, ValidInputs, ValueOf } from '../fields.ts';
-import type { CollectionName, PolicyName, ReadField, ReadableName, Row, SystemColumns } from '../names.ts';
+import type {
+	Checked,
+	Exact,
+	InputFields,
+	InputKind,
+	InputOf,
+	Simplify,
+	ValidInput,
+	ValidInputs,
+	ValueOf
+} from '../fields.ts';
+import type {
+	CollectionName,
+	PolicyName,
+	ReadField,
+	ReadableName,
+	Row,
+	SystemColumns
+} from '../names.ts';
 import type { Where } from '../where.ts';
 import type { Duration, IanaZone, Id, NonEmpty } from '../values.ts';
-import type { Ai, Convert, Files, Geo, Http, Notify, RunCause, Schedule, Send, Web } from './facilities.ts';
+import type {
+	Ai,
+	Convert,
+	Files,
+	Geo,
+	Http,
+	Notify,
+	RunCause,
+	Schedule,
+	Send,
+	Web
+} from './facilities.ts';
 import type { EnvName } from './names.ts';
 
 type Macro = '@yearly' | '@annually' | '@monthly' | '@weekly' | '@daily' | '@hourly';
-type Fields<S, N extends unknown[] = [0]> = S extends `${string} ${infer R}` ? Fields<R, [...N, 0]> : N['length'];
+type Fields<S, N extends unknown[] = [0]> = S extends `${string} ${infer R}`
+	? Fields<R, [...N, 0]>
+	: N['length'];
 /** Five space-separated fields or a macro (rule 52: tsc checks the count; the build parses the fields). */
-export type Cron<S> = S extends Macro ? S : Fields<S> extends 5 ? S : 'error: a cron is 5 fields or a macro';
+export type Cron<S> = S extends Macro
+	? S
+	: Fields<S> extends 5
+		? S
+		: 'error: a cron is 5 fields or a macro';
 export type WebhookScheme = 'bearer' | 'hmac-sha256' | 'svix' | 'stripe' | 'slack' | 'meta';
 /** Ledgers take no trigger (X-18). */
 export type TriggerTarget = ReadableName;
@@ -30,13 +64,22 @@ export type Trigger =
 	| { created: string; where?: object; delay?: Duration }
 	| { updated: string; where?: object; fields?: readonly string[]; delay?: Duration }
 	| { deleted: string; where?: object; delay?: Duration };
-type ValidTrigger<T> =
-	T extends { cron: infer S } ? { cron: Cron<S>; tz?: IanaZone }
-	: T extends { webhook: unknown } ? { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: EnvName } }
-	: T extends { created: infer C } ? { created: TriggerTarget; where?: Where<C>; delay?: Duration }
-	: T extends { updated: infer C } ? { updated: TriggerTarget; where?: Where<C>; fields?: readonly TriggerField<C>[]; delay?: Duration }
-	: T extends { deleted: infer C } ? { deleted: TriggerTarget; where?: Where<C>; delay?: Duration }
-	: Trigger;
+type ValidTrigger<T> = T extends { cron: infer S }
+	? { cron: Cron<S>; tz?: IanaZone }
+	: T extends { webhook: unknown }
+		? { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: EnvName } }
+		: T extends { created: infer C }
+			? { created: TriggerTarget; where?: Where<C>; delay?: Duration }
+			: T extends { updated: infer C }
+				? {
+						updated: TriggerTarget;
+						where?: Where<C>;
+						fields?: readonly TriggerField<C>[];
+						delay?: Duration;
+					}
+				: T extends { deleted: infer C }
+					? { deleted: TriggerTarget; where?: Where<C>; delay?: Duration }
+					: Trigger;
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
@@ -51,7 +94,7 @@ export type AutomationSpec = {
 	/** The policies the run holds, or `'trigger'` (the starter's authority) for an automation with no `on`. */
 	runAs: NonEmpty<string> | 'trigger';
 	/** Native generated verbs delegated to this authenticated run and its child action lineage only. */
-	delegations?: readonly { verb: `${string}.${'create'|'update'|'delete'}`; policy: string }[];
+	delegations?: readonly { verb: `${string}.${'create' | 'update' | 'delete'}`; policy: string }[];
 	/** Retries of a failed run, with backoff. */
 	retry?: { attempts: Attempts; backoff?: Duration };
 	/** At most `max` runs at once. */
@@ -59,28 +102,52 @@ export type AutomationSpec = {
 	/** How the agent may start it (`direct`, `confirm`, `never`). */
 	agent?: AgentUse;
 };
-type On<S> = S extends { on: infer O } ? O extends readonly unknown[] ? O[number] : O : never;
+type On<S> = S extends { on: infer O } ? (O extends readonly unknown[] ? O[number] : O) : never;
 type AutomationFor<S> = {
 	description: string;
 	input?: S extends { input: infer I } ? ValidInputs<I> : InputFields;
 	output?: S extends { output: infer O } ? ValidInput<O> : InputKind;
-	on?: S extends { on: infer O } ? O extends readonly unknown[] ? { [I in keyof O]: ValidTrigger<O[I]> } : ValidTrigger<O> : never;
+	on?: S extends { on: infer O }
+		? O extends readonly unknown[]
+			? { [I in keyof O]: ValidTrigger<O[I]> }
+			: ValidTrigger<O>
+		: never;
 	/** 'trigger' (the starter's authority) only when nothing triggers it (rule 53). */
-	runAs: NonEmpty<PolicyName> | (S extends { on: unknown } ? 'error: runAs trigger needs an automation without on' : 'trigger');
-	delegations?: readonly { verb: `${CollectionName}.${'create'|'update'|'delete'}`; policy: PolicyName }[];
+	runAs:
+		| NonEmpty<PolicyName>
+		| (S extends { on: unknown }
+				? 'error: runAs trigger needs an automation without on'
+				: 'trigger');
+	delegations?: readonly {
+		verb: `${CollectionName}.${'create' | 'update' | 'delete'}`;
+		policy: PolicyName;
+	}[];
 	retry?: { attempts: Attempts; backoff?: Duration };
 	concurrency?: { max: Max };
 	agent?: AgentUse;
 };
 
 // ── the run's input and ctx ──
-type Target<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C } ? C & CollectionName : never;
+type Target<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
+	? C & CollectionName
+	: never;
 type Deleted<T> = T extends { deleted: infer C } ? C & CollectionName : never;
-type EventInput<T> = [Target<T>] extends [never] ? {}
-	: { readonly ids: readonly Id<Target<T>>[] } extends infer E ? Exclude<T, { created: unknown } | { updated: unknown } | { deleted: unknown }> extends never ? E : Partial<E> : never;
+/** One row-event trigger's input: which collection fired, correlated with the ids it fired for. */
+type RowArm<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
+	? { readonly collection: C & CollectionName; readonly ids: readonly Id<C & CollectionName>[] }
+	: never;
+type EventInput<T> = [Target<T>] extends [never]
+	? {}
+	: Exclude<T, { created: unknown } | { updated: unknown } | { deleted: unknown }> extends never
+		? RowArm<T> // all triggers are row events: one arm per collection (a declared union)
+		: Partial<{ readonly collection: Target<T>; readonly ids: readonly Id<Target<T>>[] }>;
 /** A `deleted` run also receives the pre-images, masked to its `runAs` read grant (rule 50). */
-type Removed<T> = [Deleted<T>] extends [never] ? {} : { readonly rows?: readonly Row<Deleted<T>>[] };
-export type RunInput<S> = Simplify<(S extends { input: infer I } ? InputOf<I> : EventInput<On<S>>) & Removed<On<S>>>;
+type Removed<T> = [Deleted<T>] extends [never]
+	? {}
+	: { readonly rows?: readonly Row<Deleted<T>>[] };
+export type RunInput<S> = Simplify<
+	(S extends { input: infer I } ? InputOf<I> : EventInput<On<S>>) & Removed<On<S>>
+>;
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
 /** `a.run`'s ctx (§3.4): reads, writes and schedules as its `runAs` policies; the only place for I/O. */
@@ -90,7 +157,11 @@ export type AutomationCtx<S = AutomationSpec> = Omit<QueryCtx, 'actor' | 'refuse
 	attempt: number;
 	cause: RunCause;
 	progress(update: { ratio?: number | null; text?: string | null }): Promise<void>;
-	act: Act; schedule: Schedule; notify: Notify; send: Send; http: Http;
+	act: Act;
+	schedule: Schedule;
+	notify: Notify;
+	send: Send;
+	http: Http;
 	web: Web;
 	files: Files;
 	/** Markdown or HTML to a declared document format (optional host capability; absent → `unavailable`). */
@@ -119,7 +190,9 @@ export type Automation<S> = {
  * 	await ctx.progress({ text: `${lapsed.rows.length} lapsed` });
  * });
  */
-export function automation<const S extends AutomationSpec>(spec: S & Checked<AutomationSpec, S, Exact<S, AutomationFor<S>>>): Automation<S> {
+export function automation<const S extends AutomationSpec>(
+	spec: S & Checked<AutomationSpec, S, Exact<S, AutomationFor<S>>>
+): Automation<S> {
 	let body: RunBody<S> | undefined;
 	return {
 		spec,

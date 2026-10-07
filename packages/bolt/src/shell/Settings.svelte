@@ -542,7 +542,10 @@
 			<form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); void create(); }}>
 				{#if creating === 'channel'}
 					<label>{t('Name')}<Input required bind:value={form.channelName} /></label>
-					<label>{t('Channel type')}<select class="rounded-md border bg-background p-2" bind:value={form.channelType}>{#each s.channelTypes as type}<option value={type}>{transportLabel(type)}</option>{/each}</select></label>
+					<label class="flex flex-col gap-1">{t('Channel type')}
+						<Combobox size="sm" aria-label={t('Channel type')} value={form.channelType} onChange={(v) => { if (v !== null) form.channelType = v; }}
+							options={s.channelTypes.map((type) => ({ value: type, label: transportLabel(type) }))} />
+					</label>
 				{:else if creating === 'invite'}
 					<Input class="h-8" type="email" placeholder={t('Email')} aria-label={t('Email')} required={form.phone === null} bind:value={form.email} />
 					<PhoneInput value={form.phone} onChange={(v) => (form.phone = typeof v === 'string' ? v : null)} />

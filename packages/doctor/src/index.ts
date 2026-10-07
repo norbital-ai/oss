@@ -1,11 +1,6 @@
 /**
- * `@norbital-ai/doctor` (RFC §3.3.10, OD-K5′): the static rules `bolt check` runs. Four fixed workspace packs —
- * `boundaries`, `layout`, `svelte`, `reactive` — and no configuration; every finding is an error. A reviewed
- * `repository-health:allow <rule> -- <reason>` line is the only exception (`allowances.ts`).
- *
- * The realm's own gates select the realm packs by name (`packs/realm/*`): `realm/boundaries`, `realm/graph`,
- * `realm/overlaps`, `realm/structure`, `realm/effect`, `realm/ceremony`, and `realm/types` (the type-aware tier). An
- * absolute directory is a host's own pack.
+ * `@norbital-ai/doctor` (RFC §3.3.10, OD-K5′): `bolt check` packs. Workspace: `boundaries`, `layout`, `svelte`,
+ * `reactive`. Realm gates add `packs/realm/*`. Exception: `repository-health:allow <rule> -- <reason>`.
  */
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

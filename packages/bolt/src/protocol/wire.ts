@@ -28,6 +28,8 @@ export const PATHS = {
 export const SW = `${BOLT}/sw.js`;
 export const HEADERS = {
 	key: 'Idempotency-Key', retry: 'Idempotency-Retry', contract: 'Bolt-Contract', challenge: 'Bolt-Challenge',
+	/** A kiosk page's requests name their kiosk; the host runs them as its assigned policies (never the caller's). */
+	kiosk: 'Bolt-Kiosk',
 } as const;
 
 /** One read as the guest names it (`ctx.db.read('c', q)` → `{ m: 'read', a: ['c', q] }`); `lowerRead` decodes both. */

@@ -6,6 +6,7 @@ import type { Authority, Bindings, Outcome, ReadIR, RowData } from '../engine/co
 import type { Decision, DecideInput } from '../engine/approvals/approvals.ts';
 import type { LocalFilterField } from '../engine/filter-describe/index.ts';
 import { BoltError } from '../engine/contracts.ts';
+import { admitVisitor } from '../engine/callables/index.ts';
 import { chargesFor, RateWindows } from '../engine/access/rate.ts';
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { lowerRead, type Engine } from '../engine/index.ts';
@@ -13,7 +14,7 @@ import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import type { Verb } from '../engine/write/act.ts';
 import { actorRef } from '../engine/write/commit.ts';
 import { subscribe } from './push.ts';
-import { HEADERS, PATHS, redact, statusOf, uuidv7Within, type ActBody, type ActReply, type AgentRow, type Frame, type LiveBody, type LiveReply,
+import { HEADERS, PATHS, redact, statusOf, uuidv7Within, type ActBody, type ActReply, type AgentRow, type Frame, type LiveBody, type LiveErrorCode, type LiveReply,
 	type PushBody, type QBody, type WireRead } from './wire.ts';
 
 export type BoltHttp = {
@@ -40,6 +41,18 @@ const PING_MS = 25_000;
 const committed = (output: Json): Outcome => ({ kind: 'committed', output, records: [] });
 const refusal = (code: 'forbidden' | 'notFound' | 'rateLimited' | 'invalidInput', message: string): Outcome => ({ kind: 'refused', code, message });
 const gone = refusal('notFound', 'Not found or no access.');
+
+/**
+ * A visitor's live views are one-shot reads in live form: `read`/`get` of a granted read only.
+ * Members already passed their policy gates at registration; transcripts, inboxes and conversations
+ * refuse non-members inside their own readers.
+ */
+export function liveViewAdmitted(authority: Authority, read: WireRead | undefined): boolean {
+	if (authority.actor.kind !== 'visitor') return true;
+	if (read === undefined || (read.m !== 'read' && read.m !== 'get')) return false;
+	const collection = read.a?.[0];
+	return typeof collection === 'string' && admitVisitor(authority, { read: collection }) === null;
+}
 
 /**
  * `GET /__bolt/openapi.json` (§5.7, L-BOLT-294): OpenAPI 3.1 of what this caller may invoke, from the manifest: `/q` with the
@@ -197,7 +210,7 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 			if (!v.ok) return refusal('rateLimited', `Too many requests; retry in ${v.retryAfter} s.`);
 			const r = await filters.describe({ collection: x['collection'], text: x['text'], authority, bindings: b,
 				...(raw === undefined ? {} : { localFields: raw as LocalFilterField[] }) });
-			return r.ok ? committed({ where: r.where, ...(r.orderBy === undefined ? {} : { orderBy: r.orderBy }) })
+			return r.ok ? committed({ ...(r.where === undefined ? {} : { where: r.where }), ...(r.orderBy === undefined ? {} : { orderBy: r.orderBy }) })
 				: refusal(r.code === 'notFound' ? 'notFound' : 'invalidInput', r.message);
 		},
 		// hook:decisions — rule 16b: the same catalogue the description is offered, as plain data for the builder; pure
@@ -480,9 +493,11 @@ export function boltHandler(h: BoltHttp): ((request: Request) => Promise<Respons
 			throw new BoltError('forbidden', 'admission', 'the live connection belongs to another session');
 		if (owner !== undefined && owner.key !== authority.key) await h.engine.live.authorize(body.conn, authority);
 		for (const view of body.drop ?? []) h.engine.live.drop(body.conn, view);
-		const errors: { view: string; code: string; message: string }[] = [];
+		const errors: { view: string; code: LiveErrorCode; message: string }[] = [];
 		await Promise.all((body.add ?? []).map(async (x) => {
 			try {
+				if (!liveViewAdmitted(authority, x.read))
+					throw new BoltError('forbidden', 'admission', 'Visitors may not do this.');
 				await h.engine.live.register(body.conn, x.view, { read: x.read?.m === 'transcript' ? await transcriptRead(authority, x.read) : x.read?.m === 'inbox' ? inboxRead(authority)
 					: x.read?.m === 'conversations' ? conversationsRead(authority) : lower(x.read),
 					...(x.every === undefined ? {} : { every: x.every }), ...(x.on === undefined ? {} : { on: x.on }) });

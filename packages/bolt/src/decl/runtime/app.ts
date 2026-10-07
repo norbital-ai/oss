@@ -81,17 +81,25 @@ export function workspace<const S extends WorkspaceBase>(spec: S & Checked<Works
 
 type Audience = 'members' | 'external' | 'all' | { public: NonEmpty<string>; challenge?: 'turnstile' };
 /**
- * `site`: the page renders alone — no sidebar, banner, tabs or agent — and another website may embed it in a frame. A
+ * `portal`: the page renders alone — no sidebar, banner, tabs or agent — and another website may embed it in a frame. A
  * device kiosk in a members app, or a customer-facing page in an external or public app; the app's audience decides who
- * opens it. Sites are listed under the account menu's Sites, never as sidebar rows or tabs.
+ * opens it. Portals are listed under the account menu's Portals, never as sidebar rows or tabs.
  */
-type Page = { title: Msg; icon?: IconName; section?: Msg; site?: true };
+type Page = { title: Msg; icon?: IconName; section?: Msg; portal?: true };
+/**
+ * Device access an app cannot work without. Until each is granted the shell shows a wall in place of the app's pages,
+ * saying what is missing and how to allow it (the browser's prompt, or the phone's settings on a native host).
+ * `location:background` needs always-on location on a native host; a browser can only share while the page is open.
+ */
+export type DeviceRequirement = 'location' | 'location:background' | 'notifications' | 'camera';
 type AppBase = {
 	title: Msg; description: Msg; icon: IconName;
 	/** The app card image, an asset path. */
 	banner?: string;
 	/** Who sees the app: `members` (default), `external`, `all`, or `{ public }` for signed-out visitors. */
 	audience?: Audience;
+	/** Device access every page of the app needs; the shell walls the app until it is granted. */
+	requires?: readonly DeviceRequirement[];
 	/** The app's pages by file name, in nav order: a title, icon and optional section each. */
 	pages: { readonly [page: string]: Page };
 };
@@ -101,6 +109,8 @@ type AppFor<A> = {
 	banner?: string;
 	/** Default 'members'; `{ public }` pages run as the signed-out visitor (§3.9). */
 	audience?: 'members' | 'external' | 'all' | { public: NonEmpty<PolicyName>; challenge?: 'turnstile' };
+	/** Device access every page needs: location (`location:background` on a native host), notifications, camera. */
+	requires?: readonly DeviceRequirement[];
 	/** Key order is nav order; every page file needs an entry (build `app/page-unlisted`). */
 	pages: { [P in PageName<A>]?: Page };
 };

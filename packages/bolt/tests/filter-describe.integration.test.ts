@@ -210,6 +210,46 @@ describe('filter.describe (rule 16a)', () => {
 		const r = await describeAs('jobs over 3 hours');
 		expect(r).toMatchObject({ ok: false, code: 'notFound' });
 	});
+
+	const commit = async (input: { title: string; assignee?: string }) => {
+		const o = await t.as(t.admin).act('jobs.create', { title: input.title, scheduled_on: '2026-09-28', ...(input.assignee === undefined ? {} : { assignee: input.assignee }) });
+		if (o.kind !== 'committed') throw new Error(o.kind);
+		return o.records[0]!.id;
+	};
+	const titles = async (where?: object, orderBy?: object) =>
+		(await t.as(caller).read('jobs', { all: true, ...(where !== undefined && Object.keys(where).length > 0 ? { where } : {}), ...(orderBy === undefined ? {} : { orderBy }), select: { title: true } })).rows.map((r) => r['title']);
+
+	it('OR from a description selects the union of matching rows', async () => {
+		await open(port = system1(byField({ Title: { op: 'contains', value: 'pump' }, Assignee: { op: 'is', value: 'Bob Tan' } }, { combine: 'any of them hold' })));
+		const alice = (await t.as(t.admin).read('members', { where: { name: { eq: 'Alice Ng' } }, all: true })).rows[0]!['id'] as string;
+		await commit({ title: 'pump room', assignee: alice });
+		await commit({ title: 'install', assignee: bob });
+		await commit({ title: 'other', assignee: alice });
+		const r = await describeAs("pump jobs or Bob's jobs");
+		expect(r).toMatchObject({ ok: true, where: { or: expect.arrayContaining([{ title: { like: '%pump%' } }, { assignee: { eq: bob } }]) } });
+		expect((await titles((r as { where: object }).where)).sort()).toEqual(['install', 'pump room']);
+	});
+
+	it('a related-field condition from a description selects those rows', async () => {
+		await open(port = system1(byField({ 'Assignee › Name': { op: 'contains', value: 'bob' } })));
+		const alice = (await t.as(t.admin).read('members', { where: { name: { eq: 'Alice Ng' } }, all: true })).rows[0]!['id'] as string;
+		await commit({ title: 'bob job', assignee: bob });
+		await commit({ title: 'alice job', assignee: alice });
+		const r = await describeAs('jobs whose assignee name contains bob');
+		expect(r).toEqual({ ok: true, where: { assignee: { is: { name: { like: '%bob%' } } } } });
+		expect(await titles((r as { where: object }).where)).toEqual(['bob job']);
+	});
+
+	it('a related sort from a description orders the matching rows', async () => {
+		await open(port = system1(byField({},
+			{ 'sort.yes': true, 'sort.field': 'Assignee › Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' })));
+		const alice = (await t.as(t.admin).read('members', { where: { name: { eq: 'Alice Ng' } }, all: true })).rows[0]!['id'] as string;
+		await commit({ title: 'zzz job', assignee: bob });
+		await commit({ title: 'aaa job', assignee: alice });
+		const r = await describeAs('sorted by assignee name');
+		expect(r).toEqual({ ok: true, orderBy: { assignee: { name: 'asc' } } });
+		expect(await titles(undefined, (r as { orderBy: object }).orderBy)).toEqual(['aaa job', 'zzz job']);
+	});
 });
 
 it('literals: quoted strings, numbers and dates from the text', () => {

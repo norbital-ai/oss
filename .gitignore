@@ -31,6 +31,7 @@ node_modules/
 coverage/
 test-results/
 playwright-report/
+**/__screenshots__/
 .tmp/
 
 # Local yalc store
@@ -56,3 +57,4 @@ vite.config.*.timestamp-*
 # the package they are working in (`packages/bolt/.claude/worktrees/…`), which stayed untracked
 # and got committed once as a gitlink: a submodule pointer to a branch that exists on no remote.
 **/.claude/worktrees/
+.vitest-attachments/

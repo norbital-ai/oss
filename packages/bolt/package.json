@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.165",
+	"version": "0.0.166",
 	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
 	"type": "module",
 	"sideEffects": [
@@ -69,6 +69,7 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {
+		"@cfworker/json-schema": "4.1.1",
 		"@electric-sql/pglite": "^0.5.5",
 		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@jridgewell/trace-mapping": "^0.3.31",
@@ -96,7 +97,9 @@
 	"devDependencies": {
 		"@sveltejs/package": "^2.5.8",
 		"@types/node": "^26.2.0",
+		"@vitest/browser-playwright": "4.1.11",
 		"happy-dom": "^20.11.6",
+		"playwright": "1.63.0",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
 		"typescript": "catalog:",

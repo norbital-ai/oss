@@ -1,10 +1,10 @@
 // Value types and literal grammars (§3.3.9, §3.3.10 "values"). Type-only: the runtime values are std's, and a row
 // holds exactly them (the guest prelude and `$bolt` decode the wire into them): a `Decimal` instance, and a date and an
 // instant as std's branded ISO strings.
-import type { Decimal } from '@norbital-ai/std/decimal';
+import type { CurrencyCode as Iso4217, Decimal } from '@norbital-ai/std/decimal';
 import type { Instant, PlainDate } from '@norbital-ai/std/date';
 export type { Decimal, Instant, PlainDate };
-declare const brand: unique symbol;
+export declare const brand: unique symbol;
 
 /** A `time` field's value: a time of day. */
 export interface PlainTime { readonly [brand]: 'PlainTime' }
@@ -27,8 +27,8 @@ export type Vector = readonly number[];
 export interface FileRef { readonly [brand]: 'FileRef'; readonly id: Id<'sys_file'>; readonly name: string; readonly mime: string }
 
 // ponytail: ISO 4217 is not enumerated; upper case keeps it apart from field names, the build checks the code list.
-/** An ISO 4217 currency code, upper case (`SGD`, `USD`). */
-export type CurrencyCode = Uppercase<string>;
+/** An ISO 4217 currency code (`SGD`, `USD`): a literal or std's branded `currency()`. */
+export type CurrencyCode = Iso4217 | Uppercase<string>;
 /** A key of `src/i18n/+messages.ts` or, outside catalog mode, a literal string. */
 export type Msg = string;
 /** An icon name as the ui's `Icon` takes it (an Iconify name such as `lucide:users`). */

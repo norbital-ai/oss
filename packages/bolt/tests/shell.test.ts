@@ -2,8 +2,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
-import { canOpen, crossSite, framePolicy, holdsPublic, exposure, href, isOpenRoute, nav, route, surfaces, type ShellManifest } from '../src/shell/nav.ts';
-import { challengeQueue, visitorFetch, shellApi } from '../src/shell/runtime.ts';
+import { canOpen, canOpenKiosk, crossSite, framePolicy, holdsPublic, exposure, href, isOpenRoute, kioskHref, kioskNav, nav, route, surfaces, type ShellManifest } from '../src/shell/nav.ts';
+import { challengeQueue, kioskFetch, visitorFetch, shellApi } from '../src/shell/runtime.ts';
+import { liveViewAdmitted } from '../src/protocol/http.ts';
 import { activeApp, media, navigationModel, NORBIUS } from '../src/shell/model.ts';
 import { fileAttachments } from '../src/shell/data.ts';
 import { layoutTeams, searchTeams, subtree } from '../src/shell/teams.ts';
@@ -15,18 +16,22 @@ const m: ShellManifest = {
 	agent: { internal: 'brief', skills: {} },
 	apps: {
 		sales: { title: 'Sales', description: 'd', icon: 'i', pages: { deals: { title: 'Deals' }, quotes: { title: 'Quotes' } } },
-		'hr/kiosk': { title: 'Kiosk', description: 'd', icon: 'i', pages: { clock: { title: 'Clock', site: true } } },
+		'hr/kiosk': { title: 'Kiosk', description: 'd', icon: 'i', pages: { clock: { title: 'Clock', portal: true } } },
 		'hr/people': { title: 'People', description: 'd', icon: 'i', pages: { list: { title: 'List' } } },
 		portal: { title: 'Portal', description: 'd', icon: 'i', audience: 'external', pages: { home: { title: 'Home' } } },
 		both: { title: 'Both', description: 'd', icon: 'i', audience: 'all', pages: { home: { title: 'Home' } } },
 		careers: { title: 'Careers', description: 'd', icon: 'i', audience: { public: ['applicant'], challenge: 'turnstile' }, pages: { apply: { title: 'Apply' } } },
 	},
 	groups: { hr: { label: 'HR', icon: 'g', defaultChild: 'people' } },
+	kiosks: {
+		clock: { title: 'Clock', description: 'd', icon: 'i', auth: 'members', policies: ['kiosk_clock'], pages: { clock: { title: 'Clock' } } },
+		lobby: { title: 'Lobby', description: 'd', icon: 'i', auth: 'none', policies: ['lobby_public'], pages: { welcome: { title: 'Welcome' } } },
+	},
 };
-const member = (apps: string[], over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}, admin = false): Authority => ({
+const member = (apps: string[], over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}, admin = false, kiosks: string[] = []): Authority => ({
 	key: 'k', admin, policies: [], collections: {}, automations: [], limits: [], teamTree: [], scopes: {},
 	actor: { kind: 'member', id: 'u1', email: null, phone: null, external: false, teams: [], teamPath: [], admin, party: null, ...over },
-	capabilities: { apps, tools: [], mcp: [], skills: [] },
+	capabilities: { apps, kiosks, tools: [], mcp: [], skills: [] },
 });
 const names = (ns: ReturnType<typeof nav>): unknown[] => ns.map((n) => n.kind === 'group' ? { [n.name]: names(n.children) } : n.name);
 
@@ -186,11 +191,40 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 		]);
 		expect(resets).toBe(2);
 	});
+	it('names the kiosk on every /__bolt request while on a kiosk route, and nothing elsewhere', async () => {
+		const seen: { url: string; kiosk: string | null }[] = [];
+		const f = (async (input: string, init: RequestInit = {}) => {
+			seen.push({ url: input, kiosk: new Headers(init.headers).get('Bolt-Kiosk') });
+			return new Response('{}');
+		}) as typeof fetch;
+		let at: string | null = 'lobby';
+		const kf = kioskFetch(() => at, f);
+		await kf('/__bolt/q', { method: 'POST' });
+		await kf('/assets/x.png');
+		at = null;
+		await kf('/__bolt/q', { method: 'POST' });
+		expect(seen).toEqual([
+			{ url: '/__bolt/q', kiosk: 'lobby' },
+			{ url: '/assets/x.png', kiosk: null },
+			{ url: '/__bolt/q', kiosk: null },
+		]);
+	});
+	it('a visitor subscribes read/get views of granted reads only; members subscribe anything', () => {
+		const visitor: Authority = { ...member([]), actor: { kind: 'visitor', app: 'lobby', visitor: 'v' },
+			collections: { openings: { read: [{}], history: [], create: [], update: [], delete: [], queries: [], actions: [], moves: {}, masks: {} } } as unknown as Authority['collections'] };
+		expect(liveViewAdmitted(visitor, { m: 'read', a: ['openings', {}] })).toBe(true);
+		expect(liveViewAdmitted(visitor, { m: 'get', a: ['openings', 'id'] })).toBe(true);
+		expect(liveViewAdmitted(visitor, { m: 'read', a: ['orders', {}] })).toBe(false);
+		expect(liveViewAdmitted(visitor, { m: 'aggregate', a: ['openings', {}] })).toBe(false);
+		expect(liveViewAdmitted(visitor, { m: 'query', a: ['openings', 'q', {}] })).toBe(false);
+		expect(liveViewAdmitted(visitor, undefined)).toBe(false);
+		expect(liveViewAdmitted(member([]), { m: 'query', a: ['openings', 'q', {}] })).toBe(true);
+	});
 });
 
 describe('sidebar model', () => {
 	const bootOf = (auth: Authority, studio = false) => ({ workspace: { name: 'Acme', locale: 'en', tz: 'UTC' }, actor: auth.actor, name: 'Ada', admin: auth.admin,
-		preview: null, nav: nav(m, auth), surfaces: surfaces(m, auth.actor, auth.admin, studio), inbox: 2, push: null, visitor: null, catalog: {} });
+		preview: null, nav: nav(m, auth), kiosks: kioskNav(m, auth), surfaces: surfaces(m, auth.actor, auth.admin, studio), inbox: 2, push: null, visitor: null, catalog: {} });
 	const tree = (items: readonly { key: string; children?: readonly { key: string }[] }[] | undefined) => (items ?? []).map((i) => [i.key, (i.children ?? []).map((c) => c.key)]);
 
 	it('Operations (Norbius, Approvals) above Applications; the inbox count as a badge; an app\'s pages its tabs, a group\'s apps its children', () => {
@@ -201,23 +235,39 @@ describe('sidebar model', () => {
 		expect(sales.active).toBe(true);
 		expect(activeApp(model)?.key).toBe('sales');
 		expect(sales.pages?.map((c) => [c.key, c.active])).toEqual([['sales/deals', false], ['sales/quotes', true]]);
-		// a site page is no sidebar row or tab: `hr/kiosk` has only its site page, so the group keeps `hr/people` alone
+		// a portal page is no sidebar row or tab: `hr/kiosk` has only its portal page, so the group keeps `hr/people` alone
 		expect(tree(model.sections[1]!.items)).toContainEqual(['hr', ['hr/people']]);
 	});
-	it('site pages sit in the ellipsis menu\'s Sites group, for the viewers who may open them', () => {
+	it('portal pages sit in the ellipsis menu\'s Portals group, for the viewers who may open them', () => {
 		const model = navigationModel(bootOf(member(['hr'])), '/app/hr/kiosk/clock', (k) => k);
-		expect(tree(model.utilities)).toEqual([['sites', ['hr/kiosk/clock']]]);
+		expect(tree(model.utilities)).toEqual([['portals', ['hr/kiosk/clock']], ['kiosks', ['lobby']]]);
 		expect(model.utilities[0]!.children).toMatchObject([{ label: 'Clock', href: '/app/hr/kiosk/clock', active: true }]);
 		expect(activeApp(model)).toBeNull();
-		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([]);
+		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([['kiosks', ['lobby']]]);
+	});
+	it('kiosks sit in the ellipsis menu\'s Kiosks group: members ones by capability, `none` ones for everyone', () => {
+		expect(canOpenKiosk(m, member([], {}, false, ['clock']), 'clock')).toBe(true);
+		expect(canOpenKiosk(m, member([]), 'clock')).toBe(false);
+		expect(canOpenKiosk(m, member([]), 'lobby')).toBe(true);
+		expect(canOpenKiosk(m, null, 'lobby')).toBe(true);
+		expect(canOpenKiosk(m, null, 'clock')).toBe(false);
+		expect(canOpenKiosk(m, member([], {}, true), 'clock')).toBe(true);
+		expect(kioskNav(m, member([], {}, false, ['clock'])).map((k) => k.name)).toEqual(['clock', 'lobby']);
+		expect(kioskHref('clock', 'clock')).toBe('/kiosk/clock/clock');
+		expect(route(m, new URL('http://x/kiosk/clock/clock'))).toEqual({ kind: 'kiosk', kiosk: 'clock', page: 'clock' });
+		expect(route(m, new URL('http://x/kiosk/nope/clock'))).toEqual({ kind: 'notFound' });
+		expect(framePolicy(m, '/kiosk/lobby/welcome')).toBe('frame-ancestors *');
+		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'lobby', page: 'welcome' })).toBe(true);
+		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'clock', page: 'clock' })).toBe(false);
+		expect(tree(navigationModel(bootOf(member([], {}, false, ['clock'])), '/kiosk/clock/clock', (k) => k).utilities)).toContainEqual(['kiosks', ['clock', 'lobby']]);
 	});
 	it('the account popover: Settings (People, Organization, Audit, Automations) apart from System (no Logs: Studio holds the log); a member has neither', () => {
 		expect(tree(navigationModel(bootOf(member([], {}, true), true), '/', (k) => k).utilities)).toEqual([
-			['settings', ['people', 'organization', 'audit', 'automations']], ['system', ['envoy', 'integrations', 'secrets', 'studio']], ['sites', ['hr/kiosk/clock']]]);
+			['settings', ['people', 'organization', 'audit', 'automations']], ['system', ['envoy', 'integrations', 'secrets', 'studio']], ['portals', ['hr/kiosk/clock']], ['kiosks', ['clock', 'lobby']]]);
 		const settings = navigationModel(bootOf(member([], {}, true)), '/settings/automations', (k) => k).utilities?.[0];
 		expect(settings).toMatchObject({ key: 'settings', active: true });
 		expect(settings?.children?.find((c) => c.key === 'automations')).toMatchObject({ href: '/settings/automations', active: true });
-		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([]);
+		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([['kiosks', ['lobby']]]);
 	});
 });
 
@@ -279,7 +329,7 @@ describe('Studio port boundary', () => {
 		const state: StudioState = { commit: 'h', files, changes: [], manifest, log: [], preview: null, releases: [] };
 		const v = studioView(state);
 		const names = Object.fromEntries(Object.entries(v.sections!).map(([s, es]) => [s, es.map((e) => e.name)]));
-		expect(names).toEqual({ collections: ['a', 'b'], pipelines: ['a'], apps: ['x'], policies: [], channelTypes: [], automations: ['nightly'], remotes: ['stripe', 'docs'], environment: ['API'] });
+		expect(names).toEqual({ collections: ['a', 'b'], pipelines: ['a'], apps: ['x'], kiosks: [], policies: [], channelTypes: [], automations: ['nightly'], remotes: ['stripe', 'docs'], environment: ['API'] });
 		expect(v.sections!.apps).toEqual([{ name: 'x', path: 'src/app/x/+app.ts', href: '/app/x' }]);
 		expect(v.sections!.remotes.map((e) => e.path)).toEqual(['src/connection/+stripe.connection.ts', 'src/agent/mcp/+docs.mcp.ts']);
 		expect('manifest' in v).toBe(false);

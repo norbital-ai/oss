@@ -57,8 +57,10 @@ type SelectionBase = { columns: readonly string[]; filled?: readonly string[]; w
  * `queries`, `actions`, `similarity` searches and `notifications`.
  */
 export interface ProjectReadCtx extends QueryCtx { readonly admin: boolean; readonly policies: readonly string[]; readonly fields: readonly string[]; }
+/** A read projection: the JSON `fields` computed by the attached body over the trusted `context` columns. */
 export type ReadProjection = { fields: readonly string[]; context: readonly string[] };
 
+/** A collection's spec: its read exposure, write allowlists and named queries, actions and similarities. */
 export type CollectionSpec = {
 	description?: string;
 	/** The fields and relations callers read (grants narrow them further). */

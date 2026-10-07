@@ -270,6 +270,20 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		expect(r).toEqual({ ok: true, where: { assignee: { is: { manager: { is: { name: { like: '%pump%' } } } } } } });
 		expect(port.requests).toHaveLength(1);
 	});
+
+	it('any-of composition is OR when the text names a disjunction', async () => {
+		const plan = byField({ Title: { op: 'contains', value: 'pump' }, Status: { op: 'is', value: 'done' } }, { combine: 'any of them hold' });
+		const r = await describer(system1(plan)).describe({ collection: 'jobs', text: 'pump jobs or done jobs', authority: caller(), bindings });
+		expect(r).toMatchObject({ ok: true, where: { or: expect.arrayContaining([{ title: { like: '%pump%' } }, { status: { eq: 'done' } }]) } });
+		if (!r.ok) throw new Error(r.message);
+		expect((r.where as { or: unknown[] }).or).toHaveLength(2);
+	});
+
+	it('any-of without a disjunction word stays AND (System 1 misreading the text)', async () => {
+		const plan = byField({ Title: { op: 'contains', value: 'pump' }, Status: { op: 'is', value: 'done' } }, { combine: 'any of them hold' });
+		const r = await describer(system1(plan)).describe({ collection: 'jobs', text: 'pump titles that are done', authority: caller(), bindings });
+		expect(r).toMatchObject({ ok: true, where: { and: expect.arrayContaining([{ title: { like: '%pump%' } }, { status: { eq: 'done' } }]) } });
+	});
 });
 
 describe('described selection must fit the exposed grammar', () => {
@@ -322,6 +336,12 @@ describe('described selection must fit the exposed grammar', () => {
 			instructions: expect.stringMatching(/top-level records/)
 		});
 	});
+	it('a sort-only description on a collection has an OrderBy and no Where', async () => {
+		const port = system1(byField({}, { 'sort.yes': true, 'sort.field': 'Scheduled on', 'sort.dir': 'descending (newest, highest, Z→A first)' }));
+		expect(await describer(port).describe({ collection: 'jobs', text: 'latest first', authority: caller(), bindings }))
+			.toEqual({ ok: true, orderBy: { scheduled_on: 'desc' } });
+	});
+
 	it('allows ordinary newest-first sorting because ordering does not exclude versions', async () => {
 		const port = system1(
 			byField(

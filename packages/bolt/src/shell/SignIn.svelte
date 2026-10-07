@@ -57,7 +57,8 @@
 		{@const byEmail = !m.ok || m.value.email}
 		{@const byPhone = m.ok && m.value.phone}
 		<!-- a workspace people sign up to by number opens on the number -->
-		{@const current = mode ?? (byPhone && m.value.signup.includes('phone') ? 'phone' : byEmail ? 'email' : 'phone')}
+		<!-- email first: members sign in by email; phone sign-up (a customer's) happens on the page that asks for it -->
+		{@const current = mode ?? (byEmail ? 'email' : 'phone')}
 		{@const joins = m.ok && m.value.signup.includes(current)}
 		<Stack as="section" gap="lg" class="access-sign-in-content">
 			<Stack as="header" gap="sm">

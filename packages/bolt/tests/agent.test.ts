@@ -173,6 +173,42 @@ describe('the AI port under the 60 s wall (rule 63)', () => {
 		expect(await inferFacility(port([done(''), done(''), done(''), done('')]).p)(at({ prompt: 'q' }), AbortSignal.timeout(5_000))).toMatchObject({ ok: false, error: { kind: 'invalid' } });
 	});
 
+	it('sys_2.infer with a JSON Schema output: the schema checks structure (if/then included), CEL rules check logic, both come back by path', async () => {
+		const jsonSchema = { type: 'object', required: ['test'], properties: { test: { type: 'object', properties: {
+			status: { enum: ['done', 'unable'] }, reading: { type: 'number', minimum: 0 }, reason: { type: 'string' } },
+			if: { properties: { status: { const: 'unable' } } }, then: { required: ['reason'] } } } } as Json;
+		const rules = [{ expression: "has(test.status) && test.status == 'unable' ? !has(test.reading) : true", message: 'an unperformed test has no reading' }];
+		const { p, requests } = port([
+			tool('patch', { ops: [{ op: 'add', path: '/test', value: { status: 'unable', reading: -1 } }] }, 'p1'), tool('submit', {}, 's1'),
+			tool('patch', { ops: [{ op: 'remove', path: '/test/reading' }, { op: 'add', path: '/test/reason', value: 'VTs connected' }] }, 'p2'), tool('submit', {}, 's2')]);
+		expect(await inferFacility(p)(at({ prompt: 'q', output: { jsonSchema, rules } }), AbortSignal.timeout(5_000)))
+			.toEqual({ ok: true, value: { test: { status: 'unable', reason: 'VTs connected' } } });
+		expect(requests[0]!.messages[0]!.content).toContain('an unperformed test has no reading');
+		const back = JSON.stringify(requests[2]!.messages.at(-1));
+		expect(back).toContain('/test/reading');
+		expect(back).toContain('reason');
+		expect(back).toContain('rule broken: an unperformed test has no reading');
+		// a rule that does not compile is the caller's, refused before any model call
+		expect(await inferFacility(port([]).p)(at({ prompt: 'q', output: { jsonSchema, rules: [{ expression: 'test.(', message: 'x' }] } }), AbortSignal.timeout(5_000)))
+			.toMatchObject({ ok: false, error: { kind: 'invalid', message: expect.stringContaining('rule "x"') } });
+	});
+
+	it('sys_2.infer: more files than one request carries are read in batches into one draft, checked only after the last', async () => {
+		const loads: string[] = [];
+		const load = async (id: string) => { loads.push(id); return { mime: 'image/png', bytes: new Uint8Array(1) }; };
+		const jsonSchema = { type: 'object', required: ['rows'], properties: { rows: { type: 'array', minItems: 2, items: { type: 'string' } } } } as Json;
+		const { p, requests } = port([
+			tool('patch', { ops: [{ op: 'add', path: '/rows', value: ['a'] }] }, 'p1'), tool('submit', {}, 's1'),
+			tool('patch', { ops: [{ op: 'add', path: '/rows/-', value: 'b' }] }, 'p2'), tool('submit', {}, 's2')]);
+		const files = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}` }));
+		expect(await inferFacility(p, { load })(at({ prompt: 'q', files, output: { jsonSchema } }), AbortSignal.timeout(5_000))).toEqual({ ok: true, value: { rows: ['a', 'b'] } });
+		expect(requests.map((r) => r.files?.length)).toEqual([8, 8, 2, 2]);
+		expect(loads).toEqual(files.map((f) => f.id));
+		// the second batch starts from the first one's draft, which minItems alone would have refused
+		expect(requests[2]!.messages[0]!.content).toContain('files 9–10');
+		expect(requests[2]!.messages[0]!.content).toContain('{"rows":["a"]}');
+	});
+
 	it('sys_2.infer with tools: the model calls them beside patch and submit (L-BOLT-372)', async () => {
 		const seen: Json[] = [];
 		const browse = { name: 'browse', description: 'Read a page', input: { type: 'object' }, call: async (input: Json) => { seen.push(input); return { text: 'rate is 3' }; } };

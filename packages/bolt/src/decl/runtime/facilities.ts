@@ -3,7 +3,7 @@
 import type { StartableName } from '../access/policy.ts';
 import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '../fields.ts';
 import type { ChannelName, CollectionName, Columns, HostToolName, Is, NamesPart, PolicyName, TeamName } from '../names.ts';
-import type { FileRef, Id, Instant, Json, Msg, Offset, Point, RecordRef, Size, Vector } from '../values.ts';
+import type { brand, FileRef, Id, Instant, Json, Msg, Offset, Point, RecordRef, Size, Vector } from '../values.ts';
 import type { OutboundFor } from './channel.ts';
 import type { AiModelClass, AutomationSpecOf, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, IsUnion, TransportOf } from './names.ts';
 
@@ -127,7 +127,17 @@ export type Convert = { document: Call<[source: ConvertSource, options: ConvertO
  */
 type InferRequest<O, Tools> = { model?: AiModelClass; system?: string; prompt: string; files?: readonly FileRef[]; output?: Out<O> }
 	& (Tools extends true ? { tools?: readonly HostToolName[] } : {});
+/**
+ * An `output` given as data rather than declared: a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the
+ * logic between its parts, each read over the schema's top-level properties (`has(a.x) ? !has(a.y) : true`). Every
+ * submission must satisfy both; a broken rule comes back to the model with its message. Any number of `files` are read,
+ * in batches, into the one answer.
+ */
+export type InferSchemaOutput = { readonly jsonSchema: Json; readonly rules?: readonly { readonly expression: string; readonly message: string }[] };
+type InferSchemaRequest<Tools> = Omit<InferRequest<{ kind: 'text' }, Tools>, 'output'> & { output: InferSchemaOutput };
 interface Infer<Tools> {
+	(request: InferSchemaRequest<Tools>): Promise<Json>;
+	try(request: InferSchemaRequest<Tools>): Promise<Json | FacilityError>;
 	<const O extends InputKind = { kind: 'text' }>(request: InferRequest<O, Tools>): Promise<ValueOf<O>>;
 	try<const O extends InputKind = { kind: 'text' }>(request: InferRequest<O, Tools>): Promise<ValueOf<O> | FacilityError>;
 }
@@ -136,7 +146,13 @@ interface Infer<Tools> {
  * A `sys_1` state (P37 (3)): structured text, never a file. A `FileRef` anywhere in it is a tsc error here and `invalid`
  * at run time; describe a file in text (name, mime, size, caption) instead.
  */
-export type DecisionValue = string | number | boolean | null | readonly DecisionValue[] | { readonly [key: string]: DecisionValue };
+export type DecisionValue =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly DecisionValue[]
+	| ({ readonly [key: string]: DecisionValue } & { readonly [brand]?: never });
 /** A System 1 state: structured text keyed by name (P37); never a file. */
 export type DecisionState = { readonly [key: string]: DecisionValue };
 /** One typed question in the provider's shape (P37): a noul's criteria say what true and false mean; score levels run lowest first. */

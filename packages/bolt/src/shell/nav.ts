@@ -1,22 +1,30 @@
 // The shell's navigation (§5.10, §3.3.1, §3.9): which apps an actor sees, the nav tree of apps and groups, the URL of a
 // page or record, and the route a URL names. Pure: the host and the browser share it.
+import type { DeviceRequirement } from '../decl/runtime/app.ts';
 import type { Authority, EngineActor, EngineManifest } from '../engine/contracts.ts';
 import { SYSTEM } from '../system/index.ts';
 import { BOLT } from '../protocol/wire.ts';
+import type { CollectionExposure, Fields, Kind } from '@norbital-ai/ui';
 
-export type PageSpec = { title: string; icon?: string; section?: string; site?: true };
+export type PageSpec = { title: string; icon?: string; section?: string; portal?: true };
 export type Audience = 'members' | 'external' | 'all' | { public: readonly string[]; challenge?: 'turnstile' };
-export type AppSpec = { title: string; description: string; icon: string; banner?: string; audience?: Audience; pages: { readonly [page: string]: PageSpec } };
+export type AppSpec = { title: string; description: string; icon: string; banner?: string; audience?: Audience; requires?: readonly DeviceRequirement[]; pages: { readonly [page: string]: PageSpec } };
 export type GroupSpec = { label: string; description?: string; icon: string; defaultChild: string };
+/** A standalone kiosk: always chromeless, rooted at `/kiosk/<name>`. `auth` who may open it (`'none'` needs
+ * no sign-in); `policies` the assigned policies it runs as inside (envoy-style override). */
+export type KioskAuth = 'members' | 'external' | 'all' | 'none';
+export type KioskPageSpec = { title: string; icon?: string };
+export type KioskSpec = { title: string; description: string; icon: string; banner?: string; auth?: KioskAuth; policies: readonly string[]; pages: { readonly [page: string]: KioskPageSpec } };
 /** What the shell reads of the manifest; `groups` are the `+group.ts` literals. */
-export type ShellManifest = Pick<EngineManifest, 'workspace' | 'agent'> & Partial<Pick<EngineManifest, 'envoys'>> & { apps: { readonly [app: string]: unknown }; groups?: { readonly [group: string]: unknown } };
+export type ShellManifest = Pick<EngineManifest, 'workspace' | 'agent'> & Partial<Pick<EngineManifest, 'envoys'>> & { apps: { readonly [app: string]: unknown }; kiosks?: { readonly [kiosk: string]: unknown }; groups?: { readonly [group: string]: unknown } };
 
-export type NavPage = { name: string; title: string; icon?: string; section?: string; site?: true; href: string };
+export type NavPage = { name: string; title: string; icon?: string; section?: string; portal?: true; href: string };
 export type NavNode =
 	| { kind: 'app'; name: string; title: string; description: string; icon: string; banner?: string; href: string; pages: NavPage[] }
 	| { kind: 'group'; name: string; title: string; description?: string; icon: string; href: string; children: NavNode[] };
 
 export const APP_PREFIX = '/app/';
+export const KIOSK_PREFIX = '/kiosk/';
 /** The session cookie (§5.11.2), the admin's preview-as target (rule 39) and the visitor's idempotency id (§5.10). */
 export const COOKIES = { session: 'nb_s', preview: 'nb_p', visitor: '__bolt_v' } as const;
 /**
@@ -67,14 +75,16 @@ export type ShellBoot = {
 	/** The member's other workspaces (`ShellHost.workspaces`): the switcher's options. */
 	workspaces?: readonly WorkspaceLink[];
 	nav: NavNode[]; surfaces: Surfaces; inbox: number;
+	/** The kiosk rows the viewer may open (server-computed via `kioskNav`, like `nav`). */
+	kiosks: { readonly name: string; readonly title: string; readonly icon?: string; readonly href: string }[];
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
 	/** The VAPID public key to subscribe this device to notices with (§5.7), or `null` when the host sends no push. */
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */
 	visitor: { app: string; siteKey?: string } | null;
-	/** What ui's generated forms and record views read per collection (its `CollectionExposure`), as this caller may use it. */
-	catalog: { readonly [collection: string]: Exposure };
+/** What ui's generated forms and record views read per collection (its `CollectionExposure`), as this caller may use it. */
+	catalog: { readonly [collection: string]: CollectionExposure };
 	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
 	aiUnconfigured?: true;
 	/** The schema fingerprint the page boots against: `$bolt` sends it as `Bolt-Contract` (L-BOLT-171). */
@@ -93,34 +103,17 @@ export function environmentLabel(environment: string | undefined): string | null
 	return e === '' || e === 'production' ? null : e === 'development' ? 'local' : e;
 }
 
-export type Exposure = {
-	label: readonly string[]; search?: readonly string[]; semantic?: true; fields: { readonly [f: string]: unknown };
-	/** The named similarity searches (§3.3.4) a reader may run, by their typed `input`: the toolbar's `/<name>` indexes. */
-	similarity?: { readonly [name: string]: { input: unknown; description: string } };
-	/** The collection's named queries the caller holds, by their typed `input` and `output`: the toolbar's `/<query>` indexes. */
-	queries?: { readonly [query: string]: { input: unknown; output: unknown; description: string } };
-	relations?: { readonly [fk: string]: { targets: readonly string[]; optional?: true; inverse?: string } };
-	/** hook:query — the many-relations a Where may cross here (`bolt.decode`, rule 11a). */
-	many?: readonly string[];
-	create?: { columns: readonly string[] }; update?: { columns: readonly string[] };
-	actions?: { readonly [action: string]: { input: unknown; target?: 'record'; description?: string } };
-	/** Fields this viewer reads only on some rows (rule 14): elsewhere they arrive `{ $masked: true }`; never a sort or filter key. */
-	masked?: readonly string[];
-	/** The view toolbar's info text: the collection's declared description, else its model's. */
-	description?: string;
-	/** The caller holds a delete arm. */
-	delete?: true;
-	/** The collection has an integration whose `<c>.integration` run the caller may start. */
-	integration?: true;
-	/** The `<c>.pipeline` feeds the caller may run (import: a create arm; export: a read arm), by their declared description. */
-	pipeline?: { import?: string; export?: string };
-};
+export type Exposure = CollectionExposure;
 
 /**
  * The caller's collections for ui: the model's label and search fields, the fields and one-relations the collection and
  * the caller's read arms expose (rule 14), the create/update columns and the actions the caller holds, and which of the
  * exposed fields are masked on some rows for this caller.
  */
+/** Model field kinds as the ui catalog (stored FieldKind is Kind structurally). */
+const fieldsOf = (entries: readonly (readonly [string, unknown])[]): Fields =>
+	Object.fromEntries(entries) as Fields;
+const kindOf = (k: unknown): Kind => k as Kind;
 /** The system collections the browser resolves as targets: the directory (pickers, `actor` operands) and stored files. */
 const TARGETS = ['sys_user', 'sys_team', 'sys_file'] as const;
 function pipelineOf(m: EngineManifest, a: Authority, c: string, reads: boolean): Pick<Exposure, 'pipeline'> {
@@ -170,12 +163,12 @@ export function exposure(m: EngineManifest, a: Authority): ShellBoot['catalog'] 
 		const many = !reads ? [] : Object.values(m.relationships).flatMap((r) => r.inverse !== undefined && [r.to].flat().includes(c) && relExposed(r.inverse) ? [r.inverse] : []); // hook:query
 		const masked = a.admin ? [] : Object.keys(ca?.masks ?? {}).filter((f) => fields.some(([x]) => x === f));
 		out[c] = { label: [model.label].flat(), ...(model.search === undefined ? {} : { search: model.search.text }),
-			...(model.search?.semantic === undefined ? {} : { semantic: true as const }), fields: Object.fromEntries(fields),
-			...(reads && Object.keys(spec.similarity ?? {}).length > 0 ? { similarity: Object.fromEntries(Object.entries(spec.similarity!).map(([n, x]) => [n, { input: x.input, description: x.description }])) } : {}),
+			...(model.search?.semantic === undefined ? {} : { semantic: true as const }), fields: fieldsOf(fields),
+			...(reads && Object.keys(spec.similarity ?? {}).length > 0 ? { similarity: Object.fromEntries(Object.entries(spec.similarity!).map(([n, x]) => [n, { input: fieldsOf(Object.entries(x.input)), description: x.description }])) } : {}),
 			...(relations.length === 0 ? {} : { relations: Object.fromEntries(relations) }), ...(many.length === 0 ? {} : { many }), // hook:query (many)
 			...Object.fromEntries(writes.map((v) => [v, { columns: columns(v) }])),
-			...(queries.length === 0 ? {} : { queries: Object.fromEntries(queries.map(([n, x]) => [n, { input: x.input, output: x.output, description: x.description }])) }),
-			...(actions.length === 0 ? {} : { actions: Object.fromEntries(actions.map(([n, x]) => [n, { input: x.input, ...(x.target === undefined ? {} : { target: x.target }), description: x.description }])) }),
+			...(queries.length === 0 ? {} : { queries: Object.fromEntries(queries.map(([n, x]) => [n, { input: fieldsOf(Object.entries(x.input)), output: kindOf(x.output), description: x.description }])) }),
+			...(actions.length === 0 ? {} : { actions: Object.fromEntries(actions.map(([n, x]) => [n, { input: fieldsOf(Object.entries(x.input)), ...(x.target === undefined ? {} : { target: x.target }), description: x.description }])) }),
 			...(masked.length === 0 ? {} : { masked }),
 			description: spec.description ?? model.description,
 			...(spec.delete !== undefined && (a.admin || (ca?.delete.length ?? 0) > 0) ? { delete: true } : {}),
@@ -188,7 +181,7 @@ export function exposure(m: EngineManifest, a: Authority): ShellBoot['catalog'] 
 		const arms = a.collections[c]?.read ?? [], model = SYSTEM.models[c]!, read = SYSTEM.collections[c]!.read.fields;
 		if (!a.admin && arms.length === 0) continue;
 		const readable = Object.entries(model.fields).filter(([f]) => (read === 'all' || read.includes(f)) && (a.admin || arms.some((x) => x.fields === 'all' || x.fields.includes(f))));
-		out[c] = { label: [model.label].flat(), fields: Object.fromEntries(readable) };
+		out[c] = { label: [model.label].flat(), fields: fieldsOf(readable) };
 	}
 	return out;
 }
@@ -223,14 +216,16 @@ export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean
 }
 
 /**
- * The `Content-Security-Policy` a document is served with: a `site: true` page may be framed by any website (made to be
- * embedded); every other page only by the workspace itself, so no other site can overlay it (clickjacking). `path` is the
- * workspace path (`/app/portal/book`), without a base.
+ * The `Content-Security-Policy` a document is served with: a `portal: true` page or any kiosk page
+ * may be framed by any website (made to be embedded); every other page only by the workspace itself,
+ * so no other site can overlay it (clickjacking). `path` is the workspace path (`/app/portal/book`),
+ * without a base.
  */
 export function framePolicy(m: ShellManifest, path: string): string {
 	const r = route(m, new URL(path, 'http://x'));
-	const site = r.kind === 'page' && appOf(m, r.app)?.pages[r.page]?.site === true;
-	return `frame-ancestors ${site ? '*' : "'self'"}`;
+	if (r.kind === 'kiosk') return 'frame-ancestors *';
+	const portal = r.kind === 'page' && appOf(m, r.app)?.pages[r.page]?.portal === true;
+	return `frame-ancestors ${portal ? '*' : "'self'"}`;
 }
 
 /** A member whose policy names a public app by name (never `*` or a group) opens it as themselves, not as its visitor. */
@@ -241,6 +236,36 @@ export const holdsPublic = (auth: Authority, app: string): boolean =>
 export function href(app: string, page?: string, record?: { collection: string; id: string }): string {
 	const path = `${APP_PREFIX}${app}${page === undefined ? '' : `/${page}`}`;
 	return record === undefined ? path : `${path}?record=${encodeURIComponent(record.collection)}/${encodeURIComponent(record.id)}`;
+}
+/** `bolt.kioskHref(kiosk, page?)`: `/kiosk/<kiosk>[/<page>]`. Kiosks take no record stack. */
+export function kioskHref(kiosk: string, page?: string): string {
+	return `${KIOSK_PREFIX}${kiosk}${page === undefined ? '' : `/${page}`}`;
+}
+
+const kioskOf = (m: ShellManifest, name: string) => (m.kiosks ?? {})[name] as KioskSpec | undefined;
+/** The kiosk declaration, or `undefined` (fail closed: unknown kiosks open to nobody). */
+export const kioskSpecOf = (m: ShellManifest, name: string): KioskSpec | undefined => kioskOf(m, name);
+/** A kiosk's open audience; absent `auth` is members-only. `'none'` needs no sign-in. */
+export const kioskAuthOf = (spec: KioskSpec | undefined): KioskAuth => spec?.auth ?? 'members';
+/**
+ * Whether `auth` may open kiosk `name` (`null`: signed out). `'none'` kiosks open for anyone;
+ * otherwise a member whose audience admits their kind and whose held policy's `capabilities.kiosks`
+ * names it; an administrator opens every kiosk.
+ */
+export function canOpenKiosk(m: ShellManifest, auth: Authority | null, name: string): boolean {
+	const spec = kioskOf(m, name);
+	if (spec === undefined) return false;
+	if (kioskAuthOf(spec) === 'none') return true;
+	if (auth === null || auth.actor.kind !== 'member') return false;
+	if (auth.admin) return true;
+	const audience = kioskAuthOf(spec);
+	if (audience !== 'all' && audience !== (auth.actor.external ? 'external' : 'members')) return false;
+	return (auth.capabilities.kiosks ?? []).some((c) => c === '*' || c === name);
+}
+/** The kiosk nav rows `auth` sees (signed-out callers pass `null`): open kiosks in name order. */
+export function kioskNav(m: ShellManifest, auth: Authority | null): { name: string; title: string; icon?: string; href: string }[] {
+	return Object.keys(m.kiosks ?? {}).filter((n) => canOpenKiosk(m, auth, n)).sort()
+		.map((n) => { const s = kioskOf(m, n)!; const page = Object.keys(s.pages)[0]!; return { name: n, title: s.title, ...(s.icon === undefined ? {} : { icon: s.icon }), href: kioskHref(n, page) }; });
 }
 
 /** The nav tree `auth` sees: top-level apps and groups in `workspace.apps` order, then by name; empty groups dropped. */
@@ -285,6 +310,7 @@ export function surfaces(m: ShellManifest, actor: EngineActor, admin: boolean, s
 
 export type Route =
 	| { kind: 'page'; app: string; page: string; record?: { collection: string; id: string } }
+	| { kind: 'kiosk'; kiosk: string; page: string }
 	| { kind: 'home' } | { kind: 'inbox' } | { kind: 'settings'; tab: SettingsTab } | { kind: 'studio'; tab?: StudioTab }
 	/** A moved page (`/runs` is Settings' Automations, `/logs` Studio's runtime log): the shell replaces the URL. */
 	| { kind: 'redirect'; to: string }
@@ -296,19 +322,32 @@ export type SettingsTab = typeof SETTINGS_TABS[number];
 /** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
 export const STUDIO_TABS = ['workbench', 'changes', 'live', 'mrs', 'runtime', 'operations'] as const;
 export type StudioTab = typeof STUDIO_TABS[number];
+const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
+	tabs.find((t) => t === value);
 
 /** The route a URL names. An app name is a folder path, so the longest declared app prefix wins. */
 export function route(m: ShellManifest, url: URL): Route {
 	const path = url.pathname.replace(/\/+$/, '') || '/';
 	const seg = path.split('/').slice(1).map(decodeURIComponent);
+	if (seg[0] === 'kiosk') {
+		const kiosk = seg[1] ?? '', spec = kioskOf(m, kiosk);
+		if (spec === undefined) return { kind: 'notFound' };
+		const pages = Object.keys(spec.pages);
+		const page = seg[2] ?? pages[0];
+		if (seg.length > 3 || page === undefined || !pages.includes(page)) return { kind: 'notFound' };
+		return { kind: 'kiosk', kiosk, page };
+	}
 	switch (seg[0]) {
 		case '': return { kind: 'home' };
 		case 'inbox': return seg.length === 1 ? { kind: 'inbox' } : { kind: 'notFound' };
 		case 'runs': return seg.length <= 2 ? { kind: 'redirect', to: `/settings/automations${seg[1] === undefined ? '' : `?run=${encodeURIComponent(seg[1])}`}` } : { kind: 'notFound' };
-		case 'settings': if (seg[1] === 'channels') return { kind: 'redirect', to: '/settings/envoy' }; return { kind: 'settings', tab: SETTINGS_TABS.includes(seg[1] as never) ? seg[1] as SettingsTab : 'people' };
+		case 'settings': if (seg[1] === 'channels') return { kind: 'redirect', to: '/settings/envoy' }; return { kind: 'settings', tab: named(SETTINGS_TABS, seg[1]) ?? 'people' };
 		case 'logs': return seg.length === 1 ? { kind: 'redirect', to: '/studio/runtime' } : { kind: 'notFound' };
-		case 'studio': return seg.length === 1 ? { kind: 'studio' }
-			: seg.length === 2 && STUDIO_TABS.includes(seg[1] as never) ? { kind: 'studio', tab: seg[1] as StudioTab } : { kind: 'notFound' };
+		case 'studio': {
+			if (seg.length === 1) return { kind: 'studio' };
+			const tab = named(STUDIO_TABS, seg[1]);
+			return seg.length === 2 && tab !== undefined ? { kind: 'studio', tab } : { kind: 'notFound' };
+		}
 		case 'sign-in': { const next = url.searchParams.get('next'); return { kind: 'signIn', ...(next?.startsWith('/') && !next.startsWith('//') ? { next } : {}) }; }
 		case 'invite': return seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'notFound' };
 		case 'app': break;
@@ -345,7 +384,8 @@ export function withRecords(url: URL, depth: number): URL {
 	return next;
 }
 
-/** What a signed-out viewer may open: public app pages, sign-in and invitation. */
+/** What a signed-out viewer may open: public app pages, `auth: 'none'` kiosks, sign-in and invitation. */
 export function isOpenRoute(m: ShellManifest, r: Route): boolean {
-	return r.kind === 'signIn' || r.kind === 'invite' || (r.kind === 'page' && audienceOf(appOf(m, r.app)) === 'public');
+	return r.kind === 'signIn' || r.kind === 'invite' || (r.kind === 'page' && audienceOf(appOf(m, r.app)) === 'public')
+		|| (r.kind === 'kiosk' && kioskAuthOf(kioskOf(m, r.kiosk)) === 'none');
 }

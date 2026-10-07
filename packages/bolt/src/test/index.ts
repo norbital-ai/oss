@@ -1,6 +1,6 @@
 // The test kit (§3.3 `/test`, §3.7): a workspace on PGlite (or a given `TenantDb`), compiled from a directory through
 // `bolt check` (`root`) or given as a manifest and guest, seeded by restore, with a settable clock, in-memory host fakes,
-// and `t.as(actor)` / `t.visitor(app)` / `t.signIn(email)` in the browser form (X-24: `act`, `start` and `upload`
+// and `t.as(actor)` / `t.visitor(app)` / `t.signIn(email)` in the browser form (X-24, L-BOLT-1010: `act`, `start` and `upload`
 // resolve the Outcome and never reject; `query`, `read` and `get` reject on failure). The engine carries every area
 // (callables, runs, integrations, pipelines, live) over the kit's clock and fakes; `t.runDue()` is one deadline wake.
 import { randomUUID } from 'node:crypto';

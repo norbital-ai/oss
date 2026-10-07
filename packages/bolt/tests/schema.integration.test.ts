@@ -211,8 +211,49 @@ describe('next schema on PGlite', () => {
 		expect(calls).toBe(1);
 		const w = await remote.write({ text: `update customers set name = $1 where id = $2 returning name`, params: ["O'Brien", U(2)] }, { tables: ['customers'], advisory: ['x'] });
 		expect(w.rows).toEqual([{ name: "O'Brien" }]);
-		expect(calls).toBe(2);
+		expect(calls).toBe(3);
 		await expect(remote.write({ text: `insert into customers (id, name) values ($1, 'Ada')`, params: [U(5)] })).rejects.toMatchObject({ sqlstate: '23505' });
 		expect((await db.read([{ text: 'select count(*)::int as n from customers', params: [] }]))[0]?.rows[0]?.n).toBe(2);
+	});
+
+	it('a locked write PREPAREs once then EXECs inside the lock batch', async () => {
+		await seed();
+		const texts: string[] = [];
+		const client: PgClient = {
+			async query(q) {
+				texts.push(q.text);
+				if (q.values !== undefined) return pg.query(q.text, q.values).then((r) => ({ rows: r.rows as never, rowCount: r.affectedRows ?? 0 }));
+				return (await pg.exec(q.text)).map((r) => ({ rows: r.rows as never, rowCount: r.affectedRows ?? 0 }));
+			},
+			release() {},
+		};
+		const remote = postgresDb({ connect: async () => client });
+		const sql = { text: `update customers set name = $1 where id = $2 returning name`, params: ['Eve', U(1)] };
+		const lock = { tables: ['customers'] as const };
+		expect((await remote.write(sql, lock)).rows).toEqual([{ name: 'Eve' }]);
+		expect(texts[0]).toMatch(/^prepare /i);
+		expect(texts[1]).toMatch(/execute /i);
+		expect(texts[1]).toMatch(/^begin/i);
+		expect((await remote.write({ ...sql, params: ['Fay', U(1)] }, lock)).rows).toEqual([{ name: 'Fay' }]);
+		expect(texts.filter((t) => /^prepare /i.test(t))).toHaveLength(1);
+	});
+
+	it('an unlocked write is a named extended-protocol statement', async () => {
+		await seed();
+		const seen: { name?: string; values?: (string | null)[] }[] = [];
+		const client: PgClient = {
+			async query(q) {
+				seen.push(q);
+				if (q.values !== undefined) return pg.query(q.text, q.values).then((r) => ({ rows: r.rows as never, rowCount: r.affectedRows ?? 0 }));
+				return (await pg.exec(q.text)).map((r) => ({ rows: r.rows as never, rowCount: r.affectedRows ?? 0 }));
+			},
+			release() {},
+		};
+		const remote = postgresDb({ connect: async () => client });
+		const w = await remote.write({ text: `update customers set name = $1 where id = $2 returning name`, params: ['Ada 2', U(1)] });
+		expect(w.rows).toEqual([{ name: 'Ada 2' }]);
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.name).toMatch(/^b/);
+		expect(seen[0]?.values).toEqual(['Ada 2', U(1)]);
 	});
 });

@@ -1,7 +1,8 @@
 // The node-postgres `TenantDb` (bolt-server). The host passes its `pg` Pool; bolt names only this shape, not the
-// package. `read` and `write` are one round trip each: several statements go as one simple-protocol string with the
-// parameters inlined as quoted literals (typed `unknown`, exactly as a text-format parameter is), which is the only way
-// node-postgres sends `BEGIN; LOCK …; <statement>; COMMIT` without four round trips (rules 12, 20, 26).
+// package. A single read and an unlocked write are named (extended protocol: parse/plan once per connection). Several
+// reads stay one simple-protocol string with parameters inlined as quoted literals. A locked write PREPAREs the
+// statement shape on the connection, then `BEGIN; LOCK …; EXECUTE …; COMMIT` as one simple-protocol round trip
+// (rules 12, 20, 26).
 import { createHash } from 'node:crypto';
 import { DbError, LIMITS, type Lock, type Rows, type Sql, type TenantDb } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
@@ -48,6 +49,8 @@ const named = (text: string): string => {
 	}
 	return name;
 };
+const ident = (name: string) => `"${name.replaceAll('"', '""')}"`;
+const prepared = new WeakMap<PgClient, Set<string>>();
 const rows = (r: PgResult): Rows => ({ rows: r.rows, affected: r.rowCount ?? r.rows.length });
 
 export function postgresDb(pool: PgPool): TenantDb {
@@ -79,6 +82,21 @@ export function postgresDb(pool: PgPool): TenantDb {
 	// named: each connection parses and plans a statement shape once, not per call
 	const single = (client: PgClient, s: Sql) => client.query({ text: s.text, name: named(s.text), values: s.params.map(param), types })
 		.then((r) => rows(Array.isArray(r) ? r[r.length - 1] as PgResult : r), (e: unknown) => { throw dbError(e); });
+	const prepare = async (client: PgClient, s: Sql): Promise<string> => {
+		const name = named(s.text);
+		const have = prepared.get(client) ?? new Set<string>();
+		if (have.has(name)) return name;
+		try {
+			await send(client, `prepare ${ident(name)} as ${s.text}`);
+		} catch (e) {
+			if (!(e instanceof DbError) || e.sqlstate !== '42P05') throw e;
+		}
+		have.add(name);
+		prepared.set(client, have);
+		return name;
+	};
+	const execute = (name: string, s: Sql) =>
+		s.params.length === 0 ? `execute ${ident(name)}` : `execute ${ident(name)}(${s.params.map(literal).join(', ')})`;
 	return {
 		read: (statements, signal) => call(signal, async (client) => {
 			if (statements.length === 1) return [await single(client, statements[0] as Sql)];
@@ -86,7 +104,10 @@ export function postgresDb(pool: PgPool): TenantDb {
 			return r.slice(1, -1).map(rows);
 		}),
 		write: (statement, lock?: Lock, signal?: AbortSignal) => call(signal, async (client) => {
-			const r = await batch(client, ['begin', ...lockStatements(lock), inline(statement), 'commit']);
+			const locks = lockStatements(lock);
+			if (locks.length === 0) return single(client, statement);
+			const name = await prepare(client, statement);
+			const r = await batch(client, ['begin', ...locks, execute(name, statement), 'commit']);
 			return rows(r[r.length - 2] as PgResult);
 		}),
 		transaction: (body, lock) => call(undefined, async (client) => {

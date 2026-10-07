@@ -21,8 +21,9 @@ class Build {
 	params: Json[] = [];
 	private n = 0;
 	readonly cat: Catalog; readonly bindings: Bindings; readonly authority: Authority | null; readonly caller: boolean;
-	constructor(cat: Catalog, bindings: Bindings, authority: Authority | null, caller: boolean, private readonly options: QuerySourceOptions = {}) {
-		this.cat = cat; this.bindings = bindings; this.authority = authority; this.caller = caller;
+	private readonly options: QuerySourceOptions;
+	constructor(cat: Catalog, bindings: Bindings, authority: Authority | null, caller: boolean, options: QuerySourceOptions = {}) {
+		this.cat = cat; this.bindings = bindings; this.authority = authority; this.caller = caller; this.options = options;
 	}
 	from(model: string): string { return q(this.options.sources?.get(model) ?? model); }
 	alias(): string { return `a${this.n++}`; }

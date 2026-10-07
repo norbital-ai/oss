@@ -96,9 +96,11 @@ export type CollectionKey = keyof Collections & string;
  * record view reads it, its create input, its filter and its sort.
  */
 export type RowOf<C> = C extends keyof Collections ? Collections[C]['row'] : Row;
+/** A collection's whole row as a record view reads it. */
 export type RecordOf<C> = C extends keyof Collections ? Collections[C]['record'] : Row;
 /** A collection's many-relations a view may name as a column (read with their labels, one statement). */
 export type ManyOf<C> = C extends keyof Collections ? Collections[C] extends { many: infer M extends string } ? M : never : never;
+/** A collection's create input. */
 export type InsertOf<C> = C extends keyof Collections ? Collections[C]['insert'] : Row;
 export type WhereOf<C> = C extends keyof Collections ? Collections[C]['where'] : Loose['collections'][string]['where'];
 export type OrderByOf<C> = C extends keyof Collections ? Collections[C]['orderBy'] : Loose['collections'][string]['orderBy'];

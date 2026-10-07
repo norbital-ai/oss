@@ -357,7 +357,7 @@ export function createBolt(config: BoltConfig) {
 			if ('error' in body) throw fail(body, res.status);
 			return body;
 		},
-		fileUrl: (ref: FileRef) => `${base}${PATHS.files}${encodeURIComponent(ref.id)}`,
+		fileUrl: (ref: { readonly id: string }) => `${base}${PATHS.files}${encodeURIComponent(ref.id)}`,
 		/** Decide, withdraw or view an approval request (§3.8) as the caller. */
 		approvals: {
 			process: (requestId: string, decision: { status: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED'; reason?: string }) =>

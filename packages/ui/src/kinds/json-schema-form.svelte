@@ -20,6 +20,7 @@ Edits JSON Schema inputs using the workspace datatype registry, segmented sectio
 	import Editor from './editor.svelte';
 	import Section from '../form/section.svelte';
 	import Button from '../primitives/button/button.svelte';
+	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { provideControls, uiText } from '../primitives/utils.js';
 	import { humanize } from '../views/model.js';
 	import { jsonSchemaGroups, jsonSchemaInitial, jsonSchemaKind, resolveJsonSchema } from './json-schema.js';
@@ -56,13 +57,24 @@ Edits JSON Schema inputs using the workspace datatype registry, segmented sectio
 		<Editor kind={{ kind: 'json' }} value={spec.const} {onChange} {name} id={controlId} readonly />
 		{#if !locked && JSON.stringify(value) !== JSON.stringify(spec.const)}<Button variant="outline" size="sm" disabled={controls.disabled} onclick={() => onChange(spec.const!)}>Use fixed value</Button>{/if}
 	{:else if spec.enum !== undefined && kind.kind !== 'enum' && !['allOf', 'anyOf', 'oneOf', 'if', 'then', 'else', 'not', 'dependentSchemas', 'patternProperties', 'prefixItems'].some((key) => key in spec)}
-		<select id={controlId} class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" disabled={controls.disabled || locked}
-			value={String(spec.enum.findIndex((v) => JSON.stringify(v) === JSON.stringify(value)))}
-			aria-invalid={errors?.has(name) ? 'true' : undefined}
-			onchange={(event) => { const index = Number(event.currentTarget.value); if (index >= 0) onChange(spec.enum![index]!); }}>
-			<option value="-1" disabled>Select a value</option>
-			{#each spec.enum as option, index}<option value={String(index)}>{typeof option === 'string' ? option : JSON.stringify(option)}</option>{/each}
-		</select>
+		{@const selected = spec.enum.findIndex((v) => JSON.stringify(v) === JSON.stringify(value))}
+		<Combobox
+			id={controlId}
+			value={selected >= 0 ? String(selected) : null}
+			placeholder="Select a value"
+			disabled={controls.disabled}
+			readonly={locked}
+			invalid={errors?.has(name)}
+			options={spec.enum.map((option, index) => ({
+				value: String(index),
+				label: typeof option === 'string' ? option : JSON.stringify(option)
+			}))}
+			onChange={(v) => {
+				if (v === null) return;
+				const index = Number(v);
+				if (index >= 0) onChange(spec.enum![index]!);
+			}}
+		/>
 
 	{:else if kind.kind === 'object'}
 		{#each jsonSchemaGroups(spec, document) as group, index (`${group.advanced}:${group.title}`)}

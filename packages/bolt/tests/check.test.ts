@@ -229,11 +229,41 @@ export default { description: 'o', label: 'title', search: { text: ['title'], se
 		).toEqual(['src/access/+applicant.policy.ts', 'src/access/+kiosk.policy.ts']);
 	});
 
+	it('checks a kiosk: its policies exist, auth is known, pages are listed, and an open kiosk holds visitor-shaped grants', async () => {
+		const base = {
+			'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
+			'src/data/model/openings/+model.ts': `export default { description: 'o', label: 'title', fields: { title: { kind: 'text' } } };`,
+			'src/data/collection/openings/+collection.ts': `export default { name: 'openings', spec: { read: { fields: 'all' },
+				create: { input: { columns: ['title'] } }, update: { input: { columns: ['title'] } } } };`,
+			'src/access/+lobby.policy.ts': `export default { description: 'l', grants: { openings: {
+				read: { where: {}, fields: ['id', 'title'] }, update: { where: {}, fields: ['title'] } } } };`,
+		};
+		const bad = await check(workspace({ ...base,
+			'src/kiosk/lobby/+kiosk.ts': `export default { name: 'lobby', spec: { title: 'L', description: 'L', icon: 'x',
+				auth: 'none', policies: ['lobby', 'ghost'], pages: { welcome: { title: 'W' } } } };`,
+			'src/kiosk/lobby/+welcome.page.svelte': `<p>hi</p>`,
+			'src/kiosk/broken/+kiosk.ts': `export default { name: 'broken', spec: { title: 'B', description: 'B', icon: 'x',
+				auth: 'anyone', policies: ['lobby'], pages: {} } };`,
+		}));
+		const codes = [...new Set(bad.errors.map((e) => e.code))].sort();
+		expect(codes).toEqual(['access/kiosk-grant', 'kiosk/auth', 'kiosk/pages', 'kiosk/policy']);
+		expect(bad.errors.find((e) => e.code === 'kiosk/policy')!.message).toContain("'ghost'");
+		const good = await check(workspace({ ...base,
+			'src/access/+clerk.policy.ts': `export default { description: 'c', grants: { openings: { read: { fields: ['title'] } } },
+				capabilities: { kiosks: ['desk'] } };`,
+			'src/kiosk/desk/+kiosk.ts': `export default { name: 'desk', spec: { title: 'D', description: 'D', icon: 'x',
+				auth: 'members', policies: ['clerk'], pages: { home: { title: 'H' } } } };`,
+			'src/kiosk/desk/+home.page.svelte': `<p>hi</p>`,
+		}));
+		expect(good.errors.filter((e) => e.code.startsWith('kiosk') || e.code === 'access/kiosk-grant')).toEqual([]);
+	});
+
 	it('evaluates declarations with the guest globals (rule 6)', async () => {
 		const r = await check(
 			workspace({
 				'src/+workspace.ts': `const n = new TextEncoder().encode(new URL('https://a.test/x').href).length;
-export default structuredClone({ tz: 'UTC', locale: 'en', n: n + new TextDecoder().decode(new Uint8Array([1])).length + typeof queueMicrotask.length });`
+const f = fileRef({ id: '1', name: 'a.txt', mime: 'text/plain' });
+export default structuredClone({ tz: 'UTC', locale: 'en', n: n + new TextDecoder().decode(new Uint8Array([1])).length + typeof queueMicrotask.length, file: f.id });`
 			})
 		);
 		expect(r.errors).toEqual([]);

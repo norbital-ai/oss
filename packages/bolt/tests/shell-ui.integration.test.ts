@@ -353,4 +353,27 @@ describe('workspace boot error recovery', () => {
 		expect(target.textContent).not.toContain('could not be reached');
 		expect([...target.querySelectorAll('button')].some((button) => button.textContent?.includes('Try again'))).toBe(true);
 	});
+
+	it('a signed-out /sign-in keeps the access card, not the workspace-failure screen', async () => {
+		history.replaceState(null, '', '/sign-in');
+		const target = document.body.appendChild(document.createElement('div'));
+		const workspace = { name: 'Acme', handle: 'acme', locale: 'en', tz: 'UTC' };
+		const fetch = (async (input: RequestInfo | URL) => {
+			const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, ORIGIN);
+			if (url.pathname === '/__bolt/session/methods') {
+				return new Response(JSON.stringify({ value: { email: true, phone: false, whatsapp: false, signup: [], locale: 'en' } }), {
+					status: 200, headers: { 'content-type': 'application/json' }
+				});
+			}
+			return new Response(JSON.stringify({ error: { code: 'unauthenticated', message: 'Sign in first.', workspace } }), {
+				status: 401, headers: { 'content-type': 'application/json' }
+			});
+		}) as typeof globalThis.fetch;
+		const v = mountShell(target, { manifest: manifest as never, pages: {}, fetch });
+		views.push(() => { void unmount(v); target.remove(); });
+		await until(() => target.querySelector('#bolt-email') !== null);
+		expect(target.textContent).not.toContain('Unable to open the workspace');
+		expect(target.textContent).toContain('Sign in');
+		expect(target.textContent).toContain('Acme');
+	});
 });

@@ -1,13 +1,13 @@
 // `@norbital-ai/bolt/test/browser` (§3.7, G5): `sweep(t)` mounts the real workspace shell in a DOM test environment
-// (happy-dom or a browser) over the kit's workspace, once per policy as a staff member, once per policy as an external
-// member when an app admits externals, and once per public app as its visitor, and opens every page that actor's
+// (happy-dom or Vitest browser mode) over the kit's workspace, once per policy as a staff member, once per policy as an
+// external member when an app admits externals, and once per public app as its visitor, and opens every page that actor's
 // navigation offers plus their shell surfaces. A page that logs a console error or throws, or a live view the host
 // refuses as over budget (rule 64: `subscriptionTooLarge`, `tooManySubscriptions`, `cellBudget`) or as malformed
 // (`invalid`: a read the page itself built wrong, which a browser only shows as a view's error text), is a finding;
 // any finding rejects the sweep with the list.
-import { createRequire } from 'node:module';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+//
+// Real Chromium is Vitest browser mode: `@vitest/browser-playwright` + `page` from `vitest/browser`
+// (https://vitest.dev/guide/browser/). Headless unless `PLAYWRIGHT_HEADED=1` or `--browser.headless=false`.
 import { unmount } from 'svelte';
 import type { Authority, TransportPort } from '../engine/contracts.ts';
 import { RateWindows } from '../engine/access/rate.ts';
@@ -192,22 +192,4 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 	if (report.findings.length > 0)
 		throw Object.assign(new Error(`sweep found ${report.findings.length} problem(s):\n${report.findings.map((f) => `  ${f.who} ${f.path} ${f.kind}: ${f.message}`).join('\n')}`), { report });
 	return report;
-}
-
-/** `PLAYWRIGHT_HEADED=1` opts a run into visible windows (the visibility rows); anything else is headless (L-BOLT-1011). */
-export const headed = (): boolean => process.env['PLAYWRIGHT_HEADED'] === '1';
-
-/**
- * Chromium for a workspace's end-to-end tests, from the workspace's own `playwright` (a devDependency the kit never
- * installs): headless unless `headed()` or `{ headed }`, and loopback only — every hostname but `localhost` resolves to
- * nothing, so a page under test reaches no network. `B` is the caller's `import('playwright').Browser`.
- */
-export async function chromium<B = unknown>(o: { headed?: boolean } = {}): Promise<B> {
-	let pw: { chromium: { launch(options: { headless: boolean; args: string[] }): Promise<B> } };
-	try {
-		pw = await import(pathToFileURL(createRequire(join(process.cwd(), 'package.json')).resolve('playwright')).href) as typeof pw;
-	} catch {
-		throw new Error('test/browser: playwright is not installed in this workspace (add it as a devDependency, then `playwright install chromium`)');
-	}
-	return pw.chromium.launch({ headless: !(o.headed ?? headed()), args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1'] });
 }

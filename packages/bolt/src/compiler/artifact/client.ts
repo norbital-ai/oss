@@ -70,9 +70,10 @@ ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 
 /** Builds `<out>/index.html` and `<out>/assets/**`; returns the entry chunk and stylesheets. */
 export async function buildClient(root: string, files: readonly Discovered[], m: EngineManifest, out: string, title: string): Promise<{ entry: string; css: string[] }> {
-	const pages = files.filter((f) => f.role === 'page').map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
+	const pages = [...files.filter((f) => f.role === 'page').map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`),
+		...files.filter((f) => f.role === 'kiosk_page').map((f) => `${key(`kiosk/${f.name}`)}: () => import(${key(join(root, f.path))})`)];
 	const sessions = files.filter((f) => f.role === 'session');
-	const shell = { workspace: m.workspace, agent: m.agent, apps: m.apps, groups: m.groups ?? {} };
+	const shell = { workspace: m.workspace, agent: m.agent, apps: m.apps, kiosks: m.kiosks ?? {}, groups: m.groups ?? {} };
 	// hook:ui-kit — the client stylesheet: ui's tokens + Tailwind, scanning the shell and the workspace's pages
 	// generated inputs sit at a fixed path under the workspace, so a rebuild is byte for byte the same
 	const gen = join(root, '.norbital', 'cache', 'client'), styles = join(gen, 'client.css');

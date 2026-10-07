@@ -5,7 +5,7 @@
 import type { ActionName, InputSel, QueryName } from '../ctx.ts';
 import type { Checked, Exact } from '../fields.ts';
 import type {
-	AppName, AutomationName, CollectionName, Columns, Direction, FieldName, HostToolName, McpName, NamesPart, OneRels,
+	AppName, AutomationName, CollectionName, Columns, Direction, FieldName, HostToolName, KioskName, McpName, NamesPart, OneRels,
 	ReadField, ReadableName, SkillName, TeamName
 } from '../names.ts';
 import type { NonEmpty, Rate } from '../values.ts';
@@ -100,7 +100,7 @@ export type PolicySpec<P = unknown> = {
 	description: string;
 	grants: { [C in Grantable]?: C extends Identity ? IdentityGrant<C> : Grant<C, unknown extends P ? unknown : Part<Grants<P>, C>> };
 	automations?: readonly StartableName[];
-	capabilities?: { apps?: readonly (AppName | GroupName)[]; /* hook:access — a group covers its apps */ tools?: readonly HostToolName[]; mcp?: readonly McpName[]; skills?: readonly SkillName[] };
+	capabilities?: { apps?: readonly (AppName | GroupName)[]; /* hook:access — a group covers its apps */ kiosks?: readonly KioskName[]; tools?: readonly HostToolName[]; mcp?: readonly McpName[]; skills?: readonly SkillName[] };
 	limits?: { [K in LimitKey]?: K extends EnvoyKey ? EnvoyLimit : Limit };
 };
 type PolicyBase = {

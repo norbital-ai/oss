@@ -117,7 +117,7 @@ export function lowerRead(m: EngineManifest, member: string, args: readonly Json
 		case 'get': return ir.get(cat, c, String(a), obj(b));
 		case 'aggregate': return ir.aggregate(cat, c, obj(a));
 		case 'similar': return a !== null && typeof a === 'object' ? ir.semantic(cat, c, obj(a)) : ir.similar(cat, c, String(a), (b ?? null) as Json, obj(d)); // L-BOLT-123: `{ to }` is search.semantic
-		case 'after': return { kind: 'after', collection: c, where: ir.where(cat, c, a),...(b===undefined?{}:{query:ir.read(cat,c,{...obj(b),where:a})}) };
+		case 'after': return { kind: 'after', collection: c, where: ir.where(cat, c, a),...(b===undefined?{}:{query:ir.read(cat,c,{...obj(b),where:a}) as Extract<ReadIR, { kind: 'read' }>}) };
 		case 'history': return { kind: 'history', collection: c, id: String(a), ...(b === undefined || b === null ? {} : { at: historyAt(b) }) }; // hook:reads — the browser's `at` may be null
 		case 'query': return { kind: 'query', collection: c, query: String(a), input: (b ?? null) as Json };
 	}

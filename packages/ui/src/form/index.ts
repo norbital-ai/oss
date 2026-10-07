@@ -10,5 +10,5 @@ export const Form = FormView as unknown as {
 	<const S extends FormSource>(internal: unknown, props: FormProps<S>): {};
 };
 export type { FormProps, FormSource };
-export { FormState, useForm } from './form-state.svelte.js';
+export { FormState, idsOf, useForm } from './form-state.svelte.js';
 export type { Outcome, Row } from './draft.js';

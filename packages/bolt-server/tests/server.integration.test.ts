@@ -44,7 +44,7 @@ function writeFixture(dir = artifact, m: EngineManifest = manifest, g = guest): 
 	writeFileSync(join(dir, 'assets', 'thumbnail.svg'), '<svg/>');
 	// the recorded digests the reader verifies (L-BOLT-903)
 	const body = { format: 1, contract: CONTRACT, handle: 'acme', name: 'Acme', schema: fingerprint(schemaSlice(m)),
-		transforms: [], client: { entry: '', css: [] }, hashes: { manifest: sha(text), guest: sha(g), client: treeHash(join(dir, 'client')) } };
+		transforms: [], projections: [], client: { entry: '', css: [] }, hashes: { manifest: sha(text), guest: sha(g), client: treeHash(join(dir, 'client')) } };
 	writeFileSync(join(dir, 'artifact.json'), JSON.stringify({ ...body, hash: artifactHash(dir, body as Parameters<typeof artifactHash>[1]) }));
 }
 const env = (over: { [k: string]: string } = {}) => ({ BOLT_ARTIFACT: artifact, BOLT_PORT: '0', BOLT_PUBLIC_URL: 'http://localhost:3100',

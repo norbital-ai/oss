@@ -107,6 +107,8 @@ export type EngineManifest = {
 	envoys: { readonly [envoy: string]: Data };
 	mcp: { readonly [server: string]: Data };
 	apps: { readonly [app: string]: Data };
+	/** `+kiosk.ts` literals: standalone kiosks with their assigned policies; absent = none declared. */
+	kiosks?: { readonly [kiosk: string]: Data };
 	/** `+group.ts` literals: nav groups of apps. */ // hook:shell
 	groups?: { readonly [group: string]: Data };
 	customFields: { readonly [field: string]: Data };
@@ -116,16 +118,16 @@ export type EngineManifest = {
 
 /** Projects P1's loaded manifest into the engine's: `{ name, spec }` and automation wrappers give their literal. */
 export function engineManifest(m: Manifest): EngineManifest {
-	const specs = <T>(part: Record<string, unknown>) => Object.fromEntries(Object.entries(part).map(([k, v]) =>
+	const specs = <T>(part: Record<string, unknown> | undefined) => Object.fromEntries(Object.entries(part ?? {}).map(([k, v]) =>
 		[k, (v !== null && typeof v === 'object' && 'spec' in v ? v.spec : v) as T]));
-	const one = (part: Record<string, unknown>) => part[''];
+	const one = (part: Record<string, unknown> | undefined) => part?.[''];
 	return {
 		workspace: one(m.workspace) as WorkspaceData,
 		models: specs(m.model), relationships: (one(m.relationship) ?? {}) as EngineManifest['relationships'],
 		collections: specs(m.collection), integrations: specs(m.integration), pipelines: specs(m.pipeline),
 		policies: specs(m.policy), teams: (one(m.team) ?? {}) as EngineManifest['teams'], automations: specs(m.automation),
 		channelTypes: specs(m.channel), channels: {}, connections: specs(m.connection), envoys: {}, mcp: specs(m.mcp),
-		apps: specs(m.app), groups: specs(m.group), customFields: specs(m.custom_field), // hook:shell (groups)
+		apps: specs(m.app), kiosks: specs(m.kiosk), groups: specs(m.group), customFields: specs(m.custom_field), // hook:shell (groups)
 		agent: { ...(m.agent[''] === undefined ? {} : { internal: m.agent[''] as string }),
 			...(m.agent_external[''] === undefined ? {} : { external: m.agent_external[''] as string }), skills: specs(m.skill) },
 	};
@@ -265,9 +267,11 @@ export type LimitRule = { key: string; rate: Rate; per: 'actor' | 'ip' | 'sender
 /** Compiled once per `key` = (actor, assignment revision, team-graph revision, release) (rule 37). */
 export type Authority = {
 	key: string; actor: EngineActor; admin: boolean; policies: readonly string[];
+	/** Set when compiled for a kiosk's requests: the kiosk whose assigned policies this reads and writes as. */
+	kiosk?: string;
 	collections: { readonly [collection: string]: CollectionAuthority };
 	automations: readonly string[];
-	capabilities: { apps: readonly string[]; tools: readonly string[]; mcp: readonly string[]; skills: readonly string[] };
+	capabilities: { apps: readonly string[]; kiosks?: readonly string[]; tools: readonly string[]; mcp: readonly string[]; skills: readonly string[] };
 	limits: readonly LimitRule[];
 	/** Operand values: `actor.teamTree`, `actor.scopes('<policy>')`. */
 	teamTree: readonly string[]; scopes: { readonly [policy: string]: readonly string[] };

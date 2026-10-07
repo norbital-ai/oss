@@ -92,7 +92,7 @@ function operand(info: ModelInfo, f: FieldInfo, o: Operand, path: string, list: 
 	}
 	const a = o.actor;
 	// an actor id is text too: ported grants compare `{ actor: 'id' }` with a text column (policy matrix, L-BOLT-229)
-	if (a === 'email' ? !f.email : a === 'phone' ? !f.phone : a === 'id' ? f.of !== 'sys_user' && f.kind !== 'text' : a === 'party' ? f.kind !== 'id' : true) bad();
+	if (a === 'email' ? !f.email : a === 'phone' ? !f.phone : a === 'id' ? f.of !== 'sys_user' && f.kind !== 'text' : a === 'party' ? f.kind !== 'id' : a === 'visitor' ? f.kind !== 'text' : true) bad();
 	return o;
 }
 const val = (info: ModelInfo, f: FieldInfo, v: unknown, path: string, kind?: string): Arg =>

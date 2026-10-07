@@ -7,6 +7,7 @@ export { team } from './decl/access/team.ts';
 export { relationship } from './decl/relationship.ts';
 export { mcp } from './decl/runtime/agent.ts';
 export { app, group, messages, workspace } from './decl/runtime/app.ts';
+export { kiosk } from './decl/runtime/kiosk.ts';
 export { automation } from './decl/runtime/automation.ts';
 export { channel } from './decl/runtime/channel.ts';
 export { connection } from './decl/runtime/connection.ts';
@@ -30,8 +31,8 @@ export type { FieldCommon, FieldKind, InputFields, InputKind, InputOf, Value, Va
 export type { ComputedKind, Expr } from './decl/model.ts';
 export type {
 	AppName, AutomationName, BtreeField, ChannelName, CollectionName, CustomFieldName, FileField, PeriodField, RelName,
-	RelPath, RequiredBtreeField, SearchableField, TextField, VectorField, EnvoyName, FieldName, HostToolName, McpName,
-	ModelName, Masked, Names, PersonChannelName, PolicyName, ReadField, RelationshipSpec, Row, SkillName, TeamName
+	RelPath, RequiredBtreeField, SearchableField, TextField, VectorField, EnvoyName, FieldName, HostToolName, KioskName, McpName,
+	ModelName, Masked, Names, PersonChannelName, PolicyName, ReadField, ReadableName, RelationshipSpec, Row, SkillName, TeamName
 } from './decl/names.ts';
 export type { Check, Verify } from './decl/verify.ts';
 export type {
@@ -47,7 +48,7 @@ export type {
 	ImageFacts, Notice, RunHandle, RunRow, SpeakOptions, SpeechFormat, TranscribeOptions, Transcript, TranscriptSegment, Unavailable
 } from './decl/runtime/facilities.ts';
 export type { ConflictRule, IntegrationCtx, IntegrationSource, Remote, RemoteKey } from './decl/runtime/integration.ts';
-export type { AiModelClass, ChildName, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, EnvName, PageName, Transport } from './decl/runtime/names.ts';
+export type { AiModelClass, ChildName, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, EnvName, KioskPageName, PageName, Transport } from './decl/runtime/names.ts';
 export type { BankReader, SeedSource } from './compiler/artifact/seed.ts'; // hook:cli — X-15's seed reader types (§3.3.10)
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
 

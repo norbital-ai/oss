@@ -9,9 +9,9 @@
 	import { SECTIONS, type Section, type StudioView } from '../studio.ts';
 
 	let { view, onopen, t }: { view: StudioView; onopen: (path: string) => void; t: (key: string) => string } = $props();
-	const SECTION_TITLES: { readonly [s in Section]: string } = { collections: 'Collections', pipelines: 'Pipelines', apps: 'Apps', policies: 'Policies',
+	const SECTION_TITLES: { readonly [s in Section]: string } = { collections: 'Collections', pipelines: 'Pipelines', apps: 'Apps', kiosks: 'Kiosks', policies: 'Policies',
 		channelTypes: 'Channel types', automations: 'Automations', remotes: 'Remotes', environment: 'Environment' };
-	const ICONS: { readonly [s in Section]: string } = { collections: 'lucide:database', pipelines: 'lucide:workflow', apps: 'lucide:layout-grid',
+	const ICONS: { readonly [s in Section]: string } = { collections: 'lucide:database', pipelines: 'lucide:workflow', apps: 'lucide:layout-grid', kiosks: 'lucide:monitor',
 		policies: 'lucide:shield-check', channelTypes: 'lucide:radio', automations: 'lucide:zap', remotes: 'lucide:plug', environment: 'lucide:key-round' };
 	let section = $state<string>('collections');
 </script>

@@ -141,6 +141,10 @@ type OptionsOf<N> = N extends `${string}.upsert` ? [options: ActOptions & { onCo
 
 // ── outcomes (rule 32, §3.3.9) ──
 type Written = readonly { collection: CollectionName; id: string; revision: number }[];
+/** Rows a write reports, branded as the callable's collection (`'<c>.<verb>'`). */
+type WrittenOf<N> = N extends `${infer C extends CollectionName}.${string}`
+	? readonly { readonly collection: C; readonly id: Id<C>; readonly revision: number }[]
+	: Written;
 /**
  * The engine's own refusal codes (rule 32), beside an authored `refused`: grants, constraints, budgets, rate limits and stale requests.
  */
@@ -156,9 +160,9 @@ export type PlatformRefusal = 'approvalHeld' | 'locked' | 'readBudgetExceeded' |
 /**
  * The write is in the database: `output` is the action's result, `records` every row written with its new revision.
  */
-export type Committed<O> = { kind: 'committed'; output: O; records: Written };
+export type Committed<O, N = string> = { kind: 'committed'; output: O; records: WrittenOf<N> };
 /** The write is held for approval (§3.8): `requestId` names the approval request, `records` the held rows. */
-export type PendingApproval = { kind: 'pendingApproval'; requestId: RequestId; records: Written };
+export type PendingApproval<N = string> = { kind: 'pendingApproval'; requestId: RequestId; records: WrittenOf<N> };
 /**
  * The write was refused: `code` is `refused` for an authored refusal or a platform code, with the message and the field or rows it names.
  */
@@ -174,7 +178,7 @@ export type Unknown = { kind: 'unknown'; invocation: string };
 /**
  * Every result of a write (rule 32): `committed`, `pendingApproval`, `refused`, `conflict` or `unknown`, told apart by `kind`.
  */
-export type Outcome<O> = Committed<O> | PendingApproval | Refused | Conflict | Unknown;
+export type Outcome<O, N = string> = Committed<O, N> | PendingApproval<N> | Refused | Conflict | Unknown;
 /**
  * `ctx.act` in an action or automation: runs a callable with its typed input. The call throws on `refused`, `conflict` and `unknown`
  * and returns a committed or held write; `ctx.act.try` returns every `Outcome` instead.
@@ -183,8 +187,8 @@ export type Outcome<O> = Committed<O> | PendingApproval | Refused | Conflict | U
  */
 export interface Act {
 	/** Throws `Refused | Conflict | Unknown`; a held write is a success. */
-	<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, ...options: NoInfer<OptionsOf<N>>): Promise<Committed<ActOutput<N>> | PendingApproval>;
-	try<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, ...options: NoInfer<OptionsOf<N>>): Promise<Outcome<ActOutput<N>>>;
+	<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, ...options: NoInfer<OptionsOf<N>>): Promise<Committed<ActOutput<N>, N> | PendingApproval<N>>;
+	try<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, ...options: NoInfer<OptionsOf<N>>): Promise<Outcome<ActOutput<N>, N>>;
 }
 
 // ── contexts ──
@@ -303,7 +307,7 @@ export interface PageBolt {
 	/** Keeps a read current: re-read when the rows it depends on change (or `on` those collections, or `every` interval); a reactive value in a page. */
 	live<T>(q: Q<T>, options?: { every?: string; on?: readonly CollectionName[] }): Live<T>;
 	/** Never rejects: a refusal is a business answer (rule 32). */
-	act<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, options?: { key?: string; once?: string }): Promise<Outcome<ActOutput<N>>>;
+	act<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, options?: { key?: string; once?: string }): Promise<Outcome<ActOutput<N>, N>>;
 	/** Starts an automation now with its typed input; the handle's `id` is the run's id before the outcome settles. */
 	start<const A extends string>(automation: Is<A, StartableName>, input: NoInfer<StartInput<A>>): PromiseLike<Outcome<unknown>> & { readonly id: Id<'sys_run'> };
 	/** `accept` and `max` are checked before bytes are stored. */

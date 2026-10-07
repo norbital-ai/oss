@@ -7,6 +7,8 @@ import type { Json } from '../../decl/values.ts';
 import { LIMITS, type AiMessage, type AiPort, type AiRequest, type AiResponse, type CrossAnswer, type CrossCall } from '../contracts.ts';
 import { decodeInput } from '../callables/decode.ts';
 import { bound } from './context.ts';
+import { Validator } from '@cfworker/json-schema';
+import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
 /** Rule 72: a platform budget checked before the provider's own limit. */
 export const MODEL_FILES = { count: 8, bytes: 20 * 1024 * 1024 } as const;
@@ -151,32 +153,85 @@ export function jsonSchemaOf(k: Kind): Json {
 
 /**
  * An inference has no step budget: it goes on until it answers (a structured one, until a submission matches). What ends a
- * runaway is this ceiling on the whole call, and the stall guards (an empty or prose reply 3 times running).
+ * runaway is this ceiling, per batch of files the model reads (MODEL_FILES), and the stall guards (an empty or prose reply 3
+ * times running).
  */
 export const INFER_MS = 30 * 60_000;
+/** The ceiling on one `sys_2.infer` call: INFER_MS for every batch of files it reads. ponytail: counts batches by file count only; a byte-split batch adds a step under the same ceiling. */
+export const inferMs = (args: readonly Json[]): number =>
+	INFER_MS * Math.max(1, Math.ceil(((args[0] as { files?: unknown[] } | null)?.files?.length ?? 0) / MODEL_FILES.count));
+
+/** A rule the answer must hold beside its JSON Schema: CEL over the schema's top-level properties, and what to say when it fails. */
+type Rule = { expression: string; message: string };
+/** `output` as a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the logic, instead of a declared kind. */
+type SchemaOutput = { jsonSchema: Json; rules?: readonly Rule[] };
+const isSchemaOutput = (o: unknown): o is SchemaOutput => o !== null && typeof o === 'object' && 'jsonSchema' in o;
+
+/**
+ * A checker for a schema output: the schema's own violations as JSON Pointers into the answer, then every rule that
+ * evaluates to false. A rule that cannot evaluate (it reads a part the answer does not hold) does not apply. A rule that
+ * does not compile is the caller's fault, returned as a string before any model call.
+ */
+export function schemaChecker(output: SchemaOutput): string | ((value: Json) => string[]) {
+	const schema = output.jsonSchema as Record<string, unknown>;
+	const validator = new Validator(schema as never, '2020-12', false);
+	const properties = Object.keys((schema['properties'] as object | undefined) ?? {});
+	const scope = context(Object.fromEntries(properties.map((p) => [p, { kind: 'json', optional: true } as const])), { numbers: 'float' });
+	const rules: { rule: Rule; program: Exclude<ReturnType<typeof compile>, { error: string }> }[] = [];
+	for (const rule of output.rules ?? []) {
+		const program = compile(scope, rule.expression, 'bool');
+		if ('error' in program) return `rule "${rule.message}" (${rule.expression}): ${program.error}`;
+		rules.push({ rule, program });
+	}
+	return (value) => {
+		// a container's error repeats its children's; the leaves name what to patch
+		const shape = validator.validate(value).errors
+			.filter((e) => !['properties', 'items', 'prefixItems', 'additionalProperties', 'allOf', '$ref', 'dependentSchemas'].includes(e.keyword))
+			.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`);
+		const held = (value ?? {}) as Record<string, unknown>;
+		const broken = rules.filter(({ program }) => {
+			try { return evaluate(program, Object.fromEntries(properties.map((p) => [p, held[p] ?? null]))) === false; }
+			catch { return false; }
+		}).map(({ rule }) => `rule broken: ${rule.message} (${rule.expression})`);
+		return [...new Set(shape), ...broken];
+	};
+}
 
 /**
  * `ctx.ai.sys_2.infer` for automations (rule 63, L-BOLT-371/372): a prompt, optional files and an `output`, continued
- * across cut steps with no step budget (INFER_MS bounds the whole call). Files are FileRefs the host loads. A structured `output` is
- * built, not written in one piece: the model edits a draft with `patch` (JSON Patch) as it finds each part, and hands it
- * in with `submit`. A submission is decoded against `output`; one that does not match gets every offending field back and
- * the loop goes on until one matches. With `tools` (host tools the
- * engine resolved under the run's policies) the model may call them too. An empty (reasoning-only) reply is asked to
- * continue, at most 3 times running.
+ * across cut steps with no step budget (INFER_MS per batch bounds the call). Files are FileRefs the host loads. A
+ * structured `output` — a declared kind, or `{ jsonSchema, rules }` — is built, not written in one piece: the model edits a
+ * draft with `patch` (JSON Patch) as it finds each part, and hands it in with `submit`. A submission is checked against
+ * `output`; one that does not match gets every offending field (and broken rule) back and the loop goes on until one
+ * matches. More files than one model request carries (MODEL_FILES) are read in batches into the same draft: each batch
+ * patches what its files add, and only the last submission is checked. With `tools` (host tools the engine resolved under
+ * the run's policies) the model may call them too. An empty (reasoning-only) reply is asked to continue, at most 3 times
+ * running.
  */
 export function inferFacility(ai: AiPort | undefined, options: { load?: (fileId: string, signal: AbortSignal) => Promise<{ mime: string; bytes: Uint8Array }>; wallMs?: number } = {}) {
 	return async (call: Extract<CrossCall, { op: 'facility' }>, signal: AbortSignal, tools: readonly InferTool[] = []): Promise<CrossAnswer> => {
 		if (call.facility !== 'ai' || call.method !== 'sys_2.infer') return { ok: false, error: { kind: 'unavailable', facility: `ai.${call.method}`, reason: 'not an agent facility' } };
-		const a = (call.args[0] ?? {}) as { model?: string; system?: string; prompt?: string; files?: { id: string }[]; output?: Kind };
+		const a = (call.args[0] ?? {}) as { model?: string; system?: string; prompt?: string; files?: { id: string }[]; output?: Kind | SchemaOutput };
 		const invalid = (message: string): CrossAnswer => ({ ok: false, error: { kind: 'invalid', message } });
-		let files: { mime: string; bytes: Uint8Array }[] = [];
-		if ((a.files ?? []).length > 0) {
-			if (options.load === undefined) return { ok: false, error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' } };
-			files = await Promise.all(a.files!.map((f) => options.load!(f.id, signal)));
+		const refs = a.files ?? [];
+		if (refs.length > 0 && options.load === undefined) return { ok: false, error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' } };
+		const schemaOut = isSchemaOutput(a.output) ? a.output : undefined;
+		const out = schemaOut === undefined && a.output !== undefined && (a.output as Kind).kind !== 'text' ? a.output as Kind : undefined;
+		const structured = schemaOut !== undefined || out !== undefined;
+		if (!structured && refs.length > MODEL_FILES.count) return invalid(`a text answer reads at most ${MODEL_FILES.count} files; ask for a structured output to read more`);
+		let check: ((value: Json) => string[]) | undefined;
+		if (schemaOut !== undefined) {
+			const made = schemaChecker(schemaOut);
+			if (typeof made === 'string') return invalid(made);
+			check = made;
 		}
-		const out = a.output !== undefined && a.output.kind !== 'text' ? a.output : undefined;
-		let draft: Json = out === undefined ? null : emptyOf(out);
-		const building = out === undefined ? [] : [
+		const root = (schemaOut?.jsonSchema ?? {}) as { type?: unknown; properties?: unknown };
+		let draft: Json = out !== undefined ? emptyOf(out)
+			: schemaOut === undefined ? null : root.type === 'array' ? [] : root.type === 'object' || root.properties !== undefined ? {} : null;
+		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.jsonSchema;
+		const rulesText = (schemaOut?.rules ?? []).length === 0 ? ''
+			: `\n\nThe answer must also hold these rules (CEL over the top-level properties):\n${schemaOut!.rules!.map((r) => `- ${r.message}: ${r.expression}`).join('\n')}`;
+		const building = !structured ? [] : [
 			{ name: PATCH, description: 'Edit the answer you are building with JSON Patch operations (RFC 6902 add, replace, remove at RFC 6901 paths). "add" creates missing parent objects; "/list/-" appends to a list. One call may carry many operations: patch each part of the answer as you find it, a section at a time.',
 				input: { type: 'object', additionalProperties: false, required: ['ops'], properties: { ops: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['op', 'path'],
 					properties: { op: { enum: ['add', 'replace', 'remove'] }, path: { type: 'string' }, value: {} } } } } } as Json },
@@ -184,70 +239,102 @@ export function inferFacility(ai: AiPort | undefined, options: { load?: (fileId:
 				input: { type: 'object', additionalProperties: false, properties: {} } as Json },
 		];
 		const offered = [...tools.map(({ name, description, input }) => ({ name, description, input })), ...building];
-		/** The draft decoded against `output`: every offending field named (rule 23). */
+		/** The draft checked against `output`: every offending field named (rule 23), as JSON Pointers the model patches with. */
 		const decoded = (value: Json): CrossAnswer => {
-			const d = decodeInput({ output: out! }, { output: value });
-			// problems named as JSON Pointers into the draft, the paths the model patches with
-			const at = (path: string) => `/${path.replace(/^output\.?/, '').replaceAll(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean).join('/')}`;
-			return d.problems.length === 0 ? { ok: true, value } : invalid(`the answer does not match the output: ${d.problems.map((p) => `${at(p.path)}: ${p.message}`).join('; ')}. Fix these with ${PATCH} (the paths are JSON Pointers into your draft), then call ${SUBMIT} again`);
+			let problems: string[];
+			if (check !== undefined) problems = check(value);
+			else {
+				const d = decodeInput({ output: out! }, { output: value });
+				const at = (path: string) => `/${path.replace(/^output\.?/, '').replaceAll(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean).join('/')}`;
+				problems = d.problems.map((p) => `${at(p.path)}: ${p.message}`);
+			}
+			return problems.length === 0 ? { ok: true, value } : invalid(`the answer does not match the output: ${problems.join('; ')}. Fix these with ${PATCH} (the paths are JSON Pointers into your draft), then call ${SUBMIT} again`);
 		};
-		const messages: AiMessage[] = [{ role: 'user', content: out === undefined ? a.prompt ?? ''
-			: `${a.prompt ?? ''}\n\nBuild your answer with ${PATCH}, starting from ${JSON.stringify(draft)}, into this JSON Schema, then call ${SUBMIT}:\n${JSON.stringify(jsonSchemaOf(out))}` }];
-		let text = '', continuation: string | undefined, cutAt: number | undefined, pauses = 0, failures = 0, last: CrossAnswer | undefined;
-		for (;;) {
-			const r = await modelCall(ai, { model: a.model ?? 'default', ...(a.system === undefined ? {} : { system: a.system }), messages: [...messages],
-				...(offered.length === 0 ? {} : { tools: offered }),
-				...(files.length === 0 ? {} : { files }), ...(continuation === undefined ? {} : { continuation }) },
-				{ signal, ...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }) });
-			// the ceiling on the whole call: the last failed submission says more than a bare timeout
-			if (signal.aborted) return last !== undefined && !last.ok ? last : { ok: false, error: { kind: 'timeout', message: `the inference did not finish within ${INFER_MS / 60_000} minutes` } };
-			if (isFacilityError(r)) return { ok: false, error: r };
-			if (r.finish === 'cut') {
-				cutAt ??= messages.length;
-				text += textOf(r.content);
-				continuation = r.continuation;
-				messages.splice(cutAt, messages.length - cutAt, { role: 'assistant', content: text });
-				continue;
-			}
-			const whole: Json = text === '' ? r.content : text + textOf(r.content);
-			if (cutAt !== undefined) messages.splice(cutAt);
-			text = ''; continuation = undefined; cutAt = undefined;
-			if (r.toolCalls.length > 0) {
-				messages.push({ role: 'assistant', content: { text: typeof whole === 'string' ? whole : '', toolCalls: r.toolCalls as unknown as Json } });
-				for (const c of r.toolCalls) {
-					let result: Json;
-					if (c.name === PATCH && out !== undefined) {
-						try { draft = applyPatch(draft, ((c.input as { ops?: PatchOp[] } | null)?.ops ?? [])); result = { patched: true }; }
-						catch (e) { result = { error: e instanceof Error ? e.message : String(e) }; }
-					} else if (c.name === SUBMIT && out !== undefined) {
-						last = decoded(draft);
-						if (last.ok) return last;
-						result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
-					} else {
-						const tool = tools.find((t) => t.name === c.name);
-						result = tool === undefined ? { error: `there is no tool '${c.name}'` }
-							: await tool.call(c.input, signal).catch((e: unknown): Json => ({ error: e instanceof Error ? e.message : String(e) }));
-					}
-					messages.push({ role: 'tool', content: { id: c.id, name: c.name, result: bound(result) } });
+
+		/** One conversation over one batch of files; a batch before the last hands back its draft unchecked. */
+		const read = async (files: { mime: string; bytes: Uint8Array }[], prompt: string, final: boolean): Promise<CrossAnswer> => {
+			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
+			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
+			let text = '', continuation: string | undefined, cutAt: number | undefined, pauses = 0, failures = 0, last: CrossAnswer | undefined;
+			for (;;) {
+				const r = await modelCall(ai, { model: a.model ?? 'default', ...(a.system === undefined ? {} : { system: a.system }), messages: [...messages],
+					...(offered.length === 0 ? {} : { tools: offered }),
+					...(files.length === 0 ? {} : { files }), ...(continuation === undefined ? {} : { continuation }) },
+					{ signal, ...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }) });
+				// the ceiling on the whole call: the last failed submission says more than a bare timeout
+				if (signal.aborted) return last !== undefined && !last.ok ? last : { ok: false, error: { kind: 'timeout', message: 'the inference did not finish within its ceiling' } };
+				if (isFacilityError(r)) return { ok: false, error: r };
+				if (r.finish === 'cut') {
+					cutAt ??= messages.length;
+					text += textOf(r.content);
+					continuation = r.continuation;
+					messages.splice(cutAt, messages.length - cutAt, { role: 'assistant', content: text });
+					continue;
 				}
-				continue;
+				const whole: Json = text === '' ? r.content : text + textOf(r.content);
+				if (cutAt !== undefined) messages.splice(cutAt);
+				text = ''; continuation = undefined; cutAt = undefined;
+				if (r.toolCalls.length > 0) {
+					messages.push({ role: 'assistant', content: { text: typeof whole === 'string' ? whole : '', toolCalls: r.toolCalls as unknown as Json } });
+					for (const c of r.toolCalls) {
+						let result: Json;
+						if (c.name === PATCH && structured) {
+							try { draft = applyPatch(draft, ((c.input as { ops?: PatchOp[] } | null)?.ops ?? [])); result = { patched: true }; }
+							catch (e) { result = { error: e instanceof Error ? e.message : String(e) }; }
+						} else if (c.name === SUBMIT && structured) {
+							last = settle(draft);
+							if (last.ok) return last;
+							result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
+						} else {
+							const tool = tools.find((t) => t.name === c.name);
+							result = tool === undefined ? { error: `there is no tool '${c.name}'` }
+								: await tool.call(c.input, signal).catch((e: unknown): Json => ({ error: e instanceof Error ? e.message : String(e) }));
+						}
+						messages.push({ role: 'tool', content: { id: c.id, name: c.name, result: bound(result) } });
+					}
+					continue;
+				}
+				if (typeof whole === 'string' && whole.trim() === '') {
+					// a reply of reasoning alone: ask it to go on (L-BOLT-371)
+					if (++pauses > PAUSES) return invalid(`the model answered nothing ${PAUSES + 1} times running`);
+					messages.push({ role: 'user', content: 'Continue, and give your answer.' });
+					continue;
+				}
+				pauses = 0;
+				if (!structured) return { ok: true, value: textOf(whole) };
+				// a structured answer written out as text instead: a well-formed one is taken as a submission of it
+				let parsed: Json | undefined;
+				try { parsed = typeof whole === 'string' ? JSON.parse(whole) as Json : whole; } catch { parsed = undefined; }
+				if (parsed !== undefined) { last = settle(parsed); if (last.ok) return last; draft = parsed; }
+				if (++failures > FAILURES) return last ?? invalid(`the model did not build its answer with ${PATCH} and ${SUBMIT}`);
+				messages.push({ role: 'assistant', content: textOf(whole) }, { role: 'user', content: parsed === undefined
+					? `Build the answer with ${PATCH} and hand it in with ${SUBMIT}; do not write it out.`
+					: `${last!.ok ? '' : last!.error.kind === 'invalid' ? last!.error.message : 'That answer does not match the output'}. It is now your draft: fix it with ${PATCH}, then call ${SUBMIT}.` });
 			}
-			if (typeof whole === 'string' && whole.trim() === '') {
-				// a reply of reasoning alone: ask it to go on (L-BOLT-371)
-				if (++pauses > PAUSES) return invalid(`the model answered nothing ${PAUSES + 1} times running`);
-				messages.push({ role: 'user', content: 'Continue, and give your answer.' });
-				continue;
+		};
+
+		const ask = (lead: string) => !structured ? a.prompt ?? ''
+			: `${a.prompt ?? ''}\n\n${lead}Build your answer with ${PATCH}, starting from ${JSON.stringify(draft)}, into this JSON Schema, then call ${SUBMIT}:\n${JSON.stringify(shape)}${rulesText}`;
+		if (refs.length === 0) return read([], ask(''), true);
+		// files load a batch at a time, so a thousand scans are never all in memory at once
+		let from = 0;
+		while (from < refs.length) {
+			const batch: { mime: string; bytes: Uint8Array }[] = [];
+			let bytes = 0;
+			while (from + batch.length < refs.length && batch.length < MODEL_FILES.count) {
+				const file = await options.load!(refs[from + batch.length]!.id, signal);
+				if (batch.length > 0 && bytes + file.bytes.length > MODEL_FILES.bytes) break; // ponytail: the file that overflows is loaded again with the next batch
+				batch.push(file);
+				bytes += file.bytes.length;
 			}
-			pauses = 0;
-			if (out === undefined) return { ok: true, value: textOf(whole) };
-			// a structured answer written out as text instead: a well-formed one is taken as a submission of it
-			let parsed: Json | undefined;
-			try { parsed = typeof whole === 'string' ? JSON.parse(whole) as Json : whole; } catch { parsed = undefined; }
-			if (parsed !== undefined) { last = decoded(parsed); if (last.ok) return last; draft = parsed; }
-			if (++failures > FAILURES) return last ?? invalid(`the model did not build its answer with ${PATCH} and ${SUBMIT}`);
-			messages.push({ role: 'assistant', content: textOf(whole) }, { role: 'user', content: parsed === undefined
-				? `Build the answer with ${PATCH} and hand it in with ${SUBMIT}; do not write it out.`
-				: `${last!.ok ? '' : last!.error.kind === 'invalid' ? last!.error.message : 'That answer does not match the output'}. It is now your draft: fix it with ${PATCH}, then call ${SUBMIT}.` });
+			const to = from + batch.length, final = to === refs.length;
+			const lead = refs.length <= batch.length ? ''
+				: `You are reading ${refs.length} source files in batches; these are files ${from + 1}–${to}.${from === 0 ? '' : ` The draft below already holds what files 1–${from} gave: keep it, append to its lists, fill what it lacks, and change a value only where these files show it differently.`} ${final ? `These are the last files: call ${SUBMIT} when the whole answer is complete; it is then checked.` : `Patch in everything these files hold, then call ${SUBMIT} to move on to the next files; the answer is checked after the last batch.`}\n\n`;
+			const answer = await read(batch, ask(lead), final);
+			if (!answer.ok || final) return answer;
+			draft = answer.value;
+			from = to;
 		}
+		return invalid('no files were read');
 	};
 }

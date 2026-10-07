@@ -158,12 +158,12 @@ screen from its header.
 			className
 		)}
 	>
-		<!-- a phone's drawer: its grabber, centred on the top border (it takes no space), is dragged to resize it and tapped to
-		     expand it; expanded, the drawer is square and flush with the top bar -->
+		<!-- a phone's drawer: its grabber, inside the top edge (straddling the border, it read as a tab stuck on a box), is
+		     dragged to resize it and tapped to expand it; expanded, the drawer is square and flush with the top bar -->
 		<button type="button" data-sheet-grabber aria-label={t('resize')}
-			class="group/grab absolute inset-x-0 top-0 z-10 mx-auto flex h-4 w-16 -translate-y-1/2 cursor-row-resize touch-none items-center justify-center [--hit-target:0px] outline-none md:hidden"
+			class="group/grab absolute inset-x-0 top-0 z-10 mx-auto flex h-4 w-16 cursor-row-resize touch-none items-center justify-center [--hit-target:0px] outline-none md:hidden"
 			onpointerdown={lift} onclick={() => { if (!dragged) { full = !full; height = null; } dragged = false; }}>
-			<span class="bg-muted-foreground/70 group-focus-visible/grab:bg-ring h-1 w-10 rounded-full shadow-sm"></span>
+			<span class="bg-muted-foreground/40 group-focus-visible/grab:bg-ring h-1 w-9 rounded-full"></span>
 		</button>
 		{#if right && !full}
 			<!-- the resize handle: a pill on the left edge (wide screens), dragged or moved with the arrow keys -->

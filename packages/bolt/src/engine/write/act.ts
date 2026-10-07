@@ -514,7 +514,7 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 					if(item.change.op==='update'&&previous==null)throw new BoltError('preparedPrevious','guest','a prospective mutation requires its actual native pre-image');
 					return {collection:item.change.collection,id:item.change.id,path:item.change.path,operation:item.change.op,...(item.change.op==='update'?{set:item.change.set,previous_revision:previous?.revision??null,previous}:{}),committed:false,phase:'PREPARED_NATIVE_MUTATION',invocation_id:r.invocationId};
 				}));
-				answers.push({ok:true,value:{collection:call.collection,id,path,values:candidate.change.values,committed:false,phase:'PREPARED_NATIVE_CREATE',invocation_id:r.invocationId,related_sources,related_actions}});
+				answers.push({ok:true,value:{collection:call.collection,id,path,values:candidate.change.values,committed:false,phase:'PREPARED_NATIVE_CREATE',invocation_id:r.invocationId,related_sources,related_actions} as unknown as Json});
 			}
 			return answers;
 		}};

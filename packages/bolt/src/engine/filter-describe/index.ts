@@ -92,7 +92,7 @@ export type FilterCatalogue = readonly FilterOffer[];
 type Span = { phrase: string; options: { label: string; path: readonly FilterStep[]; cond: Json; from?: readonly FilterStep[]; near?: true }[] };
 /** A nearest-first order from where a found record is: offered as a sort. */
 type Near = { label: string; sort: string; near: { lat: number; lng: number } };
-export type Described = { ok: true; where: Json; orderBy?: Json } | { ok: false; code: string; message: string };
+export type Described = { ok: true; where?: Json; orderBy?: Json } | { ok: false; code: string; message: string };
 export type LocalFilterField = { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean };
 
 type Op = { op: string; label: string };
@@ -717,28 +717,29 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const sortField = anchored ?? (sortable.length > 0 && noulOf(r1, 'sort.yes') > 0.5 ? chosenSort : undefined);
 		// only unbuildable conditions: a relation whose words match several records says which, so the person can pick one
 		const vague = unbuilt.find((f) => (f.found?.length ?? 0) > 1);
-		if (conds.length === 0 && sortField === undefined && unbuilt.length > 0)
-			return fail(vague === undefined ? `Could not build a condition on ${unbuilt[0]!.label}.` : `Several ${vague.label} records match: ${vague.found!.slice(0, CANDIDATES).join('; ')}. Name one.`);
-		// a description that states nothing (gibberish, or words no field holds) applies nothing: an empty `and` read as "applied"
-		if (conds.length === 0 && sortField === undefined) return fail('No field here matches that description. Try naming a field and a value.');
+		if (conds.length === 0 && sortField === undefined)
+			return fail(unbuilt.length > 0
+				? (vague === undefined ? `Could not build a condition on ${unbuilt[0]!.label}.` : `Several ${vague.label} records match: ${vague.found!.slice(0, CANDIDATES).join('; ')}. Name one.`)
+				: 'No field here matches that description. Try naming a field and a value.');
 		const chosen = COMBINE[choiceOf(r1, 'combine') ?? ''] ?? ALL;
 		// a negation the text never states is a misreading (staging: "1f pine grove" → none of them hold)
 		// likewise an OR the text never states ("installation work at hillview crescent" → any of them)
 		const joined = chosen.join === 'or' && !DISJUNCTION.test(o.text) ? 'and' : chosen.join;
 		const combine = { ...chosen, join: joined, not: chosen.not && NEGATION.test(o.text) };
-		const group = conds.length === 1 ? conds[0]! : { [combine.join]: conds };
+		// an empty conjunction is not a filter: a sort-only description has no `where` (an empty `and` fails decode)
+		const group = conds.length === 0 ? undefined : conds.length === 1 ? conds[0]! : { [combine.join]: conds };
 		// one condition negates through its own operator ("is not"): a negated composition of one is System 1 misreading
 		// "jobs at 1F Pine Grove" as "none of them hold"
-		const where: Json = combine.not && conds.length > 1 ? { not: group } : group;
+		const where: Json | undefined = group === undefined ? undefined : combine.not && conds.length > 1 ? { not: group } : group;
 		const dir: Json = choiceOf(r1, 'sort.dir') === DIRS.asc ? 'asc' : 'desc';
 		const orderBy: Json | undefined = sortField === undefined ? undefined
 			: sortField.sort!.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), sortField.near === undefined ? dir : { near: sortField.near });
 		try { // rule 11a: the same strict decode as any read literal, held to the caller's exposure
-			if (!local) decodeDescribed(cat, o.authority, o.collection, { where, ...(orderBy === undefined ? {} : { orderBy }) });
+			if (!local) decodeDescribed(cat, o.authority, o.collection, { ...(where === undefined ? {} : { where }), ...(orderBy === undefined ? {} : { orderBy }) });
 		} catch (e) {
 			return fail(e instanceof BoltError ? e.message : 'Could not build a filter from that description.');
 		}
-		return { ok: true, where, ...(orderBy === undefined ? {} : { orderBy }) };
+		return { ok: true, ...(where === undefined ? {} : { where }), ...(orderBy === undefined ? {} : { orderBy }) };
 	}
 	/** `filter.options` as the caller: the same catalogue the description is asked about, as plain data for the builder. */
 	async function opts(o: { collection: string; authority: Authority; bindings: Bindings; localFields?: readonly LocalFilterField[] }): Promise<{ ok: true; fields: FilterCatalogue } | { ok: false; code: string; message: string }> {
@@ -759,7 +760,7 @@ const refuse = (message: string) => new BoltError('invalid', 'decode', message);
  * field, relation and sort key within what the caller reads unmasked — the collections it reads, their exposed fields
  * and relations, one-relation keys it reads unmasked. Anything else is `invalid`; nothing is dropped silently.
  */
-export function decodeDescribed(cat: Catalog, a: Authority, collection: string, q: { where: Json; orderBy?: Json }): void {
+export function decodeDescribed(cat: Catalog, a: Authority, collection: string, q: { where?: Json; orderBy?: Json }): void {
 	const info = (c: string) => {
 		const x = cat.collections.get(c);
 		if (x === undefined || (!a.admin && (a.collections[c]?.read.length ?? 0) === 0)) throw refuse(`'${c}' is not read by this caller`);
@@ -786,7 +787,7 @@ export function decodeDescribed(cat: Catalog, a: Authority, collection: string, 
 		}
 	};
 	info(collection);
-	walk(ir.where(cat, collection, q.where), collection);
+	if (q.where !== undefined) walk(ir.where(cat, collection, q.where), collection);
 	// a related key (`assignee.name`): each hop a relation the caller reads, then the target's field
 	if (q.orderBy !== undefined) for (const k of ir.order(q.orderBy, cat, collection)) {
 		const steps = k.field.split('.');

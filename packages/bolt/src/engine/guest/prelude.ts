@@ -312,6 +312,9 @@ Object.defineProperty(G, Symbol.for('norbital.bolt.asset'), { value: (sha) => {
 	if (!(bytes instanceof Uint8Array)) throw named('BoltError', 'the artifact has no server asset ' + String(sha));
 	return bytes;
 } });
+define('fileRef', function fileRef(file) {
+	return { id: file.id, name: file.name, mime: file.mime };
+});
 
 // ── tasks: microtasks, and zero-delay timers run one per drain by take(); the guest has no clock to wait on ──
 const timers = new Map();
@@ -369,7 +372,7 @@ function ctxFor(kind, c, invocationId) {
 		case 'projection': return { ...clock, actor: c.actor, invocationId, ...reads, refuse, admin: c.admin === true, policies: Object.freeze([...(c.policies || [])]), fields: Object.freeze([...(c.fields || [])]) };
 		case 'query': return { ...clock, actor: c.actor, invocationId, ...reads, refuse }; // hook:ctx-types (refuse)
 		case 'action': case 'tool': return { ...clock, actor: c.actor, policies: Object.freeze([...(c.policies || [])]), admin: c.admin === true, invocationId, ...reads, ...writes, target: c.row, refuse };
-		case 'automation': return { ...clock, actor: c.actor, invocationId, ...reads, ...writes, send: fn('send'), progress: fn('progress'),
+		case 'automation': return { ...clock, actor: c.actor, invocationId, cause: c.cause, ...reads, ...writes, send: fn('send'), progress: fn('progress'),
 			http: (connection) => Object.fromEntries(['get', 'post', 'put', 'patch', 'delete'].map((m) => [m,
 				Object.assign((path, request) => call('http.' + m, [connection, path, request], 'throw'),
 					{ try: (path, request) => call('http.' + m, [connection, path, request], 'try') })])),

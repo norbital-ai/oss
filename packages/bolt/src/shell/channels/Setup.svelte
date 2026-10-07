@@ -4,7 +4,7 @@
 	publishes while it pairs. Bolt names no provider here: a different provider is different data, so a different screen.
 -->
 <script lang="ts">
-	import { Button, Input, Qr } from '@norbital-ai/ui';
+	import { Button, Combobox, Input, Qr } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type { SetupField } from '../../engine/channels/connection.ts';
@@ -110,11 +110,10 @@
 					<label class="flex flex-col gap-1 text-sm">
 						<span class="text-label">{say(f.label)}{#if f.optional === true} <span class="text-meta">({t('optional')})</span>{/if}</span>
 						{#if f.options !== undefined}
-							<!-- a choice: the first option is the default, so an untouched select sends nothing -->
-							<select class="h-8 rounded-md border bg-background px-2 text-sm" name={f.name} value={values[f.name] ?? f.options[0]?.value}
-								onchange={(e) => (values[f.name] = e.currentTarget.value)}>
-								{#each f.options as o (o.value)}<option value={o.value}>{say(o.label)}</option>{/each}
-							</select>
+							<!-- a choice: the first option is the default, so an untouched control sends nothing -->
+							<Combobox size="sm" aria-label={say(f.label)} value={values[f.name] ?? f.options[0]?.value ?? null}
+								onChange={(v) => { if (v !== null) values[f.name] = v; }}
+								options={f.options.map((o) => ({ value: o.value, label: say(o.label) }))} />
 						{:else}
 							<Input class="h-8 {f.secret === true ? 'font-mono' : ''}" name={f.name} type={f.secret === true ? 'password' : 'text'} autocomplete="off"
 								required={f.optional !== true} bind:value={values[f.name]} />

@@ -227,10 +227,11 @@
 
 	<div class={cn('flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto', !expanded && 'overflow-hidden')}>
 		{#each model.sections as section (section.key)}
-			{#if section.items.length > 0}
+			{#if section.items.some((i) => !(mobile && i.href === NORBIUS))}
 				<Stack gap="none" class="relative w-full p-2">
 					<p class={cn('flex h-8 shrink-0 items-center rounded-md px-2 text-overline transition-[margin,opacity] duration-200 ease-linear', !expanded && '-mt-8 opacity-0')}>{section.label}</p>
-					<Stack as="ul" gap="xs" class="w-full">{#each section.items as item (item.key)}{@render row(item)}{/each}</Stack>
+					<!-- a phone's top bar carries Norbius; the drawer does not repeat it -->
+					<Stack as="ul" gap="xs" class="w-full">{#each section.items.filter((i) => !(mobile && i.href === NORBIUS)) as item (item.key)}{@render row(item)}{/each}</Stack>
 				</Stack>
 			{/if}
 		{/each}

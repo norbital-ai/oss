@@ -43,7 +43,9 @@ const own = (path: string) => join(dirname(fileURLToPath(import.meta.url)), '..'
 /**
  * `bolt test`: the workspace's vitest, in process, with the kit preconfigured: the type setup written, svelte compiled,
  * `@norbital-ai/bolt/test(/browser)` and `$bolt` on this copy, DOM environments resolving the browser builds, and the
- * kit's timeouts. The workspace's own vitest config still loads, and wins where it sets a value.
+ * kit's timeouts. The workspace's own vitest config still loads, and wins where it sets a value. Chromium is Vitest
+ * browser mode (`@vitest/browser-playwright`, `page` from `vitest/browser`) — https://vitest.dev/guide/browser/ — not
+ * a kit launcher.
  */
 async function test(dir: string, args: readonly string[]): Promise<number> {
 	const root = realpathSync(dir);

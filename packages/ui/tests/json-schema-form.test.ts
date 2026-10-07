@@ -19,10 +19,11 @@ test('Editor JSON schema entry point edits nested inputs without deleting unknow
 	assert.ok(target.textContent.includes('Required by payroll'));
 	const optional = target.querySelector('[data-section$="Additional details"]'); assert.equal(optional.getAttribute('data-open'), 'true');
 });
+const pick = async (trigger: HTMLElement, value: string) => { trigger.click(); flushSync(); await tick(); document.querySelector(`[role=option][data-value="${value}"] button`)!.click(); flushSync(); };
 test('numeric and boolean enum options retain JSON types', async () => {
 	for (const [type, values] of [['integer', [1, 2]], ['boolean', [false, true]]]) {
 		const { target, changes } = await show({ schema: { type, enum: values }, initial: values[0] });
-		const select = target.querySelector('select'); select.value = '1'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle(); assert.equal(changes.at(-1), values[1]);
+		await pick(target.querySelector('[role=combobox]')!, '1'); await settle(); assert.equal(changes.at(-1), values[1]);
 	}
 });
 test('array add/remove limits and readonly controls work', async () => {

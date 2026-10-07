@@ -22,6 +22,22 @@ permissions:
 jobs:
   integration:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: colony
+          POSTGRES_PASSWORD: colony
+          POSTGRES_DB: colony
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U colony -d colony"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      BOLT_TEST_PG: postgres://colony:colony@localhost:5432/colony
     steps:
       - name: Checkout
         uses: actions/checkout@v7

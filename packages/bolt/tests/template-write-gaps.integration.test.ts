@@ -1,4 +1,4 @@
-// Gaps the template migration found in the write area, one reproduction each (RFC-REALM-0.0.1): collection
+// Gaps the template migration found in the write area, one reproduction each: collection
 // notifications on an ordinary commit (rule 47), writing an exclusive arc (polymorphic ref), json `shape` on write, a
 // model check's authored message, `accept: ['*/*']` at upload, an automation calling a collection action, `revision`
 // as a model field, and an FK to `sys_user` read back through its relation.

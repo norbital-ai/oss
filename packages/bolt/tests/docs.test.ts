@@ -20,9 +20,9 @@ it('one namespace per public entry, with its module and the entry summary', () =
 	for (const n of docs.index().namespaces.filter((x) => x.reference)) expect(n.summary, n.namespace).not.toBe('');
 });
 
-it('the 16 declaration functions are functions whose spec parameter lists its fields', () => {
+it('the 17 declaration functions are functions whose spec parameter lists its fields', () => {
 	const fns = docs.namespace('bolt')!.symbols.filter((s) => s.kind === 'function').map((s) => s.name);
-	expect(fns).toEqual(['app', 'automation', 'channel', 'collection', 'connection', 'customField', 'group', 'integration', 'mcp', 'messages',
+	expect(fns).toEqual(['app', 'automation', 'channel', 'collection', 'connection', 'customField', 'group', 'integration', 'kiosk', 'mcp', 'messages',
 		'model', 'pipeline', 'policy', 'relationship', 'team', 'workspace']);
 	const model = docs.symbol('bolt', 'model')!;
 	expect(model.signature).toContain('function model');

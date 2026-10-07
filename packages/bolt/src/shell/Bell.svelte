@@ -9,8 +9,10 @@
 	import type { Notice } from './data.ts';
 	import type { ShellApi, ShellBolt } from './runtime.ts';
 
-	let { api, bolt, t, expanded = true, onNavigate }: {
-		api: ShellApi; bolt: ShellBolt; t: (key: string) => string; expanded?: boolean; onNavigate: (href: string) => void;
+	let { api, bolt, t, expanded = true, header = false, onNavigate }: {
+		api: ShellApi; bolt: ShellBolt; t: (key: string) => string; expanded?: boolean;
+		/** In a phone's top bar: the list drops below the bell, kept inside the screen. */
+		header?: boolean; onNavigate: (href: string) => void;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
@@ -54,7 +56,8 @@
 			</button>
 		{/snippet}
 	</Popover.Trigger>
-	<Popover.Content side={expanded ? 'top' : 'right'} align={expanded ? 'end' : 'start'} sideOffset={8} class="w-80 max-w-[calc(100vw-1rem)] p-0">
+	<Popover.Content side={header ? 'bottom' : expanded ? 'top' : 'right'} align={header || expanded ? 'end' : 'start'} sideOffset={8} collisionPadding={8}
+		class="w-80 max-w-[calc(100vw-1rem)] p-0">
 		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
 			<p class="text-xs font-medium">{t('Notifications')}</p>
 			{#if unread.length > 0}
