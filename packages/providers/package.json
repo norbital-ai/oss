@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/providers",
-	"version": "0.0.166",
+	"version": "0.0.1",
 	"description": "Provider adapters behind Bolt's host ports (Twilio, Resend, Sinch, WhatsApp Web, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes), injected by a host.",
 	"type": "module",
 	"sideEffects": false,

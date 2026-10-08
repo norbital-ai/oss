@@ -14,6 +14,7 @@ import { testWorkspace } from '../src/test/index.ts';
 import { loadPackWithAssets } from '../src/compiler/artifact/read.ts';
 import { check } from '../src/compiler/check/index.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
+import { messagingOp } from '../src/engine/channels/registry.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { loadKeys, mint } from '../src/engine/identity/session.ts';
 import { devTurnstile, shellHost } from '../src/shell/host.ts';
@@ -205,9 +206,25 @@ export default integration('notices', { direction: 'one_way', source: { channel:
 		expect(c.errors).toEqual([]);
 		expect(c.manifest!.integrations['notices']).toHaveProperty('resolve');
 		const t = await testWorkspace({ root, seed: 'none' });
+		// a channel connection is a runtime record an administrator saves (the artifact declares only its `mail` type)
+		await messagingOp(t.db, t.engine.manifest, t.as(t.admin).authority, 'saveChannel', { id: 'mail', name: 'Supplier mail', type: 'mail' });
 		await t.fakes.transports.email.emit({ kind: 'inbound', channel: 'mail', message: mail({ from: { address: 'pcn@onsemi.com', name: null } }) });
 		await t.runDue();
 		expect(await sql(t, `SELECT message_id, sender FROM notices`)).toEqual([{ message_id: '<pcn-1@onsemi.com>', sender: 'onsemi' }]);
+	}, 120_000);
+});
+
+describe('pipelines from source', () => {
+	it('`bolt check` keeps the bodies a pipeline import declares, so the feed calls them', async () => {
+		const root = copy('pipeline');
+		writeFileSync(join(root, 'src/data/collection/customers/+pipeline.ts'), `import { pipeline } from '@norbital-ai/bolt';
+export default pipeline('customers', { import: { description: 'Buyers from a sheet.',
+	input: { rows: { kind: 'list', of: { kind: 'object', fields: { name: { kind: 'text' } } } } },
+	records: (input) => input.rows, known: async () => ({}), map: (r) => ({ name: r.name }),
+	related: { customers: () => [] }, check: async () => [], template: async () => [] } });`);
+		const c = await check(root);
+		expect(c.errors).toEqual([]);
+		expect(c.manifest!.pipelines['customers']).toMatchObject({ import: { known: true, check: true, template: true, related: { customers: true } } });
 	}, 120_000);
 });
 

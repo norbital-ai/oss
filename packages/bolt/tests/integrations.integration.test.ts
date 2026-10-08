@@ -210,7 +210,8 @@ describe('pipelines: import and export feeds', () => {
 	it('crm\'s ERP item import: one act as the caller, codes already on file skipped by known + map', async () => {
 		ok(await sales().act('products.create', { external_code: 'P1', name: 'kept', price: '1.00' }));
 		t.count.reset();
-		const o = ok(await feeds().import('products', { items: [{ external_code: ' P1 ', name: 'renamed' }, { external_code: 'P2', name: ' bolt ', unit_price: '2.50' }] }, caller('k1')));
+		const imported = await feeds().import('products', { items: [{ external_code: ' P1 ', name: 'renamed' }, { external_code: 'P2', name: ' bolt ', unit_price: '2.50' }] }, caller('k1'));
+		const o = ok(imported.applied ? imported.outcome : { kind: 'unknown', invocation: '' });
 		expect(t.count.writes).toBe(1);
 		expect(o.records).toHaveLength(1);
 		const rows = (await sales().read('products', { all: true, orderBy: 'external_code' })).rows;
@@ -219,7 +220,8 @@ describe('pipelines: import and export feeds', () => {
 
 	it('an import is refused as the caller would be refused', async () => {
 		const reader = { ...caller('k2'), authority: t.engine.authority(t.member(['viewer'])) };
-		expect(await feeds().import('products', { items: [{ external_code: 'P9', name: 'x' }] }, reader)).toMatchObject({ kind: 'refused', code: 'forbidden' });
+		expect(await feeds().import('products', { items: [{ external_code: 'P9', name: 'x' }] }, reader))
+			.toMatchObject({ applied: false, findings: [{ row: null, severity: 'refuse', message: expect.stringContaining('may not') }] });
 	});
 
 	it('an export is every row the caller reads, the declared fields, stored as a CSV file', async () => {
@@ -246,7 +248,7 @@ describe('pipelines: import and export feeds', () => {
 	it('an uploaded feed file runs as products.pipeline under its starter: one act, the rows as the caller wrote them', async () => {
 		const f = store(), who = t.member(['sales']);
 		const file = fileId(await put(f, who, { items: [{ external_code: 'P7', name: 'bolt', unit_price: '2.50' }] }));
-		expect(await runAs(f, who, { mode: 'import', file })).toEqual({ imported: 1 });
+		expect(await runAs(f, who, { mode: 'import', file })).toEqual({ applied: true, created: 1, updated: 0, deleted: 0, findings: [] });
 		const [row] = (await sales().read('products', { all: true })).rows;
 		expect(row).toMatchObject({ external_code: 'P7', name: 'bolt', price: { $dec: '2.50' }, created_by: who.id });
 	});

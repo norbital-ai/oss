@@ -226,6 +226,8 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			}
 			return inside;
 		}
+		// the search document and the embedding live in the database: only a read decides them
+		case 'search': case 'similar': throw invalid(`$${p.t} is decided by a read, not in memory`);
 		case 'one': return rows(env, c, p.rel, p.target, row).some((r) => evaluate(env, p.target, p.pred, r));
 		case 'many': {
 			const rs = rows(env, c, p.rel, p.target, row);

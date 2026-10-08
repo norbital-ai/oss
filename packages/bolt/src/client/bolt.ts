@@ -12,7 +12,7 @@ import { decodeView } from '../protocol/ir.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 
 export type { Live, LiveError, Q };
-export type RunHandle = PromiseLike<Outcome> & { readonly id: string };
+export type RunHandle = PromiseLike<Outcome> & { readonly id: string; readonly automation: string };
 export type BoltConfig = {
 	actor: Json; locale: string; messages?: { readonly [key: string]: string };
 	base?: string; fetch?: typeof fetch; openStream?: (url: string) => EventSourceLike; signals?: Signals;
@@ -143,6 +143,7 @@ export function createBolt(config: BoltConfig) {
 	const signals: Signals | undefined = typeof document === 'undefined' ? undefined : {
 		get hidden() { return document.hidden; },
 		addEventListener: (type, run) => { window.addEventListener(type, run); },
+		removeEventListener: (type, run) => { window.removeEventListener(type, run); },
 	};
 	const stream = liveStream(() => config.openStream?.(`${base}${PATHS.live}`) ?? new EventSource(`${base}${PATHS.live}`, { withCredentials: true }), onFrame, () => {
 		conn = null;
@@ -232,6 +233,8 @@ export function createBolt(config: BoltConfig) {
 		return { read, then: (ok, bad) => (once(read) as Promise<T>).then(ok, bad) };
 	};
 
+	/** `close()` ran: an unsubscribe after it arms no grace timer. */
+	let retired = false;
 	function live<T>(query: Q<T>, options: { every?: string; on?: readonly string[] } = {}): Live<T> {
 		const key = JSON.stringify([query.read, options.every ?? null, options.on ?? null]);
 		let found: View | undefined;
@@ -251,7 +254,7 @@ export function createBolt(config: BoltConfig) {
 				run(shown(s) as T | undefined);
 				return () => {
 					s.readers.delete(run as (value: Json | undefined) => void);
-					if (s.readers.size > 0) return;
+					if (s.readers.size > 0 || retired) return;
 					s.grace = setTimeout(() => {
 						views.delete(s.id);
 						if (s.registered) void register([], [s.id]);
@@ -347,7 +350,7 @@ export function createBolt(config: BoltConfig) {
 		start(automation: string, input: Json): RunHandle {
 			const id = uuid();
 			const outcome = send('start', { automation, input, id }, id);
-			return { id, then: (ok, bad) => outcome.then(ok, bad) };
+			return { id, automation, then: (ok, bad) => outcome.then(ok, bad) };
 		},
 		/** `accept` and `max` are checked before bytes are stored. */
 		async upload(file: Blob & { name?: string }, field: string): Promise<FileRef> {
@@ -412,7 +415,14 @@ export function createBolt(config: BoltConfig) {
 		/** Calls `run` with the status now and on every change; returns the unsubscribe. */
 		onSyncStatus(run: (s: SyncStatus) => void): () => void { statusReaders.add(run); run(syncStatus()); return () => { statusReaders.delete(run); }; },
 		/** Retire this client (a boot that replaces it): the stream closes, no view reopens it, and it stops reporting. */
-		close: () => { statusReaders.clear(); stream.want(false); },
+		close: () => {
+			retired = true;
+			statusReaders.clear();
+			// a retired client keeps nothing alive: no view's grace timer still holds it (and the page that read through it)
+			for (const s of views.values()) { clearTimeout(s.grace); s.readers.clear(); }
+			views.clear();
+			stream.close();
+		},
 	};
 }
 export type Bolt = ReturnType<typeof createBolt>;

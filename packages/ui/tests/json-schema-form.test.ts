@@ -48,3 +48,17 @@ test('dynamic-property errors open their section and array scalar controls have 
 test('unknown custom datatypes preserve their initial JSON in the raw editor', async () => {
  const {target}=await show({schema:{type:'object','x-norbital':{datatype:'missing'}},initial:{reference:'kept'}}); assert.ok(target.textContent.includes('kept'));
 });
+test("a text field's `format: 'cel'` is a wrapped code editor, inside a json shape too, and the viewer shows it the same way, read-only", async () => {
+	const cel = { kind: 'text', format: 'cel' };
+	const { target, changes } = await show({ kind: { kind: 'json', shape: { kind: 'object', fields: { label: { kind: 'text' }, when: cel } } }, initial: { label: 'A', when: 'a > 1' } });
+	const code = target.querySelector('[data-code-editor=javascript]');
+	assert.ok(code, 'the CEL leaf is a code editor');
+	assert.ok(code.querySelector('.cm-lineWrapping'), 'its lines wrap');
+	assert.equal(code.textContent.includes('a > 1'), true);
+	assert.equal(target.querySelectorAll('[data-code-editor]').length, 1, 'the plain text field stays an input');
+	assert.deepEqual(changes, []);
+	const shown = await show({ kind: cel, initial: 'size(rows) > 0', view: true });
+	const ro = shown.target.querySelector('[data-code-editor=javascript]');
+	assert.ok(ro.querySelector('.cm-lineWrapping'));
+	assert.equal(ro.querySelector('.cm-content').getAttribute('contenteditable'), 'false');
+});

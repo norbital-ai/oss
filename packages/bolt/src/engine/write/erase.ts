@@ -48,7 +48,7 @@ export async function erase(e: WriteEngine, r: ActRequest, take: Taker): Promise
 	// the targets and their owned children (a held child refuses too), one round trip
 	const owned = Object.entries(m.relationships).filter(([, rel]) => rel.owned && (typeof rel.to === 'string' ? rel.to === c : rel.to.includes(c)))
 		.map(([name]) => name.split('.') as [string, string]);
-	const [rows, children] = await Promise.all([readRows(e.db, ids.map((id) => [c, id] as const)),
+	const [rows, children] = await Promise.all([readRows(e.db, catalogOf(m), ids.map((id) => [c, id] as const)),
 		owned.length === 0 ? [] : e.db.read(owned.map(([child, fk]) => ({
 			text: `SELECT approval_id::text AS approval_id FROM ${q(child)} WHERE ${q(fk)}::text IN (SELECT jsonb_array_elements_text($1::jsonb)) AND approval_id IS NOT NULL LIMIT 1`,
 			params: [JSON.stringify(ids)] })))]);

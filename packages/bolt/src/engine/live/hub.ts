@@ -51,7 +51,7 @@ function decidable(p: Pred): boolean {
 	switch (p.t) {
 		case 'and': case 'or': return p.of.every(decidable);
 		case 'not': return decidable(p.of);
-		case 'one': case 'many': case 'count': case 'agg': case 'geo': case 'period': return false; // hook:query (agg)
+		case 'one': case 'many': case 'count': case 'agg': case 'geo': case 'period': case 'search': case 'similar': return false; // hook:query (agg)
 		case 'const': return true;
 		default: return !p.field.includes('.') && !(p.t === 'cmp' && 'field' in p.arg && p.arg.field.includes('.'));
 	}

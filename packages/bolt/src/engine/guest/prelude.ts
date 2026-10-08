@@ -365,9 +365,9 @@ const todayIn = (now) => (zone) => new Intl.DateTimeFormat('en-CA', { timeZone: 
 function ctxFor(kind, c, invocationId) {
 	const clock = { now: c.now, today: c.today, tz: c.tz, todayIn: todayIn(c.now) };
 	const reads = { read: fn('read'), get: fn('get'), aggregate: fn('aggregate'), similar: fn('similar'), history: fn('history'), query: fn('query') };
-	const writes = { act: Object.assign(fn('act', 'act'), { try: fn('act', 'try') }), schedule: fn('schedule'), notify: fn('notify') };
+	const writes = { act: Object.assign(fn('act', 'act'), { try: fn('act', 'try'), many: fn('acts', 'act') }), schedule: fn('schedule'), notify: fn('notify') };
 	switch (kind) {
-		case 'transform': return { ...clock, actor: c.actor, policies: Object.freeze([...(c.policies || [])]), admin: c.admin === true, existing: (c.existing || []).map((r) => r === null ? undefined : r), staged: Object.freeze((c.staged || []).map((row) => Object.freeze({...row,path:Object.freeze([...row.path]),...(row.parent ? {parent:Object.freeze({...row.parent})} : {})}))), refuse,
+		case 'transform': return { ...clock, actor: c.actor, invocationId, policies: Object.freeze([...(c.policies || [])]), admin: c.admin === true, existing: (c.existing || []).map((r) => r === null ? undefined : r), staged: Object.freeze((c.staged || []).map((row) => Object.freeze({...row,path:Object.freeze([...row.path]),...(row.parent ? {parent:Object.freeze({...row.parent})} : {})}))), refuse,
 			db: { read: fn('db.read'), get: fn('db.get'), aggregate: fn('db.aggregate'), after: fn('db.after'),prepareCreate:fn('db.prepareCreate') } };
 		case 'projection': return { ...clock, actor: c.actor, invocationId, ...reads, refuse, admin: c.admin === true, policies: Object.freeze([...(c.policies || [])]), fields: Object.freeze([...(c.fields || [])]) };
 		case 'query': return { ...clock, actor: c.actor, invocationId, ...reads, refuse }; // hook:ctx-types (refuse)
@@ -420,7 +420,9 @@ function start(kind, path, inputJson, ctxJson, invocationId) {
 		: ctx === undefined ? [input] : [input, ctx];
 	// hook:reads — a rerank is one invocation over the candidate page: input is [query, rows], output one score per row
 	// a validation is one invocation over every value of its kind in the act: one message (or undefined) per value
-	Promise.resolve().then(() => kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' ? input.map((v) => body(v)) : body(...args)).then(
+	// a mapping over many items ({ $each, with }: a pipeline's records) is one invocation: each item through the body
+	const each = kind === 'mapping' && input !== null && typeof input === 'object' && !Array.isArray(input) && Array.isArray(input.$each);
+	Promise.resolve().then(() => each ? Promise.all(input.$each.map((item) => body(item, input.with))) : kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' ? input.map((v) => body(v)) : body(...args)).then(
 		(v) => { state = ['ok', JSON.stringify(v === undefined ? null : v)]; },
 		(e) => { state = failure(e); });
 }

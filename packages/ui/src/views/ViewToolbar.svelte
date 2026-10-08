@@ -1,35 +1,26 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { ActionInputOf, ActionKey, AutomationInputOf, AutomationKey, Row } from './bolt.js';
+	import type { Json, Row } from './bolt.js';
 
 	type IdIn<R> = R extends { readonly id: infer I extends string } ? I : string;
 	/**
-	 * Where an item sits in the actions menu: `bulk` (over the selected rows), `import` (with Import and Export CSV), or
-	 * `general`. Default: `bulk` for an item that `requiresSelection`, else `general`.
+	 * An author's actions-menu item (§3.6): an icon, a name, a line of description and the handler itself. The menu owns
+	 * the rest: a promise the handler returns is the item's pending state, a rejection or a refused outcome its error (in
+	 * place and as a toast), an `Outcome` (`bolt.act`) is toasted, and a run handle (`bolt.start`) shows its run under the
+	 * toolbar. A handler that returns nothing closes the menu (it opened a sheet or a file picker of its own).
 	 */
-	export type ToolbarGroup = 'bulk' | 'import' | 'general';
-	/** What every actions-menu item carries: its words, its place, and why it cannot run now (shown instead of `description`). */
-	type ItemMeta<R> = {
-		label: string;
-		/** One line under the label. */
+	export type ToolbarItem<R = Row> = {
+		/** An Iconify id (`lucide:upload`). */
+		icon: string;
+		name: string;
+		/** One line under the name. */
 		description?: string;
-		/** An Iconify id (`lucide:upload`); default by kind. */
-		icon?: string;
-		group?: ToolbarGroup;
-		/** Turns row selection on; the item is disabled until rows are selected. */
+		run: (selected: IdIn<R>[]) => unknown;
+		/** Turns row selection on and lists the item under Bulk; it is disabled until rows are selected. */
 		requiresSelection?: true;
-		/** Why the item cannot run now (over this selection), or null when it can. */
+		/** Why the item cannot run now (over this selection), or null when it can; shown instead of `description`. */
 		disabled?: (selected: IdIn<R>[]) => string | null;
 	};
-	/**
-	 * An author's actions-menu item (§3.6): a collection action over the selection, an automation whose run the toolbar
-	 * shows, or the page's own handler (`run`: an import, a template download, a view toggle). The toolbar owns every
-	 * page-level action: none sits in the app header or above the view.
-	 */
-	export type ToolbarItem<R = Row> =
-		| { [A in ActionKey]: ItemMeta<R> & { action: A; input?: (selected: IdIn<R>[]) => ActionInputOf<A>; confirm?: string } }[ActionKey]
-		| { [A in AutomationKey]: ItemMeta<R> & { start: A; input: (selected: IdIn<R>[]) => AutomationInputOf<A> } }[AutomationKey]
-		| ItemMeta<R> & { run: (selected: IdIn<R>[]) => unknown };
 	/**
 	 * A view's whole chrome, one shape on `Table`, `Board`, `Map` and `Pivot`. Every key defaults from the collection's
 	 * declaration and the viewer's grants; `toolbar={false}` renders none.
@@ -55,6 +46,11 @@
 		new?: boolean | (() => void);
 		/** The page's own scope controls (a period picker, an entity picker), placed in the toolbar before search. Never actions. */
 		controls?: Snippet;
+		/**
+		 * What the view is scoped to (`{ company_id, period }`), handed to the collection's pipeline feeds: the import and
+		 * its template decode it against the pipeline's `context` fields. It narrows and defaults; it never authorizes.
+		 */
+		context?: { readonly [field: string]: Json };
 	};
 	type Exporter = { fields: readonly string[]; labels: readonly string[]; read: () => PromiseLike<unknown> };
 </script>
@@ -64,21 +60,23 @@
 	import * as Popover from '../primitives/popover/index.js';
 	import { useKinds, type CollectionExposure } from '../kinds/context.js';
 	import FormView from '../form/form.svelte';
-	import type { Json } from './bolt.js';
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
 	import { enumText, initial, likeWhere, problems } from '../kinds/kind.js';
 	import { uiText } from '../primitives/utils.js';
-	import { offerContexts, openRecord, useBolt, type Outcome } from './bolt.js';
+	import { offerContexts, openRecord, useBolt, type Outcome, type RunHandle } from './bolt.js';
 	import { nodeText, pathLabel, pathOf, sortText } from './filter.js';
-	import { CSV_BOM, csvCell, filesOf, humanize, label, msg, rowsOf, searchIndexes, SEMANTIC_SEARCH, SLASH, unref, type SearchIndex } from './model.js';
+	import { CSV_BOM, csvCell, filesOf, humanize, label, msg, outcomeText, rowsOf, searchIndexes, SEMANTIC_SEARCH, SLASH, unref, type SearchIndex } from './model.js';
 	import type { ViewState } from './view-state.svelte.js';
 	import Glyph, { type GlyphName } from './Glyph.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import RunStatus from './RunStatus.svelte';
 	import ViewPopover from './ViewPopover.svelte';
 	import { notify } from './notify.js';
-	import { recordLabels } from './live.svelte.js';
+	import { toast } from '../toast/toast.svelte.js';
+	import Spinner from '../primitives/spinner/spinner.svelte';
+	import { recordLabels, watch as live } from './live.svelte.js';
+	import { watch } from 'runed';
 
 	let {
 		config = {}, collection, view, catalog, source = collection, author, sortable = [], q = $bindable(''), searchable = false,
@@ -118,12 +116,14 @@
 	const t = uiText();
 	// the collection's declared search fields, else its label's text fields (the Table searches those by `like`)
 	const lexicalFields = $derived((x?.search?.length ?? 0) > 0 ? x!.search! : (x?.label ?? []).filter((f) => likeWhere(x, [f], 'x') !== undefined));
-	const lexical = $derived(collection === '' || lexicalFields.length > 0);
-	const indexes = $derived(offered ? searchIndexes(x, onProbe !== undefined, { meaning: t('searchMeaning'), raw: t('searchRaw'), view: t('searchView') }) : []);
+	// a local array (a custom view's rows) searches its own columns, even when it names the collection its menu acts on
+	const local = $derived(collection === '' || source !== collection);
+	const lexical = $derived(local || lexicalFields.length > 0);
+	const indexes = $derived(offered && !local ? searchIndexes(x, onProbe !== undefined, { meaning: t('searchMeaning'), raw: t('searchRaw'), view: t('searchView') }) : []);
 	// the search icon exists only over something searchable: the collection's search fields or a declared index
 	const canSearch = $derived(offered && (lexical || indexes.length > 0));
 	// a collection's declared search fields; a local array searches the columns it shows (the roster's people)
-	const fieldsSearched = $derived(collection === ''
+	const fieldsSearched = $derived(local
 		? Object.keys(catalog[source]?.fields ?? {}).map((f) => pathLabel(catalog, source, f, humanize))
 		: lexicalFields.map((s) => pathLabel(catalog, collection, s, humanize)));
 	let index = $state<string | null>(untrack(() => SEMANTIC_SEARCH.test(q) ? 'semantic' : null));
@@ -178,7 +178,7 @@
 		return f.length === 0 ? msg(bolt, 'table.search', 'Search') : msg(bolt, 'table.searchIn', 'Search {fields}', { fields: f.join(', ') });
 	});
 
-	// ── the actions menu: callables, the integration's run, export, delete-selected, the author's items ──
+	// ── the actions menu: callables, the integration's run, the pipeline's feeds, export, delete-selected, the author's items ──
 	const callables = $derived(cfg?.actions === false ? [] : Object.entries(x?.actions ?? {}).flatMap(([name, a]) => a.target === 'record' && selected === undefined ? [] : [{ name, ...a }]));
 	const picked = $derived(selected ?? []);
 	const items = $derived(cfg?.actions === false || cfg?.actions === undefined ? [] : cfg.actions);
@@ -188,102 +188,151 @@
 	const canImport = $derived(feeds?.import !== undefined && kinds.upload !== undefined);
 	const canExport = $derived(cfg?.actions !== false && cfg?.export !== false && exporter !== undefined && feeds?.export === undefined);
 	const canDelete = $derived(cfg?.actions !== false && cfg?.delete === true && x?.delete === true);
-	// every entry of the menu, each in its group (bulk, import, general); a callable's entry opens its form inline
-	type Entry = { key: string; group: ToolbarGroup; glyph: GlyphName; icon?: string; text: string; hint?: string; why: string | null; onclick: () => void;
-		danger?: true; form?: { callable: string; target: string | undefined } };
+	type Group = 'bulk' | 'import' | 'general';
+	// every row of the menu, each in its group: an icon, its words, and the button that runs `act` (a callable's opens its form inline)
+	type Entry = { key: string; group: Group; glyph: GlyphName; icon?: string; text: string; hint?: string; why: string | null; button: string;
+		act: () => unknown; saved?: string; danger?: true; form?: { callable: string; target: string | undefined } };
 	const entries = $derived.by((): Entry[] => {
 		const ids = [...picked] as never;
 		const selectFirst = msg(bolt, 'view.selectRows', 'Select rows first');
+		const run = msg(bolt, 'view.run', 'Run');
 		return [
 			...callables.map((c): Entry => {
 				const callable = `${collection}.${c.name}`;
 				return { key: callable, group: c.target === 'record' ? 'bulk' : 'general', glyph: 'play', text: humanize(c.name), hint: c.description,
-					why: c.target === 'record' && picked.length !== 1 ? msg(bolt, 'view.selectOne', 'Select one row') : null,
-					onclick: () => (form = form === callable ? null : callable), form: { callable, target: c.target } };
+					why: c.target === 'record' && picked.length !== 1 ? msg(bolt, 'view.selectOne', 'Select one row') : null, button: run,
+					act: () => (form = form === callable ? null : callable), form: { callable, target: c.target } };
 			}),
-			...items.map((item): Entry => ({ key: `item:${item.label}`, group: item.group ?? (item.requiresSelection ? 'bulk' : 'general'),
-				glyph: 'start' in item ? 'sync' : 'play', text: item.label, why: item.disabled?.(ids) ?? (item.requiresSelection && picked.length === 0 ? selectFirst : null),
-				onclick: () => run(item), ...(item.icon === undefined ? {} : { icon: item.icon }), ...(item.description === undefined ? {} : { hint: item.description }) })),
+			...items.map((item): Entry => ({ key: `item:${item.name}`, group: item.requiresSelection ? 'bulk' : 'general', glyph: 'play', icon: item.icon,
+				text: item.name, why: item.disabled?.(ids) ?? (item.requiresSelection && picked.length === 0 ? selectFirst : null), button: run,
+				act: () => item.run([...picked] as never), ...(item.description === undefined ? {} : { hint: item.description }) })),
 			...(sync ? [{ key: 'sync', group: 'import', glyph: 'sync', text: msg(bolt, 'view.sync', 'Sync now'), hint: msg(bolt, 'view.syncHint', 'Pull the latest records from the source'),
-				why: null, onclick: () => start(`${collection}.integration`, { mode: 'pull' }) } satisfies Entry] : []),
+				why: null, button: msg(bolt, 'view.syncButton', 'Sync'), act: () => bolt.start(`${collection}.integration`, { mode: 'pull' }) } satisfies Entry] : []),
 			...(canImport ? [{ key: 'import', group: 'import', glyph: 'upload', text: msg(bolt, 'view.import', 'Import…'), hint: feeds?.import, why: null,
-				onclick: () => picker?.click() } satisfies Entry] : []),
+				button: msg(bolt, 'view.upload', 'Upload'), act: () => void picker?.click() } satisfies Entry] : []),
+			// the import's sheet, from the feed's declared fields (and its template rows): a run whose file RunStatus links
+			...(canImport ? [{ key: 'template', group: 'import', glyph: 'download', text: msg(bolt, 'view.template', 'Download template'),
+				hint: msg(bolt, 'view.templateHint', 'The import\'s columns as a spreadsheet'), why: null, button: msg(bolt, 'view.download', 'Download'),
+				act: () => bolt.start(`${collection}.pipeline`, { mode: 'template', ...scoped() }) } satisfies Entry] : []),
 			...(feeds?.export !== undefined ? [{ key: 'export-feed', group: 'import', glyph: 'download', text: msg(bolt, 'view.exportFeed', 'Export'), hint: feeds.export, why: null,
-				onclick: () => start(`${collection}.pipeline`, { mode: 'export' }) } satisfies Entry] : []),
+				button: msg(bolt, 'view.download', 'Download'), act: () => bolt.start(`${collection}.pipeline`, { mode: 'export' }) } satisfies Entry] : []),
 			...(canExport ? [{ key: 'export', group: 'import', glyph: 'download', text: msg(bolt, 'table.export', 'Export CSV'), hint: msg(bolt, 'view.exportHint', 'The rows in view, as shown'),
-				why: null, onclick: exportCsv } satisfies Entry] : []),
+				why: null, button: msg(bolt, 'view.download', 'Download'), act: exportCsv } satisfies Entry] : []),
 			...(canDelete ? [{ key: 'delete', group: 'bulk', glyph: 'trash', text: msg(bolt, 'table.delete', 'Delete selected'), why: picked.length === 0 ? selectFirst : null,
-				onclick: remove, danger: true } satisfies Entry] : []),
+				button: msg(bolt, 'view.deleteButton', 'Delete'), act: remove, saved: msg(bolt, 'outcome.deleted', 'Deleted'), danger: true } satisfies Entry] : []),
 		];
 	});
 	const groups = $derived(([['bulk', msg(bolt, 'view.group.bulk', 'Bulk')], ['import', msg(bolt, 'view.group.import', 'Import & export')], ['general', msg(bolt, 'view.group.general', 'General')]] as const)
 		.map(([g, title]) => ({ g, title, of: entries.filter((e) => e.group === g) })).filter((x) => x.of.length > 0));
 	const menu = $derived(entries.length > 0);
 
-	let searchOpen = $state(false), menuOpen = $state(false), busy = $state(false);
+	let searchOpen = $state(false), menuOpen = $state(false);
 	// the icon reads as on while a search holds the view
 	const searching = $derived(text !== '' || index !== null);
 	let picker = $state<HTMLInputElement>();
 	let form = $state<string | null>(null);
-	let notice = $state<string | null>(null);
 	let runs = $state<{ automation: string; id: string }[]>([]);
+	// each row's state, as a query's is: running, done (briefly), or failed with its message until it runs again
+	type Status = { state: 'pending' } | { state: 'done' } | { state: 'review' } | { state: 'failed'; message: string };
+	let status = $state<{ [key: string]: Status }>({});
+	const mark = (key: string, s: Status) => {
+		status = { ...status, [key]: s };
+		if (s.state === 'done') setTimeout(() => { if (status[key] === s) status = Object.fromEntries(Object.entries(status).filter(([k]) => k !== key)); }, 2500);
+	};
+	const ok = (o: Outcome) => o.kind === 'committed' || o.kind === 'pendingApproval';
+	const isOutcome = (v: unknown): v is Outcome => typeof v === 'object' && v !== null && 'kind' in v
+		&& ['committed', 'pendingApproval', 'refused', 'conflict', 'unknown'].includes(String(v.kind));
+	const thenable = (v: unknown): v is PromiseLike<unknown> => typeof v === 'object' && v !== null && 'then' in v && typeof v.then === 'function';
+	const isRun = (v: unknown): v is RunHandle => thenable(v) && 'id' in v && typeof v.id === 'string' && 'automation' in v && typeof v.automation === 'string';
 	const say = (o: Outcome, saved?: string) => {
 		notify(bolt, o, saved);
 		if (o.kind === 'committed') for (const f of filesOf(o.output)) window.open(bolt.fileUrl(f), '_blank', 'noopener');
-		if (o.kind === 'committed' || o.kind === 'pendingApproval') onSettled?.();
+		if (ok(o)) onSettled?.();
 	};
-	const start = (automation: string, input: Json) => {
-		runs = [...runs, { automation, id: bolt.start(automation, input).id }];
+	// a run handle's run shows under the toolbar, which says its success; only a refused start is the row's to say
+	const track = (h: RunHandle) => {
+		runs = [...runs, { automation: h.automation, id: h.id }];
 		menuOpen = false;
+		return Promise.resolve(h).then((o) => (ok(o) ? undefined : o));
 	};
-	async function run(item: ToolbarItem) {
-		const ids = [...picked];
-		if ('run' in item) { menuOpen = false; return void (await item.run(ids as never)); }
-		if ('start' in item) return start(item.start, item.input(ids) as Json);
-		if (item.confirm !== undefined && !confirm(item.confirm)) return;
-		menuOpen = false;
-		say(await bolt.act(item.action, (item.input?.(ids) ?? { target: ids }) as Json));
-	}
-	// the file is uploaded to `<c>.$import` (the member's own), then the run reads it back as the feed's input
-	async function importFile(file: File | undefined) {
-		if (file === undefined || kinds.upload === undefined) return;
-		busy = true;
+	/** Runs a row's handler and keeps its state, the way a view keeps a read's: pending, done, or the error in place and as a toast. */
+	async function perform(key: string, act: () => unknown, saved?: string) {
+		if (status[key]?.state === 'pending') return;
 		try {
-			const ref = await kinds.upload(file, `${collection}.$import`);
-			start(`${collection}.pipeline`, { mode: 'import', file: ref.id });
+			let out = act();
+			if (isRun(out)) out = track(out);
+			else if (!thenable(out)) return void (menuOpen = false);
+			mark(key, { state: 'pending' });
+			const v = await out;
+			if (isOutcome(v)) {
+				say(v, saved);
+				if (!ok(v)) return mark(key, { state: 'failed', message: outcomeText(bolt, v) });
+			}
+			mark(key, { state: 'done' });
 		} catch (e) {
-			notice = e instanceof Error ? e.message : String(e);
-		} finally {
-			busy = false;
-			if (picker) picker.value = '';
+			const message = e instanceof Error ? e.message : String(e);
+			toast.error(message);
+			mark(key, { state: 'failed', message });
 		}
 	}
-	async function remove() {
-		if (!confirm(msg(bolt, 'table.confirmDelete', 'Delete {n} rows?', { n: picked.length }))) return;
-		menuOpen = false;
-		say(await bolt.act(`${collection}.delete`, { target: [...picked] }), msg(bolt, 'outcome.deleted', 'Deleted'));
+	// ── the import: the file is uploaded to `<c>.$import` (the member's own), then the run reads it back as the feed's input.
+	// Its run is watched to its end: pending, done with its counts, its findings to review (warnings to accept), or its error.
+	type Finding = { row: number | null; column: string; message: string; severity: 'warn' | 'refuse' };
+	let imported = $state<{ id: string; file: string } | null>(null);
+	const importRun = live(() => imported === null || bolt.runs === undefined ? null : bolt.runs(`${collection}.pipeline`, { where: { id: { eq: imported.id } }, limit: 1 }));
+	const importRow = $derived(imported === null ? undefined : importRun.value?.rows.find((r) => r.id === imported?.id));
+	const importOut = $derived(importRow?.status === 'succeeded' && typeof importRow.result === 'object' && importRow.result !== null && !Array.isArray(importRow.result)
+		? importRow.result as { readonly [k: string]: Json } : null);
+	const findings = $derived((Array.isArray(importOut?.['findings']) ? importOut['findings'] : []).flatMap((f): Finding[] => typeof f === 'object' && f !== null && !Array.isArray(f)
+		? [{ row: typeof f['row'] === 'number' ? f['row'] : null, column: String(f['column'] ?? ''), message: String(f['message'] ?? ''), severity: f['severity'] === 'warn' ? 'warn' : 'refuse' }] : []));
+	const blocked = $derived(findings.some((f) => f.severity === 'refuse'));
+	const importStatus = $derived.by((): Status | undefined => {
+		if (imported === null) return undefined;
+		const r = importRow;
+		if (r === undefined || !['succeeded', 'failed', 'stopped', 'skipped'].includes(r.status)) return { state: 'pending' };
+		if (r.status !== 'succeeded') return { state: 'failed', message: r.error?.message ?? r.error?.code ?? msg(bolt, `run.status.${r.status}`, r.status) };
+		if (importOut?.['applied'] === false) return blocked ? { state: 'failed', message: msg(bolt, 'view.importRefused', 'Nothing was imported: fix the rows below and upload the file again.') }
+			: { state: 'review' };
+		return { state: 'done' };
+	});
+	const pending = $derived(Object.values(status).some((s) => s.state === 'pending') || importStatus?.state === 'pending');
+	const counts = $derived(importOut?.['applied'] === true ? msg(bolt, 'view.imported', '{created} created, {updated} updated, {deleted} deleted',
+		{ created: Number(importOut['created'] ?? 0), updated: Number(importOut['updated'] ?? 0), deleted: Number(importOut['deleted'] ?? 0) }) : '');
+	// the run ends while the menu is closed: say so, and open the menu on findings to review
+	watch(() => importStatus?.state, (now, before) => {
+		if (now === undefined || now === 'pending' || now === before) return;
+		if (now === 'done') toast.success(counts);
+		else if (now === 'failed' && importStatus?.state === 'failed') { toast.error(importStatus.message); menuOpen = true; }
+		else if (now === 'review') menuOpen = true;
+	});
+	const scoped = (): { readonly [k: string]: Json } => (cfg?.context === undefined ? {} : { context: cfg.context });
+	function startImport(file: string, accept: boolean) {
+		const h = bolt.start(`${collection}.pipeline`, { mode: 'import', file, ...(accept ? { accept } : {}), ...scoped() });
+		if (bolt.runs === undefined) return track(h); // no run reads here: RunStatus says so
+		return Promise.resolve(h).then((o) => { if (!ok(o)) return o; imported = { id: h.id, file }; return undefined; });
 	}
+	async function importFile(file: File | undefined) {
+		const upload = kinds.upload;
+		if (file === undefined || upload === undefined) return;
+		imported = null;
+		await perform('import', () => upload(file, `${collection}.$import`).then((ref) => startImport(ref.id, false)));
+		if (picker) picker.value = '';
+	}
+	const accept = (file: string) => perform('import', () => startImport(file, true));
+	const remove = () => confirm(msg(bolt, 'table.confirmDelete', 'Delete {n} rows?', { n: picked.length })) ? bolt.act(`${collection}.delete`, { target: [...picked] }) : undefined;
 	// a download the browser builds (§3.6): the rows in view, the view's columns; enums in their words, dates as ISO text,
 	// behind a BOM so Excel reads UTF-8 (Chinese included)
 	async function exportCsv() {
 		if (exporter === undefined) return;
-		busy = true;
-		try {
-			const rows = unref(kinds.catalog, collection, exporter.fields, rowsOf(await exporter.read()), bolt.locale);
-			const cell = (s: string) => /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
-			const kindOf = (f: string) => (kinds.catalog?.[collection] ?? catalog[source])?.fields[f];
-			const words = (f: string) => (v: string) => enumText(v, { t: (k) => bolt.t(k), collection, field: f });
-			const text = CSV_BOM + [exporter.labels, ...rows.map((r) => exporter.fields.map((f) => csvCell(r, f, kindOf(f), words(f), bolt.locale)))]
-				.map((line) => line.map(cell).join(',')).join('\r\n');
-			const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'text/csv' })), download: `${collection || 'rows'}.csv` });
-			a.click();
-			URL.revokeObjectURL(a.href);
-			menuOpen = false;
-		} catch (e) {
-			notice = e instanceof Error ? e.message : String(e);
-		} finally {
-			busy = false;
-		}
+		const rows = unref(kinds.catalog, collection, exporter.fields, rowsOf(await exporter.read()), bolt.locale);
+		const cell = (s: string) => /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+		const kindOf = (f: string) => (kinds.catalog?.[collection] ?? catalog[source])?.fields[f];
+		const words = (f: string) => (v: string) => enumText(v, { t: (k) => bolt.t(k), collection, field: f });
+		const text = CSV_BOM + [exporter.labels, ...rows.map((r) => exporter.fields.map((f) => csvCell(r, f, kindOf(f), words(f), bolt.locale)))]
+			.map((line) => line.map(cell).join(',')).join('\r\n');
+		const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'text/csv' })), download: `${collection || 'rows'}.csv` });
+		a.click();
+		URL.revokeObjectURL(a.href);
 	}
 	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
 	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
@@ -292,17 +341,50 @@
 </script>
 
 {#snippet menuRow(e: Entry)}
-	<button type="button" class="hover:bg-accent flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 {e.danger ? 'text-destructive' : ''}"
-		disabled={e.why !== null || busy} title={e.why ?? undefined} onclick={e.onclick} data-menu-item={e.key}>
-		{#if e.icon}<Icon name={e.icon} class="text-muted-foreground mt-0.5 size-4 shrink-0" />{:else}<Glyph name={e.glyph} class="text-muted-foreground mt-0.5 size-4 shrink-0" />{/if}
-		<span class="min-w-0 flex-1"><span class="block font-medium">{e.text}</span>
-			{#if e.hint || e.why}<span class="text-muted-foreground block text-xs">{e.why ?? e.hint}</span>{/if}</span>
-	</button>
+	{@const st = e.key === 'import' && importStatus !== undefined && status['import']?.state !== 'failed' ? importStatus : status[e.key]}
+	{@const open = e.form !== undefined && form === e.form.callable}
+	<!-- one row: the icon in its tile, the name over its description (or why it cannot run, or its error), its button -->
+	<div class="flex min-w-0 items-center gap-3 rounded-md px-2 py-2" data-menu-item={e.key} data-status={st?.state}>
+		<span class="bg-muted grid size-8 shrink-0 place-items-center rounded-md {e.danger ? 'text-destructive' : 'text-muted-foreground'}">
+			{#if e.icon}<Icon name={e.icon} class="size-4" />{:else}<Glyph name={e.glyph} class="size-4" />{/if}
+		</span>
+		<span class="min-w-0 flex-1">
+			<span class="block truncate text-sm font-medium {e.danger ? 'text-destructive' : ''}">{e.text}</span>
+			{#if st?.state === 'failed'}<span role="alert" class="text-destructive block text-xs" data-menu-error>{st.message}</span>
+			{:else if e.key === 'import' && st?.state === 'review'}<span class="text-warning-foreground dark:text-warning block text-xs" data-menu-review>{msg(bolt, 'view.importReview', 'Review {n} warnings before importing', { n: findings.length })}</span>
+			{:else if e.key === 'import' && st?.state === 'done' && counts !== ''}<span class="text-muted-foreground block text-xs">{counts}</span>
+			{:else if e.why ?? e.hint}<span class="text-muted-foreground block text-xs">{e.why ?? e.hint}</span>{/if}
+		</span>
+		<Button size="sm" variant={e.danger ? 'destructive' : open ? 'secondary' : 'outline'} class="shrink-0 px-2.5" aria-label={e.text}
+			aria-expanded={e.form === undefined ? undefined : open} aria-busy={st?.state === 'pending'} disabled={e.why !== null || st?.state === 'pending'}
+			title={e.why ?? undefined} onclick={() => (e.form === undefined ? perform(e.key, e.act, e.saved) : e.act())}>
+			{#if st?.state === 'pending'}<Spinner class="size-3.5" label={msg(bolt, 'view.running', 'Running')} />
+			{:else if st?.state === 'done'}<Glyph name="check" class="size-3.5" />{/if}
+			{st?.state === 'done' ? msg(bolt, 'view.done', 'Done') : e.button}
+		</Button>
+	</div>
+	{#if e.key === 'import' && imported !== null && findings.length > 0 && (st?.state === 'review' || st?.state === 'failed')}
+		<!-- the import's findings: each sheet row's problem; with only warnings, accepting re-submits the same file -->
+		<div class="border-border mx-2 mb-1 grid gap-2 rounded-md border p-2" data-import-findings>
+			<ul class="grid max-h-48 gap-1 overflow-y-auto text-xs">
+				{#each findings as f, i (i)}
+					{@const at = [f.row === null ? '' : msg(bolt, 'view.row', 'Row {row}', { row: f.row }), f.column].filter((x) => x !== '').join(' · ')}
+					<li class="flex items-start gap-1.5" data-finding={f.severity}>
+						<Glyph name="alert" class="mt-px size-3.5 shrink-0 {f.severity === 'refuse' ? 'text-destructive' : 'text-warning-foreground dark:text-warning'}" />
+						<span class="min-w-0">{#if at !== ''}<span class="font-medium">{at}:</span>{' '}{/if}{f.message}</span>
+					</li>
+				{/each}
+			</ul>
+			{#if !blocked}
+				<Button size="sm" class="justify-self-end" onclick={() => accept(imported!.file)} data-import-accept>{msg(bolt, 'view.acceptImport', 'Accept and import')}</Button>
+			{/if}
+		</div>
+	{/if}
 {/snippet}
 
 {#if cfg !== null}
 	<div class="@container flex min-w-0 flex-col gap-1.5" data-view-toolbar>
-		{#if canImport}<input bind:this={picker} type="file" accept=".json,application/json" class="hidden" data-view-import
+		{#if canImport}<input bind:this={picker} type="file" accept=".json,.xlsx,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden" data-view-import
 			onchange={(e) => importFile(e.currentTarget.files?.[0])} />{/if}
 		<div class="flex min-w-0 flex-wrap items-center gap-1">
 			{#if title}<h2 class="min-w-0 truncate text-sm font-semibold" data-view-title>{title}</h2>{/if}
@@ -389,14 +471,14 @@
 				<Popover.Root bind:open={menuOpen}>
 					<Popover.Trigger>
 						{#snippet child({ props })}
-							<Button {...props} size="icon" variant="ghost" hint={msg(bolt, 'view.actions', 'Actions')} aria-label={msg(bolt, 'view.actions', 'Actions')} data-view-actions>
-								<Glyph name="zap" />
+							<Button {...props} size="icon" variant="ghost" hint={msg(bolt, 'view.actions', 'Actions')} aria-label={msg(bolt, 'view.actions', 'Actions')} aria-busy={pending} data-view-actions>
+								{#if pending}<Spinner label={msg(bolt, 'view.running', 'Running')} />{:else}<Glyph name="zap" />{/if}
 							</Button>
 						{/snippet}
 					</Popover.Trigger>
-					<Popover.Content align="start" class="flex max-h-[min(70dvh,36rem)] w-[min(24rem,calc(100vw-1rem))] flex-col gap-0.5 overflow-y-auto p-1.5" data-view-menu>
+					<Popover.Content align="start" class="flex max-h-[min(70dvh,36rem)] w-[min(26rem,calc(100vw-1rem))] flex-col overflow-y-auto p-1.5" data-view-menu>
 						{#each groups as grp, gi (grp.g)}
-							<p class={['text-muted-foreground px-2 pb-1 text-xs font-medium', gi === 0 ? 'pt-1' : 'mt-1 border-t pt-2']} data-menu-group={grp.g}>{grp.title}</p>
+							<p class={['text-overline text-muted-foreground px-2 pb-1', gi === 0 ? 'pt-1' : 'mt-1 border-t pt-2']} data-menu-group={grp.g}>{grp.title}</p>
 							{#each grp.of as e (e.key)}
 								{@render menuRow(e)}
 								{#if e.form !== undefined && form === e.form.callable}
@@ -436,7 +518,6 @@
 			</div>
 		{/if}
 		{#if view?.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>{view.notice}</p>{/if}
-		{#if notice}<p role="status" class="text-muted-foreground text-xs">{notice}</p>{/if}
 		{#each runs as r (r.id)}<RunStatus automation={r.automation} run={r.id} />{/each}
 	</div>
 {/if}

@@ -1,7 +1,7 @@
 // Typed read literals → the query IR (A4, K3). This is decode: an unknown key or operator is `invalid` here, never a
 // silently ignored filter (§3.3.9). Field names are checked against the model; exposure is the compiler's (it knows
 // who reads). Shared by the engine and the browser client (`decodeView`), so it lives outside `engine/` (L-BOLT-1000).
-import type { Arg, Bucket, Cmp, Order, PageIR, Pred, ReadIR, RelSelectIR, SelectIR } from '../engine/contracts.ts';
+import type { Arg, Bucket, Cmp, MemberRef, Order, PageIR, Pred, ReadIR, RelSelectIR, SelectIR } from '../engine/contracts.ts';
 import { BoltError, LIMITS } from '../engine/contracts.ts';
 import type { Json } from '../decl/values.ts';
 import type { Operand } from '../decl/where.ts';
@@ -18,6 +18,10 @@ export const isOperand = (v: unknown): v is Operand => {
 	const ks = Object.keys(v);
 	return 'startOf' in v ? ks.every((k) => k === 'startOf' || k === 'shift') : ks.length === 1 && OPERAND_KEYS.includes(ks[0]!);
 };
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** `{ member, field }`: a keyed read's reference to an earlier member's values (`MemberRef`). */
+export const isMemberRef = (v: unknown): v is MemberRef => isObj(v) && Object.keys(v).length === 2
+	&& typeof v.member === 'string' && /^[A-Za-z0-9_:]+$/.test(v.member) && typeof v.field === 'string' && v.field.split('.').every((part) => NAME.test(part));
 const CMP: readonly string[] = ['eq', 'ne', 'lt', 'lte', 'gt', 'gte'];
 const ORDERED = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'date', 'instant', 'time', 'duration', 'text']);
 const NUM = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration']);
@@ -26,6 +30,8 @@ const OFFSET = /^([+-]\d+(s|min|h|d))?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DEC = /^-?\d+(\.\d+)?$/;
+/** `$search` / `$similar` text, and `$similar`'s nearest rows: 20 unless it says, at most 200. */
+const SEARCH_MAX_TEXT = 500, SIMILAR_TOP = 20, SIMILAR_MAX_TOP = 200;
 
 function model(cat: Catalog, name: string): ModelInfo {
 	const m = cat.models.get(name);
@@ -148,7 +154,7 @@ function fieldOps(info: ModelInfo, f: FieldInfo, ops: unknown, path: string): Pr
 				return { t: 'cmp', field: f.name, op: op as Cmp, arg: val(info, f, v, at) };
 			}
 			if (op === 'in' || op === 'nin') return { t: 'in', field: f.name, negated: op === 'nin',
-				args: isOperand(v) ? operand(info, f, v, at, true) : list(v, at).map((x, i) => literal(f, x, `${at}[${i}]`)) };
+				args: isMemberRef(v) ? { member: v.member, field: v.field } : isOperand(v) ? operand(info, f, v, at, true) : list(v, at).map((x, i) => literal(f, x, `${at}[${i}]`)) };
 			if (op === 'like' && f.kind === 'text') {
 				if (typeof v !== 'string') throw invalid(`${at}: takes a pattern string`);
 				return { t: 'like', field: f.name, pattern: v };
@@ -174,6 +180,18 @@ export function where(cat: Catalog, m: string, w: unknown, depth = 0, path = 'wh
 		const at = `${path}.${key}`;
 		if (key === 'and' || key === 'or') of.push({ t: key, of: list(v, at).map((x, i) => sub(x, `${at}[${i}]`)) });
 		else if (key === 'not') of.push({ t: 'not', of: sub(v, at) });
+		else if (key === '$search') {
+			if (info.search.length === 0) throw invalid(`${at}: '${m}' declares no search.text (rule 16)`);
+			if (typeof v !== 'string' || v.trim() === '' || v.length > SEARCH_MAX_TEXT) throw invalid(`${at}: takes 1–${SEARCH_MAX_TEXT} characters`);
+			of.push({ t: 'search', text: v });
+		} else if (key === '$similar') {
+			if (info.semantic === undefined) throw invalid(`${at}: '${m}' declares no search.semantic (rule 16)`);
+			const o = typeof v === 'string' ? { to: v } : v;
+			const to = isObj(o) ? o.to : undefined, top = isObj(o) ? o.top ?? SIMILAR_TOP : undefined;
+			if (!isObj(o) || Object.keys(o).some((k) => k !== 'to' && k !== 'top') || typeof to !== 'string' || to.trim() === '' || to.length > SEARCH_MAX_TEXT
+				|| !Number.isSafeInteger(top) || (top as number) < 1 || (top as number) > SIMILAR_MAX_TOP) throw invalid(`${at}: takes text or { to, top: 1–${SIMILAR_MAX_TOP} }`);
+			of.push({ t: 'similar', to, top: top as number });
+		}
 		else if (info.many.has(key)) {
 			const rel = info.many.get(key)!;
 			for (const [q, x] of nonEmpty(v, at, 'takes some, none, every, count, sum, min, max or avg')) {

@@ -86,7 +86,9 @@ type WhereOver<M, X> =
 	& { [R in keyof OneRels<M> & string]?: OneRelWhere<M, R, X> }
 	& { [R in Crossable<M, X, keyof ManyRels<M> & string>]?: ManyWhere<RelTarget<M, R>, X> }
 	// inline, not an alias applied to itself: a type argument at the top level is resolved eagerly
-	& { and?: readonly WhereOver<M, X>[]; or?: readonly WhereOver<M, X>[]; not?: WhereOver<M, X> };
+	& { and?: readonly WhereOver<M, X>[]; or?: readonly WhereOver<M, X>[]; not?: WhereOver<M, X> }
+	// `search.text`: every word, fuzzily; `search.semantic`: the nearest in meaning and every row nearly as near (at most `top`, default 20)
+	& { $search?: string; $similar?: string | { to: string; top?: number } };
 
 // Conditional on the name: while a call is inferred, its literal is typed against the generic `Where<C>`, whose
 // constraint is then `never`, which is cheap; expanding the generic predicate for every nested literal of every call

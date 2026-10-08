@@ -9,6 +9,7 @@ import { catalogOf } from '../access/pred.ts';
 import { q, type Catalog } from '../../protocol/catalog.ts';
 import * as ir from '../../protocol/ir.ts';
 import { whereSql } from '../query/sql.ts';
+import { composable, readComposed } from '../query/engine.ts';
 import type { Item } from './flatten.ts';
 import { modelKey } from './flatten.ts';
 import { untag } from './sql.ts';
@@ -67,7 +68,8 @@ async function pruned(m: EngineManifest, c: string, key: readonly string[], wher
 		if (e instanceof BoltError && e.code === 'forbidden') return { kind: 'refused', code: 'forbidden', message: e.message };
 		throw e;
 	}
-	const [res] = await db.read([sql]);
+	// its one `id` column (text) parses as its JSON: the read composes with the act's others
+	const [res] = await db.read([composable(sql)]);
 	return res!.rows.map((r) => String(r['id']));
 }
 
@@ -91,7 +93,8 @@ export async function importRefs(db: TenantDb, m: EngineManifest, cat: Catalog, 
 	}
 	if (wants.size === 0) return [...rows];
 	const list = [...wants.values()];
-	const res = await db.read(list.map((w) => ({
+	// every column text: each read composes with the act's others (`readComposed`)
+	const res = await readComposed(db, list.map((w) => composable({
 		text: `SELECT DISTINCT t.id::text AS id, ${w.key.map((f) => `t.${q(f)}::text AS ${q(f)}`).join(', ')} FROM ${q(w.target)} t
 			JOIN jsonb_populate_recordset(null::${q(w.target)}, $1::jsonb) r ON ${w.key.map((f) => `t.${q(f)} = r.${q(f)}`).join(' AND ')}`,
 		params: [JSON.stringify(w.at.map(({ v }) => Object.fromEntries(w.key.map((f) => [f, untag(v[f] ?? null)]))))],

@@ -143,12 +143,12 @@ function answered(q: DecisionQuestion, a: DecisionAnswer | undefined): boolean {
 		&& typeof a.confidence === 'number' && isObj(a.probabilities) && isObj(a.legend);
 }
 
-/** One `sys_1` call: every question answered within its criteria, or a typed failure. Never throws. */
-export async function ask(ai: AiPort | undefined, request: DecisionRequest): Promise<DecisionResult | FacilityError> {
+/** One `sys_1` call: every question answered within its criteria, or a typed failure. Never throws. `ms` narrows the wall. */
+export async function ask(ai: AiPort | undefined, request: DecisionRequest, ms = DECISION_CALL_MS): Promise<DecisionResult | FacilityError> {
 	// P37 (3): the state is text only; a file reaching the engine is refused before any call
 	if (fileIds(request.state).length > 0) return { kind: 'invalid', message: 'a sys_1 state is text only: describe a file (name, mime, size, caption), never pass it' };
 	const valid = (r: unknown): r is DecisionResult | FacilityError => isTyped(r) || (isObj(r) && isObj(r['answers']) && typeof r['costUsd'] === 'number');
-	const d = await callPort('sys_1', ai?.sys_1, DECISION_CALL_MS,
+	const d = await callPort('sys_1', ai?.sys_1, Math.min(ms, DECISION_CALL_MS),
 		(p, signal) => p.ask(request, signal).catch((e: unknown) => isTyped(e) ? { kind: e.kind, message: (e as { message: string }).message } as FacilityError : Promise.reject(e)), valid);
 	return failed(d) || Object.entries(request.questions).every(([id, q]) => answered(q, d.answers[id])) ? d
 		: { kind: 'invalid', message: 'sys_1 answered outside the offered criteria' };

@@ -3,7 +3,7 @@
 // model rules → post-image scope and the approval route → one write statement (rule 20), or the outcome record.
 import type { Json } from '../../decl/values.ts';
 import type {
-ApprovalRoute, Arm, Authority, Bindings, Bridge, Captured, CrossAnswer, EngineManifest, GuestPort, Invocation, InputPath, Lock, NoticeRow, Outcome, Pred, RowData, Sql, TenantDb, WriteArm
+ApprovalRoute, Arm, Authority, Bindings, Bridge, Captured, CrossAnswer, EngineManifest, GuestPort, Invocation, InputPath, Lock, NoticeRow, Outcome, Pred, RowData, Rows, Sql, TenantDb, WriteArm
 } from '../contracts.ts';
 import { BoltError, LIMITS } from '../contracts.ts';
 import { admitMove, readScope } from '../access/authority.ts';
@@ -11,7 +11,7 @@ import { catalogOf } from '../access/pred.ts';
 import { q, type Catalog } from '../../protocol/catalog.ts';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 import { compileGets } from '../query/sql.ts';
-import { readEngine } from '../query/engine.ts';
+import { coalescing, composable, readComposed, readEngine } from '../query/engine.ts';
 import { constraintIndex, type ConstraintMeta } from '../schema/ddl.ts';
 import { schemaSlice } from '../schema/plan.ts';
 import { compileCommit, compileOutcomeRecord, type Commit, type OwnedLock, type RateCharge, type Write } from './commit.ts';
@@ -49,6 +49,9 @@ export type ActRequest = {
 	// hook:callables — rule 31: a collection action records its `ctx.act` writes; the planned commit goes to `sink`
 	// instead of the database (nothing is recorded), and the outcome is the one the action's one statement commits
 	sink?: (planned: { commit: Omit<Commit, 'key' | 'digest' | 'issuedAt' | 'rate'>; lock?: { tables: string[]; mode: 'SHARE ROW EXCLUSIVE' } }) => void;
+	/** The reader of a batch of acts planned together (`calls.acts`): their reads, the transforms' too, coalesce into
+	 * one round trip per step. */
+	db?: TenantDb;
 	/** hook:callables — rows an action recorded earlier in the same act (keyed `collection␀id`), readable as refs (rule 36). */
 	pending?: ReadonlyMap<string, RowData>;
 	/** hook:envoys — rule 41: a channel's delivery-event and reply mapping (rule 61), which per-state `edit` never refuses. */
@@ -75,7 +78,7 @@ export type WriteEngine = {
 	 * The transform's reads as the workspace (rule 15); `tables()` names what it read, for rule 26's lock, and
 	 * `fingerprints()` digests them, for rule 26's assert.
 	 */
-	bridge?: (invocation: Invocation) => Bridge & { tables?(): readonly string[]; fingerprints?(): readonly Fingerprint[] };
+	bridge?: (invocation: Invocation, db?: TenantDb) => Bridge & { tables?(): readonly string[]; fingerprints?(): readonly Fingerprint[] };
 	/** Rule 38: the serving cell's in-memory windows, charged before decode. */
 	admit?: (request: ActRequest) => { retryAfter: number } | null;
 	approval?: ApprovalHook;
@@ -137,7 +140,8 @@ export const expired = (r: ActRequest): Outcome | null => {
 	return age <= 23 * HOUR && age >= -5 * 60_000 ? null : refused('expired', 'The request expired; send it again.');
 };
 
-async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<ActResult> {
+async function pipeline(engine: WriteEngine, r: ActRequest, take: Taker): Promise<ActResult> {
+	const e = r.db === undefined ? engine : { ...engine, db: r.db };
 	const m = e.manifest, cat = catalogOf(m), b = r.bindings;
 	const auth = r.integration ? { ...r.authority, admin: true } : r.authority; // hook:integrations — no grant admits it (rule 23)
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [] });
@@ -179,7 +183,7 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 	// rule 28: an upsert row whose `id` is on file is an update of it (`keep`: left as it is), resolved here, before the
 	// transform, so the transform sees the stored row; a row without an id is a create; an id on no row is refused
 	const upserted: (string | null)[] = [];
-	const onFile = byId ? await readRows(e.db, inputs.flatMap((x) => isObj(x) && typeof x['id'] === 'string' ? [[r.collection, x['id']] as const] : [])) : new Map<string, RowData>();
+	const onFile = byId ? await readRows(e.db, cat, inputs.flatMap((x) => isObj(x) && typeof x['id'] === 'string' ? [[r.collection, x['id']] as const] : [])) : new Map<string, RowData>();
 	const missing = byId ? inputs.findIndex((x) => isObj(x) && x['id'] !== undefined && !onFile.has(k(r.collection, String(x['id'])))) : -1;
 	if (missing >= 0) return none(refused('notFound', `No ${r.collection} has this id.`, [...(inputs.length > 1 || Array.isArray(r.input) ? [missing] : []), 'id']));
 	inputs.forEach((x, i) => {
@@ -208,15 +212,28 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 	// 3. the idempotency record (rule 31): looked up before guest code only on a marked retry
 	const { key, digest, stored } = await idempotency(e, r, auth);
 	if (r.retry) { const o = await stored(); if (o !== null) return none(o); }
-	// rule 30: `prune` deletes the caller-readable rows inside its `Where` whose key the import does not name
+	// the act's own reads: those issued together cross as one round trip and one statement, and a read repeated
+	// before the commit (an import's key resolution, after its transform) is answered from the first
+	const own = memoReads(coalescing(e.db));
+	// rule 30: `prune` deletes the caller-readable rows inside its `Where` whose key the import does not name; an
+	// import's rows matched by key are resolved in the same round trip
+	const transforms = e.transforms?.has(r.collection) === true;
+	const matching = imp !== undefined && transforms ? resolveUpserts(own, m, f.items.filter((i) => i.parent === undefined && i.change.op === 'upsert')) : undefined;
 	if (imp?.prune !== undefined) {
-		const ids = await imp.prune(e.db, auth, b, f.items);
+		const ids = await imp.prune(own, auth, b, f.items);
 		if (!Array.isArray(ids)) return none(ids);
 		for (const id of ids) f.delete(r.collection, id, null, ['prune']);
 	}
 
-	// the host reads (rule 20's `a`): every existing row the input names and every ref it supplies, one round trip
-	const pre = await readRows(e.db, [
+	// the host reads (rule 20's `a`): every existing row the input names and every ref it supplies, and — when the
+	// collection's transform will see them — the root rows in wire form (an import's matched ones too): one round
+	// trip, one statement
+	const wireIds = !transforms ? [] : [...new Set([
+		...f.items.filter((i) => i.parent === undefined && i.change.collection === r.collection && (i.change.op === 'update' || i.change.op === 'delete')).map((i) => i.change.id),
+		...[...(await matching ?? new Map<Item, RowData>()).values()].map((row) => String(row['id'])),
+	])];
+	const wired = wireRows(own, cat, r.collection, wireIds, b).then((rows) => new Map(rows.flatMap((row, i) => row === null ? [] : [[wireIds[i]!, row] as const])));
+	const pre = await readRows(own, cat, [
 		...f.items.filter((i) => i.change.op === 'update' || i.change.op === 'delete').map((i) => [i.change.collection, i.change.id] as const),
 		...f.items.flatMap((i) => i.change.op === 'upsert' && i.change.on.length === 1 && i.change.on[0] === 'id' && typeof i.change.values['id'] === 'string'
 			? [[i.change.collection, i.change.values['id']] as const] : []),
@@ -290,7 +307,7 @@ async function pipeline(e: WriteEngine, r: ActRequest, take: Taker): Promise<Act
 		return none((res.rows[0]?.['outcome'] as Outcome | null) ?? await stored() ?? outcome);
 	};
 	for (let attempt = 0; ; attempt++) {
-		const planned = await plan(e, r, env, f.items, pre, imp, byId ? upserted : undefined);
+		const planned = await plan(e, r, env, f.items, pre, imp, byId ? upserted : undefined, await wired, own);
 		if ('outcome' in planned) return planned.guest && r.sink === undefined ? record(planned.outcome) : none(planned.outcome);
 		if (r.sink !== undefined) { // hook:callables
 			r.sink(planned);
@@ -343,12 +360,15 @@ async function readHops(db: TenantDb, auth: Authority, cat: Catalog, from: reado
 	}
 	const statements = [...seeds.values()].flatMap(({ path, ids }) => path.map((_, d) => {
 		const joins = path.slice(1, d + 1).map(([fk, t], j) => `JOIN ${q(t)} t${j + 1} ON t${j + 1}.id = t${j}.${q(fk)}`).join(' ');
-		return { target: path[d]![1], text: `SELECT t${d}.*, t${d}.id::text AS id FROM ${q(path[0]![1])} t0 JOIN jsonb_populate_recordset(null::${q(path[0]![1])}, $1::jsonb) r ON t0.id = r.id ${joins}`,
+		return { target: path[d]![1], text: `SELECT ${exactRowSql(cat, path[d]![1], `t${d}`)} AS j FROM ${q(path[0]![1])} t0 JOIN jsonb_populate_recordset(null::${q(path[0]![1])}, $1::jsonb) r ON t0.id = r.id ${joins}`,
 			params: [JSON.stringify([...ids].map((id) => ({ id })))] };
 	}));
 	if (statements.length === 0) return new Map();
-	const res = await db.read(statements.map(({ text, params }) => ({ text, params })));
-	return new Map(statements.flatMap((s, i) => res[i]!.rows.map((row) => [k(s.target, String(row['id'])), row] as const)));
+	const res = await readComposed(db, statements.map(({ text, params }) => composable({ text, params })));
+	return new Map(statements.flatMap((s, i) => res[i]!.rows.map((row) => {
+		const got = exactRow(cat, s.target, row['j']!);
+		return [k(s.target, String(got['id'])), got] as const;
+	})));
 }
 export const list = (input: Json, verb: Verb): readonly Json[] => {
 	if (Array.isArray(input)) return input;
@@ -388,35 +408,83 @@ function judgePre(auth: Authority, env: EvalEnv, collection: string, o: 'create'
 	return field === undefined ? true : { field };
 }
 
-/** Reads rows by id, one pipelined round trip, keyed `collection␀id`. */
-export async function readRows(db: TenantDb, want: readonly (readonly [string, string])[]): Promise<Map<string, RowData>> {
+/** The array types the adapters parse element by element (`db/wire.ts`); any other array arrives as its text. */
+const PARSED_ARRAYS = new Set(['bool', 'int2', 'int4', 'int8', 'text', 'varchar', 'uuid', 'date', 'timestamptz', 'jsonb']);
+const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
+/**
+ * A stored row of `table` at alias `a` as one jsonb that equals what the adapters parse of `SELECT a.*` (numerics and
+ * unparsed arrays as their text, the id as text), so an act's own reads compose into one statement (`exactRow` ends it).
+ */
+export function exactRowSql(cat: Catalog, table: string, a: string): string {
+	const over = [`'id', ${a}.id::text`];
+	for (const f of cat.models.get(table)?.fields.values() ?? [])
+		if (f.name !== 'id' && (f.many ? !PARSED_ARRAYS.has(f.pg) : f.pg === 'numeric')) over.push(`${lit(f.column)}, ${a}.${q(f.column)}::text`);
+	return `(to_jsonb(${a}) || jsonb_build_object(${over.join(', ')}))`;
+}
+/** `exactRowSql`'s jsonb as the parsed row: an instant reads `Z`, as the adapters give it. */
+export function exactRow(cat: Catalog, table: string, j: Json): RowData {
+	const row = { ...(j as { [column: string]: Json }) };
+	const z = (v: Json): Json => typeof v === 'string' ? v.replace(/\+00:00$/, 'Z') : v;
+	for (const f of cat.models.get(table)?.fields.values() ?? []) {
+		if (f.pg !== 'timestamptz' || row[f.column] == null) continue;
+		const v = row[f.column]!;
+		row[f.column] = Array.isArray(v) ? v.map(z) : z(v);
+	}
+	return row;
+}
+
+/** A reader that answers a statement it has answered already (the same text and parameters) from the first answer. */
+function memoReads(db: TenantDb): TenantDb {
+	const seen = new Map<string, Promise<Rows>>();
+	return { ...db, read: (statements, signal) => {
+		const keys = statements.map((s) => JSON.stringify([s.text, s.params]));
+		const miss = statements.filter((_, i) => !seen.has(keys[i]!));
+		if (miss.length > 0) {
+			const answer = db.read(miss, signal);
+			miss.forEach((s, j) => seen.set(JSON.stringify([s.text, s.params]), answer.then((rows) => rows[j]!)));
+		}
+		return Promise.all(keys.map((key) => seen.get(key)!));
+	} };
+}
+
+/** Reads rows by id, one round trip and one composed statement, keyed `collection␀id`. */
+export async function readRows(db: TenantDb, cat: Catalog, want: readonly (readonly [string, string])[]): Promise<Map<string, RowData>> {
 	const byTable = Map.groupBy(want, ([c]) => c);
 	if (byTable.size === 0) return new Map();
 	const tables = [...byTable.keys()];
-	const res = await db.read(tables.map((t) => ({
-		text: `SELECT t.*, t.id::text AS id FROM ${q(t)} t JOIN jsonb_populate_recordset(null::${q(t)}, $1::jsonb) r ON t.id = r.id`,
+	const res = await readComposed(db, tables.map((t) => composable({
+		text: `SELECT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(null::${q(t)}, $1::jsonb) r ON t.id = r.id`,
 		params: [JSON.stringify([...new Set(byTable.get(t)!.map(([, id]) => id))].map((id) => ({ id })))],
 	})));
-	return new Map(tables.flatMap((t, i) => res[i]!.rows.map((row) => [k(t, String(row['id'])), row] as const)));
+	return new Map(tables.flatMap((t, i) => res[i]!.rows.map((row) => {
+		const got = exactRow(cat, t, row['j']!);
+		return [k(t, String(got['id'])), got] as const;
+	})));
 }
 
 type Planned = { guest: boolean } & ({ outcome: Outcome } | { commit: Omit<Commit, 'key' | 'digest' | 'issuedAt' | 'rate'>; lock?: { tables: string[]; mode: 'SHARE ROW EXCLUSIVE' } });
 
 /** Steps 6–8: the transform, defaults, upsert resolution, model rules, post-image scope and the approval route. */
-async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: readonly Item[], pre: Map<string, RowData>, imp?: ImportPlan, upserted?: (string | null)[]): Promise<Planned> {
+async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: readonly Item[], pre: Map<string, RowData>, imp?: ImportPlan, upserted?: (string | null)[],
+	wired: ReadonlyMap<string, RowData> = new Map(), own: TenantDb = e.db): Promise<Planned> {
 	const m = e.manifest, auth = env.authority!, b = r.bindings, cat = env.cat; // hook:integrations — the act's judged authority
 	let items = submitted, readTables: readonly string[] = [], fingerprints: readonly Fingerprint[] = [];
 	const identities=new Map(submitted.map(item=>[JSON.stringify([item.change.collection,item.change.path]),item.change.id]));
 	const preparedCreates=new Map<string,Item>();
-	const deleteGuard = r.verb === 'delete' && m.collections[r.collection]?.delete !== undefined && 'transform' in m.collections[r.collection]!.delete!;
+	const guardsDeletes = m.collections[r.collection]?.delete !== undefined && 'transform' in m.collections[r.collection]!.delete!;
+	const deleteGuard = r.verb === 'delete' && guardsDeletes;
+	// an import's pruned rows face the delete guard too: they are `{ $delete: true }` inputs after the batch's rows
+	const pruneGuard = imp?.prune !== undefined && guardsDeletes && !auth.admin;
 	const runs = e.transforms?.has(r.collection) === true && (r.verb !== 'delete' || (deleteGuard && !auth.admin));
 
 	// 6. one transform invocation over the whole batch (rule 27); its payload is the workspace's own work (rule 19)
 	if (runs) {
 		if (e.guest === undefined) throw new BoltError('noGuest', 'guest', 'this host runs no guest code');
-		// an import's pruned rows are deletes beside the batch, not inputs of it
-		const roots = submitted.filter((i) => i.parent === undefined && (r.verb === 'delete' || i.change.op !== 'delete'));
+		// an import's pruned rows are deletes beside the batch, inputs of it only when the collection guards its deletes
+		const roots = submitted.filter((i) => i.parent === undefined && (r.verb === 'delete' || pruneGuard || i.change.op !== 'delete'));
 		const inputs = imp?.rows ?? list(r.input, r.verb);
+		// an import's rows matched by key reach the transform with the stored rows they would update (its guards see them)
+		const matched = imp === undefined ? new Map<Item, RowData>() : await resolveUpserts(own, m, roots.filter((i) => i.change.op === 'upsert'));
 		const invocation: Invocation = {
 			id: r.invocationId, kind: 'transform', target: r.collection,
 			input: roots.map((it, i) => {
@@ -425,10 +493,14 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 			}),
 			ctx: { actor: auth.actor, policies: auth.policies, admin: auth.admin, now: b.now, today: b.today, tz: b.tz, seed: r.invocationId,
 				staged:submitted.map(item=>({collection:item.change.collection,id:item.change.id,path:item.change.path,operation:item.change.op,...(item.parent===undefined?{}:{parent:{collection:item.parent.collection,id:item.parent.id,relation:item.parent.rel,field:item.parent.fk}})})),
-				existing: await wireRows(e.db, cat, r.collection, roots.map((it) => pre.has(k(it.change.collection, it.change.id)) ? it.change.id : null), b) },
+				existing: await (async () => {
+					const ids = roots.map((it) => pre.has(k(it.change.collection, it.change.id)) ? it.change.id : matched.has(it) ? String(matched.get(it)!['id']) : null);
+					// the root rows read with `pre`; only an import's key-matched rows are read here
+					return ids.some((id) => id !== null && !wired.has(id)) ? wireRows(e.db, cat, r.collection, ids, b) : ids.map((id) => id === null ? null : wired.get(id) ?? null);
+				})() },
 			budget: { cpuMs: LIMITS.guestCpuMs, crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes },
 		};
-		const originalBridge = e.bridge?.(invocation) ?? { cross: () => Promise.reject(new BoltError('noBridge', 'guest', 'this host gives the transform no reads')) };
+		const originalBridge = e.bridge?.(invocation, r.db) ?? { cross: () => Promise.reject(new BoltError('noBridge', 'guest', 'this host gives the transform no reads')) };
 		const bridge={...originalBridge,cross:async(calls:Parameters<Bridge['cross']>[0],signal:AbortSignal):Promise<readonly CrossAnswer[]>=>{
 			const answers:CrossAnswer[]=[];
 			const forwarded=calls.filter(call=>call.op!=='prepareCreate'&&!(call.op==='read'&&call.read.kind==='after'));
@@ -464,7 +536,7 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 					}
 					const db:TenantDb={...e.db,read:statements=>e.db.read(statements.map(statement=>{
 						const params=[...statement.params];
-						const ctes=[...nativeRows].map(([model,rows])=>{params.push(JSON.stringify(rows));const argument=`$${params.length}::jsonb`;params.push(groups.get(model)!.map(item=>item.change.id));const identities=`$${params.length}::text[]`;return `${q(sources.get(model)!)} AS (SELECT original.* FROM ${q(model)} original WHERE NOT (original.id::text=ANY(${identities})) UNION ALL SELECT * FROM jsonb_populate_recordset(null::${q(model)},${argument}))`;});
+						const ctes=[...nativeRows].map(([model,rows])=>{params.push(JSON.stringify(rows));const argument=`$${params.length}::jsonb`;params.push(JSON.stringify(groups.get(model)!.map(item=>item.change.id)));const identities=`$${params.length}::jsonb`;return `${q(sources.get(model)!)} AS (SELECT original.* FROM ${q(model)} original WHERE NOT (original.id::text IN (SELECT jsonb_array_elements_text(${identities}))) UNION ALL SELECT * FROM jsonb_populate_recordset(null::${q(model)},${argument}))`;});
 						const text=ctes.length?`WITH ${ctes.join(', ')} ${statement.text}`:statement.text;
 						if(params.length>LIMITS.statement.params)throw new BoltError('tooLarge','guest','the prospective native read exceeds its statement parameter budget');
 						if(new TextEncoder().encode(text).length+new TextEncoder().encode(JSON.stringify(params)).length>LIMITS.readBytes)throw new BoltError('tooLarge','guest','the prospective native source statement exceeds the guest read byte budget');
@@ -496,7 +568,7 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 				if(root?.change.op==='create'&&Object.entries(root.change.values).some(([field,value])=>canonical(candidate.change.op==='create'?candidate.change.values[field]:undefined)!==canonical(value)))throw new BoltError('preparedValues','guest','a prepared root must preserve every submitted native value');
 				if(previous?.change.op==='create'&&!retainsPrepared(candidate.change.values,previous.change.values))throw new BoltError('preparedConflict','guest','a prepared native path cannot change its original values');
 				const wanted=flattened.items.flatMap(item=>item.change.op==='update'||item.change.op==='delete'?[[item.change.collection,item.change.id] as const]:[]);
-				const stored=await readRows(e.db,wanted);for(const [key,row]of stored)if(!pre.has(key))pre.set(key,row);
+				const stored=await readRows(e.db,cat,wanted);for(const [key,row]of stored)if(!pre.has(key))pre.set(key,row);
 				for(const item of flattened.items){
 					if(item.change.op==='upsert')throw new BoltError('preparedUpsert','guest','prepared native actions require resolved row identities');
 					const itemToken=JSON.stringify([item.change.collection,item.change.path]),prior=preparedCreates.get(itemToken);
@@ -529,17 +601,22 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 			const again = new Flattener(m, cat, await minter(r.invocationId, b.now),identities);
 			roots.forEach((it, i) => {
 				const c = it.change;
+				if (c.op === 'delete') return;
 				if (c.op === 'update') again.update(c.collection, 'any', c.id, out[i], c.revision, c.path);
 				else again.create(c.collection, 'any', out[i], c.path, undefined, c.op === 'upsert' ? { on: c.on, onConflict: c.onConflict } : undefined);
 			});
 			if (again.problems.length > 0) throw new BoltError('transformPayload', 'guest', again.problems.map((p) => `${p.path.join('.')}: ${p.message}`).join('; '));
 			for(const item of again.items){const assigned=identities.get(JSON.stringify([item.change.collection,item.change.path]));if(assigned!==undefined&&assigned!==item.change.id)throw new BoltError('transformIdentity','guest','a transform must preserve the engine-assigned identity of each submitted native path');}
-			for(const [token,reservation]of preparedCreates){const final=again.items.find(item=>JSON.stringify([item.change.collection,item.change.path])===token);const values=final?.change.op==='create'?final.change.values:final?.change.op==='update'?final.change.set:null;const reserved=reservation.change.op==='create'?reservation.change.values:reservation.change.op==='update'?reservation.change.set:null;if(final===undefined||final.change.op!==reservation.change.op||final.change.id!==reservation.change.id||!retainsPrepared(values,reserved))throw new BoltError('preparedValues','guest','every prepared native action must retain its reserved operation, identity and values at its reserved path');}
+			// a row the transform added mints in sequence, so it can take an identity the engine already gave another path
+			// (a child added before a later root): the same id twice in one act, which the commit would write unnoticed
+			const reservedIds=new Set(identities.values());
+			if(again.items.some(item=>!identities.has(JSON.stringify([item.change.collection,item.change.path]))&&reservedIds.has(item.change.id)))throw new BoltError('transformIdentity','guest','a transform must preserve the engine-assigned identity of each submitted native path: a row it adds would take another path\'s identity');
+			for(const [token,reservation]of preparedCreates){const final=again.items.find(item=>JSON.stringify([item.change.collection,item.change.path])===token);const values=final?.change.op==='create'?final.change.values:final?.change.op==='update'?final.change.set:null;const reserved=reservation.change.op==='create'?reservation.change.values:reservation.change.op==='update'?reservation.change.set:null;if(final===undefined||final.change.op!==reservation.change.op||final.change.id!==reservation.change.id||!retainsPrepared(values,reserved))return { guest: true, outcome: refused('internal', 'every prepared native action must retain its reserved operation, identity and values at its reserved path') };}
 			// the caller's supplied fields are what grants admit; the transform's own additions need no `fields` entry (rule 35)
 			const supplied = new Map(submitted.map((s) => [s.change.path.join('.'), s.supplied]));
 			items = [...again.items.map((it) => ({ ...it, supplied: supplied.get(it.change.path.join('.')) ?? [] })),
-				...submitted.filter((i) => i.parent === undefined && !roots.includes(i))];
-			const more = await readRows(e.db, items.flatMap((i) => i.change.op === 'update' || i.change.op === 'delete'
+				...submitted.filter((i) => i.parent === undefined && (!roots.includes(i) || i.change.op === 'delete'))];
+			const more = await readRows(e.db, cat, items.flatMap((i) => i.change.op === 'update' || i.change.op === 'delete'
 				? (pre.has(k(i.change.collection, i.change.id)) ? [] : [[i.change.collection, i.change.id] as const]) : []));
 			for (const [key, row] of more) pre.set(key, row);
 		}
@@ -549,7 +626,7 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 
 	// 7. upsert resolution read, defaults (rule 23a), model rules (rules 34, 40, 41), no-op updates (rule 29)
 	const upserts = items.filter((i) => i.change.op === 'upsert');
-	const existing = await resolveUpserts(e.db, m, upserts);
+	const existing = await resolveUpserts(own, m, upserts);
 	const writes: { write: Write; item: Item }[] = [];
 	const output: Json[] = [];
 	const report: { index: number | null; id: string | null; action: string }[] = [];
@@ -566,7 +643,8 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 				output.push(String(found['id']));
 				pre.set(k(c.collection, String(found['id'])), found);
 				const set = c.onConflict === 'keep' ? {} : changed(found, Object.fromEntries(Object.entries(c.values).filter(([f]) => !c.on.includes(f))));
-				if (c.on.length === 1 && c.on[0] === 'id' && !r.integration) {
+				// a locked row is locked whatever names it: an upsert by id, by key, or an import's row (rules 30, 40)
+				if (!r.integration) {
 					const locked = modelRules(m, c.collection, found, set);
 					if (locked !== null && !(r.delivery && locked.code === 'locked')) return stop(refused(locked.code, locked.message, [...c.path, locked.field]));
 				}
@@ -612,7 +690,8 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 		const post = w.op === 'create' ? w.values : w.op === 'update' ? { ...row, ...w.set } : null;
 		const verdict = judgePost(env, w.collection, w.op, row, post, item.supplied);
 		if (!verdict.ok) return stop(refused('forbidden', 'You may not make this change.', verdict.field === undefined ? item.change.path : [...item.change.path, verdict.field]));
-		if (item.parent === undefined) routed.push({ write: w, pre: row, routes: verdict.routes });
+		// a child the caller's own grant on its collection routes to approval holds the act too (the request names the root)
+		if (item.parent === undefined || verdict.routes.length > 0) routed.push({ write: w, pre: row, routes: verdict.routes });
 	}
 	let approval: Commit['approval'];
 	// hook:approvals — a participant's write on a held row rides the open request (rule 46) even when nothing routes
@@ -710,7 +789,7 @@ export function ownedLocks(m: EngineManifest, cat: Catalog, writes: readonly Wri
 async function wireRows(db: TenantDb, cat: Catalog, c: string, ids: readonly (string | null)[], b: Bindings): Promise<(RowData | null)[]> {
 	const want = ids.filter((id) => id !== null);
 	if (want.length === 0) return ids.map(() => null);
-	const [res] = await db.read([compileGets(cat, c, want, { fields: null, relations: {} }, { as: 'workspace' }, b)]);
+	const [res] = await db.read([composable(compileGets(cat, c, want, { fields: null, relations: {} }, { as: 'workspace' }, b))]);
 	const byId = new Map(res!.rows.map((row) => [String((row['j'] as RowData | null)?.['id']), row['j'] as RowData]));
 	return ids.map((id) => id === null ? null : byId.get(id) ?? null);
 }
@@ -721,12 +800,14 @@ async function resolveUpserts(db: TenantDb, m: EngineManifest, upserts: readonly
 	const byTable = Map.groupBy(upserts, (i) => i.change.collection);
 	if (byTable.size === 0) return found;
 	const tables = [...byTable.keys()];
-	const res = await db.read(tables.map((t) => {
+	const cat = catalogOf(m);
+	const raw = await readComposed(db, tables.map((t) => {
 		const on = (byTable.get(t)![0]!.change as { on: readonly string[] }).on; // hook:integrations — the act's own key
-		return { text: `SELECT DISTINCT t.*, t.id::text AS id FROM ${q(t)} t JOIN jsonb_populate_recordset(null::${q(t)}, $1::jsonb) r
+		return composable({ text: `SELECT DISTINCT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(null::${q(t)}, $1::jsonb) r
 			ON ${on.map((f) => `t.${q(f)} IS NOT DISTINCT FROM r.${q(f)}`).join(' AND ')}`,
-		params: [JSON.stringify(byTable.get(t)!.map((i) => Object.fromEntries(on.map((f) => [f, untag((i.change as { values: RowData }).values[f] ?? null, catalogOf(m).models.get(t)?.fields.get(f))]))))] };
+		params: [JSON.stringify(byTable.get(t)!.map((i) => Object.fromEntries(on.map((f) => [f, untag((i.change as { values: RowData }).values[f] ?? null, cat.models.get(t)?.fields.get(f))]))))] });
 	}));
+	const res = raw.map((x, i) => ({ ...x, rows: x.rows.map((row) => exactRow(cat, tables[i]!, row['j']!)) }));
 	tables.forEach((t, i) => {
 		const on = (byTable.get(t)![0]!.change as { on: readonly string[] }).on;
 		for (const it of byTable.get(t)!) {

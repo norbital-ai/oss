@@ -13,7 +13,7 @@ async function show(rows) {
  const target = document.createElement('div'); document.body.append(target);
  const app = mount(Harness, { target, props: { bolt, catalog: {}, part: 'table', props: {
   of: rows, columns: ['name'], toolbar: { title: false, search: false, filter: false, export: false, new: false,
-   actions: [{ label: 'Export selected', requiresSelection: true, run: (ids) => calls.push(ids) }] }
+   actions: [{ icon: 'lucide:download', name: 'Export selected', requiresSelection: true, run: (ids) => void calls.push(ids) }] }
  } } });
  mounted.push(() => { unmount(app); target.remove(); }); await settle();
  return { target, calls };

@@ -8,9 +8,12 @@ import type { Operand } from '../../decl/where.ts';
 import type { Catalog, CollectionInfo, FieldInfo } from '../../protocol/catalog.ts';
 import { EMBEDDING_COLUMN, SEARCH_COLUMN, SEMANTIC, collectionOf, defaultFields, exposedField, exposedRelation, q, storedFields } from '../../protocol/catalog.ts';
 import { inverted, operand, periodEnds, plain } from './eval.ts';
+import { isMemberRef } from '../../protocol/ir.ts';
 
 const invalid = (message: string) => new BoltError('invalid', 'decode', message);
 const forbidden = (message: string) => new BoltError('forbidden', 'admission', message);
+/** `$similar`: how much farther than the nearest row a row may be and still be about the same thing (cosine distance). */
+const SIMILAR_BAND = 0.1;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Engine-owned prospective model sources; names are quoted identifiers, never SQL fragments. */
@@ -87,6 +90,11 @@ function relation(b: Build, c: CollectionInfo, rel: string, target: string, lv: 
 		: conj(`${x}.${q(fk)} = ${a}."id"`, maskAt(b, t, x, fk.split('__')[0]!, lv));
 	return { t, one: one !== undefined, fk, link };
 }
+/** Rule 14: the search document and the embedding hold every field they cover, so a caller matches them only reading each one unmasked. */
+function whole(b: Build, c: CollectionInfo, fields: readonly string[], lv: Level, what: string): void {
+	for (const f of fields) if (maskOf(b, c, f, lv) !== undefined || (lv.exposed && !exposedField(c, f)))
+		throw forbidden(`${what} on '${c.name}' covers '${f}', which this caller does not read unmasked (rule 14)`);
+}
 const maskAt = (b: Build, c: CollectionInfo, a: string, name: string, lv: Level): string | null => {
 	const mask = maskOf(b, c, name, lv);
 	return mask === undefined ? null : `(${pred(b, c, a, mask, RAW)})`;
@@ -110,6 +118,15 @@ function pred(b: Build, c: CollectionInfo, a: string, p: Pred, lv: Level): strin
 		case 'like': return `(${col(b, c, a, p.field, lv)} ILIKE ${b.bind(p.pattern, 'text')})`;
 		case 'in': {
 			const f = fieldOf(c, p.field, lv);
+			if (isMemberRef(p.args)) {
+				// the earlier member's rows are the composed statement's CTE `"m:<member>"`, already under its own policies
+				// `field` may be a path through the member's relation arms (`employment_id.company_id`); a many arm's
+				// rows each give theirs (a lax jsonpath walks into the arrays)
+				const x = col(b, c, a, p.field, lv), m = b.alias(), v = b.alias();
+				const path = lit(`$${p.args.field.split('.').map((part) => `."${part}"`).join('')}`);
+				const hit = `(${x} = ANY(ARRAY(SELECT (${v} #>> '{}')::${f.pg} FROM ${q(p.args.member)} ${m}, jsonb_path_query(${m}.j, ${path}) ${v} WHERE jsonb_typeof(${v}) <> 'null')))`;
+				return p.negated ? `(NOT COALESCE(${hit}, false))` : hit;
+			}
 			const raw = Array.isArray(p.args) ? p.args : operand(p.args as Operand, b.bindings, b.authority);
 			const list = (Array.isArray(raw) ? raw : raw === null ? [] : [raw]).map((x) => plain(x, f));
 			if (f.pg === 'uuid' && list.some((x) => typeof x !== 'string' || !UUID.test(x))) throw invalid(`'${f.name}' takes ids`);
@@ -150,6 +167,17 @@ function pred(b: Build, c: CollectionInfo, a: string, p: Pred, lv: Level): strin
 				return `(${lat} BETWEEN ${b.bind(Math.min(u.lat, v.lat), 'float8')} AND ${b.bind(Math.max(u.lat, v.lat), 'float8')} AND ${lng} BETWEEN ${b.bind(Math.min(u.lng, v.lng), 'float8')} AND ${b.bind(Math.max(u.lng, v.lng), 'float8')})`;
 			}
 			return `(${x} <@ ${b.bind(`(${s.polygon.map((pt) => `(${pt.lng},${pt.lat})`).join(',')})`, 'polygon')})`;
+		}
+		case 'search':
+			whole(b, c, c.model.search, lv, '$search');
+			return `coalesce(${a}.${q(SEARCH_COLUMN)} @@ bolt_search_filter(${b.bind(p.text, 'text')}), false)`;
+		case 'similar': {
+			whole(b, c, c.model.semantic?.fields ?? [], lv, '$similar');
+			if (p.vector === undefined) throw invalid('$similar was not embedded before compiling');
+			// of what this caller reads: the nearest, and every row nearly as near (within SIMILAR_BAND of it), at most `top`.
+			// ponytail: one cosine band for every model (measured on text-embedding-3-small); per-model bands if another drifts
+			const t = b.alias(), n = b.alias(), x = `${t}.${q(EMBEDDING_COLUMN)}`, d = `(${x} <=> ${b.bind(`[${p.vector.join(',')}]`, 'vector')})`;
+			return `(${a}."id" IN (SELECT ${n}."id" FROM (SELECT ${t}."id", ${d} AS d, min(${d}) OVER () AS best FROM ${b.from(c.model.name)} ${t} WHERE ${conj(scope(b, c, t, lv), `${x} IS NOT NULL`)} ORDER BY ${d}, ${t}."id" LIMIT ${b.bind(p.top, 'int8')}) ${n} WHERE ${n}.d <= ${n}.best + ${SIMILAR_BAND}))`;
 		}
 		case 'json': {
 			const x = col(b, c, a, p.field, lv);

@@ -115,7 +115,7 @@
 	// Local projections can drive bulk actions only when each row names a distinct, stable record.
 	const localIds = $derived(kind === 'local' ? (of as readonly Row[]).map((row) => row['id']) : []);
 	const identified = $derived(kind !== 'local' || (localIds.every((id) => typeof id === 'string' && id.trim() !== '') && new Set(localIds).size === localIds.length));
-	const selectable = $derived(identified && (tb.select === true || tb.delete === true || (tb.actions || []).some((t) => t.requiresSelection || t.group === 'bulk' || typeof t.disabled === 'function')));
+	const selectable = $derived(identified && (tb.select === true || tb.delete === true || (tb.actions || []).some((t) => t.requiresSelection || typeof t.disabled === 'function')));
 	const contexts = getAllContexts(); // a New's sheet mounts outside the page; the page's create scope rides along
 	const canNew = $derived(tb.new !== false && kind === 'collection' && (typeof tb.new === 'function' || kinds.catalog?.[collection]?.create !== undefined));
 
@@ -220,6 +220,23 @@
 		if (o.kind === 'committed') for (const f of filesOf(o.output)) window.open(bolt.fileUrl(f), '_blank', 'noopener');
 		if (o.kind === 'committed' || o.kind === 'pendingApproval') selected.clear();
 	};
+	// select-all: the page's rows, then (once the page is all selected) every row the scope and search match
+	const onPage = (rows: readonly Row[]) => rows.map((r) => String(r['id']));
+	const pageAll = (rows: readonly Row[]) => rows.length > 0 && rows.every((r) => selected.has(String(r['id'])));
+	const togglePage = (rows: readonly Row[], on: boolean) => { for (const id of onPage(rows)) on ? selected.add(id) : selected.delete(id); };
+	const matching = $derived(kind === 'local' ? local.length : kind === 'collection' && probe === null ? count : null);
+	let selecting = $state(false);
+	async function selectMatching() {
+		if (kind === 'local') return void local.forEach((r) => selected.add(String(r['id'])));
+		selecting = true;
+		try {
+			for (const r of rowsOf(await bolt.read(name, compact({ ...searched, select: { id: true }, all: true })))) selected.add(String(r['id']));
+		} catch (e) {
+			notice = e instanceof Error ? e.message : String(e);
+		} finally {
+			selecting = false;
+		}
+	}
 	async function rowAct(a: RowAction, row: Row) {
 		if (a.confirm !== undefined && !confirm(a.confirm)) return;
 		say(await bolt.act(a.action, a.input?.(row) ?? { target: row['id'] ?? null }));
@@ -360,6 +377,25 @@
 	{/if}
 {/snippet}
 
+<!-- the selection bar (both layouts): the page's checkbox (the card list has no header), the count, every matching row -->
+{#snippet selection(rows: readonly Row[])}
+	{@const all = pageAll(rows)}
+	<div class={['bg-muted/40 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-t-md border-b px-3 py-1.5 text-xs', selected.size === 0 && '@3xl:hidden']} data-selection>
+		<label class="inline-flex items-center gap-2 @3xl:hidden">
+			<input type="checkbox" checked={all} aria-label={msg(bolt, 'table.selectPage', 'Select this page')} onchange={(e) => togglePage(rows, e.currentTarget.checked)} data-select-page />
+			{msg(bolt, 'table.selectPage', 'Select this page')}
+		</label>
+		{#if selected.size > 0}
+			<span class="font-medium" data-selected-count>{msg(bolt, 'table.selected', '{n} selected', { n: selected.size })}</span>
+			{#if all && matching !== null && matching > selected.size}
+				<Button variant="link" size="sm" class="h-auto px-0 text-xs" disabled={selecting} onclick={selectMatching} data-select-matching>
+					{msg(bolt, 'table.selectMatching', 'Select all {n} matching', { n: matching })}</Button>
+			{/if}
+			<Button variant="link" size="sm" class="h-auto px-0 text-xs" onclick={() => selected.clear()} data-select-clear>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button>
+		{/if}
+	</div>
+{/snippet}
+
 <!-- the view fills a bounded parent (a flex column or a definite height) and scrolls inside its card; it never grows the
      parent past its own minimum. The card: the grid (wide) or the list (narrow), then the footer, pinned at the card's foot. -->
 <section class="@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2" data-view="table" data-source={kind}>
@@ -390,6 +426,7 @@
 				{/if}
 			{:else}
 				<div class="bg-card flex min-h-0 min-w-0 flex-1 flex-col rounded-md border" data-table-card>
+					{#if selectable && !(kind === 'local' && onChange)}{@render selection(rows)}{/if}
 					<!-- its own scroll port (staging's grid): the grey header sticks, pinned columns stay while the rest scrolls sideways.
 					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
 					     the nowrap row actions never squeeze a truncating column down to its first letters -->
@@ -398,8 +435,8 @@
 							<thead class="bg-muted sticky top-0 z-20">
 								<tr>
 									{#if selectable}
-										<th class="bg-muted sticky left-0 z-10 w-8 px-2!"><input type="checkbox" aria-label={msg(bolt, 'table.selectAll', 'Select all')} checked={rows.every((r) => selected.has(String(r['id'])))}
-											onchange={(e) => { for (const r of rows) e.currentTarget.checked ? selected.add(String(r['id'])) : selected.delete(String(r['id'])); }} /></th>
+										<th class="bg-muted sticky left-0 z-10 w-8 px-2!"><input type="checkbox" aria-label={msg(bolt, 'table.selectAll', 'Select all')} checked={pageAll(rows)}
+											onchange={(e) => togglePage(rows, e.currentTarget.checked)} /></th>
 									{/if}
 									{#each ordered as c, ci (colOf(c).field)}
 										{@const f = colOf(c).field}

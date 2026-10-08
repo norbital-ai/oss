@@ -10,10 +10,10 @@
 	import RecordShell from '../src/views/RecordShell.svelte';
 	import Table from '../src/views/Table.svelte';
 
-	let { bolt, catalog, geocoder, part, props = {} }: { bolt: ViewBolt; catalog: never; geocoder?: Geocoder; part: 'table' | 'board' | 'record' | 'point' | 'picker' | 'form'; props?: never } = $props();
+	let { bolt, catalog, geocoder, upload, part, props = {} }: { bolt: ViewBolt; catalog: never; geocoder?: Geocoder; upload?: never; part: 'table' | 'board' | 'record' | 'point' | 'picker' | 'form'; props?: never } = $props();
 	// svelte-ignore state_referenced_locally
 	provideBolt(bolt);
-	provideKinds({ get catalog() { return catalog; }, read: (c, o) => bolt.read(c, o) as never, geocoder });
+	provideKinds({ get catalog() { return catalog; }, read: (c, o) => bolt.read(c, o) as never, geocoder, ...(upload === undefined ? {} : { upload }) });
 </script>
 
 {#if part === 'table'}

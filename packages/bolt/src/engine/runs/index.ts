@@ -937,6 +937,28 @@ export function runs(cfg: RunsConfig): Runs {
 					}); // hook:ctx-types (rule 28)
 					return { ok: true, value: r.outcome as Json };
 				}
+				case 'acts': {
+					// several generated verbs as one act (`calls.acts`): planned together, one statement, one key
+					const acts = call.acts.map((a) => {
+						const dot = a.callable.lastIndexOf('.');
+						return { collection: a.callable.slice(0, dot), verb: a.callable.slice(dot + 1) as Verb, input: a.input };
+					});
+					const odd = acts.find((a) => !['create', 'update', 'delete', 'upsert'].includes(a.verb));
+					if (odd !== undefined) return fail('invalidInput', `act.many takes generated verbs; '${odd.collection}.${odd.verb}' is not one`);
+					const { key } = await keyOf('acts', 'acts', call.acts as unknown as Json);
+					const r = await e.calls.acts({
+						name: 'act.many',
+						acts,
+						key,
+						issuedAt: b.now,
+						authority,
+						delegation,
+						bindings: b,
+						invocationId: key,
+						from: 'server'
+					});
+					return { ok: true, value: r.outcome as Json };
+				}
 				case 'schedule': {
 					const target = m.automations[call.automation];
 					if (target === undefined)

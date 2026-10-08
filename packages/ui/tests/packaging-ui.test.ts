@@ -92,11 +92,11 @@ test('the form mode reaches every Field by context; a Field overrides it; a Fiel
 
 test('a toolbar item says why it cannot run over the current selection', async () => {
 	const why = (ids) => ids.length === 0 ? 'Pick a job first' : null;
-	const v = await show({ part: 'table', props: { of: 'jobs', columns: ['title'], toolbar: { actions: [{ action: 'jobs.close', label: 'Close', disabled: why }] } } });
+	const v = await show({ part: 'table', props: { of: 'jobs', columns: ['title'], toolbar: { actions: [{ icon: 'lucide:x', name: 'Close', run: () => {}, disabled: why }] } } });
 	// the item lives in the toolbar's actions menu (portalled to the body)
 	v.target.querySelector('[data-view-actions]').click();
 	for (let i = 0; i < 3; i++) { flushSync(); await tick(); }
-	const item = () => [...document.querySelectorAll('[data-view-menu] button')].find((b) => b.textContent.includes('Close'));
+	const item = () => document.querySelector('[data-view-menu] button[aria-label="Close"]');
 	assert.equal(item().disabled, true);
 	assert.equal(item().getAttribute('title'), 'Pick a job first');
 	const box = v.target.querySelector('tbody input[type=checkbox]');
@@ -148,7 +148,7 @@ test('two or more row actions fold into one menu in the grid; a single action st
 
 test('the toolbar row: title, ⓘ and every widget flush left in that order; only New is pushed right', async () => {
 	const v = await show({ part: 'table', props: { of: 'jobs', columns: ['title'], toolbar: { title: 'Jobs', description: 'All jobs', new: () => {},
-		actions: [{ run: () => {}, label: 'Recount' }] } } });
+		actions: [{ icon: 'lucide:hash', name: 'Recount', run: () => {} }] } } });
 	const row = v.target.querySelector('[data-view-title]').parentElement;
 	const marks = [...row.children].map((el) => ['data-view-title', 'data-view-about', 'data-search-toggle', 'data-view-trigger', 'data-view-actions', 'data-view-new']
 		.find((a) => el.hasAttribute(a) || el.querySelector(`[${a}]`) !== null) ?? el.tagName);

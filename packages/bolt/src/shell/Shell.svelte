@@ -4,7 +4,7 @@
 	before any page chunk loads.
 -->
 <script lang="ts">
-	import { setContext, tick, type Component } from 'svelte';
+	import { onDestroy, setContext, tick, type Component } from 'svelte';
 	import { watch } from 'runed';
 	import { PersistedState } from 'runed';
 	import { MediaQuery } from 'svelte/reactivity';
@@ -187,6 +187,8 @@
 		setCurrentBolt(bolt);
 		bolt.onSyncStatus((status) => (sync = status));
 	}
+	// an unmounted shell retires its client: its stream's window listeners would otherwise hold the whole page alive
+	onDestroy(() => bolt?.close());
 	// the boot follows the audience: a public page boots its visitor, a kiosk its kiosk, everything else the session
 	const kioskRoute = $derived(current.kind === 'kiosk' ? current.kiosk : null);
 	watch(() => [publicApp, kioskRoute] as const, ([app, kiosk]) => void load(app, kiosk));

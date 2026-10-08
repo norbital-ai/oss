@@ -230,7 +230,7 @@ describe('engine/query: same-shape reads merge (rule 12)', () => {
 		count.reads = 0; count.statements = 0;
 		const out = await reads.run([get(b), get(a), get(missing), get(a, 'tags')], { as: 'workspace' }, bindings);
 		expect(out).toEqual([{ id: b, title: 'b' }, { id: a, title: 'a' }, null, null]);
-		expect(count).toMatchObject({ reads: 1, statements: 2 });
+		expect(count).toMatchObject({ reads: 1, statements: 1 }); // the merged gets and the lone one compose into one statement
 	});
 });
 

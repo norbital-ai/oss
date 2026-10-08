@@ -22,11 +22,23 @@ const catalog = {
 		many: ['lines'],
 		masked: ['salary'],
 	},
-	accounts: { label: ['name'], fields: { name: { kind: 'text' }, spot: { kind: 'point', optional: true } }, relations: { owner: { targets: ['sys_user'] } } },
+	accounts: { label: ['name'], search: ['name'], semantic: true, fields: { name: { kind: 'text' }, spot: { kind: 'point', optional: true } }, relations: { owner: { targets: ['sys_user'] } } },
 	sys_user: { label: ['name'], fields: { name: { kind: 'text' } } },
 	job_lines: { label: [], fields: { qty: { kind: 'int' }, amount: { kind: 'money' } }, relations: { job: { targets: ['jobs'], inverse: 'lines' } } },
 };
 const cond = (path, op, arg = null) => ({ t: 'cond', path, op, arg });
+
+test('the search index and meaning are rows: through a relation, back to the same Where, refused where undeclared', () => {
+	for (const w of [{ account: { is: { $search: 'pine grove' } } }, { account: { is: { $similar: 'water leak' } } }]) {
+		const rows = fromWhere(catalog, 'jobs', w);
+		assert.equal(rows.length, 1, JSON.stringify(w));
+		assert.deepEqual(toWhere(catalog, 'jobs', rows[0]), w);
+	}
+	assert.deepEqual(fromWhere(catalog, 'jobs', { account: { is: { $search: 'pine' } } }), [cond('account.$search', 'search', { lit: 'pine' })]);
+	assert.match(nodeText(catalog, 'jobs', cond('account.$similar', 'similar', { lit: 'water leak' }), (x) => x, undefined, () => 'is about'), /^account › Topic is about water leak$/i);
+	assert.equal(fromWhere(catalog, 'jobs', { $search: 'pine' }), null, 'jobs declares no search');
+	assert.equal(fromWhere(catalog, 'jobs', { account: { is: { $search: '' } } }), null, 'empty text');
+});
 
 test('contains is loose: the words in order with anything between, both ways; a described near and a nearest sort round-trip', () => {
 	// "1f pine grove" matches "1F Pine Grove #17-30" and "1F-Pine  Grove": the engine's `%1f%pine%grove%`

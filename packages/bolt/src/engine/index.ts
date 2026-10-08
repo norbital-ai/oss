@@ -247,9 +247,9 @@ export function engine(config: EngineConfig): Engine {
 	};
 	const reads = callerReads(db);
 	/** The transform's bridge: its reads, as the workspace (rule 15), one round trip per crossing (rule 12). */
-	const bridge = (inv: Invocation): Bridge & { tables(): readonly string[]; fingerprints(): readonly Fingerprint[] } => {
+	const bridge = (inv: Invocation, over?: TenantDb): Bridge & { tables(): readonly string[]; fingerprints(): readonly Fingerprint[] } => {
 		const tables = new Set<string>();
-		const fp = fingerprinting(db); // hook:write — rule 26: every transform read is fingerprinted
+		const fp = fingerprinting(over ?? db); // hook:write — rule 26: every transform read is fingerprinted
 		const own = readEngine({ db: fp.db, manifest: m, delegate, ...(similarity === undefined ? {} : { similarity }) });
 		const b: Bindings = { now: inv.ctx.now, today: inv.ctx.today, tz: inv.ctx.tz, params: {} };
 		return {
@@ -314,7 +314,8 @@ export function engine(config: EngineConfig): Engine {
 	};
 	const calls = callables({ engine: e, reads: (readDb) => callerReads(readDb).run, ...(guest === undefined ? {} : { guest }), // hook:metering, hook:drains — one runner, one pool
 		...(config.deadlines === undefined ? {} : { deadlines: config.deadlines }), scope: config.scope ?? '' });
-	e.calls = { ...calls, action: async (r) => { const x = await calls.action(r); return { ...x, v: committed(x.captured, r.bindings) }; } };
+	e.calls = { ...calls, action: async (r) => { const x = await calls.action(r); return { ...x, v: committed(x.captured, r.bindings) }; },
+		acts: async (r) => { const x = await calls.acts(r); return { ...x, v: committed(x.captured, r.bindings) }; } };
 	e.integrations = integrations({ engine: e, ...(guest === undefined ? {} : { guest }), ...(http === undefined ? {} : { http }), now: clock,
 		announce: (at) => wakeAt(at) }); // hook:integrations — inbound deliveries queue runs
 	e.pipelines = pipelines({ engine: e, bindings, ...(guest === undefined ? {} : { guest }), ...(config.files === undefined ? {} : { files: config.files }) });

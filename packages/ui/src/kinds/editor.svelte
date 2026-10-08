@@ -105,6 +105,10 @@ The editor of one value by its field kind: every kind's input in one component (
 	<TagsInput value={Array.isArray(v) ? v.map(String) : []} {onChange} {id} {disabled} {invalid} />
 {:else if kind.kind === 'text' && kind.format === 'zone'}
 	<Combobox {id} options={zones} value={str(v)} onChange={(z) => onChange(z)} clearable={kind.optional === true} {disabled} {invalid} />
+{:else if kind.kind === 'text' && kind.format === 'cel'}
+	<!-- a CEL expression: code, wrapped at the field's width, one line high until it grows -->
+	<CodeEditor {id} language="javascript" wrap minHeight="2.25rem" readonly={disabled} {invalid} value={str(v) ?? ''} aria-label={name}
+		onChange={(next) => onChange(next === '' ? null : next)} />
 {:else if kind.kind === 'text' && kind.format === 'markdown'}
 	<MarkdownEditor {id} value={str(v) ?? ''} onChange={(next) => onChange(next === '' ? null : next)} {disabled} {invalid} />
 {:else if kind.kind === 'text' && (kind.max ?? 0) > 200}

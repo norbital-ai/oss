@@ -156,6 +156,11 @@ export interface TenantDb {
 }
 
 // ── the query IR (A4) ──
+/**
+ * `{ in: { member, field } }` inside a keyed read (`ctx.read({ … })`): the values of `field` across the rows an EARLIER
+ * member of the same read answered (under its own policies), resolved inside the one statement.
+ */
+export type MemberRef = { readonly member: string; readonly field: string };
 /** A value position: a literal, or an operand resolved at execution (params, clock, actor, a same-row field). */
 export type Arg = { readonly lit: Json } | Operand;
 export type Cmp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
@@ -166,7 +171,7 @@ export type Pred =
 	| { t: 'not'; of: Pred }
 	| { t: 'cmp'; field: string; op: Cmp; arg: Arg }
 	| { t: 'like'; field: string; pattern: string }
-	| { t: 'in'; field: string; negated: boolean; args: readonly Json[] | Operand }
+	| { t: 'in'; field: string; negated: boolean; args: readonly Json[] | Operand | MemberRef }
 	| { t: 'null'; field: string; is: boolean }
 	| { t: 'list'; field: string; op: 'has' | 'hasAny' | 'hasAll' | 'isEmpty'; arg: Json }
 	| { t: 'period'; field: string; op: 'contains' | 'overlaps' | 'within'; arg: Arg }
@@ -178,7 +183,11 @@ export type Pred =
 	// hook:query — child aggregates and json containment (P34, §3.3.9)
 	| { t: 'agg'; rel: string; target: string; fn: 'sum' | 'min' | 'max' | 'avg'; of: string; op: Cmp; arg: Json }
 	| { t: 'json'; field: string; contains: Json }
-	| { t: 'json'; field: string; isEmpty: boolean }; // hook:codec — a json list is empty (null counts as empty)
+	| { t: 'json'; field: string; isEmpty: boolean } // hook:codec — a json list is empty (null counts as empty)
+	/** `$search`: the collection's `search.text` document holds every word of `text`, each as a prefix or a slipped spelling. */
+	| { t: 'search'; text: string }
+	/** `$similar`: the row nearest `to` on `search.semantic` and every row nearly as near, at most `top`; `vector` is the probe the read embeds first. */
+	| { t: 'similar'; to: string; top: number; vector?: readonly number[] };
 /** Rule 9: a limit or everything, never a default. `after` is bound to the query's AST hash (rule 11). */
 export type PageIR = { limit: number; after?: string } | { all: true };
 /** A sort key; `near` orders by great-circle distance from that point, nearest first (a point field only). */
@@ -187,9 +196,13 @@ export type Order = readonly { field: string; dir: 'asc' | 'desc'; near?: { lat:
 export type SelectIR = { fields: readonly string[] | null; relations: { readonly [rel: string]: RelSelectIR } };
 export type RelSelectIR = { target: string; many: boolean; select: SelectIR; where?: Pred; order?: Order; page?: PageIR };
 export type Bucket = { field: string; unit?: 'day' | 'week' | 'month' | 'quarter' | 'year' };
+/**
+ * `member`: the key of a keyed read's member (`ctx.read({ key: … })`), named in the caps it breaks; `cte`: its rows'
+ * name in the composed statement, unique per keyed read, which a later member's `MemberRef` reads.
+ */
 export type ReadIR =
-	| { kind: 'read'; collection: string; where?: Pred; select: SelectIR; order?: Order; search?: string; page: PageIR }
-	| { kind: 'get'; collection: string; id: string; select: SelectIR }
+	| { kind: 'read'; collection: string; where?: Pred; select: SelectIR; order?: Order; search?: string; page: PageIR; member?: string; cte?: string }
+	| { kind: 'get'; collection: string; id: string; select: SelectIR; member?: string; cte?: string }
 	| { kind: 'aggregate'; collection: string; where?: Pred; by: readonly Bucket[]; count?: true;
 		sum?: readonly string[]; avg?: readonly string[]; min?: readonly string[]; max?: readonly string[]; page?: PageIR }
 	/** `where` and `select` are the caller's options (§3.5), beside the probe's own `where`. */
@@ -293,6 +306,8 @@ export type CrossCall =
 	/** Transform-only: reserve a native owned child create path without writing or approving it. */
 	| { op:'prepareCreate';collection:string;values:Json;path:InputPath }
 	| { op: 'act'; callable: string; input: Json; options?: { key?: string; once?: string; onConflict?: 'update' | 'keep' } } // hook:ctx-types (onConflict, rule 28)
+	/** `ctx.act.many`: generated verbs over several collections, planned together and committed as one act. */
+	| { op: 'acts'; acts: readonly { callable: string; input: Json }[] }
 	| { op: 'schedule'; automation: string; input: Json; at?: string | { now: Offset }; key?: string }
 	| { op: 'notify'; notices: Json }
 	| { op: 'send'; channel: string; message: Json }

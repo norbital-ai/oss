@@ -18,6 +18,8 @@ export type Outcome =
 	| { kind: 'refused'; code: string; message: string; field?: string; row?: number }
 	| { kind: 'conflict'; records: readonly { collection: string; id: string; fields: readonly string[] }[] }
 	| { kind: 'unknown'; invocation: string };
+/** `start`'s answer: the run's id and automation at once, its start's outcome when awaited. */
+export type RunHandle = PromiseLike<Outcome> & { readonly id: string; readonly automation: string };
 export type FileRef = { id: string; name: string; mime: string };
 /** Rule 56's run row as its viewer may read it. */
 export type RunRow = { id: string; automation: string; status: string; progress?: Json; error?: { code: string; message?: string } | null;
@@ -45,7 +47,7 @@ export type ViewBolt = {
 	similar?<T = readonly Row[]>(collection: string, search: string, input: Json, options: Json): Q<T>;
 	live<T>(q: Q<T>, options?: { every?: string; on?: readonly string[] }): Live<T>;
 	act(callable: string, input: Json, options?: { key?: string }): Promise<Outcome>;
-	start(automation: string, input: Json): PromiseLike<Outcome> & { readonly id: string };
+	start(automation: string, input: Json): RunHandle;
 	/** §3.5 `runs(automation, { where?, limit })`; absent until the client serves it (views then say so). */
 	runs?(automation: string, options: { where?: Json; limit: number }): Live<Page<RunRow>>;
 	fileUrl(ref: FileRef): string;
@@ -107,14 +109,12 @@ export type OrderByOf<C> = C extends keyof Collections ? Collections[C]['orderBy
 export type FieldOf<C> = C extends unknown ? keyof RowOf<C> & string : never;
 export type RecordFieldOf<C> = C extends unknown ? keyof RecordOf<C> & string : never;
 export type IdOf<C> = C extends unknown ? RowOf<C> extends { readonly id: infer I extends string } ? I : string : never;
-/** `'<c>.<q>'` queries, `'<c>.<verb|action>'` callables and startable automations, with their inputs. */
+/** `'<c>.<q>'` queries and `'<c>.<verb|action>'` callables, with their inputs. */
 export type QueryKey = keyof Names['queries'] & string;
 export type QueryInputOf<N> = N extends keyof Names['queries'] ? Names['queries'][N]['input'] : Json;
 export type QueryOutputOf<N> = N extends keyof Names['queries'] ? Names['queries'][N]['output'] : unknown;
 export type ActionKey = keyof Names['actions'] & string;
 export type ActionInputOf<N> = N extends keyof Names['actions'] ? Names['actions'][N] : Row;
-export type AutomationKey = keyof Names['automations'] & string;
-export type AutomationInputOf<A> = A extends keyof Names['automations'] ? Names['automations'][A] : Row;
 
 /** X-20: what a `+representation.svelte` receives, `{ view: RecordView<'<collection>'> }`. */
 export type RecordView<C extends string = string> =

@@ -23,6 +23,7 @@ their label, booleans as Yes/No, groups as a label/value grid, empty as an em da
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import { uiText } from '../primitives/utils.js';
 	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
+	import CodeEditor from '../editors/code-editor.svelte';
 	import { useEnumText } from '../views/bolt.js';
 	import { humanize } from '../views/model.js';
 	import { useKinds } from './context.js';
@@ -62,6 +63,8 @@ their label, booleans as Yes/No, groups as a label/value grid, empty as an em da
 	<CopyText {id} text={(Array.isArray(v) ? v : [v]).map((x) => words(String(x), name)).join(', ')} />
 {:else if kind.kind === 'text' && kind.format === 'markdown' && typeof v === 'string'}
 	<ReadonlyMarkdown value={v} {id} />
+{:else if kind.kind === 'text' && kind.format === 'cel' && typeof v === 'string'}
+	<CodeEditor {id} language="javascript" wrap readonly minHeight="2.25rem" value={v} aria-label={name} />
 {:else if field?.entry.renderer}
 	{@const Renderer = field.entry.renderer}
 	{@const where = address === undefined ? null : untag(row[address] ?? null)}

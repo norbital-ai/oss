@@ -1,8 +1,9 @@
 // The write area's SQL plumbing (A5): the `WITH` chain builder behind rule 20's one
 // statement, the own-row predicate compiler of roll-up `where`s, and the SQLSTATE map (G3).
 import type { Json } from '../../decl/values.ts';
-import { BoltError, DbError, type Outcome, type Pred, type Sql, type TenantDb } from '../contracts.ts';
+import { BoltError, DbError, type Outcome, type Pred, type RowData, type Sql, type TenantDb } from '../contracts.ts';
 import { inline } from '../db/postgres.ts';
+import { composable } from '../query/engine.ts';
 import type { ConstraintMeta } from '../schema/ddl.ts';
 import { refusalOf } from '../schema/refusal.ts';
 import { q, type FieldInfo } from '../../protocol/catalog.ts';
@@ -215,17 +216,21 @@ export async function minter(invocationId: string, now: string): Promise<() => s
 export type Fingerprint = { sql: Sql; digest: string };
 const digestOf = (text: string): string => `(SELECT md5(coalesce(string_agg(to_jsonb(s)::text, E'\\n'), '')) FROM (${text}) s)`;
 /**
- * Wraps a `TenantDb` so every read statement is fingerprinted in the same round trip: its digest statement rides with
- * it in the same read snapshot. The commit re-computes each digest under its table lock and asserts it.
+ * Wraps a `TenantDb` so every read statement is fingerprinted in the same statement: its rows, then its digest as a
+ * last row, in one snapshot. The commit re-computes each digest under its table lock and asserts it.
  */
 export function fingerprinting(db: TenantDb): { db: TenantDb; fingerprints(): readonly Fingerprint[] } {
 	const taken: Fingerprint[] = [];
 	return {
 		fingerprints: () => taken,
 		db: { ...db, async read(statements, signal) {
-			const res = await db.read([...statements, ...statements.map((s) => ({ text: `SELECT ${digestOf(s.text)} AS d`, params: s.params }))], signal);
-			statements.forEach((sql, i) => taken.push({ sql, digest: String(res[statements.length + i]!.rows[0]!['d']) }));
-			return res.slice(0, statements.length);
+			const res = await db.read(statements.map((s) => composable({ text: `SELECT false AS fp, to_jsonb(x) AS r FROM (${s.text}) x
+UNION ALL SELECT true, to_jsonb(${digestOf(s.text)})`, params: s.params })), signal);
+			return res.map((r, i) => {
+				const rows = r.rows.filter((x) => x['fp'] !== true).map((x) => x['r'] as RowData);
+				taken.push({ sql: statements[i]!, digest: String(r.rows.find((x) => x['fp'] === true)!['r']) });
+				return { rows, affected: rows.length };
+			});
 		} },
 	};
 }

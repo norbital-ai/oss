@@ -9,7 +9,8 @@ import type {
 /** A `file` field's cap: at most 20 MiB (the stored-file cap; `bolt check` bounds the KiB form). */
 export type FileSize = `${bigint}KiB` | `${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20}MiB`;
 /** `markdown`: the text is Markdown, rendered as prose; the others are checked on write (rule 68). */
-export type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown';
+/** How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor. */
+export type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel';
 /** The unit a time field is picked in and snapped to (its start; weeks from Monday); the ui's pickers render it. */
 export type DatePrecision = 'year' | 'month' | 'week' | 'day';
 export type TimePrecision = 'hour' | 'minute';

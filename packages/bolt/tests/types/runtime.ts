@@ -515,6 +515,50 @@ pipeline('notice_notes', {
 		onConflict: 'keep'
 	}
 });
+// a set import: scope, findings and template rows (§3.3.5)
+pipeline('notice_notes', {
+	import: {
+		description: 'x',
+		input: { rows: { kind: 'list', of: { kind: 'object', fields: { row: { kind: 'number' }, body: { kind: 'text' } } } } },
+		records: (input) => input.rows,
+		map: () => null,
+		onConflict: 'update',
+		scope: { by: ['note'] },
+		check: async (_ctx, { records }) => records.map((r) => ({ row: r.row, column: 'body', message: 'x', severity: 'warn' as const })),
+		template: async () => [{ body: 'x' }]
+	}
+});
+// known: one typed resolver per upload; context: the page's typed scope; related: rows of other collections
+pipeline('notice_notes', {
+	import: {
+		description: 'x',
+		input: { rows: { kind: 'list', of: { kind: 'object', fields: { code: { kind: 'text' }, note: { kind: 'text' } } } } },
+		context: { notice: { kind: 'id', of: 'notices' } },
+		records: (input) => input.rows,
+		known: async (ctx, records, { context }) => ({ notice: context.notice, codes: records.map((r) => r.code) }),
+		map: (r, { known, context }) => (known.codes.includes(r.code) ? { notice: context.notice, note: r.note } : null),
+		related: { notice_notes: (r, { known }) => [{ notice: known.notice, note: r.code }] },
+		scope: { by: ['note'], of: (r, { known }) => (known.codes.length > 0 ? { note: r.note } : null) },
+		check: async (_ctx, { known }) => known.codes.length > 0 ? [] : [{ row: null, column: '', message: 'empty', severity: 'refuse' as const }],
+		template: async (_ctx, { context }) => [{ code: String(context.notice) }],
+		onConflict: 'update'
+	}
+});
+pipeline('notice_notes', {
+	import: {
+		description: 'x', input: {}, records: () => [], onConflict: 'update',
+		known: async () => ({ count: 1 }),
+		// @ts-expect-error P8 `known` is the resolver's own value, not a map
+		map: (_r, { known }) => (known.get('x') ? null : null)
+	}
+});
+pipeline('notice_notes', {
+	import: {
+		description: 'x', input: {}, records: () => [], map: () => null, onConflict: 'update',
+		// @ts-expect-error P7 a scope over a field the collection does not write
+		scope: { by: ['nope'] }
+	}
+});
 pipeline('notices', {
 	// @ts-expect-error P1 import into a one_way mirror (no create)
 	import: { description: 'x', input: {}, records: () => [], map: () => null }

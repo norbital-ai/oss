@@ -13,10 +13,11 @@ import { DDL, bindings, manifest, rep } from './query.fixture.ts';
 
 // ── a PGlite TenantDb: `read` runs its statements in order inside one call ──
 let pg: PGlite;
-let reads = 0;
+let reads = 0, statementCount = 0;
 const db: TenantDb = {
 	async read(statements) {
 		reads++;
+		statementCount += statements.length;
 		const out = [];
 		for (const s of statements) {
 			const r = await pg.query<{ [c: string]: Json }>(s.text, s.params as unknown[]);
@@ -304,6 +305,63 @@ describe('next query engine (PGlite)', () => {
 		expect(out[0]).toEqual(out[2]);
 		expect((out[1] as RowData).id).toBe(ORDERS[0]!.id);
 		expect(out[3]).toEqual({ count: 40 });
+	});
+
+	it('rule 12: a batch of N reads is one statement, each read answered as if alone, under the caller\'s policies', async () => {
+		const batch = [ir.read(cat, 'accounts', { all: true, select: { name: true } }), ir.read(cat, 'orders', { limit: 3, orderBy: { placed: 'desc' } }),
+			ir.get(cat, 'orders', ORDERS[1]!.id), ir.get(cat, 'orders', ORDERS[2]!.id), ir.aggregate(cat, 'orders', { count: true, where: { status: { eq: 'open' } } }),
+			ir.read(cat, 'lines', { all: true, where: { sku: { eq: 's1' } }, select: { amount: true } }), ir.read(cat, 'notes', { limit: 0 })];
+		for (const reader of [workspace, caller]) {
+			const alone = [];
+			for (const one of batch) alone.push((await run(reader, one))[0]);
+			const [r0, s0] = [reads, statementCount];
+			expect(await run(reader, ...batch)).toEqual(alone);
+			expect([reads - r0, statementCount - s0]).toEqual([1, 1]);
+		}
+		// the caller sees only its scope in every member: rep reads the north accounts' orders
+		const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
+		const [accounts, far] = await run(caller, ir.read(cat, 'accounts', { all: true }), ir.get(cat, 'orders', ORDERS.find((o) => !north.has(o.account))!.id));
+		expect((accounts as Page).rows.map((r) => r.id).sort()).toEqual([...north].sort());
+		expect(far).toBeNull();
+	});
+
+	/** A batch read labelled as a keyed read's member (what the runner lowers `ctx.read({ … })` to). */
+	const member = (read: ReadIR, key: string, cte?: string): ReadIR => ({ ...read, member: key, ...(cte === undefined ? {} : { cte }) }) as ReadIR;
+	it('rule 12: a keyed member reads an earlier member\'s values inside the one statement, under that member\'s scope', async () => {
+		const ref = (where: object, cte: string) => member(ir.read(cat, 'orders', { all: true, where, select: { account: true } }), 'orders', cte);
+		const north = ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id);
+		for (const reader of [workspace, caller]) {
+			const s0 = statementCount;
+			const [accounts, orders] = await run(reader, member(ir.read(cat, 'accounts', { all: true, where: { region: { eq: 'north' } }, select: { name: true } }), 'accounts', '1:accounts'),
+				ref({ account: { in: { member: '1:accounts', field: 'id' } } }, '1:orders')) as [Page, Page];
+			expect(statementCount - s0).toBe(1);
+			expect(accounts.rows.map((r) => r.id).sort()).toEqual([...north].sort());
+			const expected = ORDERS.filter((o) => north.includes(o.account)).map((o) => o.id).sort();
+			expect(orders.rows.map((r) => r.id).sort()).toEqual(expected);
+		}
+		// the referenced rows are the earlier member's as its reader sees them: the rep's accounts are its north ones
+		const [, scoped] = await run(caller, member(ir.read(cat, 'accounts', { all: true }), 'accounts', '2:accounts'),
+			ref({ account: { nin: { member: '2:accounts', field: 'id' } } }, '2:orders')) as [Page, Page];
+		expect(scoped.rows).toEqual([]);
+	});
+
+	it('rule 12: a member reference walks the earlier member\'s relation arms (a path, through a many arm)', async () => {
+		const north = ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id);
+		const orders = new Set(ORDERS.filter((o) => north.includes(o.account)).map((o) => o.id));
+		const s0 = statementCount;
+		const [, lines] = await run(workspace,
+			member(ir.read(cat, 'accounts', { all: true, where: { region: { eq: 'north' } }, select: { name: true, orders: { select: { status: true }, all: true } } }), 'accounts', '3:accounts'),
+			member(ir.read(cat, 'lines', { all: true, where: { order: { in: { member: '3:accounts', field: 'orders.id' } } }, select: { order: true } }), 'lines', '3:lines')) as [Page, Page];
+		expect(statementCount - s0).toBe(1);
+		expect(lines.rows.map((r) => r.id).sort()).toEqual(LINES.filter((l) => orders.has(l.order)).map((l) => l.id).sort());
+	});
+
+	it('rule 9: a keyed read member past its cap names itself; the rest of the batch is still one statement', async () => {
+		const small = readEngine({ db, manifest, allBytes: 200 });
+		const s0 = statementCount;
+		await expect(small.run([member(ir.read(cat, 'accounts', { limit: 1 }), 'one'), member(ir.read(cat, 'orders', { all: true }), 'every')], workspace, bindings))
+			.rejects.toMatchObject({ code: 'tooLarge', message: "member 'every': the read of orders is larger than 200 bytes; page it (rule 9)" });
+		expect(statementCount - s0).toBe(1);
 	});
 
 	it('rule 13: a caller read is scoped at every level; out of scope is absent, or null through a one-relation', async () => {

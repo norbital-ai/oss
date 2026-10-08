@@ -55,5 +55,11 @@ describe('lexical tokenizer', () => {
 		expect(await hit('Москва', 'moskva')).toBe(true);
 		expect(await hit('Kismis Raya Bakery', 'kizmis')).toBe(true);
 		expect(await hit('Kimchi House', 'zzqx')).toBe(false);
+		// a possessive names its owner ("Bob's jobs" found no Bob Tan), and still prefixes a stored possessive
+		const found = async (doc: string, term: string) =>
+			(await database.query<{ value: boolean }>('select bolt_search_document($1) @@ bolt_search_query($2, false) as value', [doc, term])).rows[0]?.value;
+		expect(await found('Bob Tan', "Bob's jobs")).toBe(true);
+		expect(await found("Bob's Plumbing", 'bob’s')).toBe(true);
+		expect(await found("O'Brien", "o'brien")).toBe(true);
 	});
 });

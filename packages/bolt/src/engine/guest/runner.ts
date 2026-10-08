@@ -13,14 +13,14 @@ import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
 import ivm from 'isolated-vm';
 import type { Json } from '../../decl/values.ts';
 import { BoltError, type Bridge, type CrossAnswer, type CrossCall, type GuestOutcome, type GuestPort, type Invocation, type InvocationKind,
-	LIMITS, type ReadIR } from '../contracts.ts';
+	LIMITS, type Pred, type ReadIR, type SelectIR } from '../contracts.ts';
 import { PRELUDE } from './prelude.ts';
 import type { EventLog } from './telemetry.ts';
 
 /** `assets`: the bytes of each `?bytes` import by sha256 (§5.8), read synchronously by the isolate. */
 /** An invocation's crossings and database statements; a statement is one `read`, `act`, `schedule`, `notify` or `send` call. */
 export type Tally = { crossings: number; statements: number };
-const STATEMENTS: ReadonlySet<string> = new Set(['read', 'act', 'schedule', 'notify', 'send']);
+const STATEMENTS: ReadonlySet<string> = new Set(['read', 'act', 'acts', 'schedule', 'notify', 'send']);
 /** `snapshot`: `guest.snapshot`, the prelude and the evaluated bundle as a V8 heap for this host (compiler/artifact/snapshot.ts). */
 export type GuestProgram = { source: string; sourceMap?: string; assets?: Readonly<Record<string, Uint8Array>>; snapshot?: Uint8Array };
 export type GuestOptions = {
@@ -78,6 +78,10 @@ export function lower(member: string, args: readonly Json[], bins: readonly Uint
 				...(o.onConflict === 'update' || o.onConflict === 'keep' ? { onConflict: o.onConflict as 'update' | 'keep' } : {}) }; // hook:ctx-types (rule 28)
 			return { op: 'act', callable: String(args[0]), input: args[1] ?? null, ...(Object.keys(options).length > 0 ? { options } : {}) };
 		}
+		case 'acts': {
+			if (!Array.isArray(args[0])) throw new BoltError('invalid', 'decode', 'act.many takes a list of { callable, input }');
+			return { op: 'acts', acts: args[0].map((a) => ({ callable: String(object(a).callable), input: object(a).input ?? null })) };
+		}
 		case 'schedule': {
 			const o = object(args[2]);
 			return { op: 'schedule', automation: String(args[0]), input: args[1] ?? null,
@@ -91,6 +95,52 @@ export function lower(member: string, args: readonly Json[], bins: readonly Uint
 	}
 	throw new Error(`the guest called an unknown ctx member '${member}'`);
 }
+
+/**
+ * `ctx.read({ key: { collection, …query } })` (and `ctx.db.read`): a keyed set of reads, one crossing. A member with
+ * an `id` is a `get`. Each member is lowered as its own read, labelled with its key, so the batch's one statement
+ * reads them all and a cap names the member that broke it.
+ */
+export type Keyed = { keyed: readonly (readonly [key: string, call: CrossCall | CrossAnswer])[] };
+export function lowerKeyed(member: string, set: Json, lowerRead: GuestOptions['lowerRead'], scope: number): Keyed {
+	const earlier = new Set<string>();
+	return { keyed: Object.entries(object(set)).map(([key, spec]) => {
+		try {
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new BoltError('invalid', 'decode', 'a keyed read member key is a name (letters, digits, _)');
+			const { collection, id, ...q } = object(spec);
+			if (typeof collection !== 'string') throw new BoltError('invalid', 'decode', 'a keyed read member names its collection');
+			const read = id === undefined ? lowerRead(member, [collection, q]) : lowerRead(member.replace('read', 'get'), [collection, id, q]);
+			// `{ in: { member, field } }` names an earlier member of this read: its rows are this read's CTE `<scope>:<key>`
+			const scoped = (p: Pred): Pred => {
+				switch (p.t) {
+					case 'and': case 'or': return { ...p, of: p.of.map(scoped) };
+					case 'not': case 'one': return p.t === 'not' ? { ...p, of: scoped(p.of) } : { ...p, pred: scoped(p.pred) };
+					case 'many': return { ...p, pred: scoped(p.pred) };
+					case 'in': {
+						const ref = p.args;
+						if (Array.isArray(ref) || !('member' in ref)) return p;
+						if (!earlier.has(ref.member)) throw new BoltError('invalid', 'decode', `'${ref.member}' is no earlier member of this read`);
+						return { ...p, args: { member: `${scope}:${ref.member}`, field: ref.field } };
+					}
+					default: return p;
+				}
+			};
+			// a relation arm's `where` may name an earlier member too
+			const arms = (select: SelectIR): SelectIR => ({ ...select, relations: Object.fromEntries(Object.entries(select.relations).map(([rel, r]) =>
+				[rel, { ...r, select: arms(r.select), ...(r.where === undefined ? {} : { where: scoped(r.where) }) }])) });
+			const where = {
+				...('where' in read && read.where !== undefined ? { where: scoped(read.where) } : {}),
+				...('select' in read && read.select !== undefined ? { select: arms(read.select) } : {}),
+			};
+			earlier.add(key);
+			return [key, { op: 'read', read: { ...read, ...where, member: key, cte: `${scope}:${key}` } as ReadIR, params: {} }] as const;
+		} catch (e) {
+			return [key, fail('invalidInput', `member '${key}': ${messageOf(e)}`)] as const;
+		}
+	}) };
+}
+const isKeyedRead = (member: string, args: readonly Json[]) =>
+	(member === 'read' || member === 'db.read') && args.length === 1 && args[0] !== null && typeof args[0] === 'object' && !Array.isArray(args[0]);
 
 const messageOf = (e: unknown): string => e instanceof Error ? e.message : String(e);
 const fail = (code: string, message: string) => ({ ok: false, error: { kind: 'bolt', code, message } }) as const;
@@ -384,15 +434,16 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 			{ arguments: { copy: true } }));
 
 		let crossings = 0, readBytes = 0;
-		const isCall = (x: CrossCall | CrossAnswer): x is CrossCall => 'op' in x;
-		const wallOf = (part: readonly (CrossCall | CrossAnswer)[]): number => {
+		const isCall = (x: CrossCall | CrossAnswer | Keyed): x is CrossCall => 'op' in x;
+		const isKeyed = (x: CrossCall | CrossAnswer | Keyed): x is Keyed => 'keyed' in x;
+		const wallOf = (part: readonly (CrossCall | CrossAnswer | Keyed)[]): number => {
 			const [only] = part;
 			if (part.length !== 1 || only === undefined || !isCall(only) || only.op !== 'facility' || only.facility !== 'ai') return wallMs;
 			return only.method === 'sys_2.infer' ? inferMs(only.args) : only.method === 'transcribe' || only.method === 'speak' ? LIMITS.callMs.speech : wallMs;
 		};
 		// batches in flight: each drain's calls cross together, and whichever batch answers first is given back first,
 		// so a body's concurrent branches (`Promise.all` over slow AI calls) proceed as each answer lands, not in lockstep
-		type Landed = { batch: number; calls: Taken[1]; lowered: (CrossCall | CrossAnswer)[]; sent: readonly CrossAnswer[] };
+		type Landed = { batch: number; calls: Taken[1]; lowered: (CrossCall | CrossAnswer | Keyed)[]; sent: readonly CrossAnswer[] };
 		const outstanding = new Map<number, Promise<Landed>>();
 		let batches = 0;
 		for (;;) {
@@ -427,19 +478,22 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 				if (big !== undefined) return failed('tooLarge', `a ctx call's arguments are over ${LIMITS.argsBytes} bytes at ${where(big[2])}`);
 				await options.events?.slice();
 				crossings += calls.length;
-				const lowered = calls.map(([member, json], i): CrossCall | CrossAnswer => {
+				const lowered = calls.map(([member, json], i): CrossCall | CrossAnswer | Keyed => {
 					try {
-						return lower(member, JSON.parse(json) as Json[], bins[i] ?? [], options.lowerRead);
+						const args = JSON.parse(json) as Json[];
+						if (isKeyedRead(member, args)) return lowerKeyed(member, args[0]!, options.lowerRead, calls[i]![3]);
+						return lower(member, args, bins[i] ?? [], options.lowerRead);
 					} catch (e) {
 						return fail('invalidInput', messageOf(e));
 					}
 				});
 				// a facility call (AI, web, files, http) lands on its own; reads and writes stay one ordered batch
-				const alone = (x: CrossCall | CrossAnswer) => isCall(x) && x.op === 'facility';
+				const alone = (x: CrossCall | CrossAnswer | Keyed) => isCall(x) && x.op === 'facility';
 				const groups = [...lowered.flatMap((x, i) => alone(x) ? [[i]] : []), lowered.flatMap((x, i) => alone(x) ? [] : [i])].filter((g) => g.length > 0);
 				for (const g of groups) {
 					const batch = batches++, part = g.map((i) => lowered[i]!);
-					outstanding.set(batch, crossWithin(bridge, part.filter(isCall), wallOf(part), options.signal) // hook:drains
+					const sending = part.flatMap((x) => isKeyed(x) ? x.keyed.map(([, c]) => c).filter(isCall) : isCall(x) ? [x] : []);
+					outstanding.set(batch, crossWithin(bridge, sending, wallOf(part), options.signal) // hook:drains
 						.then((sent) => ({ batch, calls: g.map((i) => calls[i]!), lowered: part, sent })));
 				}
 			}
@@ -449,10 +503,17 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 			outstanding.delete(landed.batch);
 			if (halted !== undefined) return { kind: 'failed', error: halted, cpuMs: cpu() };
 			let next = 0;
-			const answers = landed.lowered.map((x) => isCall(x) ? landed.sent[next++] ?? fail('badAnswer', 'no answer') : x);
+			const answerOf = (x: CrossCall | CrossAnswer): CrossAnswer => isCall(x) ? landed.sent[next++] ?? fail('badAnswer', 'no answer') : x;
+			// a keyed read answers its members by key; a failed member fails the read (its message names the member)
+			const answers = landed.lowered.map((x): CrossAnswer => {
+				if (!isKeyed(x)) return answerOf(x);
+				const members = x.keyed.map(([key, c]) => [key, answerOf(c)] as const);
+				const bad = members.find(([, a]) => !a.ok);
+				return bad !== undefined ? bad[1] : { ok: true, value: Object.fromEntries(members.map(([key, a]) => [key, a.ok ? a.value : null])) };
+			});
 			crossings -= landed.sent.filter((a) => a.journal === true).length;
 			tally.crossings = crossings;
-			tally.statements += landed.lowered.filter((x) => isCall(x) && STATEMENTS.has(x.op)).length;
+			tally.statements += landed.lowered.filter((x) => isKeyed(x) || (isCall(x) && STATEMENTS.has(x.op))).length;
 
 			let bytes = 0, biggest = 0, biggestAt = 0;
 			const texts = answers.map((a, i) => {
@@ -466,7 +527,7 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 				bytes += size;
 				if (size > biggest) { biggest = size; biggestAt = i; }
 				const call = landed.lowered[i];
-				if (call !== undefined && isCall(call) && call.op === 'read') readBytes += size;
+				if (call !== undefined && (isKeyed(call) || (isCall(call) && call.op === 'read'))) readBytes += size;
 				if (!a.ok && call !== undefined && isCall(call) && call.op === 'facility' && a.error.kind !== 'bolt')
 					options.events?.emit('warn', 'facility.failed', { facility: call.facility, method: call.method, kind: a.error.kind, message: 'message' in a.error ? a.error.message : a.error.reason });
 				return text;
@@ -474,9 +535,14 @@ async function run(pool: Pool, program: GuestProgram, key: string, where: (frame
 			const at = landed.calls[0]![2];
 			if (bytes > LIMITS.crossingBytes) {
 				const big = landed.lowered[biggestAt]!;
-				const what = !isCall(big) ? 'a refused call' : big.op === 'read' ? `ctx.${big.read.kind} of '${big.read.collection}'`
+				const widest = (value: Json): string => {
+					const sizes = Object.entries(object(value)).map(([key, v]) => [key, Buffer.byteLength(JSON.stringify(v) ?? '')] as const).sort((x, y) => y[1] - x[1]);
+					return sizes.length === 0 ? 'ctx.read({})' : `ctx.read member '${sizes[0]![0]}' (${sizes[0]![1]} bytes)`;
+				};
+				const keyedAnswer = answers[biggestAt]!;
+				const what = isKeyed(big) ? widest(keyedAnswer.ok ? keyedAnswer.value : null) : !isCall(big) ? 'a refused call' : big.op === 'read' ? `ctx.${big.read.kind} of '${big.read.collection}'`
 					: big.op === 'act' ? `ctx.act('${big.callable}')` : big.op === 'facility' ? `ctx.${big.facility}.${big.method}` : `ctx.${big.op}`;
-				const hint = isCall(big) && big.op === 'read' ? 'page it with `limit` and the returned cursor, or `select` fewer fields' : 'return less from it';
+				const hint = isKeyed(big) || (isCall(big) && big.op === 'read') ? 'page it with `limit` and the returned cursor, or `select` fewer fields' : 'return less from it';
 				return failed('tooLarge', `${what} answered ${biggest} bytes (${bytes} this crossing), over the ${LIMITS.crossingBytes / 1024 / 1024} MiB crossing limit at ${where(landed.calls[biggestAt]![2])}; ${hint}`);
 			}
 			if (readBytes > inv.budget.readBytes) return failed('readBudgetExceeded', `the invocation read over ${inv.budget.readBytes} bytes; the last read was at ${where(at)}`);

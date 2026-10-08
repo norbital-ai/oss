@@ -84,9 +84,15 @@ end $bolt_search$`
 		sql: "create or replace function bolt_search_document(value text) returns tsvector language plpgsql immutable strict parallel safe as $bolt_search$ begin return array_to_tsvector(array(select distinct lexeme from bolt_search_terms(value) where lexeme <> '' and octet_length(lexeme) <= 256)); end $bolt_search$"
 	},
 	{
-		// `every`: each native query word and CJK run, as a prefix. Otherwise any lexeme that can place a row.
+		// `every`: each native query word and CJK run, as a prefix. Otherwise any lexeme that can place a row. A possessive
+		// `'s` is dropped from the query only ("Bob's jobs" → bob:*, which still prefixes a stored "bobs")
 		id: 'bolt:function-search-5-query',
-		sql: "create or replace function bolt_search_query(term text, every boolean) returns tsquery language plpgsql immutable strict parallel safe as $bolt_search$ begin return (select string_agg(distinct quote_literal(lexeme) || case when kind = 'j' then '' else ':*' end, case when every then ' & ' else ' | ' end)::tsquery from bolt_search_terms(term) where lexeme <> '' and (kind in ('w', 'r') or (not every and (kind in ('a', 'j') or (kind = 's' and char_length(lexeme) >= 4))))); end $bolt_search$"
+		sql: "create or replace function bolt_search_query(term text, every boolean) returns tsquery language plpgsql immutable strict parallel safe as $bolt_search$ begin return (select string_agg(distinct quote_literal(lexeme) || case when kind = 'j' then '' else ':*' end, case when every then ' & ' else ' | ' end)::tsquery from bolt_search_terms(regexp_replace(term, '[''’]s\\M', '', 'gi')) where lexeme <> '' and (kind in ('w', 'r') or (not every and (kind in ('a', 'j') or (kind = 's' and char_length(lexeme) >= 4))))); end $bolt_search$"
+	},
+	{
+		// `$search` as a filter: every word of the term, each by any of its lexemes (a prefix, a romanization, a skeleton)
+		id: 'bolt:function-search-6-filter',
+		sql: "create or replace function bolt_search_filter(term text) returns tsquery language plpgsql immutable strict parallel safe as $bolt_search$ begin return (select string_agg('(' || q::text || ')', ' & ')::tsquery from regexp_split_to_table(bolt_search_fold(regexp_replace(term, '[''’]s\\M', '', 'gi')), ' ') as word, bolt_search_query(word, false) as q where q is not null); end $bolt_search$"
 	}
 ];
 

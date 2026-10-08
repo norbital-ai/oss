@@ -60,6 +60,9 @@ Shows any stored or input value read-only, formatted by its field kind.
 	</span>
 {:else if kind.kind === 'text' && kind.format === 'markdown' && typeof v === 'string'}
 	<ReadonlyMarkdown value={v} class={className} />
+{:else if kind.kind === 'text' && kind.format === 'cel' && typeof v === 'string'}
+	<!-- a cell or a dense list shows the expression as wrapped code; the record viewer's readonly form shows it in the CodeEditor -->
+	<code class={cn('font-mono text-xs whitespace-pre-wrap wrap-anywhere', className)} data-cel>{v}</code>
 {:else if kind.kind === 'bool'}
 	<Icon icon={v ? 'lucide:check' : 'lucide:x'} class={cn('size-4', v ? 'text-success' : 'text-muted-foreground', className)} aria-label={v ? t('yes') : t('no')} />
 {:else if field?.entry.renderer}

@@ -10,7 +10,7 @@ import type { Json } from '../src/decl/values.ts';
 import { type Bridge, type CrossAnswer, type CrossCall, type GuestOutcome, type Invocation, type InvocationKind, LIMITS } from '../src/engine/contracts.ts';
 import type { IsolateGlobals } from '../src/engine/guest/globals.ts';
 import { PRELUDE } from '../src/engine/guest/prelude.ts';
-import { bodyPath, type GuestOptions, type GuestProgram, guestRunner } from '../src/engine/guest/runner.ts';
+import { bodyPath, type GuestOptions, type GuestProgram, guestRunner, lowerKeyed } from '../src/engine/guest/runner.ts';
 import { buildSnapshot } from '../src/compiler/artifact/snapshot.ts';
 import { EventLog } from '../src/engine/guest/telemetry.ts';
 import { transient } from '../src/engine/runs/index.ts';
@@ -199,6 +199,47 @@ describe('next guest runner', () => {
 			invocation(), recorder().bridge, { cpu: (_i, _ms, counts) => { seen.push({ ...counts }); } });
 		expect(ok(o)).toBe('done');
 		expect(seen).toEqual([{ crossings: 3, statements: 2 }]);
+	});
+
+	it('answers a keyed read by key as one crossing and one statement, its members crossing together (rule 12)', async () => {
+		const seen: { crossings: number; statements: number }[] = [];
+		const { crossings, bridge } = recorder((c) => ({ ok: true, value: c.op === 'read' && c.read.kind === 'get' ? `${c.read.collection}:${c.read.id}:${c.read.member}` : null }));
+		const o = await runIn(automation(`async (_, ctx) => ctx.read({ a: { collection: 't', id: 'x' }, b: { collection: 'u', id: 'y' }, c: { collection: 'v', id: 'z' } })`),
+			invocation(null, { crossings: 1 }), bridge, { cpu: (_i, _ms, counts) => { seen.push({ ...counts }); } });
+		expect(ok(o)).toEqual({ a: 't:x:a', b: 'u:y:b', c: 'v:z:c' });
+		expect(crossings.map((c) => c.length)).toEqual([3]);
+		expect(seen).toEqual([{ crossings: 1, statements: 1 }]);
+	});
+
+	it('scopes a keyed member\'s reference to an earlier member of the same read, and refuses any other', () => {
+		const stub: GuestOptions['lowerRead'] = (_m, args) => ({ kind: 'read', collection: String(args[0]), select: { fields: null, relations: {} }, page: { all: true },
+			...((args[1] as { ref?: string }).ref === undefined ? {} : { where: { t: 'and', of: [{ t: 'in', field: 'x', negated: false, args: { member: (args[1] as { ref: string }).ref, field: 'id' } }] } }) });
+		const { keyed } = lowerKeyed('read', { a: { collection: 't' }, b: { collection: 'u', ref: 'a' }, c: { collection: 'v', ref: 'c' } }, stub, 7);
+		expect(keyed.map(([key, x]) => [key, 'op' in x && x.op === 'read' ? (x.read.kind === 'read' ? [x.read.cte, JSON.stringify(x.read.where ?? null)] : null) : x])).toEqual([
+			['a', ['7:a', 'null']],
+			['b', ['7:b', JSON.stringify({ t: 'and', of: [{ t: 'in', field: 'x', negated: false, args: { member: '7:a', field: 'id' } }] })]],
+			['c', { ok: false, error: { kind: 'bolt', code: 'invalidInput', message: "member 'c': 'c' is no earlier member of this read" } }],
+		]);
+	});
+
+	it('lowers act.many to one acts call: one crossing, one statement', async () => {
+		const seen: { crossings: number; statements: number }[] = [];
+		const { crossings, bridge } = recorder((c) => ({ ok: true, value: c.op === 'acts' ? { kind: 'committed', output: c.acts.map((a) => a.callable), records: [] } : null }));
+		const o = await runIn(automation(`async (_, ctx) => (await ctx.act.many([{ callable: 'a.create', input: { x: 1 } }, { callable: 'b.update', input: [] }])).output`),
+			invocation(), bridge, { cpu: (_i, _ms, counts) => { seen.push({ ...counts }); } });
+		expect(ok(o)).toEqual(['a.create', 'b.update']);
+		expect(crossings).toEqual([[{ op: 'acts', acts: [{ callable: 'a.create', input: { x: 1 } }, { callable: 'b.update', input: [] }] }]]);
+		expect(seen).toEqual([{ crossings: 1, statements: 1 }]);
+	});
+
+	it('fails a keyed read with the member that failed, and names the widest member past 4 MiB (rule 9)', async () => {
+		const { bridge } = recorder((c) => c.op === 'read' && c.read.collection === 'u' ? { ok: false, error: { kind: 'bolt', code: 'tooLarge', message: "member 'b': the read of u matches more than 50000 rows; page it (rule 9)" } } : { ok: true, value: 1 });
+		expect(ok(await runIn(automation(`async (_, ctx) => ctx.read({ a: { collection: 't', id: 'x' }, b: { collection: 'u', id: 'y' } }).catch((e) => e.code + ' ' + e.message)`), invocation(), bridge)))
+			.toBe("tooLarge member 'b': the read of u matches more than 50000 rows; page it (rule 9)");
+		expect(ok(await runIn(automation(`async (_, ctx) => ctx.read({ a: { id: 'x' } }).catch((e) => e.message)`)))).toMatch(/^member 'a': a keyed read member names its collection/);
+		const big = recorder((c) => ({ ok: true, value: c.op === 'read' && c.read.collection === 'u' ? 'x'.repeat(LIMITS.crossingBytes) : 1 }));
+		expect(failure(await runIn(automation(`async (_, ctx) => ctx.read({ a: { collection: 't', id: 'x' }, b: { collection: 'u', id: 'y' } })`), invocation(), big.bridge)))
+			.toMatchObject({ code: 'tooLarge', message: expect.stringMatching(/^ctx\.read member 'b' \(4194306 bytes\) answered/) });
 	});
 
 	it('bounds each crossing by the per-call wall, as a typed timeout (X-28)', async () => {

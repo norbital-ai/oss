@@ -135,11 +135,15 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 			const openStream = (url: string) => {
 				const source = { onmessage: null as ((e: MessageEvent<string>) => void) | null, onerror: null as ((event: Event) => void) | null, close: () => {} };
 				const abort = new AbortController();
-				source.close = () => abort.abort();
+				// the in-process handler never sees the abort: cancelling the body is what ends the server's connection, which
+				// otherwise holds this visit's client (and through it the whole unmounted page) for the rest of the sweep
+				let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+				source.close = () => { abort.abort(); void reader?.cancel().catch(() => {}); };
 				streams.push(source.close);
 				void (async () => {
 					try {
-						const reader = (await fetch(url, { signal: abort.signal })).body!.getReader();
+						reader = (await fetch(url, { signal: abort.signal })).body!.getReader();
+						if (abort.signal.aborted) { await reader.cancel(); return; }
 						const text = new TextDecoder();
 						let buffer = '';
 						for (;;) {
@@ -183,6 +187,17 @@ export async function sweep(t: TestWorkspace, o: SweepOptions = {}): Promise<Swe
 				if (view !== undefined) await unmount(view);
 				for (const close of streams) close();
 				target.remove();
+				// happy-dom files every computed-style lookup (CodeMirror measures one per ancestor) in lists on the document
+				// and <html> that it clears only when their own styles, focus or children change: reset them, or every visit's
+				// lookups stay for the whole sweep. A browser keeps no such lists, and this changes nothing on the page.
+				if ('happyDOM' in window) {
+					document.adoptedStyleSheets = [...document.adoptedStyleSheets];
+					const probe = document.createElement('button');
+					document.documentElement.append(probe);
+					probe.focus();
+					probe.blur();
+					probe.remove();
+				}
 				window.removeEventListener('error', onError);
 				console.error = consoleError;
 			}

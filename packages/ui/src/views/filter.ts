@@ -15,7 +15,9 @@ type Catalog = { readonly [collection: string]: CollectionExposure };
 
 export type Cmp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
 export type Op = Cmp | 'in' | 'nin' | 'like' | 'isNull' | 'notNull' | 'has' | 'hasAny' | 'hasAll' | 'isEmpty' | 'notEmpty'
-	| 'during' | 'contains' | 'overlaps' | 'within' | 'near';
+	| 'during' | 'contains' | 'overlaps' | 'within' | 'near' | 'search' | 'similar';
+/** A collection's search index (`$search`: every word) and embedding (`$similar`: nearest in meaning) as condition keys. */
+export const INDEX: { readonly [key: string]: { op: 'search' | 'similar'; label: string } } = { $search: { op: 'search', label: 'Search' }, $similar: { op: 'similar', label: 'Topic' } };
 export type Unit = 'week' | 'month' | 'quarter' | 'year';
 /** A condition's value: a literal, a list, a relative date span (with the catalogue's label, when it came from one), an
  * actor, or a `today`/`now`/`startOf` operand. */
@@ -120,6 +122,8 @@ export function resolve(cat: Catalog, collection: string, path: string): Resolve
 			continue;
 		}
 		if (!last || arm !== undefined) return null;
+		if (INDEX[name] !== undefined) return (name === '$search' ? (x.search?.length ?? 0) > 0 : x.semantic === true)
+			? { leaf: 'field', kind: { kind: 'text' }, nullable: false, label: INDEX[name]!.label } : null;
 		const kind = (c.startsWith('$') ? undefined : SYS[name]) ?? (filterable(x, name) ? x.fields[name]! : undefined); // `$local`: no system columns
 		return kind === undefined ? null : { leaf: 'field', kind, nullable: kind.optional === true, label: kind.label ?? name };
 	}
@@ -207,6 +211,7 @@ function leafOps(n: Extract<Node, { t: 'cond' }>): Json {
 		case 'isEmpty': return { isEmpty: true };
 		case 'notEmpty': return { isEmpty: false };
 		case 'like': return { like: likeOf(String(a !== null && 'lit' in a ? a.lit : '')) };
+		case 'search': case 'similar': return a !== null && 'lit' in a && typeof a.lit === 'string' ? a.lit : null;
 		case 'during': {
 			if (a === null || !('range' in a)) return null;
 			return { gte: a.range[0], lt: a.range[1] };
@@ -333,6 +338,10 @@ export function fromWhere(cat: Catalog, root: string, w: Json, at = root, prefix
 			const of = fromWhere(cat, root, v);
 			if (of === null) return null;
 			out.push({ t: 'group', join: 'and', not: true, of });
+		} else if (INDEX[key] !== undefined) {
+			const path = prefix + key;
+			if (typeof v !== 'string' || v.trim() === '' || resolve(cat, root, path) === null) return null;
+			out.push({ t: 'cond', path, op: INDEX[key]!.op, arg: { lit: v } });
 		} else if ((x.many ?? []).includes(key)) {
 			const child = childOf(cat, at, key);
 			if (prefix !== '' || !isObj(v) || keysOf(v).length === 0 || child === undefined) return null;
@@ -520,7 +529,7 @@ export function pathLabel(cat: Catalog, collection: string, path: string, human:
 		const [name, arm] = step.split(':') as [string, string | undefined];
 		const x = cat[c], rel = x?.relations?.[name];
 		// a relation is named for its record ("Site"), never its key column ("Site id"): the describer's own words
-		out.push((rel?.label ?? x?.fields[name]?.label ?? human(rel === undefined ? name : name.replace(/_id$/, ''))) + (arm === undefined ? '' : ` (${human(arm)})`));
+		out.push((INDEX[name]?.label ?? rel?.label ?? x?.fields[name]?.label ?? human(rel === undefined ? name : name.replace(/_id$/, ''))) + (arm === undefined ? '' : ` (${human(arm)})`));
 		c = arm ?? rel?.targets[0] ?? c;
 	}
 	return out.join(' › ');

@@ -9,7 +9,7 @@ type Common = { optional?: true; default?: unknown; unique?: true; label?: strin
 /** A field kind literal as the ui reads it: every stored and input kind, structurally (no bolt dependency). */
 export type Kind = Common & (
 	/** `markdown`: stored Markdown, read as prose. */
-	| { kind: 'text'; format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown'; max?: number; many?: true }
+	| { kind: 'text'; format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel'; max?: number; many?: true }
 	| { kind: 'int' | 'number'; min?: number; max?: number }
 	| { kind: 'decimal'; scale: number; precision?: number; min?: number; max?: number }
 	/** `scale`: places kept beyond the currency's minor unit (a unit price); shown padded only to the minor digits. */
@@ -184,7 +184,8 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 		case 'decimal': case 'sum': return decimalText(String(v), locale);
 		case 'money': {
 			const c = o.currency;
-			return c === undefined ? decimalText(String(v), locale) : moneyText(String(v), c, locale);
+			// a money with no currency (none on the row, none in the workspace) still reads at the common minor unit, 5,884.70
+			return c === undefined ? decimalText(String(v), locale, 2) : moneyText(String(v), c, locale);
 		}
 		case 'bool': return v === true ? '✓' : '✗';
 		// a year or a month shows as one (its stored first day would read as a day)

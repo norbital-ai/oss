@@ -16,6 +16,8 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		invalid?: boolean;
 		/** CSS min-height of the editing area; one line is `2.25rem` (a field's height). */
 		minHeight?: string;
+		/** Long lines wrap at the editor's width instead of scrolling sideways (an expression, prose). */
+		wrap?: boolean;
 		id?: string;
 		class?: string;
 		'aria-label'?: string;
@@ -32,7 +34,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	import { basicSetup } from 'codemirror';
 	import { cn } from '../primitives/utils.js';
 
-	let { value, onChange, language = 'plaintext', readonly = false, invalid = false, minHeight = '7rem', id, class: className, 'aria-label': ariaLabel }: CodeEditorProps = $props();
+	let { value, onChange, language = 'plaintext', readonly = false, invalid = false, minHeight = '7rem', wrap = false, id, class: className, 'aria-label': ariaLabel }: CodeEditorProps = $props();
 
 	const theme = EditorView.theme({
 		'&': { height: '100%', minHeight: 'inherit', fontSize: '0.75rem', color: 'var(--foreground)', backgroundColor: 'transparent' },
@@ -59,7 +61,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	/** Marks a transaction that mirrors `value` in, so it is not echoed back through `onChange`. */
 	const External = Annotation.define<boolean>();
 	const config = new Compartment();
-	const settings = (): Extension => [lang(language), EditorState.readOnly.of(readonly), EditorView.editable.of(!readonly),
+	const settings = (): Extension => [lang(language), wrap ? EditorView.lineWrapping : [], EditorState.readOnly.of(readonly), EditorView.editable.of(!readonly),
 		EditorView.contentAttributes.of({ 'aria-label': ariaLabel ?? 'Code', ...(id === undefined ? {} : { id }) })];
 	let view: EditorView | undefined;
 

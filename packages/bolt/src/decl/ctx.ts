@@ -63,10 +63,46 @@ export type ActionName<C> = keyof ActionsOfC<C> & string;
 type In<X> = X extends { input: infer I } ? InputOf<I> : undefined;
 type Out<X> = X extends { output: infer O } ? ValueOf<O> : undefined;
 
+/**
+ * One member of a keyed read (`ctx.read({ key: member })`): a read of `collection` (its `where`, `select`, `orderBy` and
+ * page, as `read` takes them), or with an `id` that row (`get`). A field's `{ in: { member, field } }` takes the values
+ * of `field` across the rows an EARLIER member of the same read answered, inside the same statement: a dependent read
+ * (an entity, then the versions its `settings_code` names) is still one read.
+ */
+export type ReadMember<C extends string> = ({ readonly collection: Is<C, ReadableName>; readonly where?: Where<C> | MemberWhere<C>; readonly select?: Select<C>; readonly orderBy?: OrderBy<C> } & Paged)
+	| { readonly collection: Is<C, ReadableName>; readonly id: Id<C>; readonly select?: Select<C> };
+/** An earlier keyed member's values of one of its fields: `{ in: { member: 'entity', field: 'settings_code' } }`. */
+export type MemberIn = { readonly in: { readonly member: string; readonly field: string } } | { readonly nin: { readonly member: string; readonly field: string } };
+/** A keyed member's `where` that names an earlier member's values (each other clause as `Where` takes it). */
+export type MemberWhere<C> = { readonly [P in ReadField<C>]?: MemberIn | NonNullable<Where<C>[P & keyof Where<C>]> };
+/** A keyed read's members by key. */
+export type ReadSet = { readonly [key: string]: { readonly collection: string } };
+type MemberAnswer<M> = M extends { collection: infer C extends string; id: unknown } ? ReadResult<C, SelectOf<M>> | null
+	: M extends { collection: infer C extends string } ? Page<ListResult<C, SelectOf<M>>> : never;
+/** A keyed read's answer: each member's page (or row, for an `id` member) under its key. */
+export type ReadSetAnswer<M> = { readonly [K in keyof M]: MemberAnswer<M[K]> };
+/** A workspace keyed read's member (`ctx.db.read({ key: member })`): stored rows, or with an `id` that row. */
+export type StoredMember<C extends string> = ({ readonly collection: Is<C, ReadableName>; readonly where?: ModelWhere<C> | MemberWhere<C>; readonly select?: { readonly [P in keyof StoredRow<C>]?: true } } & Paged)
+	| { readonly collection: Is<C, ReadableName>; readonly id: Id<C> };
+type StoredAnswer<M> = M extends { collection: infer C extends string; id: unknown } ? StoredRow<C> | null
+	: M extends { collection: infer C extends string } ? Page<[keyof SelectOf<M>] extends [never] ? StoredRow<C> : Pick<StoredRow<C>, (keyof SelectOf<M> | 'id') & keyof StoredRow<C>>> : never;
+
 /** Reads as the caller (queries, actions): exposed fields only. Only the collection name (and `select`) infers: `NoInfer`
  * keeps TS from inferring back through `Where` and `ActInput`, which walked their conditional branches on every call. */
 export interface CallerReads {
 	read<C extends string, const S extends Select<C> = {}>(collection: Is<C, ReadableName>, q: { where?: NoInfer<Where<C>>; select?: S; orderBy?: NoInfer<OrderBy<C>> } & Paged): Promise<Page<ListResult<C, S>>>; // hook:query (orderBy)
+	/**
+	 * A keyed set of reads in one crossing and ONE statement: each member is a read (or, with `id`, a `get`) under the
+	 * caller's read policies, answered under its key. Every member states its page (rule 9); the row and byte caps hold
+	 * per member and name the member that breaks them.
+	 * @example
+	 * const { contracts, entity } = await ctx.read({
+	 *   contracts: { collection: 'contract', where: { company_id: { eq: id } }, all: true },
+	 *   entity: { collection: 'entity', id },
+	 *   versions: { collection: 'settings', where: { code: { in: { member: 'entity', field: 'settings_code' } } }, all: true },
+	 * });
+	 */
+	read<const M extends ReadSet>(set: M & { readonly [K in keyof M]: ReadMember<M[K]['collection']> }): Promise<ReadSetAnswer<M>>;
 	/** `{ revision }` (L-BOLT-181): the record as of that revision, folded from its history; `null` once pruned past its create. */
 	get<C extends string, const S extends Select<C> = {}>(collection: Is<C, ReadableName>, id: NoInfer<Id<C>>, q?: { select?: S; revision?: number }): Promise<ReadResult<C, S> | null>;
 	/** A named similarity search (§3.3.4): nearest first, each row with its `$distance`. */
@@ -82,6 +118,8 @@ export interface WorkspaceReads {
 	/** `select` names the stored fields to read (a 7 MB lineage read only its needed columns, rule 72); `id` always comes. */
 	read<C extends string, const S extends { readonly [P in keyof StoredRow<C>]?: true } = {}>(collection: Is<C, ReadableName>,
 		q: { where?: NoInfer<ModelWhere<C>>; select?: S } & Paged): Promise<Page<[keyof S] extends [never] ? StoredRow<C> : Pick<StoredRow<C>, (keyof S | 'id') & keyof StoredRow<C>>>>;
+	/** A keyed set of stored reads in one crossing and one statement (as the caller's `read({ … })`, unmasked). */
+	read<const M extends ReadSet>(set: M & { readonly [K in keyof M]: StoredMember<M[K]['collection']> }): Promise<{ readonly [K in keyof M]: StoredAnswer<M[K]> }>;
 	get<C extends string>(collection: Is<C, ReadableName>, id: NoInfer<Id<C>>, q?: { revision?: number }): Promise<StoredRow<C> | null>;
 	/** Stored rows overlaid with this batch's inputs (PH GAP-5). */
 	after<C extends string>(collection: Is<C, ReadableName>, where: NoInfer<ModelWhere<C>>): Promise<readonly StoredRow<C>[]>;
@@ -189,6 +227,14 @@ export interface Act {
 	/** Throws `Refused | Conflict | Unknown`; a held write is a success. */
 	<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, ...options: NoInfer<OptionsOf<N>>): Promise<Committed<ActOutput<N>, N> | PendingApproval<N>>;
 	try<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, ...options: NoInfer<OptionsOf<N>>): Promise<Outcome<ActOutput<N>, N>>;
+	/**
+	 * Generated verbs (`create`, `update`, `upsert`, `delete`) over several collections as ONE act: planned together (their
+	 * reads one round trip per step), committed as one statement; the first that does not commit throws. The acts are
+	 * independent: none names a row another creates. Answers each act's output, in order.
+	 * @example
+	 * await ctx.act.many([{ callable: 'task.create', input: rows }, { callable: 'slip.update', input: holds }]);
+	 */
+	many(acts: readonly { readonly callable: Callable; readonly input: Json }[]): Promise<Committed<readonly unknown[]>>;
 }
 
 // ── contexts ──
@@ -247,6 +293,8 @@ export type PreparedCreateReceipt={
  * workspace reads in `db` (unmasked, including `db.after`) and `refuse`.
  */
 export interface TransformCtx<in out M> extends Clock {
+	/** The act's invocation: what a prepared create's receipts carry as `invocation_id`. */
+	readonly invocationId: string;
 	readonly policies: readonly string[];
 	readonly admin: boolean;
 	refuse(message: string, at?: { field?: WritableField<M> }): never;
@@ -308,8 +356,8 @@ export interface PageBolt {
 	live<T>(q: Q<T>, options?: { every?: string; on?: readonly CollectionName[] }): Live<T>;
 	/** Never rejects: a refusal is a business answer (rule 32). */
 	act<const N extends string>(callable: Is<N, Callable>, input: NoInfer<ActInput<N>>, options?: { key?: string; once?: string }): Promise<Outcome<ActOutput<N>, N>>;
-	/** Starts an automation now with its typed input; the handle's `id` is the run's id before the outcome settles. */
-	start<const A extends string>(automation: Is<A, StartableName>, input: NoInfer<StartInput<A>>): PromiseLike<Outcome<unknown>> & { readonly id: Id<'sys_run'> };
+	/** Starts an automation now with its typed input; the handle's `id` is the run's id before the outcome settles (a toolbar item returning it shows the run). */
+	start<const A extends string>(automation: Is<A, StartableName>, input: NoInfer<StartInput<A>>): PromiseLike<Outcome<unknown>> & { readonly id: Id<'sys_run'>; readonly automation: A };
 	/** `accept` and `max` are checked before bytes are stored. */
 	upload(file: Blob & { name?: string }, field: UploadField): Promise<FileRef>;
 	/** The URL a page shows or downloads a stored file from. */

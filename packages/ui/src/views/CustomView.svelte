@@ -23,6 +23,8 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		children: Snippet<[readonly R[]]>;
 		/** No rows: the kit's `EmptyState` by default, this snippet instead, or `false` to draw the view empty (a calendar). */
 		empty?: Snippet | false;
+		/** The collection the view draws (a roster grid of `roster_entry`): its pipeline feeds join the actions menu, scoped by `toolbar.context`. */
+		collection?: string;
 	};
 </script>
 
@@ -36,7 +38,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	import { viewState } from './view-state.svelte.js';
 	import ViewToolbar from './ViewToolbar.svelte';
 
-	let { of, fields, key, toolbar = {}, children, empty }: CustomViewProps<R> = $props();
+	let { of, fields, key, toolbar = {}, children, empty, collection = '' }: CustomViewProps<R> = $props();
 	const bolt = useBolt();
 	const LOCAL = '$local';
 	const names = $derived(fields.map((f) => typeof f === 'string' ? f : f.field));
@@ -50,7 +52,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 </script>
 
 {#snippet bar()}
-	<ViewToolbar config={toolbar as Toolbar} collection="" {view} {catalog} source={LOCAL} sortable={sortable(catalog[LOCAL], false, catalog)} bind:q searchable {exporter} />
+	<ViewToolbar config={toolbar as Toolbar} {collection} {view} {catalog} source={LOCAL} sortable={sortable(catalog[LOCAL], false, catalog)} bind:q searchable {exporter} />
 {/snippet}
 
 <Cover gap="sm" top={bar}>

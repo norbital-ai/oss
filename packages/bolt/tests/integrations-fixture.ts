@@ -77,7 +77,7 @@ export default {
 	pipeline: { products: { spec: { import: {
 		records: (input) => input.items.map((i) => ({ ...i, external_code: i.external_code.trim(), name: i.name.trim() })),
 		// ponytail: { in: codes } binds a list the PGlite adapter cannot pass (query/sql.ts 'in'); filtered here until it can
-		known: async (ctx, codes) => (await ctx.read('products', { all: true })).rows.filter((r) => codes.includes(r.external_code)),
+		known: async (ctx, items) => Object.fromEntries((await ctx.read('products', { all: true })).rows.filter((r) => items.some((i) => i.external_code === r.external_code)).map((r) => [r.external_code, r])),
 		map: (item, { known }) => known[item.external_code] ? null : { external_code: item.external_code, name: item.name, price: item.unit_price ?? null },
 	} } } },
 };`;

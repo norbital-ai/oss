@@ -15,6 +15,7 @@ import type { Engine } from '../index.ts';
 import * as ir from '../../protocol/ir.ts';
 import { constraintIndex } from '../schema/ddl.ts';
 import { schemaSlice } from '../schema/plan.ts';
+import { coalescing } from '../query/engine.ts';
 import type { ActRequest, Verb } from '../write/act.ts';
 import { actorId, actorRef, compileCommit, compileOutcomeRecord, type Commit, type RateCharge } from '../write/commit.ts';
 import { canonical, decided, fingerprinting, hex, KEY_REUSE, minter, sha256, storedOutcome, type Fingerprint } from '../write/sql.ts';
@@ -37,9 +38,13 @@ export type ActionRequest = Caller & { collection: string; action: string; input
 export type StartRequest = { automation: string; input: Json; id: string; authority: Authority; bindings: Bindings };
 /** An action's answer; `error` is the cause behind an `unknown` outcome (a guest throw or budget, rule 72a). */
 export type CallResult = { outcome: Outcome; captured: readonly Captured[]; error?: BoltError };
+/** Generated verbs over several collections committed as one act: one statement, one idempotency key, one refusal refuses all. */
+export type ActsRequest = Caller & { name: string; acts: readonly { collection: string; verb: Verb; input: Json }[]; key: string; issuedAt: string };
 export type Callables = {
 	query(r: QueryRequest): Promise<Json>;
 	action(r: ActionRequest): Promise<CallResult>;
+	/** The planned commit's `output` is each act's own output, in order. */
+	acts(r: ActsRequest): Promise<CallResult>;
 	start(r: StartRequest): Promise<Outcome>;
 };
 
@@ -140,6 +145,16 @@ export function callables(config: CallablesConfig): Callables {
 				if (rec === null || !writable || x.op === 'send' || x.op === 'facility' || x.op === 'progress'||x.op==='prepareCreate') // hook:runtime (progress)
 					return fail('unsupported', `a collection ${!writable ? 'query' : 'action'} cannot ${x.op === 'facility' ? `call ${x.facility}` : x.op}; queue an automation (rule 31)`);
 				if (x.op === 'act') return { ok: true, value: await recordAct(x.callable, x.input, { ...c, from: 'server', invocationId: sub }, rec, x.options?.onConflict) };
+				// inside an action every act is one statement already: `act.many` records each in turn
+				if (x.op === 'acts') {
+					const outputs: Json[] = [];
+					for (const a of x.acts) {
+						const o = await recordAct(a.callable, a.input, { ...c, from: 'server', invocationId: sub }, rec);
+						if (o.kind !== 'committed') return { ok: true, value: o as Json };
+						outputs.push(o.output);
+					}
+					return { ok: true, value: { kind: 'committed', output: outputs, records: [] } };
+				}
 				if (x.op === 'notify') {
 					const mint = await minter(sub, c.bindings.now);
 					for (const notice of [x.notices].flat() as NoticeRow[]) rec.notices.push({ ...notice, id: mint() });
@@ -172,8 +187,8 @@ export function callables(config: CallablesConfig): Callables {
 		const [c, v] = split(name);
 		const feed = v === 'pipeline' ? m.pipelines?.[c] as { import?: unknown; export?: unknown } | undefined : undefined;
 		const spec = v === 'integration' && m.integrations[c] !== undefined ? { input: { mode: { kind: 'enum', values: ['pull', 'push', 'reconcile'] } } }
-			: feed !== undefined ? { input: { mode: { kind: 'enum', values: [...feed.import === undefined ? [] : ['import'], ...feed.export === undefined ? [] : ['export']] },
-				file: { kind: 'text', optional: true } } } : m.automations[name];
+			: feed !== undefined ? { input: { mode: { kind: 'enum', values: [...feed.import === undefined ? [] : ['import', 'template'], ...feed.export === undefined ? [] : ['export']] },
+				file: { kind: 'text', optional: true }, accept: { kind: 'bool', optional: true }, context: { kind: 'json', optional: true } } } : m.automations[name];
 		if (spec === undefined) return refused('notFound', `'${name}' is not an automation.`);
 		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
 		// a pipeline is gated by the caller's grants on its collection (§3.3.5: its rows enter as the caller); the act judges each row again
@@ -185,18 +200,23 @@ export function callables(config: CallablesConfig): Callables {
 		return d.problems.length > 0 ? refused('invalidInput', problems(d), d.problems[0]!.path) : null;
 	}
 
+	/** One generated verb through the act pipeline, its planned commit recorded (`sink`), its creates readable by later acts. */
+	async function recordVerb(collection: string, verb: Verb, input: Json, c: Caller, rec: Recorder, onConflict?: 'update' | 'keep',
+		batch?: { db: TenantDb; into: (planned: Recorder['commits'][number]) => void }): Promise<Outcome> {
+		return (await e.act({ collection, verb, input, key: `${c.invocationId}`, issuedAt: rec.issuedAt, authority: delegatedVerbAuthority(m, c.authority, c.delegation, `${collection}.${verb}`),
+			bindings: c.bindings, invocationId: c.invocationId, pending: rec.pending, ...(onConflict === undefined ? {} : { onConflict }), ...(batch === undefined ? {} : { db: batch.db }), sink: (p) => {
+				if (batch === undefined) rec.commits.push(p); else batch.into(p);
+				for (const w of p.commit.writes) if (w.op === 'create')
+					rec.pending.set(`${w.collection}\u0000${w.id}`, { ...w.values, id: w.id, revision: 1, approval_id: null, created_by: actorId(c.authority.actor) });
+			} })).outcome;
+	}
+
 	/** One `ctx.act` inside an action: a generated verb through the act pipeline with `sink`, or a nested action. */
 	async function recordAct(callable: string, input: Json, c: Caller, rec: Recorder, onConflict?: 'update' | 'keep'): Promise<Outcome> {
 		const [collection, verb] = split(callable);
 		let outcome: Outcome;
-		if (VERBS.includes(verb)) {
-			outcome = (await e.act({ collection, verb: verb as Verb, input, key: `${c.invocationId}`, issuedAt: rec.issuedAt, authority: delegatedVerbAuthority(m,c.authority,c.delegation,callable),
-				bindings: c.bindings, invocationId: c.invocationId, pending: rec.pending, ...(onConflict === undefined ? {} : { onConflict }), sink: (p) => {
-					rec.commits.push(p);
-					for (const w of p.commit.writes) if (w.op === 'create')
-						rec.pending.set(`${w.collection}\u0000${w.id}`, { ...w.values, id: w.id, revision: 1, approval_id: null, created_by: actorId(c.authority.actor) });
-				} })).outcome;
-		} else {
+		if (VERBS.includes(verb)) outcome = await recordVerb(collection, verb as Verb, input, c, rec, onConflict);
+		else {
 			const p = await perform({ ...c, collection, action: verb, input, key: c.invocationId, issuedAt: rec.issuedAt }, rec);
 			if ('error' in p) throw p.error;
 			outcome = 'output' in p ? { kind: 'committed', output: p.output, records: [] } : p.outcome;
@@ -249,13 +269,34 @@ export function callables(config: CallablesConfig): Callables {
 		throw g.kind === 'failed' ? g.error : new BoltError('refused', 'guest', g.message);
 	}
 
-	async function action(r: ActionRequest): Promise<CallResult> {
+	const action = (r: ActionRequest): Promise<CallResult> => atomic(r, `${r.collection}.${r.action}`, r.input, (rec) => perform(r, rec));
+	/** Each act records into the one commit; the first that does not commit is the outcome, recorded (it ran guest code). */
+	/**
+	 * Each act records into the one commit; the first (in order) that does not commit is the outcome, recorded (it ran
+	 * guest code). The acts are planned at once over one coalesced reader — one round trip, one statement per step for
+	 * the whole batch — so they are independent: one names no row another creates (rule 36 sees the stored rows).
+	 */
+	const acts = (r: ActsRequest): Promise<CallResult> => atomic({ ...r, input: r.acts as unknown as Json }, r.name, r.acts as unknown as Json, async (rec) => {
+		const db = coalescing(e.db, r.acts.length);
+		const plans: (Recorder['commits'][number] | undefined)[] = r.acts.map(() => undefined);
+		// each act its own invocation: its minted ids are its own (two creates of one collection mint apart)
+		const outcomes = await Promise.all(r.acts.map((a, i) => recordVerb(a.collection, a.verb, a.input, { ...r, invocationId: `${r.invocationId}/${i}` }, rec, undefined,
+			{ db, into: (p) => { plans[i] = p; } }).finally(() => db.done())));
+		const bad = outcomes.find((o) => o.kind !== 'committed');
+		if (bad !== undefined) return { outcome: bad, guest: true };
+		for (const p of plans) if (p !== undefined) rec.commits.push(p);
+		return { output: plans.map((p) => p?.commit.output ?? null) };
+	});
+
+	/** One act of recorded writes under one idempotency key: `body` records into the recorder, committed as one statement. */
+	async function atomic(r: Caller & { key: string; issuedAt: string; retry?: boolean; rate?: readonly RateCharge[]; input: Json }, callable: string, input: Json,
+		body: (rec: Recorder) => Promise<Performed>): Promise<CallResult> {
 		const none = (outcome: Outcome, error?: BoltError): CallResult => ({ outcome, captured: [], ...(error === undefined ? {} : { error }) });
 		const age = Date.parse(r.bindings.now) - Date.parse(r.issuedAt);
 		if (!(age <= 23 * HOUR && age >= -5 * 60_000)) return none(refused('invalidInput', 'The request expired; send it again.'));
-		const callable = `${r.collection}.${r.action}`, actor = r.authority.actor;
+		const actor = r.authority.actor;
 		const key = hex(await sha256(`${canonical({ actor: actor.kind === 'member' ? actor.id : actor, callable })}\u0000${r.key}`));
-		const digest = hex(await sha256(canonical({ callable, input: r.input })));
+		const digest = hex(await sha256(canonical({ callable, input })));
 		const stored = async (): Promise<Outcome | null> =>
 			((await e.db.read([{ text: `SELECT ${storedOutcome('$1', '$2')} AS outcome`, params: [key, digest] }]))[0]!.rows[0]?.['outcome'] ?? null) as Outcome | null;
 		if (r.retry) { const o = await stored(); if (o !== null) return none(o); }
@@ -268,7 +309,7 @@ export function callables(config: CallablesConfig): Callables {
 			const fp = fingerprinting(e.db);
 			const rec: Recorder = { commits: [], runs: [], notices: [], refusals: new Map(), issuedAt: r.issuedAt, pending: new Map(),
 				reads: config.reads(fp.db), fingerprints: fp.fingerprints, tables: new Set() };
-			const p = await perform(r, rec);
+			const p = await body(rec);
 			if ('error' in p) return none({ kind: 'unknown', invocation: r.invocationId }, p.error);
 			if ('outcome' in p) return p.guest ? record(p.outcome) : none(p.outcome);
 			const writes = rec.commits.flatMap((x) => x.commit.writes);
@@ -313,7 +354,7 @@ export function callables(config: CallablesConfig): Callables {
 		return row!['created'] === true || row!['same'] === true ? { kind: 'committed', output: { id: r.id, automation: r.automation }, records: [] } : KEY_REUSE;
 	}
 
-	return { query, action, start };
+	return { query, action, acts, start };
 }
 
 // ── visitors (rule 38d, §3.9) and what an outcome may say to whom (rule 32) ──

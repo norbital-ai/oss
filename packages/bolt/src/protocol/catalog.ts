@@ -26,7 +26,7 @@ export type ModelInfo = {
 	name: string; fields: ReadonlyMap<string, FieldInfo>; one: ReadonlyMap<string, OneRel>; many: ReadonlyMap<string, ManyRel>;
 	search: readonly string[];
 	/** `search.semantic` (rule 16): the platform embedding `bolt_embedding`, the model class that fills it, and the width both must agree on. */
-	semantic?: { model: string; dim: number };
+	semantic?: { model: string; dim: number; fields: readonly string[] };
 };
 export type CollectionInfo = { name: string; model: ModelInfo; fields: 'all' | ReadonlySet<string>; relations: 'all' | ReadonlySet<string>;
 	similarity: { readonly [name: string]: { candidates?: number } } };
@@ -92,7 +92,7 @@ export function catalog(m: EngineManifest): Catalog {
 	}
 	const models = new Map<string, ModelInfo>([...fields].map(([name, f]) => [name, {
 		name, fields: f, one: one.get(name)!, many: many.get(name)!, search: specs[name]?.search?.text ?? [],
-		...(specs[name]?.search?.semantic === undefined ? {} : { semantic: { model: specs[name]!.search!.semantic!.model, dim: specs[name]!.search!.semantic!.dim } }),
+		...(specs[name]?.search?.semantic === undefined ? {} : { semantic: { model: specs[name]!.search!.semantic!.model, dim: specs[name]!.search!.semantic!.dim, fields: specs[name]!.search!.semantic!.fields ?? [] } }),
 	}]));
 	const collections = new Map<string, CollectionInfo>();
 	const expose = (name: string, spec: EngineManifest['collections'][string]) => {
@@ -117,9 +117,12 @@ export function family(f: FieldInfo): string {
 /** What the browser knows of the caller's collections (the shell boot's `catalog`): readable fields as declared, the
  * one-relations it may use (with their inverse names) and the many-relations it exposes. `bolt.decode` checks against it. */
 export type BrowserCatalog = { readonly [c: string]: { fields: { readonly [f: string]: unknown };
-	relations?: { readonly [fk: string]: { targets: readonly string[]; inverse?: string } }; many?: readonly string[] } };
+	relations?: { readonly [fk: string]: { targets: readonly string[]; inverse?: string } }; many?: readonly string[];
+	/** `search.text`'s fields and whether `search.semantic` is declared: where `$search` and `$similar` decode. */
+	search?: readonly string[]; semantic?: true } };
 export function browserCatalog(b: BrowserCatalog): Catalog {
-	const models = Object.fromEntries(Object.entries(b).map(([c, x]) => [c, { description: '', label: [], fields: x.fields }]));
+	const models = Object.fromEntries(Object.entries(b).map(([c, x]) => [c, { description: '', label: [], fields: x.fields,
+		...(x.search === undefined ? {} : { search: { text: x.search, ...(x.semantic === true ? { semantic: { fields: [], model: '', dim: 0 } } : {}) } }) }]));
 	const relationships = Object.fromEntries(Object.entries(b).flatMap(([c, x]) => Object.entries(x.relations ?? {})
 		.map(([fk, r]) => [`${c}.${fk}`, { to: r.targets.length === 1 ? r.targets[0]! : r.targets, ...(r.inverse === undefined ? {} : { inverse: r.inverse }) }])));
 	const collections = Object.fromEntries(Object.entries(b).map(([c, x]) => [c, { read: { fields: 'all', relations: [...Object.keys(x.relations ?? {}), ...x.many ?? []] } }]));

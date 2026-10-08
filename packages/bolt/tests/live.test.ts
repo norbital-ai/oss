@@ -451,6 +451,29 @@ describe('$bolt client without a server', () => {
 		} finally { random.mockRestore(); vi.useRealTimers(); }
 	});
 
+	it('a closed client holds nothing: its signal listeners come off and no view grace timer stays armed', async () => {
+		vi.useFakeTimers();
+		try {
+			const listening = new Set<string>();
+			const signals = {
+				hidden: false,
+				addEventListener: (type: string) => { listening.add(type); },
+				removeEventListener: (type: string) => { listening.delete(type); },
+			};
+			let closed = 0;
+			const fetch = async () => Response.json({ errors: [] });
+			const bolt = createBolt({ actor: null, locale: 'en', fetch: fetch as typeof globalThis.fetch, signals,
+				openStream: () => ({ onmessage: null, onerror: null, close: () => { closed++; } }) });
+			const stop = bolt.live(bolt.read('orders', { all: true })).subscribe(() => {});
+			expect([...listening].sort()).toEqual(['online', 'visibilitychange']);
+			bolt.close();
+			stop(); // an unmount after the shell retired its client
+			expect(listening.size).toBe(0);
+			expect(closed).toBe(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
 	it('all queries share one connection that remains live in a hidden tab', async () => {
 		vi.useFakeTimers();
 		try {

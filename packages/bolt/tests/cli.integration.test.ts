@@ -62,7 +62,7 @@ describe('bolt build', () => {
 		expect(artifact.artifact).toMatchObject({ format: 1, handle: 'norbital_good', name: 'Good' });
 		expect(readFileSync(join(out, 'client/index.html'), 'utf8')).toContain(`/${artifact.artifact.client.entry}`);
 		const pages = readdirSync(join(out, 'client/assets')).filter((f) => f.includes('.page-') && f.endsWith('.js'));
-		expect(pages).toHaveLength(3);
+		expect(pages).toHaveLength(4); // sales/board, sales/list, hr/kiosk/clock and the kiosk clock/clock
 		for (const p of pages) expect(readFileSync(join(out, 'client/assets', p), 'utf8'), p).not.toContain('A view needs the shell');
 		// the bundle carries the messages (base and locales), the record view and ui's stylesheet
 		const shell = readFileSync(join(out, 'client', artifact.artifact.client.entry), 'utf8');

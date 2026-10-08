@@ -34,7 +34,7 @@ export async function upload(e: { manifest: EngineManifest; db: TenantDb; files?
 	const panel = u.collection === 'sys_message' && u.field === 'files';
 	// a pipeline import's file (`<c>.$import`, read back by its `<c>.pipeline` run): a member who may create in `c`
 	const feed = u.field === '$import' && (e.manifest.pipelines?.[u.collection] as { import?: unknown } | undefined)?.import !== undefined;
-	const kind = panel ? { kind: 'file' as const, accept: [] as string[], max: '20MiB' } : feed ? { kind: 'file' as const, accept: ['application/json'], max: '20MiB' }
+	const kind = panel ? { kind: 'file' as const, accept: [] as string[], max: '20MiB' } : feed ? { kind: 'file' as const, accept: ['application/json', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'], max: '20MiB' }
 		: e.manifest.models[u.collection]?.fields[u.field];
 	const allowed = panel || feed ? u.authority.actor.kind === 'member' && (panel || u.authority.admin || (u.authority.collections[u.collection]?.create.length ?? 0) > 0)
 		: admits(e.manifest, u.authority, u.collection, u.field);

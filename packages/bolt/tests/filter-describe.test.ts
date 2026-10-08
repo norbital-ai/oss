@@ -106,8 +106,8 @@ const describer = (port: System1Port) => filterDescribe({ manifest, clock: () =>
 	ai: { sys_1: port, sys_2: { models: ['x'], async infer() { throw new Error('System 2 is never asked (P35)'); } } } as unknown as AiPort });
 const bindings = { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'Asia/Singapore', params: {} };
 const choices = (q: DecisionQuestion | undefined) => q?.type === 'choice' ? Object.keys(q.criteria) : [];
-/** The field a `f1`-shaped question is about, read back from that question's own operator options. */
-const labelOf = (r: System1Request, id: string) => choices(r.questions[`${id}.op`])[0]!.split(' \u00b7 ')[0]!;
+/** The field a `f1`-shaped question is about: the state's Nth field. */
+const labelOf = (r: System1Request, id: string) => (r.state['fields'] as { label: string }[])[Number(id.slice(1)) - 1]!.label;
 /** Every field label the one request asked about, in the order it asked. */
 const askedFields = (r: System1Request) => Object.keys(r.questions).filter((id) => /^f\d+$/.test(id)).map((id) => labelOf(r, id));
 /**

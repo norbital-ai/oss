@@ -24,6 +24,7 @@ import type { Json } from '../../decl/values.ts';
 import { BoltError, type AiPort, type Authority, type Bindings, type EngineManifest, type MeteringPort, type Pred, type ReadEngine, type TenantDb } from '../contracts.ts';
 import { ask, choiceOf, decisionEvent, failed, meter, noulOf, type DecisionQuestion, type DecisionRequest, type DecisionResult } from '../decisions/index.ts';
 import { catalogOf } from '../access/pred.ts';
+import { midnight } from '../query/eval.ts';
 import { exposedField, exposedRelation, type Catalog, type FieldInfo } from '../../protocol/catalog.ts';
 import * as ir from '../../protocol/ir.ts';
 
@@ -32,12 +33,16 @@ export const FILTER_MAX_CONDITIONS = 4;
 /** Fields asked about in the one request; past this the most plausible are asked and the rest are not offered at all. */
 export const FILTER_MAX_FIELDS = 16;
 export const FILTER_MAX_TEXT = 500;
+/** A description answers within this: its candidate reads and its one `sys_1` call together. */
+export const FILTER_DEADLINE_MS = 1_000;
 /** Relation hops a condition path may take: the builder's own two-hop limit. */
 export const FILTER_MAX_HOPS = 2;
 /** A named child relation's options asked about before every other candidate has had a place. */
 const PER_RELATION = 4;
 
 const CANDIDATES = 5, WORDS = 8, NONE = '(no value)';
+/** The collection's own search index as a condition path. */
+const SEARCH: readonly FilterStep[] = [{ k: 'field', name: '$search' }];
 /** The likeness at which a typed token matches a label's token. */
 const MATCH = 0.5;
 /** Phrases asked about, and the answer that reads a phrase as no condition. */
@@ -128,14 +133,28 @@ function spans(kind: 'date' | 'instant'): FilterValue[] {
 	}
 	return out;
 }
-/** Quoted strings, numbers and dates (ISO, or day-first `d/m/yyyy`; month-first in `en-US`) from the text. */
-export function literals(text: string, locale: string): { strings: string[]; numbers: number[]; dates: string[] } {
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const MONTH = String.raw`(${MONTHS.join('|')}|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\.?`, DAY = String.raw`(\d{1,2})(?:st|nd|rd|th)?`;
+/** "3rd October", "3 oct 2026", "the 3rd of October"; "October 3", "Oct 3rd, 2026". */
+const DAY_MONTH = new RegExp(String.raw`\b${DAY}\s+(?:of\s+)?${MONTH}(?:,?\s+(\d{4}))?\b`, 'gi');
+const MONTH_DAY = new RegExp(String.raw`\b${MONTH}\s+${DAY}(?:,?\s+(\d{4}))?\b`, 'gi');
+/**
+ * Quoted strings, numbers and dates (ISO, day-first `d/m/yyyy` — month-first in `en-US` — or a named month, its year
+ * `today`'s when unstated) from the text.
+ */
+export function literals(text: string, locale: string, today = new Date().toISOString().slice(0, 10)): { strings: string[]; numbers: number[]; dates: string[] } {
 	const dates: string[] = [];
-	const rest = text.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (d) => (dates.push(d), ' ')).replace(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g, (_, a: string, b: string, y: string) => {
-		const [m, d] = locale === 'en-US' ? [a, b] : [b, a];
-		dates.push(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
+	const push = (y: string, m: string, d: string) => {
+		const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+		// a day the month does not have (31 June) is no date
+		if (!Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) && new Date(`${iso}T00:00:00Z`).toISOString().startsWith(iso)) dates.push(iso);
 		return ' ';
-	});
+	};
+	const month = (name: string) => String(MONTHS.findIndex((x) => x.startsWith(name.toLowerCase().slice(0, 3))) + 1);
+	const rest = text.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (d) => (dates.push(d), ' ')).replace(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g, (_, a: string, b: string, y: string) =>
+		locale === 'en-US' ? push(y, a, b) : push(y, b, a))
+		.replace(DAY_MONTH, (_, d: string, m: string, y?: string) => push(y ?? today.slice(0, 4), month(m), d))
+		.replace(MONTH_DAY, (_, m: string, d: string, y?: string) => push(y ?? today.slice(0, 4), month(m), d));
 	return { dates, strings: [...rest.matchAll(/(?:^|\s)["“']([^"”']+)["”']/g)].map((x) => x[1]!.trim()),
 		numbers: [...rest.matchAll(/(?<![\w.])\d+(?:\.\d+)?(?![\w.])/g)].map((x) => Number(x[0])) };
 }
@@ -188,6 +207,24 @@ function held(text: string, label: string, least = 2): string {
 	}
 	return best.length >= least && (best.length > 1 || (best[0]!.length >= 4 && !STOP.has(best[0]!))) ? best.join(' ') : '';
 }
+/** Words that frame a topic rather than name it ("about", "after", "with"), and the calendar's own words. */
+const FRAME = new Set([...STOP, 'about', 'regarding', 'related', 'relating', 'similar', 'like', 'mention', 'mentions', 'mentioning', 'involving', 'concerning',
+	'to', 'of', 'in', 'on', 'at', 'by', 'a', 'an', 'is', 'was', 'be', 'has', 'have', 'had', 'without', 'after', 'before', 'since', 'until', 'between', 'than',
+	'more', 'less', 'over', 'under', 'me', 'my', 'our', 'their', 'his', 'her', 'its', 'records', 'record', 'ones', 'items', 'entries', 'or', 'nor', 'not', 'no',
+	'st', 'nd', 'rd', 'th', ...MONTHS, 'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec']);
+/** The runs of the description's own words a search or a meaning could be about ("water leaks" in "jobs about water leaks
+ * after 3rd October"): framing words, numbers and the collection's and fields' names split them; quoted strings as given. */
+function topics(text: string, names: readonly string[]): string[] {
+	const named = new Set(names.flatMap((n) => tokens(n)).flatMap((t) => [t, t.replace(/s$/, ''), `${t}s`]));
+	const runs: string[] = [];
+	let run: string[] = [];
+	const end = () => { if (run.length > 0) runs.push(run.join(' ')); run = []; };
+	for (const t of text.toLowerCase().replace(/(?<=\p{L})['’]s\b/gu, '').match(/[\p{L}\p{N}]+|[^\p{L}\p{N}\s]+/gu) ?? []) {
+		if (/^[\p{L}]{2,}$/u.test(t) && !FRAME.has(t) && !named.has(t)) run.push(t); else end();
+	}
+	end();
+	return [...new Set([...literals(text, 'en').strings, ...runs])].slice(0, MAX_SPANS);
+}
 const words = (text: string) => [...new Set((text.toLowerCase().replace(/'s\b/g, '').match(/\p{L}{3,}/gu) ?? []).filter((w) => !STOP.has(w)))].slice(0, WORDS);
 const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 /** A `contains` pattern: the words in order, anything between them. */
@@ -198,7 +235,7 @@ const loose = (s: string) => `%${s.trim().split(/\s+/).map(esc).join('%')}%`;
 const ECHOES = new WeakSet<FilterArg>();
 const echoed = (x: Json): FilterArg => { const a = { lit: x }; ECHOES.add(a); return a; };
 
-function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[]): { ops: Op[]; values: FilterValue[] } | undefined {
+function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | undefined, lit: ReturnType<typeof literals>, ws: readonly string[], tz: string): { ops: Op[]; values: FilterValue[] } | undefined {
 	const values: FilterValue[] = [];
 	const add = (label: string, arg: FilterArg) => { let l = label, n = 2; while (values.some((v) => v.label === l)) l = `${label} (${n++})`; values.push({ label: l, arg }); };
 	const op = (name: string, label: string): Op => ({ op: name, label });
@@ -233,6 +270,12 @@ function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | und
 			op('lt', when ? 'before' : 'less than'), op('lte', when ? 'on or before' : 'at most')];
 		if (when) for (const v of spans(k)) add(v.label, v.arg);
 		if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
+		// a day on an instant is that day in the workspace zone: [00:00, next 00:00)
+		if (k === 'instant') for (const d of lit.dates) {
+			const arg: FilterArg = { range: [midnight(d, tz), midnight(new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10), tz)] };
+			ECHOES.add(arg);
+			add(d, arg);
+		}
 	} else if (k === 'period' && f.periodOf === 'date') {
 		// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
 		ops = [op('contains', 'in force on'), op('overlaps', 'overlaps'), op('within', 'is within')];
@@ -252,6 +295,7 @@ function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | und
 
 /** The operator object an op and its argument make; `undefined` when the pair means nothing. */
 function operator(op: string, arg: FilterArg | undefined): Json | undefined {
+	if (op === 'search' || op === 'similar') return arg !== undefined && 'lit' in arg && typeof arg.lit === 'string' ? arg.lit : undefined;
 	if (op === 'isNull') return { isNull: true };
 	if (op === 'notNull') return { isNull: false };
 	if (op === 'isEmpty') return { isEmpty: true };
@@ -267,11 +311,12 @@ function operator(op: string, arg: FilterArg | undefined): Json | undefined {
 	}
 	if ('range' in arg) {
 		const [lo, hi] = arg.range;
-		if (op === 'during') return { gte: lo, lt: hi };
+		if (op === 'during' || op === 'eq') return { gte: lo, lt: hi };
 		if (op === 'overlaps' || op === 'within') return { [op]: { from: lo, to: hi } };
+		// a span is [lo, hi): before it is under lo, after it is from hi ("after last week" is from this Monday)
 		if (op === 'lt') return { lt: lo };
-		if (op === 'lte') return { lte: hi };
-		if (op === 'gt') return { gt: lo };
+		if (op === 'lte') return { lt: hi };
+		if (op === 'gt') return { gte: hi };
 		if (op === 'gte') return { gte: lo };
 		return undefined;
 	}
@@ -330,7 +375,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 	/** The catalogue: the caller's exposed, readable, unmasked fields of a filterable kind as (field, operator) offers. */
 	async function offer(collection: string, text: string, a: Authority, b: Bindings): Promise<{ fields: Field[]; spans: Span[]; nears: Near[] }> {
 		const c = cat.collections.get(collection)!;
-		const lit = literals(text, m.workspace.locale);
+		const lit = literals(text, m.workspace.locale, b.today);
 		const ws = words(text);
 		const out: Field[] = [];
 		const searches: { field: Field; target: string; label: string }[] = [];
@@ -348,7 +393,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 				// a relation is named for its record ("Site"), never its key column ("Site id": System 1 read it as a code)
 				const label = prefix + (system ? (f.name === 'created_at' ? 'Created' : 'Updated') : s?.label ?? human(rel === undefined ? f.name : f.name.replace(/_id$/, '')));
 				if (rel === undefined) {
-					const o = options(f, s, lit, ws);
+					const o = options(f, s, lit, ws, b.tz);
 					if (o === undefined) continue;
 					const sort = sortFrom === undefined || f.many || UNSORTABLE.has(f.kind) ? undefined : sortFrom === '' ? f.name : `${sortFrom}.${f.name}`;
 					out.push({ label, path: [...steps, { k: 'field', name: f.name }], kind: f.kind, ...o, ...(sort === undefined ? {} : { sort }) });
@@ -375,6 +420,14 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 						`${field.label} › `, arm === undefined && steps.length === 0 ? f.name : undefined, hops - 1);
 				}
 			}
+			// the target's search index and embedding: every word of a phrase (`$search`), or the nearest in meaning
+			// (`$similar`), offered only to a caller who reads every field they cover unmasked (rule 14)
+			const whole = (fs: readonly string[]) => fs.every((x) => exposedField(tc, x) && unmasked(a, target, x));
+			const about = (label: string) => topics(text, [target, human(target), ...[...tc.model.fields.keys()].map(human), label]).map((x) => ({ label: x, arg: echoed(x) }));
+			if (tc.model.search.length > 0 && whole(tc.model.search))
+				out.push({ label: `${prefix}Search`, path: [...steps, { k: 'field', name: '$search' }], kind: 'search', ops: [{ op: 'search', label: 'has all the words' }], values: about(prefix) });
+			if (tc.model.semantic !== undefined && whole(tc.model.semantic.fields))
+				out.push({ label: `${prefix}Topic`, path: [...steps, { k: 'field', name: '$similar' }], kind: 'semantic', ops: [{ op: 'similar', label: 'is about' }], values: about(prefix) });
 		};
 		leaves(collection, [], '', '', FILTER_MAX_HOPS);
 		for (const [r, rel] of c.model.many) {
@@ -415,6 +468,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const self = text !== '' && c.model.search.length > 0 && own.length > 0
 			? ir.read(cat, collection, { search: text, select: Object.fromEntries(own.map((f) => [(f.path[0] as { name: string }).name, true])), limit: CANDIDATES }) : undefined;
 		const found: { phrase: string; option: Span['options'][number] }[] = [];
+		const offered = (path: readonly FilterStep[]) => out.some((f) => JSON.stringify(f.path) === JSON.stringify(path));
 		const nears: Near[] = [];
 		// where a found record is, to read "near <it>": the collection's own points and, one hop, the relation's points
 		const radius = metresOf(text);
@@ -424,11 +478,18 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			const all = await cfg.read([...lookups.map((r) => r.q), ...(self === undefined ? [] : [self])], { as: 'caller', authority: a }, b);
 			const answers = all.slice(0, lookups.length);
 			if (self !== undefined) {
+				const runs = topics(text, [collection, human(collection), ...out.map((f) => f.label)]);
 				const rows = (all.at(-1) as { rows: readonly { readonly [k: string]: Json }[] }).rows;
 				for (const f of own) {
 					const name = (f.path[0] as { name: string }).name;
 					const phrase = rows.map((r) => held(text, String(r[name] ?? ''), 1)).sort((l, r) => r.length - l.length)[0];
 					if (phrase) found.push({ phrase, option: { label: `${f.label} contains “${phrase}”`, path: f.path, cond: condition(f.path, 'like', { lit: phrase })! } });
+					// the same phrase over every searched field, typos and partial words included: the whole typed run around it
+					// ("pmup room" around "room", which the index meets and a `contains` would not)
+					if (phrase && offered(SEARCH) && c.model.search.includes(name)) {
+						const run = runs.find((x) => phrase.split(' ').every((w) => x.split(' ').includes(w))) ?? phrase;
+						found.push({ phrase: run, option: { label: `Search has all the words “${run}”`, path: SEARCH, cond: condition(SEARCH, 'search', { lit: run })! } });
+					}
 				}
 			}
 			const rows = new Map<(typeof searches)[number], Map<string, { readonly [k: string]: Json }>>();
@@ -472,6 +533,9 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 					const spanned = ranked.map((r) => held(text, String(r.row[f] ?? ''), 1)).sort((l, r) => r.length - l.length)[0];
 					if (spanned) {
 						found.push({ phrase: spanned, option: { label: `${s.field.label} · whose ${flabel} contains “${spanned}”`, path: s.field.path, cond: condition(s.field.path, 'eq', { match: { field: f, phrase: spanned } })! } });
+						const indexed: FilterStep[] = [{ k: 'is', rel }, ...SEARCH];
+						if (offered(indexed)) found.push({ phrase: spanned, option: { label: `${s.field.label} · Search has all the words “${spanned}”`, path: indexed,
+							cond: condition(indexed, 'search', { lit: spanned })!, from: s.field.path } });
 						// the records whose own field holds the whole phrase, as themselves
 						for (const r of ranked.filter((r) => held(spanned, String(r.row[f] ?? ''), 1).split(' ').length === spanned.split(' ').length).slice(0, 2)) {
 							found.push({ phrase: spanned, option: { label: `${s.field.label} is ${r.label}`, path: s.field.path, cond: condition(s.field.path, 'eq', { lit: r.id })! } });
@@ -501,7 +565,8 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const akin = (w: string, x: string) => w.startsWith(x) || x.startsWith(w) || [...w].findIndex((ch, i) => ch !== x[i]) >= 5;
 		for (const f of out) {
 			const tokens = f.label.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2);
-			const valued = f.values.filter((v) => !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
+			// a search or a meaning is offered the description's own phrases: holding one names nothing
+			const valued = f.kind === 'search' || f.kind === 'semantic' ? [] : f.values.filter((v) => !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
 			// a value copied from the description is an echo, never evidence; one the engine or the schema declares (a state,
 			// a choice, `this week`) that the text says names the field
 			const declared = f.values.some((v) => !ECHOES.has(v.arg) && new RegExp(`\\b${v.label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(said));
@@ -523,7 +588,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		...(f.values.length === 0 ? {} : { values: f.values }), ...(f.sort === undefined ? {} : { sort: f.sort }) })));
 	/** The local view's own fields (`$local`): text, number and bool only, and no relation. */
 	const localFields = (fs: readonly LocalFilterField[], text: string): Field[] => fs.map((f) => ({ label: f.label, path: [{ k: 'field' as const, name: f.name }], kind: f.kind,
-		...options({ kind: f.kind }, f.optional ? { optional: true } : undefined, literals(text, m.workspace.locale), words(text))!, sort: f.name }));
+		...options({ kind: f.kind }, f.optional ? { optional: true } : undefined, literals(text, m.workspace.locale), words(text), m.workspace.tz)!, sort: f.name }));
 	/** The collection a caller may describe or see options on; a `$local` view carries its own fields. */
 	const subject = (o: { collection: string; authority: Authority; localFields?: readonly LocalFilterField[] }, text: string): { fields?: Field[]; fail?: { ok: false; code: string; message: string } } => {
 		const local = o.collection === '$local';
@@ -535,9 +600,9 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		return local ? { fields: localFields(o.localFields!, text) } : {};
 	};
 
-	async function call(state: DecisionRequest['state'], questions: { [id: string]: DecisionQuestion }): Promise<DecisionResult | { ok: false; code: string; message: string }> {
+	async function call(state: DecisionRequest['state'], questions: { [id: string]: DecisionQuestion }, ms: number): Promise<DecisionResult | { ok: false; code: string; message: string }> {
 		const req = { state, questions };
-		const d = await ask(cfg.ai, req);
+		const d = await ask(cfg.ai, req, ms);
 		const id = randomUUID();
 		// the decision's record and its meter are independent: one round trip, not two
 		await Promise.all([cfg.db.write({ text: `INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES ($1::timestamptz, $2, 'decision.made', $3, $4::jsonb)`,
@@ -573,6 +638,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const fail = (message: string): Described => ({ ok: false, code: 'invalid', message });
 		if (o.text.trim() === '' || o.text.length > FILTER_MAX_TEXT) return fail(`A description is 1–${FILTER_MAX_TEXT} characters.`);
 		if (cfg.ai === undefined) return { ok: false, code: 'notFound', message: 'Describing a filter is not available here.' };
+		const started = performance.now();
 		const subjectOf = subject(o, o.text);
 		if (subjectOf.fail !== undefined) return subjectOf.fail;
 		const local = o.collection === '$local';
@@ -606,7 +672,10 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			seen.set(rel, (seen.get(rel) ?? 0) + 1);
 			return seen.get(rel)! > PER_RELATION;
 		}));
-		const asked = [...ranked.filter((x) => x.f.hit && !crowded.has(x)), ...ranked.filter((x) => crowded.has(x)), ...ranked.filter((x) => !x.f.hit)]
+		// the collection's own search index and meaning are always asked: no field label names them
+		const index = ranked.filter((x) => x.f.path.length === 1 && (x.f.kind === 'search' || x.f.kind === 'semantic') && x.f.values.length > 0);
+		const rest = ranked.filter((x) => !index.includes(x));
+		const asked = [...rest.filter((x) => x.f.hit && !crowded.has(x)), ...index, ...rest.filter((x) => crowded.has(x)), ...rest.filter((x) => !x.f.hit)]
 			.slice(0, FILTER_MAX_FIELDS);
 		const state = { description: o.text, collection: human(o.collection), fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today, timezone: o.bindings.tz, weekStartsOn: 'Monday' };
@@ -625,6 +694,9 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 						criteria: { true: `it states a condition on ${f.label}`, false: `it states no condition on ${f.label}` } },
 				[`f${n + 1}.op`]: { type: 'choice', instructions: `Which comparison does the condition on ${f.label} use?`, criteria: own([...q.ops.keys()]) },
 				[`f${n + 1}.value`]: { type: 'choice', instructions: `Which value does the condition on ${f.label} compare with?`, criteria: own([NONE, ...q.vals.keys()]) } });
+			// a question with one answer is not asked: the request is smaller, and the call faster
+			if (q.ops.size === 1) delete first[`f${n + 1}.op`];
+			if (q.vals.size === 0) delete first[`f${n + 1}.value`];
 		}
 		// each phrase the data holds: which reading it is — a choice among concrete conditions, which System 1 answers far more
 		// surely than whether a field is restricted at all (staging: "sunset vale" scored Site 0.28 as a field)
@@ -658,7 +730,8 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 				false: 'the requested selection is represented by the offered conditions and ordering'
 			}
 		};
-		const r1 = await call(state, first);
+		// what is left of the deadline after the candidate reads
+		const r1 = await call(state, first, Math.max(1, Math.round(FILTER_DEADLINE_MS - (performance.now() - started))));
 		if ('ok' in r1) return r1;
 		if (noulOf(r1, 'selection.unsupported') > 0.5)
 			return { ok: false, code: 'invalid', message: 'This selection requires comparing or ranking records across groups, which the available filters cannot express. Choose a field condition or sort instead.' };
@@ -684,6 +757,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			for (const x of sp.options) decided.add(JSON.stringify(x.from ?? x.path));
 			for (const w of sp.phrase.split(' ')) used.add(w);
 		});
+		const built: { path: readonly FilterStep[]; echo: boolean; c: Json }[] = [];
 		for (const [n, { f }] of asked.entries()) {
 			if (decided.has(JSON.stringify(f.path))) continue;
 			// System 1 hedges a field it is unsure the text restricts (0.3–0.5 on "sunset vale" → Site) while still naming the
@@ -695,7 +769,7 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			// the engine has already refused an answer outside the offered criteria, so these are present; the fallbacks only
 			// satisfy the type, and an unbuildable pair fails the filter below rather than being dropped
 			const q = choices2.get(f)!;
-			const op = q.ops.get(choiceOf(r1, `f${n + 1}.op`) ?? ''), arg = q.vals.get(valueOf(r1, `f${n + 1}.value`) ?? '');
+			const op = q.ops.size === 1 ? [...q.ops.values()][0] : q.ops.get(choiceOf(r1, `f${n + 1}.op`) ?? ''), arg = q.vals.get(valueOf(r1, `f${n + 1}.value`) ?? '');
 			// an echoed word a phrase already used ("pine" beside "1f pine grove"), or one that names a field ("site"), is no value
 			if (arg !== undefined && ECHOES.has(arg) && 'lit' in arg && ([...used].some((w) => alike(w, String(arg.lit).toLowerCase()) >= MATCH)
 				|| (/^\p{L}{3,}$/u.test(String(arg.lit)) && asked.some(({ f: g }) => tokens(g.label).includes(String(arg.lit).toLowerCase()))))) continue;
@@ -707,9 +781,14 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			// a field System 1 flagged but gave no value for is noise beside the conditions it did build (staging: "some place
 			// with 1f pine grove" picked the site and a valueless Description, and the Description failed the whole filter)
 			if (c === undefined) { unbuilt.push(f); continue; }
-			conds.push(c);
-			if (conds.length >= FILTER_MAX_CONDITIONS) break;
+			built.push({ path: f.path, echo: arg !== undefined && ECHOES.has(arg), c });
+			if (conds.length + built.length >= FILTER_MAX_CONDITIONS) break;
 		}
+		// a relation already pinned to a record or a phrase its records hold takes no echoed word under it ("bbo tan" found
+		// Bob Tan; "Assignee › Name is tan" beside it emptied the result)
+		const pinned = new Set([...[...decided].map((x) => JSON.parse(x) as FilterStep[]), ...built.filter((x) => !x.echo).map((x) => x.path)]
+			.flatMap((p) => p.length === 1 && p[0]!.k === 'field' ? [p[0]!.name] : []));
+		for (const x of built) if (!(x.echo && x.path[0]?.k === 'is' && pinned.has(x.path[0].rel))) conds.push(x.c);
 		// "nearest to <place>" states its order: the chosen nearest sort, else the first from that place's records
 		const chosenSort = sortable.find((f) => f.label === choiceOf(r1, 'sort.field'));
 		const anchored = anchors.length === 0 ? undefined : chosenSort?.near !== undefined ? chosenSort
@@ -777,6 +856,8 @@ export function decodeDescribed(cat: Catalog, a: Authority, collection: string, 
 	const walk = (p: Pred, c: string): void => {
 		switch (p.t) {
 			case 'const': return;
+			// the search document and the embedding cover the collection's searched fields, not one field the caller reads
+			case 'search': case 'similar': info(c); return;
 			case 'and': case 'or': return p.of.forEach((x) => walk(x, c));
 			case 'not': return walk(p.of, c);
 			case 'one': case 'many': rel(c, p.rel); return walk(p.pred, p.target);

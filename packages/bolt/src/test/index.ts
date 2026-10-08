@@ -212,8 +212,9 @@ export async function testWorkspace(o: TestOptions): Promise<TestWorkspace> {
 			if (typeof c['owner'] === 'string') await db.write({ text: `INSERT INTO sys_user (id, name, kind) VALUES ($1, $1, 'staff') ON CONFLICT DO NOTHING`, params: [c['owner']] });
 			await db.write({ text: `INSERT INTO sys_channel_connection (id, name, type, owner, configuration, revision) VALUES ($1, $2, $3, $4, '{}'::jsonb, 1)`, params: [id, String(c['name'] ?? id), String(c['type'] ?? id), c['owner'] as Json ?? null] });
 		}
+		// the declaration as declared: a nameless envoy stays nameless (the generic wording), never named after its key
 		for (const [id, e] of Object.entries(initialEnvoys)) {
-			await db.write({ text: `INSERT INTO sys_envoy (id, name, task, audience, policies, group_messages, delegation, triage, active, revision) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, true, 1)`, params: [id, String(e['name'] ?? id), String(e['task'] ?? ''), String(e['audience'] ?? 'private'), (e['policies'] ?? []) as Json, String(e['groupMessages'] ?? 'disabled'), String(e['delegation'] ?? 'disabled'), (e['triage'] ?? {}) as Json] });
+			await db.write({ text: `INSERT INTO sys_envoy (id, name, task, audience, policies, group_messages, delegation, triage, active, revision) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, true, 1)`, params: [id, String(e['name'] ?? ''), String(e['task'] ?? ''), String(e['audience'] ?? 'private'), (e['policies'] ?? []) as Json, String(e['groupMessages'] ?? 'disabled'), String(e['delegation'] ?? 'disabled'), (e['triage'] ?? {}) as Json] });
 			const channels = Array.isArray(e['channels']) ? e['channels'] : typeof e['channel'] === 'string' ? [e['channel']] : [];
 			for (const channel of channels) await db.write({ text: `INSERT INTO sys_envoy_channel (id, envoy, channel_connection, revision) VALUES ($1, $2, $3, 1)`, params: [`${id}:${channel}`, id, String(channel)] });
 		}

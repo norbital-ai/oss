@@ -25,7 +25,7 @@ export type {
 export type {
 	Act, ActInput, ActOutput, ActionCtx, ActionName, AggRow, Callable, Committed, MessageKey, QueryInput, QueryOutput, Conflict,
 	Cursor, Insert, KeyValues, ListRow, Live, Outcome, Page, Paged, Patch, PendingApproval, PlatformRefusal, Q, QueryCtx, Revision,
-	QueryName, Refused, Select, TransformCtx, TransformRow, Unknown
+	QueryName, MemberIn, MemberWhere, ReadMember, ReadSet, ReadSetAnswer, Refused, Select, StoredMember, TransformCtx, TransformRow, Unknown
 } from './decl/ctx.ts';
 export type { FieldCommon, FieldKind, InputFields, InputKind, InputOf, Value, ValueOf } from './decl/fields.ts';
 export type { ComputedKind, Expr } from './decl/model.ts';
@@ -47,7 +47,7 @@ export type {
 	ConvertOptions, ConvertSource, ConvertTarget, ConvertTargets, DecisionAnswers, DecisionQuestion, DecisionState, FileMeta, GeoHit,
 	ImageFacts, Notice, RunHandle, RunRow, SpeakOptions, SpeechFormat, TranscribeOptions, Transcript, TranscriptSegment, Unavailable
 } from './decl/runtime/facilities.ts';
-export type { ConflictRule, IntegrationCtx, IntegrationSource, Remote, RemoteKey } from './decl/runtime/integration.ts';
+export type { ConflictRule, ImportFinding, IntegrationCtx, IntegrationSource, Remote, RemoteKey } from './decl/runtime/integration.ts';
 export type { AiModelClass, ChildName, ConnectionName, DeclaredConvertTarget, EmbeddingModelName, EnvName, KioskPageName, PageName, Transport } from './decl/runtime/names.ts';
 export type { BankReader, SeedSource } from './compiler/artifact/seed.ts'; // hook:cli — X-15's seed reader types (§3.3.10)
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props

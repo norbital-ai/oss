@@ -182,6 +182,10 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function') f.spec.check = true; // the write path calls an attached validate
 	for (const i of Object.values(d.integration ?? {})) { const s = i?.spec ?? i; if (typeof s?.resolve === 'function') s.resolve = true; } // hook:runtime — the runner calls a declared resolve
 	for (const c of Object.values(d.channel ?? {})) for (const k of ['inbound', 'poll']) if (typeof c?.[k]?.messages === 'function') c[k].messages = true; // a custom channel's mapping
+	for (const p of Object.values(d.pipeline ?? {})) { const s = (p?.spec ?? p)?.import; if (!s) continue; // the feed calls the bodies a pipeline declares
+		for (const k of ['known', 'check', 'template']) if (typeof s[k] === 'function') s[k] = true;
+		if (typeof s.scope?.of === 'function') s.scope.of = true;
+		for (const r of Object.keys(s.related ?? {})) if (typeof s.related[r] === 'function') s.related[r] = true; }
 	return JSON.stringify({ roles: d, bodies }); })()`;
 
 async function evaluate({ source, assets }: GuestProgram): Promise<{ json: string; cpuMs: number }> {

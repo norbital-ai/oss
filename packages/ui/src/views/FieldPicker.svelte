@@ -6,7 +6,7 @@
 	import { cn } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import { useBolt } from './bolt.js';
-	import { filterable, offeredPaths, pathLabel, resolve, type FilterStep, type Offer } from './filter.js';
+	import { filterable, INDEX, offeredPaths, pathLabel, resolve, type FilterStep, type Offer } from './filter.js';
 	import { humanize, msg } from './model.js';
 
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
@@ -37,6 +37,8 @@
 			const path = prefix + f;
 			if (resolve(catalog, collection, path) !== null && offered.conditions.has(path) && !out.some((e) => e.path === path)) out.push({ path, label: pathLabel(catalog, c, f, humanize), depth });
 		}
+		// the search index and the embedding: offered where the engine's catalogue offers them
+		for (const f of Object.keys(INDEX)) if (offered.conditions.has(prefix + f) && resolve(catalog, collection, prefix + f) !== null) out.push({ path: prefix + f, label: pathLabel(catalog, c, f, humanize), depth });
 		for (const [fk, rel] of Object.entries(x.relations ?? {})) {
 			for (const step of rel.targets.length > 1 ? rel.targets.map((t) => `${fk}:${t}`) : [fk]) {
 				const path = prefix + step;

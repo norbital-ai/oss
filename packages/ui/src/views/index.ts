@@ -69,7 +69,7 @@ export { default as Rows, type RowsProps } from './Rows.svelte';
 export { default as RunsFor, type RunsForProps } from './RunsFor.svelte';
 export { default as RunStatus, type RunStatusProps } from './RunStatus.svelte';
 export type { Col, ColumnsIn, RowAction, RowIn, TableProps, TableSource } from './Table.svelte';
-export type { Toolbar, ToolbarGroup, ToolbarItem } from './ViewToolbar.svelte';
+export type { Toolbar, ToolbarItem } from './ViewToolbar.svelte';
 export { carriedContexts, onPageContexts, openRecord, pageContexts, provideBolt, provideCollection, useEnumText, useRecordView, provideRepresentations, type RecordView, type RepresentationLoader, type ViewBolt, type Workspace } from './bolt.js';
 export { default as LogView, type LogViewProps } from './LogView.svelte';
 export { default as EmptyState } from './EmptyState.svelte';

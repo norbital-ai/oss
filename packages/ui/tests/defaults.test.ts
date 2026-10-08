@@ -56,6 +56,8 @@ test('dates: a date is a medium date; an instant a medium date and a short time,
 test('numbers: money is CODE 1,234.00; a decimal is trimmed; a sum of money is money', () => {
 	assert.equal(k.format({ kind: 'money', currency: 'SGD' }, '1234.5', { locale: 'en', currency: 'SGD' }), 'SGD 1,234.50');
 	assert.equal(k.format({ kind: 'money' }, '1200', { locale: 'en', currency: 'JPY' }), 'JPY 1,200');
+	assert.equal(k.format({ kind: 'money' }, '5884.7', { locale: 'en' }), '5,884.70', 'no currency: two places, never trimmed');
+	assert.equal(k.format({ kind: 'money' }, 42586, { locale: 'en' }), '42,586.00');
 	assert.equal(k.format({ kind: 'decimal', scale: 4 }, '1234.5000', { locale: 'en' }), '1,234.5');
 	assert.equal(k.format({ kind: 'decimal', scale: 2 }, '12.00', { locale: 'en' }), '12');
 	// the boot marks a sum over a money child with `money` (its literal code when the child has one)
@@ -262,6 +264,49 @@ test('CustomView: no rows is the kit\'s empty state', async () => {
 	assert.equal(t.querySelector('[data-custom-rows]'), null);
 	const some = await show('custom', { of: [{ title: 'a' }], fields: ['title'], key: 'y' }, bolt);
 	assert.equal(some.querySelector('[data-custom-rows]').textContent, '1');
+});
+
+test('select-all: the card list selects its page, then every matching row, beside the grid\'s header checkbox', async () => {
+	const all = Array.from({ length: 30 }, (_, i) => ({ ...ROW, id: `j${i}`, title: `Job ${i}` }));
+	const reads = [];
+	const { bolt } = fake(all.slice(0, 25), {
+		aggregate: () => Object.assign(Promise.resolve([{ count: 30 }]), { read: { m: 'aggregate', a: [] } }),
+		read: (c, o) => { reads.push(o); const rows = o.all ? all.map((r) => ({ id: r.id })) : all.slice(0, 25);
+			return Object.assign(Promise.resolve({ rows, next: o.all ? null : 'c1' }), { read: { m: 'read', a: [c, o] } }); },
+	});
+	const t = await show('table', { of: 'jobs', columns: ['title'], toolbar: { select: true } }, bolt, jobs);
+	const page = t.querySelector('[data-select-page]');
+	assert.ok(page, 'the card list has its own page checkbox');
+	page.click(); await settle();
+	assert.equal(t.querySelector('[data-selected-count]').textContent, '25 selected');
+	assert.equal(t.querySelectorAll('[data-table-list] input[type=checkbox]:checked').length, 25);
+	assert.equal(t.querySelector('thead input[type=checkbox]').checked, true, 'the grid header agrees');
+	const more = t.querySelector('[data-select-matching]');
+	assert.match(more.textContent, /Select all 30 matching/);
+	more.click(); await settle();
+	assert.equal(t.querySelector('[data-selected-count]').textContent, '30 selected');
+	assert.deepEqual(reads.at(-1).select, { id: true });
+	assert.equal(t.querySelector('[data-select-matching]'), null);
+	t.querySelector('[data-select-clear]').click(); await settle();
+	assert.equal(t.querySelector('[data-selected-count]'), null);
+});
+
+test('CustomView with `collection`: the menu offers that collection\'s pipeline feeds, and the search stays on the view\'s own rows', async () => {
+	const started = [];
+	const { bolt } = fake([], { start: (automation, input) => (started.push({ automation, input }), { id: 'r1', automation, then: (ok) => Promise.resolve({ kind: 'committed', output: null, records: [] }).then(ok) }) });
+	const cat = { jobs: { ...jobs.jobs, search: ['title'], pipeline: { export: 'Every job' } } };
+	const props = { of: [{ id: 'a', name: 'Ada' }], fields: [{ field: 'name', label: 'Person' }], key: 'roster', toolbar: { title: 'Roster', context: { site: 's1' } } };
+	const t = await show('custom', { ...props, collection: 'jobs' }, bolt, cat);
+	t.querySelector('[data-view-actions]').click(); await settle();
+	const row = document.querySelector('[data-view-menu] [data-menu-item="export-feed"]');
+	assert.ok(row, 'the export feed is in the menu');
+	row.querySelector('button').click(); await settle();
+	assert.deepEqual(started, [{ automation: 'jobs.pipeline', input: { mode: 'export' } }]);
+	t.querySelector('[data-search-toggle]').click(); await settle();
+	assert.match(document.querySelector('[data-search-fields]').textContent, /Person/, 'it searches the roster\'s columns, not jobs\' fields');
+	assert.equal(document.querySelector('[data-search-commands]'), null);
+	const plain = await show('custom', props, bolt, cat);
+	assert.equal(plain.querySelector('[data-view-actions]'), null, 'without `collection` the view offers no feed');
 });
 
 test('Runs tab: one "No runs yet" only when no automation has runs; runs named by title, not key', async () => {

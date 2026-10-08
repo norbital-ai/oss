@@ -53,11 +53,12 @@ const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (
 	const answers: { [id: string]: string | boolean } = { ...sort };
 	for (const [id, q] of Object.entries(r.questions)) {
 		if (q.type !== 'noul' || !id.startsWith('f')) continue;
-		const label = options(r.questions[`${id}.op`])[0]!.split(' \u00b7 ')[0]!;
+		// `fN` asks about the state's Nth field (a single-operator field has no `.op` question to read it from)
+		const label = (r.state['fields'] as { label: string }[])[Number(id.slice(1)) - 1]!.label;
 		const a = plan[label];
 		if (a === undefined || a === false) { answers[id] = false; continue; }
 		answers[id] = true;
-		answers[`${id}.op`] = `${label} \u00b7 ${a.op}`;
+		if (r.questions[`${id}.op`] !== undefined) answers[`${id}.op`] = `${label} \u00b7 ${a.op}`;
 		answers[`${id}.value`] = `${label} \u00b7 ${a.value}`;
 	}
 	return answers;
@@ -255,4 +256,49 @@ describe('filter.describe (rule 16a)', () => {
 it('literals: quoted strings, numbers and dates from the text', () => {
 	expect(literals('jobs over 3 hours named "pump room" before 2026-10-01 or 5/10/2026', 'en')).toEqual({
 		strings: ['pump room'], numbers: [3], dates: ['2026-10-01', '2026-10-05'] });
+	// a named month, its year today's unless stated; a day the month lacks is no date
+	expect(literals('after 3rd October, before Oct 9th 2027, the 1st of jan or 31 June', 'en', '2026-10-08').dates.sort()).toEqual(['2026-01-01', '2026-10-03', '2027-10-09']);
+	expect(literals('jobs with 3 decimal places in march', 'en', '2026-10-08')).toEqual({ strings: [], numbers: [3], dates: [] });
+});
+
+describe('dates and relations a description names (live Jev misreadings, 2026-10-08)', () => {
+	const at = { now: '2026-10-08T03:00:00.000Z', today: '2026-10-08', tz: 'Asia/Singapore', params: {} };
+	// members carry a search document: their candidates come from the indexed search, not a label scan
+	const searchable = { ...manifest, models: { ...manifest.models, members: { ...manifest.models['members'], search: { text: ['name'] } } } } as unknown as EngineManifest;
+	const run = async (text: string, plan: Plan, sort: { [id: string]: string | boolean } = {}) => {
+		const p = system1(byField(plan, sort));
+		const w = await testWorkspace({ manifest: searchable, ai: ai(p) });
+		const o = await w.as(w.admin).act('members.create', { name: 'Bob Tan' });
+		if (o.kind !== 'committed') throw new Error(o.kind);
+		const r = await w.engine.filters!.describe({ collection: 'jobs', text, authority: w.as(w.admin).authority, bindings: at });
+		return { r, bob: o.records[0]!.id, offered: Object.values(p.requests[0]!.questions).flatMap((q) => options(q)) };
+	};
+
+	it('"after 3rd October" offers that day: a date is after it, an instant from the next midnight in the workspace zone', async () => {
+		const date = await run('jobs scheduled after 3rd October', { 'Scheduled on': { op: 'after', value: '2026-10-03' } });
+		expect(date.r).toEqual({ ok: true, where: { scheduled_on: { gt: '2026-10-03' } } });
+		const instant = await run('jobs created after 3rd October', { Created: { op: 'after', value: '2026-10-03' } });
+		expect(instant.offered).toContain('Created \u00b7 2026-10-03');
+		expect(instant.r).toEqual({ ok: true, where: { created_at: { gte: '2026-10-03T16:00:00.000Z' } } });
+		expect((await run('jobs created on 3 Oct', { Created: { op: 'is', value: '2026-10-03' } })).r)
+			.toEqual({ ok: true, where: { created_at: { gte: '2026-10-02T16:00:00.000Z', lt: '2026-10-03T16:00:00.000Z' } } });
+	});
+
+	it('after a span is from its end, on or before it up to its end', async () => {
+		expect((await run('jobs scheduled after last week', { 'Scheduled on': { op: 'after', value: 'last week' } })).r)
+			.toEqual({ ok: true, where: { scheduled_on: { gte: { startOf: 'week' } } } });
+		expect((await run('jobs scheduled on or before this month', { 'Scheduled on': { op: 'on or before', value: 'this month' } })).r)
+			.toEqual({ ok: true, where: { scheduled_on: { lt: { startOf: 'month', shift: 1 } } } });
+	});
+
+	it("a possessive finds its owner through the search index (\"Bob's jobs\" offered no Bob Tan)", async () => {
+		const { r, bob, offered } = await run("Bob's jobs", { Assignee: { op: 'is', value: 'Bob Tan' } });
+		expect(offered).toContain('Assignee \u00b7 Bob Tan');
+		expect(r).toEqual({ ok: true, where: { assignee: { eq: bob } } });
+	});
+
+	it('a relation pinned to a found record takes no echoed word under it ("bbo tan" also read Name is "tan")', async () => {
+		const { r, bob } = await run('jobs for bbo tan', { Assignee: { op: 'is', value: 'Bob Tan' }, 'Assignee \u203a Name': { op: 'is', value: 'tan' } });
+		expect(r).toEqual({ ok: true, where: { assignee: { eq: bob } } });
+	});
 });

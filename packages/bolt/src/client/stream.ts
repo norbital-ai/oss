@@ -3,7 +3,11 @@ import type { Frame } from '../protocol/wire.ts';
 
 export type EventSourceLike = { onmessage: ((event: MessageEvent<string>) => void) | null; onerror: ((event: Event) => void) | null; close(): void };
 /** The two signals the link's liveness rides on: whether the tab is hidden, and whether the browser is back online. */
-export type Signals = { readonly hidden: boolean; addEventListener(type: 'visibilitychange' | 'online', listener: () => void): void };
+export type Signals = {
+	readonly hidden: boolean;
+	addEventListener(type: 'visibilitychange' | 'online', listener: () => void): void;
+	removeEventListener?(type: 'visibilitychange' | 'online', listener: () => void): void;
+};
 /** From 0.5 s, doubling to 30 s, each wait spread ±50% so a hundred tabs that dropped together do not all return together. */
 const BACKOFF_MS = 500, BACKOFF_MAX_MS = 30_000;
 
@@ -40,6 +44,13 @@ export function liveStream(open: () => EventSourceLike, onFrame: (frame: Frame) 
 		/** A drop is being retried: the link is down, not merely unasked-for (the shell's `connecting` says so). */
 		get retrying() { return retrying; },
 		restart() { drop(); reconcile(); },
+		/** Retire the stream for good: closed, no retry pending, and off the signals, so nothing global holds this client. */
+		close() {
+			wanted = false;
+			reconcile();
+			signals?.removeEventListener?.('visibilitychange', reconcile);
+			signals?.removeEventListener?.('online', reconcile);
+		},
 		want(on: boolean) {
 			wanted = on;
 			reconcile();

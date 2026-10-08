@@ -1,6 +1,6 @@
-// An xlsx workbook read on the host (`node:zlib`): the agent's `read_attachment` sheets and the sheets `sandbox_run`
-// hands its programs as CSV.
-import { inflateRawSync } from 'node:zlib';
+// An xlsx workbook read and written on the host (`node:zlib`): the agent's `read_attachment` sheets, the sheets
+// `sandbox_run` hands its programs as CSV, and a pipeline's upload, template and export.
+import { crc32, deflateRawSync, inflateRawSync } from 'node:zlib';
 
 /** std/sheet's cell (`@norbital-ai/std` sheet). */
 export type Cell = string | number | boolean | null;
@@ -77,3 +77,48 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 /** Cells as RFC 4180 CSV: a field with a comma, quote or line break is quoted, quotes doubled; `null` is empty. */
 export const csvOf = (rows: readonly (readonly Cell[])[]): string =>
 	rows.map((r) => r.map((c) => { const t = c === null ? '' : String(c); return /[",\r\n]/.test(t) ? `"${t.replaceAll('"', '""')}"` : t; }).join(',')).join('\n') + '\n';
+
+const xml = (s: string) => s.replace(/[<>&"]/g, (c) => `&${({ '<': 'lt', '>': 'gt', '&': 'amp', '"': 'quot' } as const)[c as '<']};`);
+const column = (i: number): string => (i >= 26 ? column(Math.floor(i / 26) - 1) : '') + String.fromCharCode(65 + (i % 26));
+
+/** One worksheet of cells as an xlsx workbook (strings inline, row 1 first): what `xlsxCells` reads back. */
+export function xlsxOf(rows: readonly (readonly Cell[])[], sheet = 'Sheet1'): Uint8Array {
+	const cells = rows.map((r, y) => `<row r="${y + 1}">${r.map((c, x) => {
+		const at = `${column(x)}${y + 1}`;
+		return c === null ? '' : typeof c === 'number' ? `<c r="${at}"><v>${c}</v></c>` : typeof c === 'boolean' ? `<c r="${at}" t="b"><v>${c ? 1 : 0}</v></c>`
+			: `<c r="${at}" t="inlineStr"><is><t xml:space="preserve">${xml(c)}</t></is></c>`;
+	}).join('')}</row>`).join('');
+	const files: [string, string][] = [
+		['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'],
+		['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+		['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xml(sheet.slice(0, 31))}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+		['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'],
+		['xl/worksheets/sheet1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${cells}</sheetData></worksheet>`],
+	];
+	// a zip of deflated entries: local headers, then the central directory and its end record
+	const parts: Uint8Array[] = [], central: Uint8Array[] = [];
+	let offset = 0;
+	for (const [name, text] of files) {
+		const raw = new TextEncoder().encode(text), data = deflateRawSync(raw), path = new TextEncoder().encode(name), crc = crc32(raw);
+		const head = (sig: number, extra: number) => {
+			const b = new Uint8Array(extra + path.length), v = new DataView(b.buffer);
+			v.setUint32(0, sig, true);
+			const at = sig === 0x02014b50 ? 2 : 0; // the central record carries a "made by" version first
+			v.setUint16(4 + at, 20, true); v.setUint16(8 + at, 8, true);
+			v.setUint32(14 + at, crc, true); v.setUint32(18 + at, data.length, true); v.setUint32(22 + at, raw.length, true); v.setUint16(26 + at, path.length, true);
+			if (at === 2) v.setUint32(42, offset, true);
+			b.set(path, extra);
+			return b;
+		};
+		const local = head(0x04034b50, 30);
+		central.push(head(0x02014b50, 46));
+		parts.push(local, data);
+		offset += local.length + data.length;
+	}
+	const size = central.reduce((n, b) => n + b.length, 0), end = new Uint8Array(22), v = new DataView(end.buffer);
+	v.setUint32(0, 0x06054b50, true); v.setUint16(8, files.length, true); v.setUint16(10, files.length, true); v.setUint32(12, size, true); v.setUint32(16, offset, true);
+	const out = new Uint8Array(offset + size + 22);
+	let at = 0;
+	for (const b of [...parts, ...central, end]) { out.set(b, at); at += b.length; }
+	return out;
+}

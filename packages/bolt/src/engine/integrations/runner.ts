@@ -312,10 +312,10 @@ export function integrations(config: IntegrationsConfig) {
  */
 export function mappingBody(config: { engine: Pick<Engine, 'read'>; guest?: GuestPort }, authority: Authority, bindings: Bindings, prefix: string) {
 	let n = 0;
-	return async (path: string, args: readonly Json[]): Promise<Json> => {
+	const call = async (path: string, args: Json): Promise<Json> => {
 		if (config.guest === undefined) throw new BoltError('noGuest', 'guest', 'this host runs no guest code');
 		const id = `${prefix}:body:${n++}`;
-		const inv: Invocation = { id, kind: 'mapping', target: path, input: args as Json,
+		const inv: Invocation = { id, kind: 'mapping', target: path, input: args,
 			ctx: { actor: authority.actor, now: bindings.now, today: bindings.today, tz: bindings.tz, seed: id },
 			budget: { cpuMs: LIMITS.guestCpuMs, crossings: LIMITS.crossings.sync, readBytes: LIMITS.readBytes } };
 		const bridge: Bridge = { async cross(calls) {
@@ -334,6 +334,15 @@ export function mappingBody(config: { engine: Pick<Engine, 'read'>; guest?: Gues
 		if (g.kind === 'ok') return g.output;
 		throw g.kind === 'failed' ? g.error : new BoltError('guestRefused', 'guest', g.message);
 	};
+	/** One body over its arguments; `each` runs it over many items (each with `extra`) in ONE invocation, answers in order. */
+	return Object.assign((path: string, args: readonly Json[]) => call(path, args as Json), {
+		each: async (path: string, items: readonly Json[], extra: Json): Promise<readonly Json[]> => {
+			if (items.length === 0) return [];
+			const out = await call(path, { $each: items as Json, with: extra });
+			if (!Array.isArray(out) || out.length !== items.length) throw new BoltError('badAnswer', 'guest', `${path} answered ${Array.isArray(out) ? out.length : 'no'} results for ${items.length} items`);
+			return out;
+		}
+	});
 }
 
 /** The `$sync` of rows (§3.3.5): a failed push stays visible until a push succeeds. */
