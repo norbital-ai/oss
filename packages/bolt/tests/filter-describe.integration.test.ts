@@ -3,6 +3,7 @@
 // System 2 path (owner ruling): a System 1 failure applies nothing, and with no AI facility the feature is absent.
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AiPort, Authority, EngineManifest, MeteringPort } from '../src/engine/contracts.ts';
+import type { Json } from '../src/decl/values.ts';
 import type { DecisionAnswer, DecisionQuestion, System1Port, System1Request } from '../src/engine/decisions/index.ts';
 import { literals } from '../src/engine/filter-describe/index.ts';
 import { testWorkspace, type TestWorkspace } from '../src/test/index.ts';
@@ -29,9 +30,12 @@ const manifest = {
 
 /** A scripted System 1: `pick` maps question ids to a choice or a noul; any other question gets its first option or 0. */
 function system1(pick: (r: System1Request, call: number) => { readonly [id: string]: string | boolean }) {
-	const answer = (q: DecisionQuestion, v: string | boolean | undefined): DecisionAnswer => q.type === 'noul' ? { type: 'noul', noul: v === true ? 0.9 : 0.1 }
-		: q.type === 'choice' ? { type: 'choice', choice: typeof v === 'string' ? v : Object.keys(q.criteria)[0]!, confidence: 0.9, probabilities: {} }
+	const answer = (q: DecisionQuestion, v: string | boolean | undefined): DecisionAnswer => {
+		if (q.type === 'noul') return { type: 'noul', noul: v === true ? 0.9 : 0.1 };
+		const choice = q.type === 'choice' ? typeof v === 'string' ? v : Object.keys(q.criteria)[0]! : '';
+		return q.type === 'choice' ? { type: 'choice', choice, confidence: 0.9, probabilities: { [choice]: 0.9 } }
 			: { type: 'score', score: 0, level: 0, confidence: 0.9, probabilities: {}, legend: {} };
+	};
 	const port: System1Port & { requests: System1Request[]; throws: boolean } = { requests: [], throws: false,
 		async ask(r) {
 			port.requests.push(r);
@@ -44,24 +48,24 @@ function system1(pick: (r: System1Request, call: number) => { readonly [id: stri
 const options = (q: DecisionQuestion | undefined) => q?.type === 'choice' ? Object.keys(q.criteria) : [];
 const ai = (s: System1Port): AiPort => ({ sys_1: s, sys_2: { models: ['fast'], async infer() { throw new Error('System 2 is never asked') } } });
 /**
- * A scripted answer in the request's own shape: which fields the description restricts, and for each of those the
- * operator and the value. The engine numbers the fields it asked about, so the script names them by label; the
- * operator question's own options are how this reads back which number belongs to which field.
+ * A scripted answer in the request's own shape: per field the whole condition the description states ("Title contains
+ * “pump”"), or none when the plan omits the field. The engine numbers the fields it asked about in the state's order, so
+ * the script names them by label. A list operator names its values, each its own yes / no.
  */
-type Plan = { readonly [label: string]: { op: string; value: string } | false };
-const byField = (plan: Plan, sort: { [id: string]: string | boolean } = {}) => (r: System1Request): { readonly [id: string]: string | boolean } => {
-	const answers: { [id: string]: string | boolean } = { ...sort };
+type Plan = { readonly [label: string]: { op: string; value?: string; values?: readonly string[] } | false };
+const byField = (plan: Plan, extra: { [id: string]: string | boolean } = {}) => (r: System1Request): { readonly [id: string]: string | boolean } => {
+	const pick: { [id: string]: string | boolean } = { ...extra };
 	for (const [id, q] of Object.entries(r.questions)) {
-		if (q.type !== 'noul' || !id.startsWith('f')) continue;
-		// `fN` asks about the state's Nth field (a single-operator field has no `.op` question to read it from)
-		const label = (r.state['fields'] as { label: string }[])[Number(id.slice(1)) - 1]!.label;
-		const a = plan[label];
-		if (a === undefined || a === false) { answers[id] = false; continue; }
-		answers[id] = true;
-		if (r.questions[`${id}.op`] !== undefined) answers[`${id}.op`] = `${label} \u00b7 ${a.op}`;
-		answers[`${id}.value`] = `${label} \u00b7 ${a.value}`;
+		if (q.type !== 'choice' || !/^f\d+$/.test(id)) continue;
+		const label = (r.state['fields'] as { label: string }[])[Number(id.slice(1)) - 1]!.label, a = plan[label];
+		if (a === undefined || a === false) continue; // its first option: no condition
+		const want = a.values !== undefined ? [`${label} ${a.op} the ones named`] : [`${label} ${a.op}${a.value === undefined ? '' : ` ${a.value}`}`, `${label} ${a.op} \u201c${a.value}\u201d`];
+		const hit = Object.keys(q.criteria).find((k) => want.includes(k));
+		if (hit === undefined) throw new Error(`no option "${want[0]}" among: ${Object.keys(q.criteria).join(' | ')}`);
+		pick[id] = hit;
+		for (const [v, nq] of Object.entries(r.questions)) if (v.startsWith(`${id}.`) && a.values?.some((x) => nq.instructions.startsWith(`Is ${x} one of`))) pick[v] = true;
 	}
-	return answers;
+	return pick;
 };
 const BOB: Plan = {
 	Assignee: { op: 'is', value: 'Bob Tan' },
@@ -92,18 +96,18 @@ describe('filter.describe (rule 16a)', () => {
 
 	it("Bob's jobs this week that aren't done: three conditions from ONE System 1 call, every answer an offered option", async () => {
 		const r = await describeAs("Bob's jobs this week that aren't done");
-		// the conditions follow the order the fields were asked about: the ones the description names, in schema order
-		expect(r).toEqual({ ok: true, where: { and: [
+		expect(r).toMatchObject({ ok: true, where: { and: expect.arrayContaining([
 			{ scheduled_on: { gte: { startOf: 'week' }, lt: { startOf: 'week', shift: 1 } } },
 			{ status: { nin: ['done'] } },
 			{ assignee: { eq: bob } },
-		] } });
+		]) } });
+		expect(r.ok && (r.where as { and: unknown[] }).and).toHaveLength(3);
 		expect(port.requests).toHaveLength(1);
 		const q = port.requests[0]!.questions;
-		// each field is asked about on its own, so a value can only ever name its own field
+		// each field is asked about on its own, as whole conditions, so a value can only ever name its own field
 		const values = Object.values(q).flatMap((x) => options(x));
-		expect(values).toContain('Assignee \u00b7 Bob Tan');
-		expect(values).toContain('Scheduled on \u00b7 this week');
+		expect(values).toContain('Assignee is Bob Tan');
+		expect(values).toContain('Scheduled on is within this week');
 		expect(values).not.toContain('Notes'); // masked to the caller: never offered
 		expect(await events()).toMatchObject([{ use: 'filter', system: 1 }]);
 		expect(metered).toEqual(['ai:decision']);
@@ -111,23 +115,22 @@ describe('filter.describe (rule 16a)', () => {
 
 	it('newest first sets one sort key; the sort questions ride the same call', async () => {
 		// only the assignee is named: a field the plan omits is one the description did not restrict
-		await open(port = system1(byField({ Assignee: BOB.Assignee! }, { 'sort.yes': true, 'sort.field': 'Created',
-			'sort.dir': 'descending (newest, highest, Z\u2192A first)' })));
+		await open(port = system1(byField({ Assignee: BOB.Assignee! }, { sort: 'Created, latest first' })));
 		expect(await describeAs("Bob's open jobs, newest first")).toEqual({ ok: true, where: { assignee: { eq: bob } }, orderBy: { created_at: 'desc' } });
 		expect(port.requests).toHaveLength(1);
 	});
 
-	it('one call answers every field: no operator can name another field, so nothing is ever re-asked', async () => {
-		// the old shape offered every field's operators in one question, so an answer could pair one field's operator with
-		// another's value, and a second call had to re-ask it. A field's own options make that impossible by construction.
+	it('one call answers every field: each question offers only its own field\'s whole conditions', async () => {
+		// an operator and a value asked apart could disagree (a day for "is within", one value for "is any of"); a field's
+		// whole conditions, each decoded before it is offered, make a mismatch impossible by construction
 		const r = await describeAs("Bob's jobs this week that aren't done");
 		expect(r.ok).toBe(true);
 		expect(port.requests).toHaveLength(1);
-		for (const [id, q] of Object.entries(port.requests[0]!.questions)) {
-			if (q.type !== 'choice' || !id.endsWith('.op')) continue;
-			const label = options(q)[0]!.split(' \u00b7 ')[0]!;
-			// every option of this question belongs to the one field it asks about
-			expect(options(q).every((o) => o.startsWith(`${label} \u00b7 `))).toBe(true);
+		const req = port.requests[0]!;
+		for (const [id, q] of Object.entries(req.questions)) {
+			if (!/^f\d+$/.test(id)) continue;
+			const label = (req.state['fields'] as { label: string }[])[Number(id.slice(1)) - 1]!.label;
+			expect(options(q).every((o) => o === 'no condition' || o.startsWith(`${label} `))).toBe(true);
 		}
 	});
 
@@ -165,7 +168,7 @@ describe('filter.describe (rule 16a)', () => {
 			relationships: { ...manifest.relationships, 'suspicious_activity_logs.member': { to: 'members', inverse: 'suspicious_activity_logs' } },
 			collections: { ...manifest.collections, suspicious_activity_logs: { read: { fields: 'all' }, create: { input: { columns: ['summary', 'severity', 'raised_on', 'member'] } } } },
 		} as unknown as EngineManifest;
-		const count = 'Suspicious activity logs \u203a count';
+		const count = 'Number of suspicious activity logs';
 		const t2 = await testWorkspace({ manifest: wide, metering, ai: ai(system1(byField({ [count]: { op: 'at least', value: '1' } }))) });
 		const r = await t2.engine.filters!.describe({ collection: 'members', text: 'those with 1 suspicion log', authority: t2.as(t2.admin).authority,
 			bindings: { now: t2.clock.now(), today: t2.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
@@ -196,8 +199,8 @@ describe('filter.describe (rule 16a)', () => {
 		const r = await t.engine.filters!.describe({ collection: 'jobs', text: 'code c7', authority: t.as(t.admin).authority,
 			bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'Asia/Singapore', params: {} } });
 		expect(r).toMatchObject({ ok: false, code: 'tooLarge' });
-		const codeValue = Object.keys(seen[0]!.questions).find((id) => id.endsWith('.value') && options(seen[0]!.questions[id]).some((o) => o.startsWith('Code \u00b7 ')));
-		expect(options(seen[0]!.questions[codeValue!]).filter((o) => o.startsWith('Code \u00b7 '))).toHaveLength(200);
+		const code = Object.values(seen[0]!.questions).find((q) => options(q).some((o) => o.startsWith('Code is c')));
+		expect(options(code).filter((o) => /^Code is c\d+$/.test(o))).toHaveLength(200);
 		// every question is in P37's shape over a structured state
 		expect(Object.values(seen[0]!.questions).every((q) => typeof q.instructions === 'string' && q.criteria !== undefined)).toBe(true);
 		expect(seen[0]!.state).toMatchObject({ description: 'code c7', collection: 'Jobs', timezone: 'Asia/Singapore' });
@@ -243,7 +246,7 @@ describe('filter.describe (rule 16a)', () => {
 
 	it('a related sort from a description orders the matching rows', async () => {
 		await open(port = system1(byField({},
-			{ 'sort.yes': true, 'sort.field': 'Assignee › Name', 'sort.dir': 'ascending (oldest, lowest, A→Z first)' })));
+			{ sort: 'Assignee › Name, A to Z' })));
 		const alice = (await t.as(t.admin).read('members', { where: { name: { eq: 'Alice Ng' } }, all: true })).rows[0]!['id'] as string;
 		await commit({ title: 'zzz job', assignee: bob });
 		await commit({ title: 'aaa job', assignee: alice });
@@ -278,9 +281,9 @@ describe('dates and relations a description names (live Jev misreadings, 2026-10
 		const date = await run('jobs scheduled after 3rd October', { 'Scheduled on': { op: 'after', value: '2026-10-03' } });
 		expect(date.r).toEqual({ ok: true, where: { scheduled_on: { gt: '2026-10-03' } } });
 		const instant = await run('jobs created after 3rd October', { Created: { op: 'after', value: '2026-10-03' } });
-		expect(instant.offered).toContain('Created \u00b7 2026-10-03');
+		expect(instant.offered).toContain('Created after 2026-10-03');
 		expect(instant.r).toEqual({ ok: true, where: { created_at: { gte: '2026-10-03T16:00:00.000Z' } } });
-		expect((await run('jobs created on 3 Oct', { Created: { op: 'is', value: '2026-10-03' } })).r)
+		expect((await run('jobs created on 3 Oct', { Created: { op: 'is within', value: '2026-10-03' } })).r)
 			.toEqual({ ok: true, where: { created_at: { gte: '2026-10-02T16:00:00.000Z', lt: '2026-10-03T16:00:00.000Z' } } });
 	});
 
@@ -293,12 +296,88 @@ describe('dates and relations a description names (live Jev misreadings, 2026-10
 
 	it("a possessive finds its owner through the search index (\"Bob's jobs\" offered no Bob Tan)", async () => {
 		const { r, bob, offered } = await run("Bob's jobs", { Assignee: { op: 'is', value: 'Bob Tan' } });
-		expect(offered).toContain('Assignee \u00b7 Bob Tan');
+		expect(offered).toContain('Assignee is Bob Tan');
 		expect(r).toEqual({ ok: true, where: { assignee: { eq: bob } } });
 	});
 
 	it('a relation pinned to a found record takes no echoed word under it ("bbo tan" also read Name is "tan")', async () => {
 		const { r, bob } = await run('jobs for bbo tan', { Assignee: { op: 'is', value: 'Bob Tan' }, 'Assignee \u203a Name': { op: 'is', value: 'tan' } });
 		expect(r).toEqual({ ok: true, where: { assignee: { eq: bob } } });
+	});
+});
+
+describe('named days, lists, ranges and a related record\'s own related records (2026-10-09)', () => {
+	const at = { now: '2026-10-08T03:00:00.000Z', today: '2026-10-08', tz: 'Asia/Singapore', params: {} };
+	const shop = {
+		workspace: { tz: 'Asia/Singapore', locale: 'en' },
+		models: {
+			customers: { description: 'A customer', label: 'name', search: { text: ['name'] }, fields: { name: { kind: 'text' } } },
+			invoices: { description: 'An invoice', label: 'number', fields: { number: { kind: 'text' }, status: { kind: 'enum', values: ['paid', 'unpaid'] } } },
+			holidays: { description: 'A holiday', label: 'name', fields: { name: { kind: 'text' }, date: { kind: 'date' } } },
+			jobs: { description: 'A job', label: 'title', fields: { title: { kind: 'text' }, scheduled_on: { kind: 'date' }, hours: { kind: 'decimal', scale: 1 },
+				status: { kind: 'enum', values: ['scheduled', 'in_progress', 'done'] } } },
+		},
+		relationships: { 'jobs.customer': { to: 'customers', inverse: 'jobs', optional: true }, 'invoices.customer': { to: 'customers', inverse: 'invoices' } },
+		collections: {
+			customers: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } },
+			invoices: { read: { fields: 'all' }, create: { input: { columns: ['number', 'status', 'customer'] } } },
+			holidays: { read: { fields: 'all' }, create: { input: { columns: ['name', 'date'] } } },
+			jobs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'scheduled_on', 'hours', 'status', 'customer'] } } },
+		},
+		integrations: {}, pipelines: {}, policies: {}, teams: {}, automations: {}, channels: {}, connections: {}, envoys: {}, mcp: {}, apps: {}, customFields: {}, agent: { skills: {} },
+	} as unknown as EngineManifest;
+	const setup = async (plan: Plan, extra: { [id: string]: string | boolean } = {}) => {
+		const p = system1(byField(plan, extra));
+		const w = await testWorkspace({ manifest: shop, ai: ai(p) });
+		const a = w.as(w.admin);
+		const id = async (c: string, row: { [k: string]: Json }) => { const o = await a.act(`${c}.create`, row); if (o.kind !== 'committed') throw new Error(JSON.stringify(o)); return o.records[0]!.id; };
+		const acme = await id('customers', { name: 'Acme' }), globex = await id('customers', { name: 'Globex' });
+		await id('invoices', { number: 'INV-1', status: 'unpaid', customer: acme });
+		await id('invoices', { number: 'INV-2', status: 'paid', customer: globex });
+		for (const [name, date] of [['National Day', '2025-08-09'], ['National Day', '2026-08-09'], ['Company Day', '2026-10-01']]) await id('holidays', { name: name!, date: date! });
+		for (const [title, scheduled_on, hours, status, customer] of [['pump room', '2026-10-06', 3, 'scheduled', acme], ['roof leak', '2026-09-20', 8, 'done', globex],
+			['door hinge', '2026-10-02', 1, 'in_progress', null]] as const) await id('jobs', { title, scheduled_on, hours, status, ...(customer === null ? {} : { customer }) });
+		const describe = async (collection: string, text: string) => {
+			const r = await w.engine.filters!.describe({ collection, text, authority: a.authority, bindings: at });
+			const label = collection === 'jobs' ? 'title' : 'name';
+			const rows = r.ok ? (await a.read(collection, { all: true, ...(r.where === undefined ? {} : { where: r.where }), select: { [label]: true } } as never)).rows.map((x) => x[label]).sort() : [];
+			return { r, rows, offered: Object.values(p.requests.at(-1)!.questions).flatMap((q) => options(q)) };
+		};
+		return describe;
+	};
+
+	it('a named day is a record the caller reads with a date, its nearest occurrence, applied once', async () => {
+		const d = await setup({ 'Scheduled on': { op: 'after', value: 'National Day (2026-08-09)' }, Created: { op: 'after', value: 'National Day (2026-08-09)' } });
+		const { r, offered } = await d('jobs', 'jobs scheduled after national day');
+		expect(offered).toContain('Scheduled on after National Day (2026-08-09)');
+		expect(offered).not.toContain('Scheduled on after National Day (2025-08-09)'); // the occurrence nearest today
+		// the day reads once: one date condition, never both "scheduled after" and "created after"
+		expect(r).toMatchObject({ ok: true });
+		expect(JSON.stringify((r as { where: object }).where).match(/2026-08-09/g)).toHaveLength(1);
+	});
+
+	it('a related record\'s own related records: "jobs whose customer has an unpaid invoice"', async () => {
+		const d = await setup({ 'Customer › Invoices (any) › Status': { op: 'is', value: 'unpaid' } });
+		const { r, rows } = await d('jobs', 'jobs whose customer has an unpaid invoice');
+		expect(r).toEqual({ ok: true, where: { customer: { is: { invoices: { some: { status: { eq: 'unpaid' } } } } } } });
+		expect(rows).toEqual(['pump room']);
+	});
+
+	it('presence and absence of related records need no number in the text', async () => {
+		expect((await (await setup({ Customer: { op: 'is not empty' } }))('jobs', 'jobs with a customer')).rows).toEqual(['pump room', 'roof leak']);
+		const none = await (await setup({ 'Number of invoices': { op: 'is', value: '0' } }))('customers', 'customers with no invoices');
+		expect(none.r).toEqual({ ok: true, where: { invoices: { count: { eq: 0 } } } });
+		expect(none.rows).toEqual([]);
+		const one = await (await setup({ 'Invoices (any) › Status': { op: 'is', value: 'unpaid' }, 'Number of invoices': { op: 'at least', value: '1' } }))('customers', 'customers with at least 1 unpaid invoice');
+		expect(one.r).toEqual({ ok: true, where: { invoices: { some: { status: { eq: 'unpaid' } } } } }); // "at least one" is implied
+	});
+
+	it('"is any of" takes the values the description names, each its own yes / no; "between" takes two of its numbers', async () => {
+		const any = await (await setup({ Status: { op: 'is any of', values: ['scheduled', 'done'] } }))('jobs', 'scheduled or done jobs');
+		expect(any.r).toEqual({ ok: true, where: { status: { in: ['scheduled', 'done'] } } });
+		expect(any.rows).toEqual(['pump room', 'roof leak']);
+		const between = await (await setup({ Hours: { op: 'between 2 and 8' } }))('jobs', 'jobs between 2 and 8 hours');
+		expect(between.r).toEqual({ ok: true, where: { hours: { gte: 2, lte: 8 } } });
+		expect(between.rows).toEqual(['pump room', 'roof leak']);
 	});
 });

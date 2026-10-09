@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { Window as HappyWindow } from 'happy-dom';
 import { flushSync, unmount, type Component } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { EventSourceLike } from '../src/client/stream.ts';
 import type { EngineManifest } from '../src/engine/contracts.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -70,12 +71,45 @@ async function open(t: TestWorkspace, path: string, pages: ShellMountConfig['pag
 	}) as typeof globalThis.fetch;
 	history.replaceState(null, '', path);
 	const target = document.body.appendChild(document.createElement('div'));
-	const v = mountShell(target, { manifest: m as never, pages, fetch, openStream: () => ({ onmessage: null, onerror: null, close() {} }), ...(representations === undefined ? {} : { representations }) });
+	const sources: EventSourceLike[] = [];
+	const v = mountShell(target, { manifest: m as never, pages, fetch, openStream: () => { const source: EventSourceLike = { onmessage: null, onerror: null, close() {} }; sources.push(source); return source; }, ...(representations === undefined ? {} : { representations }) });
 	views.push(() => { void unmount(v); target.remove(); });
-	return { target, puts };
+	return { target, puts, sources };
 }
 
 describe('the shell renders a page (§5.10)', () => {
+	it.each([false, true])(
+		'a release reloads a clean page and preserves an unsaved form (dirty=%s)',
+		async (dirty) => {
+			const reload = vi.spyOn(location, 'reload').mockImplementation(() => {});
+			views.push(() => reload.mockRestore());
+			const t = await testWorkspace({ manifest });
+			const { target, sources } = await open(t, '/app/desk/upload', {
+				'desk/upload': page(Upload)
+			});
+			await until(() => target.querySelector('input') !== null && sources.length > 0);
+			if (dirty) {
+				const title = target.querySelector<HTMLInputElement>('input[type=text]')!;
+				title.value = 'Unsaved title';
+				title.dispatchEvent(new Event('input', { bubbles: true }));
+				await tick();
+			}
+			sources.at(-1)!.onmessage!(
+				new MessageEvent('message', {
+					data: JSON.stringify({ t: 'close', release: 'new-release' })
+				})
+			);
+			await tick();
+			expect(reload).toHaveBeenCalledTimes(dirty ? 0 : 1);
+			if (dirty) {
+				expect(target.textContent).toContain('This workspace was updated');
+				expect(target.querySelector<HTMLInputElement>('input[type=text]')!.value).toBe(
+					'Unsaved title'
+				);
+			}
+		}
+	);
+
 	it('hoists mobile page identity into navigation and restores the desktop hero on resize', async () => {
 		const resize = (width: number) =>
 			(window as unknown as HappyWindow).happyDOM.setWindowSize({ width, height: 812 });
@@ -345,7 +379,8 @@ describe('workspace boot error recovery', () => {
 	it.each([403, 404, 429, 500, 503])('shows the reason and retry control for HTTP %s', async (status) => {
 		history.replaceState(null, '', '/app/desk/hero');
 		const target = document.body.appendChild(document.createElement('div'));
-		const v = mountShell(target, { manifest: manifest as never, pages: {}, fetch: async () => new Response('proxy error', { status }) });
+		const sources: EventSourceLike[] = [];
+	const v = mountShell(target, { manifest: manifest as never, pages: {}, fetch: async () => new Response('proxy error', { status }) });
 		views.push(() => { void unmount(v); target.remove(); });
 		await until(() => target.querySelector('[role=alert]') !== null);
 		expect(target.textContent).toContain(`HTTP ${status}`);
@@ -369,7 +404,8 @@ describe('workspace boot error recovery', () => {
 				status: 401, headers: { 'content-type': 'application/json' }
 			});
 		}) as typeof globalThis.fetch;
-		const v = mountShell(target, { manifest: manifest as never, pages: {}, fetch });
+		const sources: EventSourceLike[] = [];
+	const v = mountShell(target, { manifest: manifest as never, pages: {}, fetch });
 		views.push(() => { void unmount(v); target.remove(); });
 		await until(() => target.querySelector('#bolt-email') !== null);
 		expect(target.textContent).not.toContain('Unable to open the workspace');

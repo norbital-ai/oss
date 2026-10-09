@@ -185,7 +185,15 @@
 			kiosk: () => { const r = route(config.manifest, url); return r.kind === 'kiosk' ? r.kiosk : null; },
 			...(config.fetch === undefined ? {} : { fetch: config.fetch }), ...(config.openStream === undefined ? {} : { openStream: config.openStream }) });
 		setCurrentBolt(bolt);
-		bolt.onSyncStatus((status) => (sync = status));
+		bolt.onSyncStatus((status) => {
+			const wasClosed = sync === 'closed';
+			sync = status;
+			if (wasClosed || status !== 'closed') return;
+			// A clean page follows the release; mounted drafts may cancel and keep the reload notice.
+			const leaving = new Event('beforeunload', { cancelable: true });
+			window.dispatchEvent(leaving);
+			if (!leaving.defaultPrevented) location.reload();
+		});
 	}
 	// an unmounted shell retires its client: its stream's window listeners would otherwise hold the whole page alive
 	onDestroy(() => bolt?.close());

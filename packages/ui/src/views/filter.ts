@@ -67,7 +67,8 @@ export function offersFor(offers: readonly Offer[], prefix: readonly FilterStep[
 	return offers.filter((o) => { const rest = within(o, prefix); return rest !== null && (rest.at(-1)?.k === 'field' || rest.at(-1)?.k === 'is' || rest.at(-1)?.k === 'arm') && pathOf(rest) === path; });
 }
 /** What a many-relation offers in a context: its count and aggregate comparisons, and the aggregate child fields. */
-export function manyOffers(offers: readonly Offer[], prefix: readonly FilterStep[], rel: string): { all: boolean; count: readonly Offer[]; aggs: readonly Offer[] } {
+export function manyOffers(offers: readonly Offer[], at: readonly FilterStep[], path: string): { all: boolean; count: readonly Offer[]; aggs: readonly Offer[] } {
+	const { prefix, name: rel } = manyAt(at, path);
 	const count: Offer[] = [], aggs: Offer[] = [];
 	let all = false;
 	for (const o of offers) {
@@ -85,14 +86,23 @@ export type Node =
 	 * that ends on a relation is a condition on the related record. */
 	| { t: 'cond'; path: string; op: Op; arg: Arg | null }
 	| { t: 'group'; join: 'and' | 'or'; not?: true; of: readonly Node[] }
-	/** A many-relation: has any / none / all match with nested conditions, or `count` / an aggregate of a child field. */
+	/** A many-relation: has any / none / all match with nested conditions, or `count` / an aggregate of a child field.
+	 * `rel` may sit one relation hop on (`customer.invoices`: the customer's invoices). */
 	| { t: 'many'; rel: string; q: Quant; of: readonly Node[]; field?: string; op?: Cmp; n?: number | null };
 
-/** A many-relation's child collection: the one whose relation to `collection` declares it as `inverse`. */
+/** A many-relation's child collection: the one whose relation to its owner declares it as `inverse`; `rel` may be
+ * reached through one-relations (`customer.invoices`). */
 export function childOf(cat: Catalog, collection: string, rel: string): string | undefined {
-	if (!(cat[collection]?.many ?? []).includes(rel)) return undefined;
-	return Object.keys(cat).find((c) => Object.values(cat[c]!.relations ?? {}).some((r) => r.inverse === rel && r.targets.includes(collection)));
+	const steps = rel.split('.'), name = steps.pop()!;
+	const owner = steps.reduce<string | undefined>((c, s) => c === undefined ? undefined : cat[c]?.relations?.[s]?.targets[0], collection);
+	if (owner === undefined || !(cat[owner]?.many ?? []).includes(name)) return undefined;
+	return Object.keys(cat).find((c) => Object.values(cat[c]!.relations ?? {}).some((r) => r.inverse === name && r.targets.includes(owner)));
 }
+/** The catalogue steps to a many-relation row's own options: the one-relations it is reached through, then itself. */
+export const manyAt = (prefix: readonly FilterStep[], rel: string): { prefix: FilterStep[]; name: string } => {
+	const steps = rel.split('.'), name = steps.pop()!;
+	return { prefix: [...prefix, ...steps.map((r) => ({ k: 'is' as const, rel: r }))], name };
+};
 const isObj = (v: unknown): v is { readonly [k: string]: Json } => typeof v === 'object' && v !== null && !Array.isArray(v);
 const keysOf = (v: object) => Object.keys(v);
 
@@ -229,13 +239,14 @@ export function toWhere(cat: Catalog, collection: string, n: Node): Where | null
 		return n.not ? { not: body } : body;
 	}
 	if (n.t === 'many') {
+		const steps = n.rel.split('.'), name = steps.pop()!;
 		if (n.q === 'some' || n.q === 'none' || n.q === 'every') {
 			const child = childOf(cat, collection, n.rel) ?? '';
 			const inner = n.of.map((x) => toWhere(cat, child, x)).filter((x): x is Where => x !== null);
-			return { [n.rel]: { [n.q]: inner.length === 0 ? {} : inner.length === 1 ? inner[0]! : { and: inner } } };
+			return wrap(steps, { [name]: { [n.q]: inner.length === 0 ? {} : inner.length === 1 ? inner[0]! : { and: inner } } });
 		}
 		const cmp = { [n.op!]: n.n! };
-		return { [n.rel]: { [n.q]: n.q === 'count' ? cmp : { of: n.field!, ...cmp } } };
+		return wrap(steps, { [name]: { [n.q]: n.q === 'count' ? cmp : { of: n.field!, ...cmp } } });
 	}
 	const r = resolve(cat, collection, n.path);
 	if (r === null) return null;
@@ -343,20 +354,21 @@ export function fromWhere(cat: Catalog, root: string, w: Json, at = root, prefix
 			if (typeof v !== 'string' || v.trim() === '' || resolve(cat, root, path) === null) return null;
 			out.push({ t: 'cond', path, op: INDEX[key]!.op, arg: { lit: v } });
 		} else if ((x.many ?? []).includes(key)) {
-			const child = childOf(cat, at, key);
-			if (prefix !== '' || !isObj(v) || keysOf(v).length === 0 || child === undefined) return null;
+			// at the root, or one relation hop on (`customer: { is: { invoices: { some } } }` is the row `customer.invoices`)
+			const child = childOf(cat, at, key), rel = prefix + key;
+			if (prefix.split('.').length > 2 || !isObj(v) || keysOf(v).length === 0 || child === undefined) return null;
 			for (const [q, body] of Object.entries(v)) {
 				if (q === 'some' || q === 'none' || q === 'every') {
 					const of = fromWhere(cat, child, body);
 					if (of === null) return null;
-					out.push({ t: 'many', rel: key, q, of });
+					out.push({ t: 'many', rel, q, of });
 				} else if (q === 'count' || ['sum', 'min', 'max', 'avg'].includes(q)) {
 					if (!isObj(body)) return null;
 					const { of: field, ...cmp } = body;
 					const [op, n] = Object.entries(cmp)[0] ?? [];
 					if (keysOf(cmp).length !== 1 || !['eq', 'ne', 'lt', 'lte', 'gt', 'gte'].includes(op!) || typeof n !== 'number') return null;
 					if (q === 'count' ? field !== undefined || !Number.isInteger(n) || n < 0 : typeof field !== 'string' || !aggregable(cat, child, q as Quant).includes(field)) return null;
-					out.push({ t: 'many', rel: key, q: q as Quant, of: [], op: op as Cmp, n, ...(q === 'count' ? {} : { field: field as string }) });
+					out.push({ t: 'many', rel, q: q as Quant, of: [], op: op as Cmp, n, ...(q === 'count' ? {} : { field: field as string }) });
 				} else return null;
 			}
 		} else if (x.relations?.[key] !== undefined) {

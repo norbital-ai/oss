@@ -22,11 +22,24 @@ const catalog = {
 		many: ['lines'],
 		masked: ['salary'],
 	},
-	accounts: { label: ['name'], search: ['name'], semantic: true, fields: { name: { kind: 'text' }, spot: { kind: 'point', optional: true } }, relations: { owner: { targets: ['sys_user'] } } },
+	accounts: { label: ['name'], search: ['name'], semantic: true, fields: { name: { kind: 'text' }, spot: { kind: 'point', optional: true } }, relations: { owner: { targets: ['sys_user'] } }, many: ['invoices'] },
+	invoices: { label: [], fields: { status: { kind: 'enum', values: ['paid', 'unpaid'] } }, relations: { account: { targets: ['accounts'], inverse: 'invoices' } } },
 	sys_user: { label: ['name'], fields: { name: { kind: 'text' } } },
 	job_lines: { label: [], fields: { qty: { kind: 'int' }, amount: { kind: 'money' } }, relations: { job: { targets: ['jobs'], inverse: 'lines' } } },
 };
 const cond = (path, op, arg = null) => ({ t: 'cond', path, op, arg });
+
+test('a related record\'s own related records are a row: "jobs whose account has an unpaid invoice", and its count', () => {
+	const some = { account: { is: { invoices: { some: { status: { eq: 'unpaid' } } } } } };
+	const rows = fromWhere(catalog, 'jobs', some);
+	assert.deepEqual(rows, [{ t: 'many', rel: 'account.invoices', q: 'some', of: [cond('status', 'eq', { lit: 'unpaid' })] }]);
+	assert.deepEqual(toWhere(catalog, 'jobs', rows[0]), some);
+	const count = { account: { is: { invoices: { count: { gte: 1 } } } } };
+	const n = fromWhere(catalog, 'jobs', count);
+	assert.deepEqual(toWhere(catalog, 'jobs', n[0]), count);
+	assert.match(nodeText(catalog, 'jobs', rows[0], (x) => x), /^account › invoices/i);
+	assert.equal(fromWhere(catalog, 'jobs', { account: { is: { owner: { is: { name: { eq: 'x' } } } } } })?.length, 1, 'two one-relation hops still read');
+});
 
 test('the search index and meaning are rows: through a relation, back to the same Where, refused where undeclared', () => {
 	for (const w of [{ account: { is: { $search: 'pine grove' } } }, { account: { is: { $similar: 'water leak' } } }]) {

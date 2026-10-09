@@ -1,24 +1,23 @@
-// AI filtering (rule 16a, P33, P34): the view popover's "Describe what to show…" text becomes a typed `Where` and at most
-// one `OrderBy` key through System 1 alone (P37 shapes). System 1 only chooses among criteria, so the engine builds ONE
-// catalogue of condition options per request from the collection's exposure narrowed to what the caller reads unmasked:
-// fields of every filterable kind (many-valued fields included: has, has any, has all, is empty), operators per kind in
-// the machine vocabulary the UI builder authors, values (enum and state names, the final-state set, relative date spans,
-// me / my team / my party, relation candidates from a label search ≤ 5 per word), one and two relation hops, many-relation
-// quantifiers with count and numeric child aggregates, and null tests where the field is optional. The catalogue is plain
-// data (`FilterStep` paths + machine ops), shared with the browser: `filter.options` returns it so the builder renders the
-// same list, and `instantiate` folds a path with the chosen operator the one way. A description asks a question per
-// offered field — does it restrict by this field, with which of ITS operators and which of ITS values — plus one
-// composition question (all / any / not all / none of the stated conditions) and the sort questions, so every answer is
-// independent and ONE `sys_1` call suffices. (Asking per condition slot instead needs a second call: the operator and
-// value questions must offer every field's options, so an answer can name one field's operator and another's value, which
-// then has to be re-asked.) A collection wider than `FILTER_MAX_FIELDS` is asked about for the fields the description most
-// plausibly names. Bounded: at most `FILTER_MAX_CONDITIONS` conditions, `FILTER_MAX_HOPS` relation hops, one top-level
-// group. Bolt caps no option set: a request too large is the provider's refusal (`tooLarge`). The chosen options map 1:1
-// onto the result, which is decoded like any read literal and AND-composed under the author's `where` and the caller's
-// grants by the reader (so it only narrows). A System 1 failure or an answer that maps to no condition is a typed failure:
-// nothing applies. No fallback (owner). Sorting is by an own sortable field or, one hop through an exposed one-relation, a
-// target field the caller reads unmasked (`{ assignee: { name: 'asc' } }`, offered as "Assignee › Name");
-// `decodeDescribed` holds a related key and every condition to the same exposure.
+// AI filtering (rule 16a, P33, P34, P37): the view popover's "Describe what to show…" becomes a typed `Where` and an
+// `OrderBy` key through ONE `sys_1` call. System 1 never writes a filter: it chooses among conditions the engine built.
+//
+//   1. Fields: the collection's exposure narrowed to what the caller reads unmasked — own fields, one-relations and
+//      many-relations (any / all / none, count, child totals) up to `FILTER_MAX_HOPS`, the search index (`$search`) and
+//      the embedding (`$similar`). Plain data (`FilterStep` paths): `filter.options` hands the same catalogue to the builder.
+//   2. Values: the description's own literals (dates, numbers, quoted strings, words, topic phrases), relative spans,
+//      enum and state names, me / my team / my party, and ONE batched read as the caller: the records a relation's words
+//      name (through the search index where declared), the phrases the collection's own records hold, and named days —
+//      a record the caller reads whose name the description holds and which has a date ("after National Day").
+//   3. Conditions: per field, every (operator, value) its kind admits, each built and decoded as any read literal is
+//      (`ir.where`). A condition that does not decode — a text operator on a number, a number against text, one day for
+//      "is within" — is never offered, so it can never be chosen.
+//   4. One call: per field one choice, "no condition" or one of its conditions (a list operator's values are a yes / no
+//      each, as several can hold); one sort choice of (key, direction) or none; how the conditions combine; and whether
+//      the ask needs a selection the grammar cannot express.
+//   5. The chosen conditions compose under one top-level group and decode once more, held to the caller's exposure.
+//
+// No fallback (owner): a System 1 failure, or nothing chosen, applies nothing. The whole answers within
+// `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
 import { BoltError, type AiPort, type Authority, type Bindings, type EngineManifest, type MeteringPort, type Pred, type ReadEngine, type TenantDb } from '../contracts.ts';
@@ -30,30 +29,30 @@ import * as ir from '../../protocol/ir.ts';
 
 /** The stated conditions a description may produce. */
 export const FILTER_MAX_CONDITIONS = 4;
-/** Fields asked about in the one request; past this the most plausible are asked and the rest are not offered at all. */
+/** Fields asked about in the one request: the ones the description most plausibly names. */
 export const FILTER_MAX_FIELDS = 16;
 export const FILTER_MAX_TEXT = 500;
-/** A description answers within this: its candidate reads and its one `sys_1` call together. */
+/** A description answers within this: its one read and its one `sys_1` call together. */
 export const FILTER_DEADLINE_MS = 1_000;
-/** Relation hops a condition path may take: the builder's own two-hop limit. */
+/** Relation hops a condition path may take (a many-relation's quantifier is a hop). */
 export const FILTER_MAX_HOPS = 2;
-/** A named child relation's options asked about before every other candidate has had a place. */
-const PER_RELATION = 4;
 
-const CANDIDATES = 5, WORDS = 8, NONE = '(no value)';
-/** The collection's own search index as a condition path. */
-const SEARCH: readonly FilterStep[] = [{ k: 'field', name: '$search' }];
+const CANDIDATES = 5, WORDS = 8, MAX_TOPICS = 4;
+/** Collections searched for a named day, at most. ponytail: the first that hold a date; rank them if a workspace has more. */
+const MAX_DATED = 8;
+const NO = 'no condition', NO_ORDER = 'no particular order';
 /** The likeness at which a typed token matches a label's token. */
 const MATCH = 0.5;
-/** Phrases asked about, and the answer that reads a phrase as no condition. */
-const MAX_SPANS = 4, NOTHING = 'nothing: it is not a condition';
-/** How likely an offered value must be to stand in for "(no value)" on a field the description restricts. */
-const CLOSE = 0.2;
-/** The hedged yes at which a field whose likeliest value is evidence counts as restricted. */
-const HEDGED = 0.3;
-/** Words that negate a composition; without one, "none of them" / "not all of them" is System 1 misreading the text. */
+/** A hedged answer (no condition under 0.7) still counts when its likeliest condition is evidence at this or more. */
+const CLOSE = 0.2, HEDGED = 0.3;
+/** A disjunction or a negation the text never states is System 1 misreading the composition. */
 const DISJUNCTION = /\b(or|nor|either|neither|any of|whichever)\b/i;
 const NEGATION = /\b(not|no|without|except|excluding|neither|nor|none|never|isn['’]?t|aren['’]?t|other than|outside)\b/i;
+/** Words that put a day on a condition: only then are named days looked for. */
+const DAY_WORDS = /\b(after|before|since|until|till|from|on|by|between|during|around|following|prior)\b/i;
+const LIST_OPS = new Set(['in', 'nin', 'hasAny', 'hasAll']);
+const NO_VALUE = new Set(['isNull', 'notNull', 'isEmpty', 'notEmpty']);
+const DAY_KINDS = new Set(['date', 'instant']);
 
 /** The child aggregates a many-relation offers. */
 export type FilterAgg = 'sum' | 'avg' | 'min' | 'max';
@@ -69,43 +68,42 @@ export type FilterStep =
 	| { k: 'some' | 'every' | 'none'; rel: string }
 	| { k: 'count'; rel: string }
 	| { k: 'agg'; rel: string; fn: FilterAgg; of: string };
-/** A value offered for an operator: a literal, a list, a relative span (`during` → gte/lt) or an actor reference. */
+/** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or an actor reference. */
 export type FilterArg = { lit: Json } | { list: readonly Json[] } | { range: readonly [Json, Json] } | { actor: 'id' | 'party' | 'teams' }
 	/** A one-relation's records whose text field holds a phrase (the description's words a found record holds). */
 	| { match: { field: string; phrase: string } }
 	/** Within `metres` of a point (a found record's own location). */
 	| { near: readonly [{ lat: number; lng: number }, number] };
 export type FilterValue = { label: string; arg: FilterArg };
-/** One offered (field, operator) pair: a row the builder renders and an option System 1 may choose. Plain data. */
+/** One offered (field, operator) pair: a row the builder renders. Plain data. */
 export type FilterOffer = {
-	/** The question's own name for the field ("Assignee › Name", "Lines (any) › Qty", "Lines › count"). */
+	/** The field's name ("Assignee › Name", "Lines (any) › Qty", "Lines › count"). */
 	label: string;
 	/** How the condition nests from the root. */
 	path: readonly FilterStep[];
 	/** The machine operator. */
 	op: string;
-	/** The operator's words for this field ("is", "is within", "before", "has any of"). */
+	/** The operator's words ("is", "is within", "before", "has any of"). */
 	opLabel: string;
-	/** The literal's kind for the editor (`state` as `enum`, a list's element kind). */
+	/** The literal's kind for the editor. */
 	kind: string;
 	values?: readonly FilterValue[];
 	/** The field's `OrderBy` key where it may order the records. */
 	sort?: string;
 };
 export type FilterCatalogue = readonly FilterOffer[];
-/** A phrase of the description that data holds, and the conditions it can be read as: one choice question each. */
-type Span = { phrase: string; options: { label: string; path: readonly FilterStep[]; cond: Json; from?: readonly FilterStep[]; near?: true }[] };
-/** A nearest-first order from where a found record is: offered as a sort. */
-type Near = { label: string; sort: string; near: { lat: number; lng: number } };
 export type Described = { ok: true; where?: Json; orderBy?: Json } | { ok: false; code: string; message: string };
 export type LocalFilterField = { name: string; label: string; kind: 'text' | 'number' | 'bool'; optional?: boolean };
 
 type Op = { op: string; label: string };
-/** One offered field: its operators and values. `path` is the serialisable replacement for the old `put` closure. */
-type Field = { label: string; path: readonly FilterStep[]; kind: string; ops: readonly Op[]; values: FilterValue[]; sort?: string; hit?: boolean;
-	/** The records a search on the description's words found, as evidence the description names this relation. */ found?: string[];
-	/** Where the description's own words appear in those records ("“sunset vale” is in its Name"): the strongest evidence. */ holds?: string[];
-	/** How strongly the description names the field: its words in the label, a row a search found, one of its own values. */ named?: number };
+/** One field: its operators and values. */
+type Field = { label: string; path: readonly FilterStep[]; kind: string; ops: readonly Op[]; values: FilterValue[]; sort?: string;
+	/** The records the description's words found, named in its question. */ found?: string[];
+	/** How strongly the description names the field: label words, a found record, one of its declared values. */ named?: number };
+/** One whole condition System 1 may choose. `list`: a list operator's candidate values, each its own yes / no. */
+type Cond = { label: string; op: string; arg?: FilterArg; list?: readonly FilterValue[]; value?: string; evidence: boolean; where: Json };
+/** A sort System 1 may choose: a key and its direction, or nearest first from a found record. */
+type Order = { label: string; key: string; dir: 'asc' | 'desc' | { near: { lat: number; lng: number } } };
 
 const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum', 'duration']);
 /** Kinds `OrderBy` refuses: no sort key is offered on them (the builder's own `UNSORTABLE`). */
@@ -165,20 +163,6 @@ function metresOf(text: string): number {
 	const n = Number(x[1]);
 	return Math.round(/^k/i.test(x[2]!) ? n * 1000 : n);
 }
-/** Whether a proximity word stands within three words before the phrase ("near", "close to", "around", "within 2 km of"). */
-const proximate = (text: string, phrase: string) => {
-	const t = tokens(text), first = phrase.split(' ')[0]!;
-	const at = t.findIndex((x) => alike(x, first) >= MATCH);
-	return at > 0 && t.slice(Math.max(0, at - 5), at).some((x) => /^(near|nearby|close|around|within|vicinity|beside|next|km|m)$/.test(x));
-};
-/** Words that ask for an order by distance rather than a radius. */
-const SORTING = /\b(nearest|closest|furthest|farthest|by distance|distance from|sort|sorted|order|ordered)\b/i;
-/** Whether a negating word stands within three words before the phrase's first word. */
-const negated = (text: string, phrase: string) => {
-	const t = tokens(text), first = phrase.split(' ')[0]!;
-	const at = t.findIndex((x) => alike(x, first) >= MATCH);
-	return at > 0 && t.slice(Math.max(0, at - 3), at).some((x) => NEGATION.test(x));
-};
 /** Search terms: letters or digits, three or more ("595001", "grove"), no stop words. */
 const terms = (text: string) => [...new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((w) => !STOP.has(w)))].slice(0, WORDS);
 const tokens = (s: string): string[] => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -189,12 +173,6 @@ const alike = (a: string, b: string) => {
 	if (a.length < 3 || b.length < 3) return 0;
 	const x = new Set(grams(a)), y = grams(b);
 	return y.filter((g) => x.has(g)).length / (x.size + y.length - y.filter((g) => x.has(g)).length);
-};
-/** How closely a label holds the terms: the summed likeness of each term a token of it matches (other terms name other
- * fields, so they neither add nor dilute). */
-const closeness = (ts: readonly string[], label: string) => {
-	const ls = tokens(label);
-	return ts.reduce((sum, t) => { const best = Math.max(0, ...ls.map((l) => alike(t, l))); return best >= MATCH ? sum + best : sum; }, 0);
 };
 /** The longest run of the text's tokens a label holds in order, spelled as the label spells it ("" when under two tokens). */
 function held(text: string, label: string, least = 2): string {
@@ -223,7 +201,7 @@ function topics(text: string, names: readonly string[]): string[] {
 		if (/^[\p{L}]{2,}$/u.test(t) && !FRAME.has(t) && !named.has(t)) run.push(t); else end();
 	}
 	end();
-	return [...new Set([...literals(text, 'en').strings, ...runs])].slice(0, MAX_SPANS);
+	return [...new Set([...literals(text, 'en').strings, ...runs])].slice(0, MAX_TOPICS);
 }
 const words = (text: string) => [...new Set((text.toLowerCase().replace(/'s\b/g, '').match(/\p{L}{3,}/gu) ?? []).filter((w) => !STOP.has(w)))].slice(0, WORDS);
 const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -290,7 +268,7 @@ function options(f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>, s: Spec | und
 		ops = [];
 	} else return undefined;
 	if (s?.optional === true) ops.push(op('isNull', 'is empty'), op('notNull', 'is not empty'));
-	return ops.length === 0 ? undefined : { ops, values };
+	return ops.length === 0 && k !== 'point' ? undefined : { ops, values }; // a point is kept: a found record's location offers "within … of it"
 }
 
 /** The operator object an op and its argument make; `undefined` when the pair means nothing. */
@@ -312,6 +290,7 @@ function operator(op: string, arg: FilterArg | undefined): Json | undefined {
 	if ('range' in arg) {
 		const [lo, hi] = arg.range;
 		if (op === 'during' || op === 'eq') return { gte: lo, lt: hi };
+		if (op === 'between') return { gte: lo, lte: hi };
 		if (op === 'overlaps' || op === 'within') return { [op]: { from: lo, to: hi } };
 		// a span is [lo, hi): before it is under lo, after it is from hi ("after last week" is from this Monday)
 		if (op === 'lt') return { lt: lo };
@@ -348,6 +327,8 @@ export function instantiate(path: readonly FilterStep[], ops: Json): Json {
 }
 /** One condition from a field path, a machine operator and an operand; `undefined` when the pair means nothing. */
 function condition(path: readonly FilterStep[], op: string, arg: FilterArg | undefined): Json | undefined {
+	// "does not contain": the negated `like`
+	if (op === 'unlike') { const like = operator('like', arg); return like === undefined ? undefined : { not: instantiate(path, like) }; }
 	// a relation's records NOT holding a phrase: the negated match ("jobs not at pine grove")
 	if (arg !== undefined && 'match' in arg && op === 'ne') return { not: instantiate(path, operator('eq', arg)!) };
 	const ops = operator(op, arg);
@@ -356,39 +337,41 @@ function condition(path: readonly FilterStep[], op: string, arg: FilterArg | und
 
 export type FilterDescribeConfig = { manifest: EngineManifest; db: TenantDb; read: ReadEngine['run']; clock: () => string; ai?: AiPort; metering?: MeteringPort };
 
+type Row = { readonly [k: string]: Json };
+/** A wire date (`{ $d }`) or plain. */
+const day = (v: Json | undefined) => String(typeof v === 'object' && v !== null && !Array.isArray(v) && '$d' in v ? v['$d'] : v);
+const nextDay = (d: string) => new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+const AGGS = [['total', 'sum'], ['average', 'avg'], ['lowest', 'min'], ['highest', 'max']] as const;
+const SUMMABLE = ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration'];
+/** Kinds whose value is words: shown quoted in a condition ("Title contains “pump”"). */
+const QUOTED = new Set(['text', 'search', 'semantic']);
+const same = (a: readonly FilterStep[], b: readonly FilterStep[]) => JSON.stringify(a) === JSON.stringify(b);
+
 export function filterDescribe(cfg: FilterDescribeConfig) {
 	const m = cfg.manifest, cat = catalogOf(m);
 	/** Whether the caller reads collection `c` and its field `f` unmasked (rule 14): the narrowing of every option. */
 	const reads = (a: Authority, c: string) => a.admin || (a.collections[c]?.read.length ?? 0) > 0;
 	const unmasked = (a: Authority, c: string, f: string) => a.admin || a.collections[c]?.masks[f] === undefined;
-
-	/** A collection's point fields the caller reads unmasked, with their labels. */
-	const points = (a: Authority, c: string) => {
-		const x = cat.collections.get(c);
-		if (x === undefined || !reads(a, c)) return [];
-		return [...x.model.fields.values()].filter((f) => f.kind === 'point' && !f.many && exposedField(x, f.name) && unmasked(a, c, f.name)
-			&& (m.models[c]?.fields[f.name] as Spec | undefined)?.hidden !== true)
-			.map((f) => ({ name: f.name, label: (m.models[c]?.fields[f.name] as Spec | undefined)?.label ?? human(f.name) }));
-	};
+	const spec = (c: string, f: string) => m.models[c]?.fields[f] as Spec | undefined;
+	const nameOf = (c: string, f: string) => spec(c, f)?.label ?? human(f);
 	/** A collection's searched text fields: where a phrase the person typed can be found. */
 	const texts = (c: string) => (cat.collections.get(c)?.model.search ?? []).filter((f) => cat.collections.get(c)?.model.fields.get(f)?.kind === 'text');
-	/** The catalogue: the caller's exposed, readable, unmasked fields of a filterable kind as (field, operator) offers. */
-	async function offer(collection: string, text: string, a: Authority, b: Bindings): Promise<{ fields: Field[]; spans: Span[]; nears: Near[] }> {
-		const c = cat.collections.get(collection)!;
-		const lit = literals(text, m.workspace.locale, b.today);
-		const ws = words(text);
-		const out: Field[] = [];
-		const searches: { field: Field; target: string; label: string }[] = [];
-		/** One model's own fields nested under `steps`. `prefix` labels them; `sortFrom` is the dot path they sort by
-		 * (`undefined` past the builder's one relation hop); `hops` counts relation steps still offered. */
-		const leaves = (target: string, steps: readonly FilterStep[], prefix: string, sortFrom: string | undefined, hops: number) => {
-			const tc = cat.collections.get(target), tspec = m.models[target]?.fields ?? {};
-			if (tc === undefined) return;
+
+	/** 1. Every field the caller may describe on `collection`, with the description's literal values. Reads nothing. */
+	function fieldsOf(collection: string, text: string, a: Authority, b: Bindings): Field[] {
+		const lit = literals(text, m.workspace.locale, b.today), ws = words(text), out: Field[] = [];
+		const cmp: Op[] = [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'gt', label: 'more than' }, { op: 'gte', label: 'at least' },
+			{ op: 'lt', label: 'less than' }, { op: 'lte', label: 'at most' }];
+		const numbers = () => lit.numbers.map((x) => ({ label: String(x), arg: echoed(x) }));
+		/** `target`'s fields under `steps`; `sortFrom` is the dot path they sort by (none past one hop); `hops` remain.
+		 * `back` is the relation walked in by, never walked out again ("Assignee › Assigned jobs" is the jobs themselves). */
+		const walk = (target: string, steps: readonly FilterStep[], prefix: string, sortFrom: string | undefined, hops: number, back?: string) => {
+			const tc = cat.collections.get(target);
+			if (tc === undefined || !reads(a, target)) return;
 			for (const f of tc.model.fields.values()) {
-				const s = tspec[f.name] as Spec | undefined;
-				const system = target === collection && (f.name === 'created_at' || f.name === 'updated_at');
-				if (f.name.includes('.') || (!system && s === undefined && !tc.model.one.has(f.name)) || s?.hidden || !exposedField(tc, f.name)) continue;
-				if (!unmasked(a, target, f.name)) continue;
+				const s = spec(target, f.name);
+				const system = steps.length === 0 && (f.name === 'created_at' || f.name === 'updated_at');
+				if (f.name.includes('.') || (!system && s === undefined && !tc.model.one.has(f.name)) || s?.hidden || !exposedField(tc, f.name) || !unmasked(a, target, f.name)) continue;
 				const rel = tc.model.one.get(f.name);
 				// a relation is named for its record ("Site"), never its key column ("Site id": System 1 read it as a code)
 				const label = prefix + (system ? (f.name === 'created_at' ? 'Created' : 'Updated') : s?.label ?? human(rel === undefined ? f.name : f.name.replace(/_id$/, '')));
@@ -399,200 +382,249 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 					out.push({ label, path: [...steps, { k: 'field', name: f.name }], kind: f.kind, ...o, ...(sort === undefined ? {} : { sort }) });
 					continue;
 				}
-				// a relation is offered as a record condition only while a hop remains: past `FILTER_MAX_HOPS` it is not reached
-				if (hops === 0 || !exposedRelation(tc, f.name)) continue;
-				// the relation's record as a condition by its key, and (one arm per target of an exclusive arc)
+				if (hops === 0 || !exposedRelation(tc, f.name) || back === `${target}.${f.name}`) continue;
+				// the record itself by its key, then its fields one hop on (one arm per target of an exclusive arc)
 				for (const arm of rel.targets.length > 1 ? rel.targets : [undefined]) {
 					const at = arm ?? rel.targets[0]!;
 					const optional = (m.relationships[`${target}.${f.name}`] as { optional?: true } | undefined)?.optional === true;
 					const field: Field = { label: arm === undefined ? label : `${label} (${human(arm)})`, kind: 'record',
-						path: [...steps, arm === undefined ? { k: 'field', name: f.name } : { k: 'arm', rel: f.name, arm }], ops: [], values: [] };
-					const nul: Op[] = optional ? [{ op: 'isNull', label: 'is empty' }, { op: 'notNull', label: 'is not empty' }] : [];
-					field.ops = [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'in', label: 'is any of' }, { op: 'nin', label: 'is none of' }, ...nul];
-					if (at === 'sys_user') field.values.push({ label: 'me', arg: { actor: 'id' } });
-					if (at === 'sys_team') field.values.push({ label: 'my team', arg: { actor: 'teams' } });
-					if (a.actor.kind === 'member' && a.actor.party?.collection === at) field.values.push({ label: 'my party', arg: { actor: 'party' } });
-					const tl = [m.models[at]?.label ?? 'name'].flat()[0]!;
-					if (arm === undefined && steps.length === 0 && cat.collections.get(at)?.model.fields.get(tl)?.kind === 'text' && reads(a, at) && unmasked(a, at, tl))
-						searches.push({ field, target: at, label: tl });
+						path: [...steps, arm === undefined ? { k: 'field', name: f.name } : { k: 'arm', rel: f.name, arm }],
+						ops: [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'in', label: 'is any of' }, { op: 'nin', label: 'is none of' },
+							...(optional ? [{ op: 'isNull', label: 'is empty' }, { op: 'notNull', label: 'is not empty' }] : [])],
+						values: [...(at === 'sys_user' ? [{ label: 'me', arg: { actor: 'id' } }] : []), ...(at === 'sys_team' ? [{ label: 'my team', arg: { actor: 'teams' } }] : []),
+							...(a.actor.kind === 'member' && a.actor.party?.collection === at ? [{ label: 'my party', arg: { actor: 'party' } }] : [])] as FilterValue[] };
 					out.push(field);
-					if (reads(a, at)) leaves(at, [...steps, arm === undefined ? { k: 'is', rel: f.name } : { k: 'arm', rel: f.name, arm }],
-						`${field.label} › `, arm === undefined && steps.length === 0 ? f.name : undefined, hops - 1);
+					walk(at, [...steps, arm === undefined ? { k: 'is', rel: f.name } : { k: 'arm', rel: f.name, arm }], `${field.label} › `,
+						arm === undefined && steps.length === 0 ? f.name : undefined, hops - 1, `${target}.${f.name}`);
 				}
 			}
-			// the target's search index and embedding: every word of a phrase (`$search`), or the nearest in meaning
-			// (`$similar`), offered only to a caller who reads every field they cover unmasked (rule 14)
+			// many-relations, at the root and one relation hop on ("Customer › Invoices (any) › Status"): has any / none (and, at
+			// the root, all) of the related records, how many, and child totals. A related record's own relations are not walked:
+			// the catalogue the builder receives grows with every hop (hr-payroll: 0.4 MB → 3 MB a collection at full depth).
+			if (hops > 0 && steps.every((x) => x.k === 'is')) for (const [r, rel] of tc.model.many) {
+				const child = cat.collections.get(rel.child);
+				if (child === undefined || !exposedRelation(tc, r) || !reads(a, rel.child) || rel.column.includes('__') || back === `${rel.child}.${rel.column}`) continue;
+				const rl = prefix + human(r);
+				for (const [q, word] of steps.length === 0 ? [['some', 'any'], ['every', 'all'], ['none', 'none']] as const : [['some', 'any'], ['none', 'none']] as const)
+					walk(rel.child, [...steps, { k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
+				// how many: 0 and 1 always ("with no invoices", "with an unpaid one"), then the text's own numbers
+				out.push({ label: `${prefix}Number of ${human(r).toLowerCase()}`, path: [...steps, { k: 'count', rel: r }], kind: 'count', ops: cmp,
+					values: [{ label: '0', arg: { lit: 0 } }, { label: '1', arg: { lit: 1 } }, ...numbers().filter((v) => v.label !== '0' && v.label !== '1')] });
+				for (const f of child.model.fields.values()) {
+					const s = spec(rel.child, f.name);
+					if (s === undefined || s.hidden || f.many || !exposedField(child, f.name) || !unmasked(a, rel.child, f.name)) continue;
+					for (const [word, fn] of AGGS) if (SUMMABLE.includes(f.kind) || ((fn === 'min' || fn === 'max') && (f.kind === 'date' || f.kind === 'instant')))
+						out.push({ label: `${rl} › ${word} ${(s.label ?? human(f.name)).toLowerCase()}`, path: [...steps, { k: 'agg', rel: r, fn, of: f.name }], kind: f.kind, ops: cmp, values: numbers() });
+				}
+			}
+			// the search index and the embedding, to a caller who reads every field they cover unmasked (rule 14)
 			const whole = (fs: readonly string[]) => fs.every((x) => exposedField(tc, x) && unmasked(a, target, x));
-			const about = (label: string) => topics(text, [target, human(target), ...[...tc.model.fields.keys()].map(human), label]).map((x) => ({ label: x, arg: echoed(x) }));
+			const about = () => topics(text, [target, human(target), ...[...tc.model.fields.keys()].map(human), prefix]).map((x) => ({ label: x, arg: echoed(x) }));
 			if (tc.model.search.length > 0 && whole(tc.model.search))
-				out.push({ label: `${prefix}Search`, path: [...steps, { k: 'field', name: '$search' }], kind: 'search', ops: [{ op: 'search', label: 'has all the words' }], values: about(prefix) });
+				out.push({ label: `${prefix}Search`, path: [...steps, { k: 'field', name: '$search' }], kind: 'search', ops: [{ op: 'search', label: 'has all the words' }], values: about() });
 			if (tc.model.semantic !== undefined && whole(tc.model.semantic.fields))
-				out.push({ label: `${prefix}Topic`, path: [...steps, { k: 'field', name: '$similar' }], kind: 'semantic', ops: [{ op: 'similar', label: 'is about' }], values: about(prefix) });
+				out.push({ label: `${prefix}Topic`, path: [...steps, { k: 'field', name: '$similar' }], kind: 'semantic', ops: [{ op: 'similar', label: 'is about' }], values: about() });
 		};
-		leaves(collection, [], '', '', FILTER_MAX_HOPS);
-		for (const [r, rel] of c.model.many) {
-			if (!exposedRelation(c, r) || !reads(a, rel.child) || rel.column.includes('__')) continue;
-			const tc = cat.collections.get(rel.child), rl = human(r);
-			if (tc === undefined) continue;
-			for (const [q, word] of [['some', 'any'], ['every', 'all'], ['none', 'none']] as const)
-				leaves(rel.child, [{ k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
-			// its count, and numeric child aggregates: compared with the numbers in the text
-			const values: FilterValue[] = lit.numbers.map((x) => ({ label: String(x), arg: echoed(x) }));
-			const cmp: Op[] = [{ op: 'eq', label: 'is' }, { op: 'ne', label: 'is not' }, { op: 'gt', label: 'more than' }, { op: 'gte', label: 'at least' },
-				{ op: 'lt', label: 'less than' }, { op: 'lte', label: 'at most' }];
-			out.push({ label: `${rl} › count`, path: [{ k: 'count', rel: r }], kind: 'count', ops: cmp, values: [...values] });
-			for (const f of tc.model.fields.values()) {
-				const s = m.models[rel.child]?.fields[f.name] as Spec | undefined;
-				if (s === undefined || s.hidden || f.many || !exposedField(tc, f.name) || !unmasked(a, rel.child, f.name)) continue;
-				const words4 = [['total', 'sum'], ['average', 'avg'], ['lowest', 'min'], ['highest', 'max']] as const;
-				for (const [word, fn] of words4) {
-					const ok = fn === 'min' || fn === 'max'
-						? ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration', 'date', 'instant'].includes(f.kind)
-						: ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration'].includes(f.kind);
-					if (!ok) continue;
-					out.push({ label: `${rl} › ${word} ${(s.label ?? human(f.name)).toLowerCase()}`, path: [{ k: 'agg', rel: r, fn, of: f.name }], kind: f.kind,
-						ops: [...cmp], values: [...values] });
-				}
-			}
-		}
-		// relation candidates, fuzzily: one pipelined batch of searches as the caller. A target that declares `search.text`
-		// is read through its indexed search document (prefixes, romanised forms, consonant skeletons: typos and partial words
-		// match, ranked); any other is searched by its label, term by term. The best ≤ 5 per relation are offered.
-		const ts = terms(text);
-		const lookups = searches.flatMap((s) => (cat.collections.get(s.target)?.model.search.length ?? 0) > 0
-			? [{ s, q: ir.read(cat, s.target, { search: text, select: Object.fromEntries([s.label, ...texts(s.target), ...points(a, s.target).map((p) => p.name)].map((f) => [f, true])), limit: CANDIDATES }) }]
-			: ts.map((w) => ({ s, q: ir.read(cat, s.target, { where: { [s.label]: { like: `%${esc(w)}%` } }, select: { [s.label]: true }, limit: CANDIDATES }) })));
-		const searched = new Set<Field>();
-		// the collection's own text fields, when it declares a search: which of them hold the description's words
-		const own = out.filter((f) => f.path.length === 1 && f.kind === 'text');
-		const self = text !== '' && c.model.search.length > 0 && own.length > 0
-			? ir.read(cat, collection, { search: text, select: Object.fromEntries(own.map((f) => [(f.path[0] as { name: string }).name, true])), limit: CANDIDATES }) : undefined;
-		const found: { phrase: string; option: Span['options'][number] }[] = [];
-		const offered = (path: readonly FilterStep[]) => out.some((f) => JSON.stringify(f.path) === JSON.stringify(path));
-		const nears: Near[] = [];
-		// where a found record is, to read "near <it>": the collection's own points and, one hop, the relation's points
-		const radius = metresOf(text);
-		const within = radius >= 1000 ? `${radius / 1000} km` : `${radius} m`;
-		const ownPoints = points(a, collection).map((p) => ({ label: p.label, path: [{ k: 'field', name: p.name }] as FilterStep[], sort: p.name }));
-		if (lookups.length > 0 || self !== undefined) {
-			const all = await cfg.read([...lookups.map((r) => r.q), ...(self === undefined ? [] : [self])], { as: 'caller', authority: a }, b);
-			const answers = all.slice(0, lookups.length);
-			if (self !== undefined) {
-				const runs = topics(text, [collection, human(collection), ...out.map((f) => f.label)]);
-				const rows = (all.at(-1) as { rows: readonly { readonly [k: string]: Json }[] }).rows;
-				for (const f of own) {
-					const name = (f.path[0] as { name: string }).name;
-					const phrase = rows.map((r) => held(text, String(r[name] ?? ''), 1)).sort((l, r) => r.length - l.length)[0];
-					if (phrase) found.push({ phrase, option: { label: `${f.label} contains “${phrase}”`, path: f.path, cond: condition(f.path, 'like', { lit: phrase })! } });
-					// the same phrase over every searched field, typos and partial words included: the whole typed run around it
-					// ("pmup room" around "room", which the index meets and a `contains` would not)
-					if (phrase && offered(SEARCH) && c.model.search.includes(name)) {
-						const run = runs.find((x) => phrase.split(' ').every((w) => x.split(' ').includes(w))) ?? phrase;
-						found.push({ phrase: run, option: { label: `Search has all the words “${run}”`, path: SEARCH, cond: condition(SEARCH, 'search', { lit: run })! } });
-					}
-				}
-			}
-			const rows = new Map<(typeof searches)[number], Map<string, { readonly [k: string]: Json }>>();
-			lookups.forEach(({ s }, i) => {
-				const got = rows.get(s) ?? new Map<string, { readonly [k: string]: Json }>();
-				for (const row of (answers[i] as { rows: readonly { readonly [k: string]: Json }[] }).rows) got.set(String(row['id']), row);
-				rows.set(s, got);
-			});
-			for (const [s, got] of rows) {
-				// the search's own rank first; a label search's rows by how closely they hold the terms
-				const ranked = [...got].map(([id, row], i) => ({ id, row, label: String(row[s.label]), score: closeness(ts, String(row[s.label])), i }))
-					.sort((l, r) => (cat.collections.get(s.target)!.model.search.length > 0 ? l.i - r.i : r.score - l.score)).slice(0, CANDIDATES);
-				for (const { id, label } of ranked) {
-					if (!s.field.values.some((v) => 'lit' in v.arg && v.arg.lit === id)) {
-						let l = label, n = 2; while (s.field.values.some((v) => v.label === l)) l = `${label} (${n++})`;
-						s.field.values.push({ label: l, arg: { lit: id } });
-					}
-					// the words that found this row came from the description, so the field is one it plausibly means
-					searched.add(s.field);
-					if (!(s.field.found ??= []).includes(label)) s.field.found.push(label);
-				}
-				// the words the person typed that a found record holds ("1f pine grove" in "1F Pine Grove #17-30", "bca
-				// accessibility programme" in a client name), in the record's own spelling, as a value of the relation itself:
-				// "Site · whose Name contains “1f pine grove”" reaches every site that matches, not only one record, and the one
-				// question about the site carries all its evidence (asked as three fields, Site, Site › Name and Site › Address
-				// split it and none reached the bar: staging, "installation work at hillview crescent")
-				const rel = (s.field.path[0] as { name: string }).name;
-				const relPoints = points(a, s.target).map((p) => ({ label: `${s.field.label} › ${p.label}`, path: [{ k: 'is', rel }, { k: 'field', name: p.name }] as FilterStep[], sort: `${rel}.${p.name}`, name: p.name }));
-				/** Where a record is: its first point with a value. */
-				const whereIs = (row: { readonly [k: string]: Json }) => relPoints.map((p) => row[p.name]).find((v): v is { lat: number; lng: number } =>
-					typeof v === 'object' && v !== null && typeof (v as { lat?: unknown }).lat === 'number');
-				for (const r of ranked.slice(0, 2)) {
-					const pt = whereIs(r.row);
-					if (pt === undefined) continue;
-					for (const p of [...ownPoints, ...relPoints]) if (!nears.some((x) => x.label === `${p.label}, nearest to ${r.label}`))
-						nears.push({ label: `${p.label}, nearest to ${r.label}`, sort: p.sort, near: pt });
-				}
-				for (const f of texts(s.target)) {
-					// every reading a span can take: a single long word ("springside") too
-					const flabel = (m.models[s.target]?.fields[f] as Spec | undefined)?.label ?? human(f);
-					const spanned = ranked.map((r) => held(text, String(r.row[f] ?? ''), 1)).sort((l, r) => r.length - l.length)[0];
-					if (spanned) {
-						found.push({ phrase: spanned, option: { label: `${s.field.label} · whose ${flabel} contains “${spanned}”`, path: s.field.path, cond: condition(s.field.path, 'eq', { match: { field: f, phrase: spanned } })! } });
-						const indexed: FilterStep[] = [{ k: 'is', rel }, ...SEARCH];
-						if (offered(indexed)) found.push({ phrase: spanned, option: { label: `${s.field.label} · Search has all the words “${spanned}”`, path: indexed,
-							cond: condition(indexed, 'search', { lit: spanned })!, from: s.field.path } });
-						// the records whose own field holds the whole phrase, as themselves
-						for (const r of ranked.filter((r) => held(spanned, String(r.row[f] ?? ''), 1).split(' ').length === spanned.split(' ').length).slice(0, 2)) {
-							found.push({ phrase: spanned, option: { label: `${s.field.label} is ${r.label}`, path: s.field.path, cond: condition(s.field.path, 'eq', { lit: r.id })! } });
-							// "near <it>": within the text's radius (1 km unless it says) of where the record is
-							const pt = whereIs(r.row);
-							if (pt !== undefined) for (const p of [...ownPoints, ...relPoints])
-								found.push({ phrase: spanned, option: { label: `${p.label} within ${within} of ${r.label}`, path: p.path, cond: condition(p.path, 'near', { near: [pt, radius] })!, from: s.field.path, near: true } });
-						}
-					}
-					const phrase = ranked.map((r) => held(text, String(r.row[f] ?? ''))).sort((l, r) => r.length - l.length)[0];
-					if (phrase === undefined || phrase === '') continue;
-					const label = `whose ${(m.models[s.target]?.fields[f] as Spec | undefined)?.label ?? human(f)} contains “${phrase}”`;
-					if (s.field.values.some((v) => v.label === label)) continue;
-					s.field.values.push({ label, arg: { match: { field: f, phrase } } });
-					(s.field.holds ??= []).push(`“${phrase}” is in its ${(m.models[s.target]?.fields[f] as Spec | undefined)?.label ?? human(f)}`);
-				}
-			}
-		}
-		// A field the description names, by its label, by a row a search on its words found, or by one of its OWN values
-		// appearing in the text. A value the words contributed is not evidence — a text field is handed the description's
-		// words as its options, so matching one would call every text field a hit and rank the collection by its schema.
-		// A word names a label token in another inflection too: `log` → `logs`, `suspicion` → `suspicious` (a shared stem of
-		// five letters, or one word the other's prefix). A number in the text is a value of every numeric field, so it marks
-		// them all as candidates but names none of them: `named` counts only the label's words, a search hit and a value
-		// that is not a number, and ranks the fields a wide collection is asked about.
-		const said = text.toLowerCase();
-		const akin = (w: string, x: string) => w.startsWith(x) || x.startsWith(w) || [...w].findIndex((ch, i) => ch !== x[i]) >= 5;
-		for (const f of out) {
-			const tokens = f.label.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2);
-			// a search or a meaning is offered the description's own phrases: holding one names nothing
-			const valued = f.kind === 'search' || f.kind === 'semantic' ? [] : f.values.filter((v) => !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
-			// a value copied from the description is an echo, never evidence; one the engine or the schema declares (a state,
-			// a choice, `this week`) that the text says names the field
-			const declared = f.values.some((v) => !ECHOES.has(v.arg) && new RegExp(`\\b${v.label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(said));
-			f.named = ws.filter((w) => tokens.some((x) => akin(w, x))).length + (searched.has(f) ? 1 : 0) + (declared ? 1 : 0);
-			f.hit = f.named > 0 || valued.length > 0;
-		}
-		// spans: a phrase and every reading of it; a phrase inside a longer one folds into it ("pine grove" into "1f pine grove")
-		const spans: Span[] = [];
-		for (const { phrase, option } of found.sort((l, r) => r.phrase.split(' ').length - l.phrase.split(' ').length)) {
-			const words = phrase.split(' ');
-			const into = spans.find((x) => words.every((w) => x.phrase.split(' ').includes(w)));
-			const span = into ?? (spans.length < MAX_SPANS ? (spans.push({ phrase, options: [] }), spans.at(-1)!) : undefined);
-			if (span !== undefined && !span.options.some((x) => x.label === option.label) && span.options.length < 12) span.options.push(option);
-		}
-		return { fields: out, spans, nears };
+		walk(collection, [], '', '', FILTER_MAX_HOPS);
+		return out;
 	}
-	/** The catalogue as plain data for the browser, without the description's text-derived values. */
+
+	/** Adds a value a read found; it replaces the description's own word of the same label (found beats echoed). */
+	const found = (f: Field, label: string, arg: FilterArg) => {
+		const at = f.values.findIndex((v) => v.label === label);
+		if (at < 0) f.values.push({ label, arg });
+		else if (ECHOES.has(f.values[at]!.arg)) f.values[at] = { label, arg };
+	};
+
+	/**
+	 * 2. The one read, as the caller: the records a relation's words name, the phrases the collection's own records hold
+	 * and named days. Their values join the fields; a found record with a location offers "nearest to it" orders.
+	 */
+	async function lookup(collection: string, text: string, fields: readonly Field[], a: Authority, b: Bindings): Promise<Order[]> {
+		const c = cat.collections.get(collection)!, ts = terms(text), orders: Order[] = [];
+		const radius = metresOf(text), within = radius >= 1000 ? `${radius / 1000} km` : `${radius} m`;
+		const reads_: { q: ReturnType<typeof ir.read>; then: (rows: readonly Row[]) => void }[] = [];
+		const at = (path: readonly FilterStep[]) => fields.find((f) => same(f.path, path));
+		const points = fields.filter((f) => f.kind === 'point' && (f.path.length === 1 || (f.path.length === 2 && f.path[0]!.k === 'is')));
+		// a) a relation's records the words name: through the search index where declared, else by label, word by word
+		for (const f of fields) {
+			const s = f.path[0];
+			if (f.kind !== 'record' || f.path.length !== 1 || s?.k !== 'field') continue;
+			const target = c.model.one.get(s.name)!.targets[0]!, x = cat.collections.get(target)!;
+			const tl = [m.models[target]?.label ?? 'name'].flat()[0]!;
+			if (x.model.fields.get(tl)?.kind !== 'text' || !reads(a, target) || !unmasked(a, target, tl)) continue;
+			const own = points.filter((p) => p.path.length === 1 || (p.path[0] as { rel: string }).rel === s.name);
+			const select = Object.fromEntries([tl, ...texts(target), ...own.filter((p) => p.path.length === 2).map((p) => (p.path[1] as { name: string }).name)]
+				.filter((n) => unmasked(a, target, n)).map((n) => [n, true]));
+			const then = (rows: readonly Row[]) => {
+				for (const row of rows) {
+					const label = String(row[tl]);
+					found(f, label, { lit: String(row['id']) });
+					if (!(f.found ??= []).includes(label)) f.found.push(label);
+					for (const t of texts(target)) {
+						// the words the person typed that the record holds ("1f pine grove" in "1F Pine Grove #17-30"): every such record
+						const phrase = held(text, String(row[t] ?? ''), 1);
+						if (phrase === '') continue;
+						found(f, `one whose ${nameOf(target, t)} contains “${phrase}”`, { match: { field: t, phrase } });
+						const search = at([{ k: 'is', rel: s.name }, { k: 'field', name: '$search' }]);
+						if (search !== undefined) found(search, phrase, { lit: phrase });
+					}
+					// "near <it>", "nearest to <it>": where the record is
+					const pt = own.filter((p) => p.path.length === 2).map((p) => row[(p.path[1] as { name: string }).name])
+						.find((v): v is { lat: number; lng: number } => typeof v === 'object' && v !== null && typeof (v as { lat?: unknown }).lat === 'number');
+					if (pt !== undefined) for (const p of own) {
+						found(p, `${within} of ${label}`, { near: [pt, radius] });
+						orders.push({ label: `${p.label}, nearest to ${label}`, key: p.path.map((x) => 'name' in x ? x.name : x.rel).join('.'), dir: { near: pt } });
+					}
+				}
+			};
+			// by the description's terms: a one- or two-letter word is a prefix of half the records ("a" found "Acme")
+			if (x.model.search.length > 0 && ts.length > 0) reads_.push({ q: ir.read(cat, target, { search: ts.join(' '), select, limit: CANDIDATES }), then });
+			else for (const w of ts) reads_.push({ q: ir.read(cat, target, { where: { [tl]: { like: `%${esc(w)}%` } }, select, limit: CANDIDATES }), then });
+		}
+		// b) the phrases the collection's own searched text holds, read whole through the index (typos included)
+		const own = fields.filter((f) => f.path.length === 1 && f.kind === 'text' && c.model.search.includes((f.path[0] as { name: string }).name));
+		if (own.length > 0) {
+			const runs = topics(text, [collection, human(collection), ...fields.map((f) => f.label)]), search = at([{ k: 'field', name: '$search' }]);
+			if (ts.length > 0) reads_.push({ q: ir.read(cat, collection, { search: ts.join(' '), select: Object.fromEntries(own.map((f) => [(f.path[0] as { name: string }).name, true])), limit: CANDIDATES }),
+				then: (rows) => {
+					for (const f of own) {
+						const phrase = rows.map((r) => held(text, String(r[(f.path[0] as { name: string }).name] ?? ''), 1)).sort((l, r) => r.length - l.length)[0];
+						if (!phrase) continue;
+						found(f, phrase, { lit: phrase });
+						const holders = rows.map((r) => String(r[(f.path[0] as { name: string }).name] ?? '')).filter((x) => held(text, x, 1) !== '');
+						(f.found ??= []).push(...holders.filter((x) => !f.found!.includes(x)));
+						// over the index, the whole typed run around it ("pmup room" around "room"), which a `contains` would miss
+						const run = runs.find((x) => phrase.split(' ').every((w) => x.split(' ').includes(w))) ?? phrase;
+						if (search !== undefined) { found(search, run, { lit: run }); (search.found ??= []).push(...holders.filter((x) => !search.found!.includes(x))); }
+					}
+				} });
+		}
+		// c) named days: a record the caller reads, with a date, whose name the description holds ("after National Day")
+		const dated = fields.filter((f) => f.kind === 'date' || f.kind === 'instant');
+		const days: { name: string; day: string }[] = [];
+		if (dated.length > 0 && ts.length > 0 && DAY_WORDS.test(text)) {
+			let n = 0;
+			for (const [name, x] of cat.collections) {
+				if (n >= MAX_DATED || name.startsWith('sys_') || !reads(a, name)) continue;
+				const readable = (f: string, kind: string) => x.model.fields.get(f)?.kind === kind && !x.model.fields.get(f)!.many && exposedField(x, f) && unmasked(a, name, f);
+				const label = [m.models[name]?.label ?? 'name'].flat()[0]!;
+				const title = [label, ...x.model.search, 'name', 'title'].find((f) => readable(f, 'text'));
+				const when = [label, ...x.model.fields.keys()].find((f) => readable(f, 'date'));
+				if (title === undefined || when === undefined) continue;
+				n++;
+				reads_.push({ q: ir.read(cat, name, { where: { or: ts.map((w) => ({ [title]: { like: `%${esc(w)}%` } })) }, select: { [title]: true, [when]: true }, limit: 20 }),
+					then: (rows) => { for (const r of rows) if (held(text, String(r[title] ?? '')) !== '') days.push({ name: String(r[title]), day: day(r[when]) }); } });
+			}
+		}
+		if (reads_.length === 0) return orders;
+		const all = await cfg.read(reads_.map((r) => r.q), { as: 'caller', authority: a }, b);
+		reads_.forEach((r, i) => r.then((all[i] as { rows: readonly Row[] }).rows));
+		// one day per name, the occurrence nearest today ("National Day" in October is this August's)
+		// ponytail: nearest occurrence; a "next" / "last" in the text could pick the side
+		const near = new Map<string, { name: string; day: string }>();
+		const gap = (d: string) => Math.abs(Date.parse(d) - Date.parse(b.today));
+		for (const d of days) { const k = d.name.toLowerCase(), was = near.get(k); if (was === undefined || gap(d.day) < gap(was.day)) near.set(k, d); }
+		for (const f of dated) for (const d of near.values())
+			found(f, `${d.name} (${d.day})`, f.kind === 'date' ? { lit: d.day } : { range: [midnight(d.day, b.tz), midnight(nextDay(d.day), b.tz)] });
+		return orders;
+	}
+
+	/**
+	 * 3. A field's whole conditions: every (operator, value) its kind admits, each built and decoded as a read literal
+	 * (`collection`; `$local` has no catalogue, its kinds are its own three). A pair that does not decode is not offered.
+	 */
+	function condsOf(f: Field, collection: string | undefined, text: string): Cond[] {
+		const out: Cond[] = [];
+		const lits = f.values.filter((v) => 'lit' in v.arg);
+		// a list operator's candidates: what the description names (its words, a declared value it says) or a read found
+		const said = text.toLowerCase();
+		const named = lits.filter((v) => ECHOES.has(v.arg) || f.found?.includes(v.label) || said.includes(v.label.toLowerCase()));
+		const listy = f.kind === 'enum' || f.kind === 'state' || f.kind === 'record' || f.ops.some((x) => x.op === 'hasAny');
+		const show = (v: FilterValue) => QUOTED.has(f.kind) && 'lit' in v.arg && typeof v.arg.lit === 'string' ? `“${v.label}”` : v.label;
+		const add = (label: string, op: string, arg: FilterArg | undefined, extra: Partial<Cond> = {}) => {
+			const where = condition(f.path, op, arg);
+			if (where === undefined || out.some((x) => x.label === label)) return;
+			if (collection !== undefined) try { ir.where(cat, collection, where); } catch { return; }
+			out.push({ label, op, ...(arg === undefined ? {} : { arg }), evidence: arg !== undefined && !ECHOES.has(arg), where, ...extra });
+		};
+		for (const x of f.ops) {
+			const head = `${f.label} ${x.label}`;
+			if (NO_VALUE.has(x.op)) { add(head, x.op, undefined); continue; }
+			if (LIST_OPS.has(x.op)) {
+				// a set the schema names ("a final state", "my teams"), or the values the description names, each a yes / no
+				for (const v of f.values) if ('list' in v.arg || 'actor' in v.arg) add(`${head} ${v.label}`, x.op, v.arg, { value: v.label });
+				if (listy && named.length >= 2) add(`${head} the ones named`, x.op, { list: named.map((v) => (v.arg as { lit: Json }).lit) },
+					{ list: named, evidence: named.some((v) => !ECHOES.has(v.arg)) });
+				continue;
+			}
+			for (const v of f.values) {
+				// "is within" takes a span; a span's "is" is "is within"
+				if ((x.op === 'during' && !('range' in v.arg)) || (x.op === 'eq' && 'range' in v.arg && f.ops.some((y) => y.op === 'during'))) continue;
+				add(`${head} ${show(v)}`, x.op, v.arg, { value: v.label });
+				if (x.op === 'like') add(`${f.label} does not contain ${show(v)}`, 'unlike', v.arg, { value: v.label });
+			}
+		}
+		// within a radius of a found record's location (describe only: the builder edits no point)
+		for (const v of f.values) if ('near' in v.arg) add(`${f.label} is within ${v.label}`, 'near', v.arg, { value: v.label });
+		// between two of the description's own numbers or days, both ends included
+		if (f.ops.some((y) => y.op === 'gte')) {
+			const ends = lits.filter((v) => ECHOES.has(v.arg)).map((v) => (v.arg as { lit: Json }).lit as string | number).sort((p, q) => p < q ? -1 : 1);
+			for (const [i, lo] of ends.entries()) for (const hi of ends.slice(i + 1)) if (lo !== hi) add(`${f.label} between ${lo} and ${hi}`, 'between', { range: [lo, hi] }, { value: `${lo} and ${hi}` });
+		}
+		return out;
+	}
+
+	/** A field's sort keys, in its own words. */
+	const orderOf = (f: Field): Order[] => {
+		const [up, down] = f.kind === 'date' || f.kind === 'instant' || f.kind === 'time' ? ['earliest first', 'latest first']
+			: NUMERIC.has(f.kind) ? ['lowest first', 'highest first'] : ['A to Z', 'Z to A'];
+		return [{ label: `${f.label}, ${up}`, key: f.sort!, dir: 'asc' }, { label: `${f.label}, ${down}`, key: f.sort!, dir: 'desc' }];
+	};
+	/**
+	 * How strongly the description names each field: a word of its label (in any inflection: `log` → `logs`), a record a
+	 * read found for it, one of its declared values the text says (a state, a choice, `this week`). A word copied from the
+	 * description is no evidence; a number names no field but makes every numeric one a candidate.
+	 */
+	function rank(fields: readonly Field[], text: string, collection: string): Field[] {
+		// the collection's own name ("jobs") names every field equally, so none
+		const said = text.toLowerCase(), ws = words(text).filter((w) => !tokens(human(collection)).some((x) => w.startsWith(x.replace(/s$/, '')) || x.startsWith(w)));
+		const akin = (w: string, x: string) => w.startsWith(x) || x.startsWith(w) || [...w].findIndex((ch, i) => ch !== x[i]) >= 5;
+		const score = new Map(fields.map((f) => {
+			const label = f.label.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2);
+			const declared = f.values.some((v) => !ECHOES.has(v.arg) && new RegExp(`\\b${v.label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(said));
+			const candidate = f.kind !== 'search' && f.kind !== 'semantic' && f.values.some((v) => ECHOES.has(v.arg) && !ws.includes(v.label) && said.includes(v.label.toLowerCase()));
+			// the collection's own search index and meaning stand just behind any named field: no label names them
+			const index = f.path.length === 1 && (f.kind === 'search' || f.kind === 'semantic') && f.values.length > 0 ? 0.5 : 0;
+			return [f, ws.filter((w) => label.some((x) => akin(w, x))).length + (f.found !== undefined ? 1 : 0) + (declared ? 1 : 0) + (candidate ? 0.25 : 0) + index];
+		}));
+		// one child relation the text names offers its count, totals and every field under any / all / none: past its first
+		// four, the rest wait behind the other candidates, so a second condition ("done", a date) still fits
+		const per = new Map<string, number>();
+		const crowded = (f: Field) => {
+			const s = f.path.find((p) => p.k === 'some' || p.k === 'every' || p.k === 'none' || p.k === 'count' || p.k === 'agg');
+			if (s === undefined || !('rel' in s) || score.get(f)! === 0) return false;
+			per.set(s.rel, (per.get(s.rel) ?? 0) + 1);
+			return per.get(s.rel)! > 4;
+		};
+		// within a related list: its count, then its fields under "any", before totals and "none" / "all"
+		const weight = (f: Field) => f.path.some((p) => p.k === 'agg') ? 2 : f.path.some((p) => p.k === 'none') ? 3 : f.path.some((p) => p.k === 'every') ? 4 : 0;
+		const ranked = fields.map((f, i) => ({ f, i })).sort((l, r) => score.get(r.f)! - score.get(l.f)! || weight(l.f) - weight(r.f) || l.f.path.length - r.f.path.length || l.i - r.i).map((x) => x.f);
+		const late = new Set(ranked.filter(crowded));
+		return [...ranked.filter((f) => score.get(f)! > 0 && !late.has(f)), ...late, ...ranked.filter((f) => score.get(f)! === 0)];
+	}
+
+	/** The catalogue as plain data for the builder. Values ride the one row that reads them, "is within"'s spans: repeated
+	 * on every operator they made a wide collection's catalogue megabytes. */
 	const catalogue = (fields: readonly Field[]): FilterCatalogue => fields.flatMap((f) => f.ops.map((o) => ({ label: f.label, path: f.path, op: o.op, opLabel: o.label, kind: f.kind,
-		...(f.values.length === 0 ? {} : { values: f.values }), ...(f.sort === undefined ? {} : { sort: f.sort }) })));
+		...(o.op === 'during' && f.values.length > 0 ? { values: f.values } : {}), ...(f.sort === undefined ? {} : { sort: f.sort }) })));
 	/** The local view's own fields (`$local`): text, number and bool only, and no relation. */
 	const localFields = (fs: readonly LocalFilterField[], text: string): Field[] => fs.map((f) => ({ label: f.label, path: [{ k: 'field' as const, name: f.name }], kind: f.kind,
 		...options({ kind: f.kind }, f.optional ? { optional: true } : undefined, literals(text, m.workspace.locale), words(text), m.workspace.tz)!, sort: f.name }));
 	/** The collection a caller may describe or see options on; a `$local` view carries its own fields. */
 	const subject = (o: { collection: string; authority: Authority; localFields?: readonly LocalFilterField[] }, text: string): { fields?: Field[]; fail?: { ok: false; code: string; message: string } } => {
 		const local = o.collection === '$local';
-		if (!local && (!cat.collections.has(o.collection) || (!o.authority.admin && (o.authority.collections[o.collection]?.read.length ?? 0) === 0)))
+		if (!local && (!cat.collections.has(o.collection) || !reads(o.authority, o.collection)))
 			return { fail: { ok: false, code: 'notFound', message: 'Not found or no access.' } };
 		if (local && (o.localFields === undefined || o.localFields.length === 0 || o.localFields.length > 50 ||
 			o.localFields.some((f) => !/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(f.name) || f.label.length > 100 || !['text', 'number', 'bool'].includes(f.kind))))
@@ -609,29 +641,15 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 			params: [cfg.clock(), failed(d) ? 'warn' : 'info', id, JSON.stringify(decisionEvent('filter', req, d))] }), meter(cfg.metering, d, id)]);
 		return failed(d) ? { ok: false, code: d.kind, message: 'Could not build a filter from that description.' } : d;
 	}
-	/** The value chosen for a field System 1 said the description restricts: "(no value)" contradicts that yes, so the likeliest
-	 * offered value wins when it is close (staging: Site 0.80 yes, value 0.51 none against 0.49 "3 Ridgewood Close"). */
-	const valueOf = (r: DecisionResult, id: string) => {
-		const a = r.answers[id];
-		if (a?.type !== 'choice' || a.choice !== NONE) return choiceOf(r, id);
-		const [best, p] = Object.entries(a.probabilities).filter(([k]) => k !== NONE).sort((l, r) => r[1] - l[1])[0] ?? [];
-		return best !== undefined && p! >= CLOSE ? best : NONE;
-	};
-	/** The likeliest offered value that is evidence rather than an echo of the description's words, when it reaches CLOSE. */
-	const bestValue = (r: DecisionResult, id: string, q: { vals: Map<string, FilterArg> }) => {
-		const a = r.answers[id];
-		if (a?.type !== 'choice') return undefined;
-		const [best, p] = Object.entries(a.probabilities).filter(([k]) => k !== NONE && q.vals.has(k) && !ECHOES.has(q.vals.get(k)!)).sort((l, r) => r[1] - l[1])[0] ?? [];
-		return best !== undefined && p! >= CLOSE ? best : undefined;
-	};
-	/** How the stated conditions combine: the one composition question, bounded to one top-level group. */
+	/** How the stated conditions combine: one top-level group. */
 	const COMBINE: { readonly [c: string]: { join: 'and' | 'or'; not: boolean; because: string } } = {
 		'all of them hold': { join: 'and', not: false, because: 'every stated condition holds' },
 		'any of them hold': { join: 'or', not: false, because: 'at least one stated condition holds' },
 		'not all of them hold': { join: 'and', not: true, because: 'not every stated condition holds' },
 		'none of them hold': { join: 'or', not: true, because: 'no stated condition holds' },
 	};
-	const ALL = COMBINE['all of them hold']!;
+	/** A choice's criteria: each option names itself. */
+	const own = (keys: readonly string[]) => Object.fromEntries(keys.map((k) => [k, k]));
 
 	/** `filter.describe` as the caller: `{ collection, text }` → a decoded `Where` and optional `OrderBy`, or a typed failure. */
 	async function describe(o: { collection: string; text: string; authority: Authority; bindings: Bindings; localFields?: readonly LocalFilterField[] }): Promise<Described> {
@@ -642,177 +660,88 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		const subjectOf = subject(o, o.text);
 		if (subjectOf.fail !== undefined) return subjectOf.fail;
 		const local = o.collection === '$local';
-		const { fields, spans, nears } = subjectOf.fields !== undefined ? { fields: subjectOf.fields, spans: [] as Span[], nears: [] as Near[] } : await offer(o.collection, o.text, o.authority, o.bindings);
-		if (fields.length === 0) return fail('Nothing here can be filtered by a description.');
-		const qual = (f: Field, x: string) => `${f.label} · ${x}`;
-		/** A choice's criteria: each option names itself (the provider reads option → description). */
-		const own = (keys: readonly string[]) => Object.fromEntries(keys.map((k) => [k, k]));
-		// one field's own operators and values, so an answer can only ever name that field: the request asks what to do
-		// with a field, never which field, and so carries no answer the next question depends on
-		const forField = (f: Field) => ({ ops: new Map(f.ops.map((x) => [qual(f, x.label), x])), vals: new Map(f.values.map((v) => [qual(f, v.label), v.arg])) });
-		// the provider's cap per choice question (the Decisions API: 255)
-		const max = cfg.ai?.sys_1.maxChoices ?? Infinity;
-		// nearest-first orders from found records first: "nearest to 1f pine grove" names one of them
-		const sortable: { label: string; sort?: string; near?: Near['near'] }[] = [...nears, ...fields.filter((f) => f.sort !== undefined)];
-		const DIRS = { asc: 'ascending (oldest, lowest, A→Z first)', desc: 'descending (newest, highest, Z→A first)' };
-		// the fields the description most plausibly means, asked about in that order: a wide collection keeps the ones a
-		// person actually wrote of rather than the first twelve the schema happens to declare
-		const ranked = fields
-			.map((f, i) => ({ f, i }))
-			.sort((l, r) => (r.f.named ?? 0) - (l.f.named ?? 0) || Number(r.f.hit ?? false) - Number(l.f.hit ?? false)
-				// among fields named equally, the shallower path: a count before every child field under any / all / none
-				|| l.f.path.length - r.f.path.length || l.i - r.i);
-		// one child relation named by the description offers its count, aggregates and every field under any / all / none:
-		// past its first few, the rest wait behind the other candidates, so a second condition ("done", a date) still fits
-		const seen = new Map<string, number>();
-		const crowded = new Set(ranked.filter(({ f }) => {
-			const step = f.path.find((p) => p.k === 'some' || p.k === 'every' || p.k === 'none' || p.k === 'count' || p.k === 'agg');
-			const rel = step !== undefined && 'rel' in step ? step.rel : undefined;
-			if (rel === undefined || !f.hit) return false;
-			seen.set(rel, (seen.get(rel) ?? 0) + 1);
-			return seen.get(rel)! > PER_RELATION;
-		}));
-		// the collection's own search index and meaning are always asked: no field label names them
-		const index = ranked.filter((x) => x.f.path.length === 1 && (x.f.kind === 'search' || x.f.kind === 'semantic') && x.f.values.length > 0);
-		const rest = ranked.filter((x) => !index.includes(x));
-		const asked = [...rest.filter((x) => x.f.hit && !crowded.has(x)), ...index, ...rest.filter((x) => crowded.has(x)), ...rest.filter((x) => !x.f.hit)]
-			.slice(0, FILTER_MAX_FIELDS);
+		const fields = subjectOf.fields ?? fieldsOf(o.collection, o.text, o.authority, o.bindings);
+		const nears = local ? [] : await lookup(o.collection, o.text, fields, o.authority, o.bindings);
+		const max = cfg.ai.sys_1.maxChoices ?? Infinity;
+		// the fields the description most plausibly names that have a condition to offer, each with all of them
+		const asked: { f: Field; conds: Cond[] }[] = [];
+		for (const f of rank(fields, o.text, o.collection)) {
+			if (asked.length >= FILTER_MAX_FIELDS) break;
+			const conds = condsOf(f, local ? undefined : o.collection, o.text).slice(0, max - 1);
+			if (conds.length > 0) asked.push({ f, conds });
+		}
+		const orders = [...nears, ...fields.filter((f) => f.sort !== undefined).flatMap(orderOf)].slice(0, max - 1);
+		if (asked.length === 0 && orders.length === 0) return fail('Nothing here can be filtered by a description.');
+
+		// 4. the one call
+		const questions: { [id: string]: DecisionQuestion } = {};
+		asked.forEach(({ f, conds }, n) => {
+			questions[`f${n + 1}`] = { type: 'choice', instructions: `Which condition does the description state on ${f.label}?${f.found === undefined ? '' : f.kind === 'record' ? ` Its words match these ${f.label} records: ${f.found.join('; ')}.` : ` Records hold its words: ${f.found.join('; ')}.`}`,
+				criteria: { [NO]: `it states no condition on ${f.label}`, ...own(conds.map((c) => c.label)) } };
+			conds.find((c) => c.list !== undefined)?.list!.forEach((v, k) => {
+				questions[`f${n + 1}.${k}`] = { type: 'noul', instructions: `Is ${v.label} one of the ${f.label} values the description names?`,
+					criteria: { true: `it names ${v.label}`, false: `it does not name ${v.label}` } };
+			});
+		});
+		questions['combine'] = { type: 'choice', instructions: 'How do the stated conditions combine?', criteria: Object.fromEntries(Object.entries(COMBINE).map(([k, v]) => [k, v.because])) };
+		if (orders.length > 0) questions['sort'] = { type: 'choice', instructions: 'Which order does the description ask for?',
+			criteria: { [NO_ORDER]: 'it asks for no order', ...own(orders.map((x) => x.label)) } };
+		// admission is semantic, not a keyword guard: an exposed current flag or a related aggregate can express a selection
+		// that otherwise needs comparisons across root records
+		questions['selection.unsupported'] = { type: 'noul',
+			instructions: 'Does satisfying the requested selection require comparing top-level records with other top-level records, selecting a ranked subset or a maximum/minimum per group, or limiting the record count, rather than testing the offered field and relation conditions? A descending sort changes order only; it does not select latest-only or one record per group. Answer false when an exposed current/latest flag or an offered related aggregate directly represents the requested selection.',
+			criteria: { true: 'the requested selection requires unsupported cross-record comparisons or ranking', false: 'the requested selection is represented by the offered conditions and ordering' } };
 		const state = { description: o.text, collection: human(o.collection), fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today, timezone: o.bindings.tz, weekStartsOn: 'Monday' };
-		const first: { [id: string]: DecisionQuestion } = {};
-		const choices2 = new Map<Field, ReturnType<typeof forField>>();
-		for (const [n, { f }] of asked.entries()) {
-			const q = forField(f);
-			choices2.set(f, q);
-			Object.assign(first, {
-				[`f${n + 1}`]: f.ops.every((x) => x.op === 'isNull' || x.op === 'notNull')
-					// a field only ever tested for presence (a point, a file): naming it is not asking whether it is set
-					? { type: 'noul', instructions: `Does the description ask whether ${f.label} is recorded at all (empty or not empty)?`,
-						criteria: { true: `it asks for records with or without a ${f.label}`, false: `it does not ask whether ${f.label} is recorded` } }
-					: { type: 'noul', instructions: `Does the description restrict the records by ${f.label}?${f.holds !== undefined ? ` The description's words name ${f.label} records: ${f.holds.join('; ')}.`
-						: f.found === undefined ? '' : ` Its words match these ${f.label} records: ${f.found.join('; ')}.`}`,
-						criteria: { true: `it states a condition on ${f.label}`, false: `it states no condition on ${f.label}` } },
-				[`f${n + 1}.op`]: { type: 'choice', instructions: `Which comparison does the condition on ${f.label} use?`, criteria: own([...q.ops.keys()]) },
-				[`f${n + 1}.value`]: { type: 'choice', instructions: `Which value does the condition on ${f.label} compare with?`, criteria: own([NONE, ...q.vals.keys()]) } });
-			// a question with one answer is not asked: the request is smaller, and the call faster
-			if (q.ops.size === 1) delete first[`f${n + 1}.op`];
-			if (q.vals.size === 0) delete first[`f${n + 1}.value`];
-		}
-		// each phrase the data holds: which reading it is — a choice among concrete conditions, which System 1 answers far more
-		// surely than whether a field is restricted at all (staging: "sunset vale" scored Site 0.28 as a field)
-		// A phrase of two or more words that a record holds is a condition: offered "nothing", System 1 took it for a bare place
-		// name ("sunset vale" 0.77 nothing, "bca accessibility programme" 0.91) though the data holds it. A single word may be
-		// incidental ("work"), so it keeps the choice of none.
-		// "nearest to <place>", "by distance from <place>": the place is the order's anchor, not a condition — its span and its
-		// relation's own question stand down, and the sort question offers "nearest to <it>"
-		const anchors = SORTING.test(o.text) ? spans.filter((sp) => sp.options.some((x) => x.near)) : [];
-		const standing = new Set(anchors.flatMap((sp) => sp.options.map((x) => JSON.stringify(x.from ?? x.path))));
-		spans.splice(0, spans.length, ...spans.filter((sp) => !anchors.includes(sp)));
-		// "near <place>", "within 2 km of <place>": a proximity word before the phrase leaves only its distance readings
-		for (const sp of spans) if (proximate(o.text, sp.phrase) && sp.options.some((x) => x.near)) sp.options = sp.options.filter((x) => x.near);
-		spans.forEach((sp, i) => Object.assign(first, { [`span${i + 1}`]: sp.options.length === 1 ? undefined : { type: 'choice', instructions: `What does “${sp.phrase}” in the description filter by?`,
-			criteria: { ...own(sp.options.map((x) => x.label)), ...(sp.phrase.includes(' ') ? {} : { [NOTHING]: `“${sp.phrase}” names nothing to filter by` }) } } }));
-		for (const k of Object.keys(first)) if (first[k] === undefined) delete first[k];
-		// the composition of every stated condition: bounded to one top-level AND, OR or their negations
-		Object.assign(first, { combine: { type: 'choice', instructions: 'How do the stated conditions combine?',
-			criteria: Object.fromEntries(Object.entries(COMBINE).map(([k, v]) => [k, v.because])) } });
-		if (sortable.length > 0) Object.assign(first, {
-			'sort.yes': { type: 'noul', instructions: 'Does the description ask for an order?', criteria: { true: 'it asks for an order', false: 'it asks for no order' } },
-			'sort.field': { type: 'choice', instructions: 'Which field orders the records?', criteria: own(sortable.slice(0, max).map((f) => f.label)) },
-			'sort.dir': { type: 'choice', instructions: 'Which direction?', criteria: { [DIRS.asc]: 'smallest or earliest first', [DIRS.desc]: 'largest or latest first' } } });
-		// Admission is semantic, not a keyword guard: an explicit current flag or a related aggregate
-		// can express a selection that otherwise needs unsupported comparisons across root records.
-		first['selection.unsupported'] = {
-			type: 'noul',
-			instructions: 'Does satisfying the requested selection require comparing top-level records with other top-level records, selecting a ranked subset or a maximum/minimum per group, or limiting the record count, rather than testing the offered field and relation conditions? A descending sort changes order only; it does not select latest-only or one record per group. Answer false when an exposed current/latest flag or an offered related aggregate directly represents the requested selection.',
-			criteria: {
-				true: 'the requested selection requires unsupported cross-record comparisons or ranking',
-				false: 'the requested selection is represented by the offered conditions and ordering'
-			}
-		};
-		// what is left of the deadline after the candidate reads
-		const r1 = await call(state, first, Math.max(1, Math.round(FILTER_DEADLINE_MS - (performance.now() - started))));
-		if ('ok' in r1) return r1;
-		if (noulOf(r1, 'selection.unsupported') > 0.5)
+		const r = await call(state, questions, Math.max(1, Math.round(FILTER_DEADLINE_MS - (performance.now() - started))));
+		if ('ok' in r) return r;
+		if (noulOf(r, 'selection.unsupported') > 0.5)
 			return { ok: false, code: 'invalid', message: 'This selection requires comparing or ranking records across groups, which the available filters cannot express. Choose a field condition or sort instead.' };
-		const conds: Json[] = [];
-		const unbuilt: Field[] = [];
-		// the spans' readings first; a field one already decided, or an echoed word one already used, is not asked again
-		const decided = new Set<string>(standing), used = new Set<string>();
-		spans.forEach((sp, i) => {
-			// a single word System 1 leaves at "nothing" while a reading of it reaches CLOSE takes that reading, as a field does
-			const a = r1.answers[`span${i + 1}`];
-			const best = a?.type === 'choice' ? Object.entries(a.probabilities).filter(([k]) => k !== NOTHING).sort((l, r) => r[1] - l[1])[0] : undefined;
-			// (five letters or more: "work" in "installation work" is incidental)
-			const label = a?.type === 'choice' && a.choice === NOTHING && best !== undefined && best[1] >= CLOSE && sp.phrase.length >= 5 ? best[0] : choiceOf(r1, `span${i + 1}`);
-			// a lone reading (a proximity word left one) needs no question
-			const pick = sp.options.length === 1 && sp.phrase.includes(' ') ? sp.options[0] : sp.options.find((x) => x.label === label);
-			// a single word that names a field ("site" in "site location contains …") is that field, not a value of another
-			if (pick === undefined || (!sp.phrase.includes(' ') && asked.some(({ f: g }) => tokens(g.label).includes(sp.phrase)))) return;
-			// "jobs not at pine grove": a negating word just before the phrase negates its reading
-			conds.push(negated(o.text, sp.phrase) ? { not: pick.cond } : pick.cond);
-			decided.add(JSON.stringify(pick.path));
-			// the relation whose records the phrase came from is read: its own question stands down ("within 3 km of 1f pine
-			// grove" also became Site is 1F Pine Grove)
-			for (const x of sp.options) decided.add(JSON.stringify(x.from ?? x.path));
-			for (const w of sp.phrase.split(' ')) used.add(w);
+
+		// 5. the chosen conditions: past even odds a condition holds; from HEDGED when its likeliest is evidence at CLOSE
+		const picks: { f: Field; c: Cond; p: number; where: Json }[] = [];
+		asked.forEach(({ f, conds }, n) => {
+			const a = r.answers[`f${n + 1}`];
+			if (a?.type !== 'choice') return;
+			const yes = 1 - (a.probabilities[NO] ?? 0);
+			const ranked = conds.map((c) => ({ c, p: a.probabilities[c.label] ?? 0 })).sort((l, r2) => r2.p - l.p);
+			const evidence = ranked.find((x) => x.c.evidence && x.p >= CLOSE);
+			const pick = yes > 0.5 ? ranked[0] : yes >= HEDGED ? evidence : undefined;
+			if (pick === undefined) return;
+			const named = pick.c.list?.filter((_, k) => noulOf(r, `f${n + 1}.${k}`) > 0.5);
+			if (named !== undefined && named.length === 0) return;
+			const where = named === undefined ? pick.c.where : condition(f.path, pick.c.op, { list: named.map((v) => (v.arg as { lit: Json }).lit) })!;
+			picks.push({ f, c: pick.c, p: pick.p, where });
 		});
-		const built: { path: readonly FilterStep[]; echo: boolean; c: Json }[] = [];
-		for (const [n, { f }] of asked.entries()) {
-			if (decided.has(JSON.stringify(f.path))) continue;
-			// System 1 hedges a field it is unsure the text restricts (0.3–0.5 on "sunset vale" → Site) while still naming the
-			// right value: past 0.5 the field is restricted; from HEDGED it is when its likeliest value is evidence (a found
-			// record, a phrase a record holds, a declared value) at CLOSE or more — never a word merely echoed from the text
-			const yes = noulOf(r1, `f${n + 1}`);
-			const best = bestValue(r1, `f${n + 1}.value`, choices2.get(f)!);
-			if (yes <= 0.5 && !(yes >= HEDGED && best !== undefined)) continue;
-			// the engine has already refused an answer outside the offered criteria, so these are present; the fallbacks only
-			// satisfy the type, and an unbuildable pair fails the filter below rather than being dropped
-			const q = choices2.get(f)!;
-			const op = q.ops.size === 1 ? [...q.ops.values()][0] : q.ops.get(choiceOf(r1, `f${n + 1}.op`) ?? ''), arg = q.vals.get(valueOf(r1, `f${n + 1}.value`) ?? '');
-			// an echoed word a phrase already used ("pine" beside "1f pine grove"), or one that names a field ("site"), is no value
-			if (arg !== undefined && ECHOES.has(arg) && 'lit' in arg && ([...used].some((w) => alike(w, String(arg.lit).toLowerCase()) >= MATCH)
-				|| (/^\p{L}{3,}$/u.test(String(arg.lit)) && asked.some(({ f: g }) => tokens(g.label).includes(String(arg.lit).toLowerCase()))))) continue;
-			// a phrase a span already read is not read again as another field ("site location contains 1f pine grove" became
-			// both Location address and Site › Name contains it)
-			if (arg !== undefined && 'match' in arg && arg.match.phrase.split(' ').every((w) => used.has(w))) continue;
-			if (arg !== undefined && 'match' in arg) for (const w of arg.match.phrase.split(' ')) used.add(w);
-			const c = condition(f.path, op?.op ?? '', arg);
-			// a field System 1 flagged but gave no value for is noise beside the conditions it did build (staging: "some place
-			// with 1f pine grove" picked the site and a valueless Description, and the Description failed the whole filter)
-			if (c === undefined) { unbuilt.push(f); continue; }
-			built.push({ path: f.path, echo: arg !== undefined && ECHOES.has(arg), c });
-			if (conds.length + built.length >= FILTER_MAX_CONDITIONS) break;
-		}
-		// a relation already pinned to a record or a phrase its records hold takes no echoed word under it ("bbo tan" found
-		// Bob Tan; "Assignee › Name is tan" beside it emptied the result)
-		const pinned = new Set([...[...decided].map((x) => JSON.parse(x) as FilterStep[]), ...built.filter((x) => !x.echo).map((x) => x.path)]
-			.flatMap((p) => p.length === 1 && p[0]!.k === 'field' ? [p[0]!.name] : []));
-		for (const x of built) if (!(x.echo && x.path[0]?.k === 'is' && pinned.has(x.path[0].rel))) conds.push(x.c);
-		// "nearest to <place>" states its order: the chosen nearest sort, else the first from that place's records
-		const chosenSort = sortable.find((f) => f.label === choiceOf(r1, 'sort.field'));
-		const anchored = anchors.length === 0 ? undefined : chosenSort?.near !== undefined ? chosenSort
-			: nears.find((n) => anchors.some((sp) => n.label.toLowerCase().includes(sp.phrase.split(' ')[0]!)));
-		const sortField = anchored ?? (sortable.length > 0 && noulOf(r1, 'sort.yes') > 0.5 ? chosenSort : undefined);
-		// only unbuildable conditions: a relation whose words match several records says which, so the person can pick one
-		const vague = unbuilt.find((f) => (f.found?.length ?? 0) > 1);
-		if (conds.length === 0 && sortField === undefined)
-			return fail(unbuilt.length > 0
-				? (vague === undefined ? `Could not build a condition on ${unbuilt[0]!.label}.` : `Several ${vague.label} records match: ${vague.found!.slice(0, CANDIDATES).join('; ')}. Name one.`)
-				: 'No field here matches that description. Try naming a field and a value.');
-		const chosen = COMBINE[choiceOf(r1, 'combine') ?? ''] ?? ALL;
-		// a negation the text never states is a misreading (staging: "1f pine grove" → none of them hold)
-		// likewise an OR the text never states ("installation work at hillview crescent" → any of them)
-		const joined = chosen.join === 'or' && !DISJUNCTION.test(o.text) ? 'and' : chosen.join;
-		const combine = { ...chosen, join: joined, not: chosen.not && NEGATION.test(o.text) };
-		// an empty conjunction is not a filter: a sort-only description has no `where` (an empty `and` fails decode)
-		const group = conds.length === 0 ? undefined : conds.length === 1 ? conds[0]! : { [combine.join]: conds };
-		// one condition negates through its own operator ("is not"): a negated composition of one is System 1 misreading
-		// "jobs at 1F Pine Grove" as "none of them hold"
-		const where: Json | undefined = group === undefined ? undefined : combine.not && conds.length > 1 ? { not: group } : group;
-		const dir: Json = choiceOf(r1, 'sort.dir') === DIRS.asc ? 'asc' : 'desc';
-		const orderBy: Json | undefined = sortField === undefined ? undefined
-			: sortField.sort!.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), sortField.near === undefined ? dir : { near: sortField.near });
+		// a word the description merely contains yields to what a read found: under a relation a found record pins, inside a
+		// phrase a found condition already reads ("pine" beside "1f pine grove"), or as a field's own name ("site")
+		const strong = picks.filter((x) => x.c.evidence);
+		const rootRel = (p: readonly FilterStep[]) => p.length > 1 && 'rel' in p[0]! ? p[0].rel : p[0]?.k === 'count' || p[0]?.k === 'agg' ? p[0].rel : undefined;
+		const under = (x: readonly FilterStep[], y: readonly FilterStep[]) => x[0]?.k === 'is' && (y[0]?.k === 'is' || y[0]?.k === 'field') && ('rel' in y[0] ? y[0].rel : y[0].name) === x[0].rel;
+		// a word is read when a found condition holds it, as its value or in its field's name ("unpaid invoice" beside
+		// "Customer › Invoices (any) › Status is unpaid"); a lone word that names a field is that field, not a value
+		const read = (w: string) => strong.some((s) => tokens(s.c.value ?? '').includes(w) || tokens(s.f.label).some((t) => t === w || t.startsWith(w) || w.startsWith(t.replace(/s$/, ''))));
+		const kept = picks.filter((x) => x.c.evidence || !(strong.some((s) => under(x.f.path, s.f.path))
+			|| (x.c.value !== undefined && tokens(x.c.value).every(read))
+			|| (x.c.value !== undefined && /^\p{L}{3,}$/u.test(x.c.value) && asked.some(({ f }) => tokens(f.label).includes(x.c.value!.toLowerCase())))))
+			.sort((l, r2) => r2.p - l.p || r2.f.path.length - l.f.path.length)
+			// one of the text's own numbers or words reads once per related list: "any line quantity over 5" is not also "more
+			// than 5 lines" (the likelier, then the more specific, reading keeps it)
+			.filter((x, i, all) => x.c.evidence || x.c.value === undefined || !all.slice(0, i).some((y) => !y.c.evidence && y.c.value === x.c.value && rootRel(y.f.path) === rootRel(x.f.path)))
+			// a day reads once: "scheduled after National Day" is not also "created after" it
+			.filter((x, i, all) => !DAY_KINDS.has(x.f.kind) || x.c.value === undefined || !all.slice(0, i).some((y) => DAY_KINDS.has(y.f.kind) && y.c.value === x.c.value))
+			// "at least one" beside "any of them …" on the same related list is implied by it
+			.filter((x, _, all) => !(x.f.kind === 'count' && (x.c.label.endsWith(' at least 1') || x.c.label.endsWith(' more than 0'))
+				&& all.some((y) => y.f.path.some((p) => p.k === 'some' && p.rel === rootRel(x.f.path)))))
+			.slice(0, FILTER_MAX_CONDITIONS).map((x) => x.where);
+		const chosen = COMBINE[choiceOf(r, 'combine') ?? ''] ?? COMBINE['all of them hold']!;
+		// an OR or a negation the text never states is a misreading; one condition negates through its own operator
+		const join = chosen.join === 'or' && !DISJUNCTION.test(o.text) ? 'and' : chosen.join;
+		const group = kept.length === 0 ? undefined : kept.length === 1 ? kept[0]! : { [join]: kept };
+		const where: Json | undefined = group !== undefined && chosen.not && kept.length > 1 && NEGATION.test(o.text) ? { not: group } : group;
+		const sort = orders.find((x) => x.label === choiceOf(r, 'sort'));
+		const orderBy: Json | undefined = sort === undefined ? undefined : sort.key.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), sort.dir as Json);
+		if (where === undefined && orderBy === undefined) return fail('No field here matches that description. Try naming a field and a value.');
 		try { // rule 11a: the same strict decode as any read literal, held to the caller's exposure
 			if (!local) decodeDescribed(cat, o.authority, o.collection, { ...(where === undefined ? {} : { where }), ...(orderBy === undefined ? {} : { orderBy }) });
 		} catch (e) {
@@ -820,12 +749,11 @@ export function filterDescribe(cfg: FilterDescribeConfig) {
 		}
 		return { ok: true, ...(where === undefined ? {} : { where }), ...(orderBy === undefined ? {} : { orderBy }) };
 	}
-	/** `filter.options` as the caller: the same catalogue the description is asked about, as plain data for the builder. */
+	/** `filter.options` as the caller: the catalogue the builder renders. */
 	async function opts(o: { collection: string; authority: Authority; bindings: Bindings; localFields?: readonly LocalFilterField[] }): Promise<{ ok: true; fields: FilterCatalogue } | { ok: false; code: string; message: string }> {
 		const subjectOf = subject(o, '');
 		if (subjectOf.fail !== undefined) return subjectOf.fail;
-		const fields = subjectOf.fields ?? (await offer(o.collection, '', o.authority, o.bindings)).fields;
-		return { ok: true, fields: catalogue(fields) };
+		return { ok: true, fields: catalogue(subjectOf.fields ?? fieldsOf(o.collection, '', o.authority, o.bindings)) };
 	}
 	return { describe, options: opts };
 }

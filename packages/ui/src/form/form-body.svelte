@@ -38,7 +38,15 @@
 		const outcome = await form.submit();
 		if (outcome !== null) onOutcome?.(outcome);
 	}
+	function beforeUnload(event: BeforeUnloadEvent) {
+		if (!readonly && (form.dirty || form.pending)) {
+			event.preventDefault();
+			event.returnValue = true;
+		}
+	}
 </script>
+
+<svelte:window onbeforeunload={beforeUnload} />
 
 <form class={['flex h-full min-h-0 min-w-0 flex-col', className]} onsubmit={send} novalidate aria-busy={form.pending}>
 	<div class="min-h-0 flex-1 overflow-auto pb-4" data-form-body>

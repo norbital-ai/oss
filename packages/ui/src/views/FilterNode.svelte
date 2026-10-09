@@ -14,7 +14,7 @@
 	import { useBolt } from './bolt.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import {
-		argKind, childOf, manyOffers, offersFor, operandsFor, QUANT_LABEL, radiusText, resolve, valueKind,
+		argKind, childOf, manyAt, manyOffers, offersFor, operandsFor, QUANT_LABEL, radiusText, resolve, valueKind,
 		type Arg, type Cmp, type FilterStep, type Node, type Offer, type Op, type Quant, type Resolved, type Unit,
 	} from './filter.js';
 	import FilterNode from './FilterNode.svelte';
@@ -142,7 +142,7 @@
 			{/if}
 			{@render remove()}
 		</div>
-		{#if !agg}{@render nested(m, child, false, [...prefix, { k: m.q as 'some' | 'every' | 'none', rel: m.rel }])}{/if}
+		{#if !agg}{@const at = manyAt(prefix, m.rel)}{@render nested(m, child, false, [...at.prefix, { k: m.q as 'some' | 'every' | 'none', rel: at.name }])}{/if}
 	</div>
 {:else}
 	{@const r = node.path === '' ? null : resolve(catalog, collection, node.path)}
