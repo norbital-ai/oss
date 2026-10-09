@@ -60,9 +60,22 @@ describe('engine-owned staged transform identities',()=>{
   expect((await one('select id::text as id from orders')).id).toBe(parent.id);
   expect(await one('select id::text as id, "order"::text as owner from lines')).toEqual({id:child.id,owner:parent.id});
  });
- it('refuses transformed mint-order changes before committing a staged owner capture',async()=>{
-  await expect(run({verb:'create',input:[{title:'first'},{title:'second'}]},transform(inv=>({kind:'ok',output:(inv.input as Record<string,Json>[]).map((row,index)=>index===0?{...row,lines:{create:[{label:'new',amount:'1'}]}}:row),cpuMs:1})))).rejects.toThrow(/engine-assigned identity/);
-  expect(await rows('select id from orders')).toEqual([]);
+ it('gives rows a multi-row transform adds fresh ids disjoint from every submitted path, and commits',async()=>{
+  const calls:Invocation[]=[];
+  const result=await run({verb:'create',input:[{title:'first'},{title:'second'},{title:'third'}]},transform(inv=>({kind:'ok',output:(inv.input as Record<string,Json>[]).map((row,index)=>index<2?{...row,lines:{create:[{label:`${row['title']}-a`,amount:'1'},{label:`${row['title']}-b`,amount:'2'}]}}:row),cpuMs:1}),'orders',calls));
+  const records=ok(result.outcome).records;
+  const staged=new Map(calls[0]!.ctx.staged!.map(row=>[row.path.join('.'),row.id]));
+  const orders=await rows('select id::text as id, title from orders order by title');
+  const lines=await rows('select id::text as id, label, "order"::text as owner from lines order by label');
+  expect(orders.map(o=>o['title'])).toEqual(['first','second','third']);
+  expect(lines).toHaveLength(4);
+  const ids=[...orders,...lines].map(row=>row['id']);
+  expect(new Set(ids).size).toBe(7);
+  // every submitted root keeps the identity the engine assigned it before the transform
+  for(const [i,title]of['first','second','third'].entries())expect(orders.find(o=>o['title']===title)!['id']).toBe(staged.get(String(i)));
+  const idOfTitle=(title:string)=>orders.find(o=>o['title']===title)!['id'];
+  for(const line of lines)expect(line['owner']).toBe(idOfTitle(String(line['label']).split('-')[0]!));
+  expect(new Set(records.map(r=>r.id)).size).toBe(records.length);
  });
 });
 

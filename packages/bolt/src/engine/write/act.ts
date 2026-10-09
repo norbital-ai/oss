@@ -598,7 +598,9 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 		if (r.verb !== 'delete') {
 			const out = g.output;
 			if (!Array.isArray(out) || out.length !== roots.length) throw new BoltError('transformShape', 'guest', 'a transform returns one payload per input');
-			const again = new Flattener(m, cat, await minter(r.invocationId, b.now),identities);
+			// a row the transform adds mints from its own seed: the invocation's seed would replay the sequence the
+			// submitted paths took, so a child added before a later root would take that root's id
+			const again = new Flattener(m, cat, await minter(`${r.invocationId}:transform`, b.now),identities);
 			roots.forEach((it, i) => {
 				const c = it.change;
 				if (c.op === 'delete') return;
@@ -607,8 +609,7 @@ async function plan(e: WriteEngine, r: ActRequest, env: EvalEnv, submitted: read
 			});
 			if (again.problems.length > 0) throw new BoltError('transformPayload', 'guest', again.problems.map((p) => `${p.path.join('.')}: ${p.message}`).join('; '));
 			for(const item of again.items){const assigned=identities.get(JSON.stringify([item.change.collection,item.change.path]));if(assigned!==undefined&&assigned!==item.change.id)throw new BoltError('transformIdentity','guest','a transform must preserve the engine-assigned identity of each submitted native path');}
-			// a row the transform added mints in sequence, so it can take an identity the engine already gave another path
-			// (a child added before a later root): the same id twice in one act, which the commit would write unnoticed
+			// the same id twice in one act would commit unnoticed; the disjoint seed above makes this unreachable, and this keeps it so
 			const reservedIds=new Set(identities.values());
 			if(again.items.some(item=>!identities.has(JSON.stringify([item.change.collection,item.change.path]))&&reservedIds.has(item.change.id)))throw new BoltError('transformIdentity','guest','a transform must preserve the engine-assigned identity of each submitted native path: a row it adds would take another path\'s identity');
 			for(const [token,reservation]of preparedCreates){const final=again.items.find(item=>JSON.stringify([item.change.collection,item.change.path])===token);const values=final?.change.op==='create'?final.change.values:final?.change.op==='update'?final.change.set:null;const reserved=reservation.change.op==='create'?reservation.change.values:reservation.change.op==='update'?reservation.change.set:null;if(final===undefined||final.change.op!==reservation.change.op||final.change.id!==reservation.change.id||!retainsPrepared(values,reserved))return { guest: true, outcome: refused('internal', 'every prepared native action must retain its reserved operation, identity and values at its reserved path') };}
