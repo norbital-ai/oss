@@ -1,0 +1,11 @@
+{
+	"extends": "../../../../../tsconfig.base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"target": "ES2024",
+		"paths": { "@norbital-ai/bolt": ["../../../src/index.ts"] }
+	},
+	"include": ["src/**/*.ts", "src/**/*.svelte", ".norbital/names.ts"]
+}

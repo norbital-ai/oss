@@ -1,0 +1,59 @@
+{
+	"$schema": "https://turbo.build/schema.json",
+	// Every package's `build` shells out to `scripts/build-package.ts`, which lives outside all of
+	// them — so edits to it, or to the emit checks it imports, change what a build produces without
+	// changing any package's own inputs. Without these entries turbo replays a cache entry from
+	// before the change and the new check never runs.
+	"globalDependencies": [
+		"tsconfig.base.json",
+		"**/.env.*local",
+		"scripts/build-package.ts",
+		"scripts/lib/declaration-emit.mjs"
+	],
+	"globalPassThroughEnv": ["CI"],
+	"tasks": {
+		"build": {
+			"dependsOn": ["^build"],
+			"inputs": [
+				"$TURBO_DEFAULT$",
+				".env*",
+				"!build/**",
+				"!.generated/**",
+				"!.norbital/dist/**",
+				"!.svelte-kit/**",
+				"!.vercel/**"
+			],
+			"outputs": ["build/**", ".generated/**", ".norbital/dist/**", ".svelte-kit/**", ".vercel/**"]
+		},
+		"lint": {
+			"dependsOn": ["^build", "^lint"]
+		},
+		"types:compat": {
+			"dependsOn": ["^build"]
+		},
+		"@norbital-ai/doctor#test": {
+			"dependsOn": ["build", "^build", "^test"],
+			"inputs": [
+				"$TURBO_DEFAULT$",
+				"$TURBO_ROOT$/packages/*/src/**",
+				"$TURBO_ROOT$/packages/*/docs/**",
+				"$TURBO_ROOT$/packages/*/assets/**",
+				"$TURBO_ROOT$/packages/*/README.md",
+				"$TURBO_ROOT$/packages/*/package.json"
+			]
+		},
+		// The database-backed half of bolt's suite. Kept off `test` so a merge is not gated on
+		// twenty-five minutes of Postgres boots; run on its own schedule, and on demand.
+		"test:integration": {
+			"dependsOn": ["^build"]
+		},
+		"test": {
+			// The server-artifact fixture materializes each package exactly as a consumer receives it,
+			// including Bolt's own `build/` directory. Its test must therefore follow this package's build:
+			// otherwise a source export removal can leave the fixture evaluating stale emitted imports.
+			// A task dependency is ordered, so `build` finishes before `test` starts and cannot race the
+			// build's opening cleanup of the output directory.
+			"dependsOn": ["build", "^build", "^test"]
+		}
+	}
+}

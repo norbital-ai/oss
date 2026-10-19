@@ -1,0 +1,15 @@
+id: EFF6
+summary: throw escapes the typed Effect error channel
+severity: error
+principles: [simplicity, straightforwardness, testability, type-safety]
+rule:
+  all:
+    - kind: ThrowStatement
+    - fact: { name: effectThrowEscapes }
+examples:
+  bad:
+    - "import { Effect } from 'effect';\nexport const f = Effect.gen(function* () { throw new Error('x'); });"
+    - "import { Effect } from 'effect';\nexport const f = Effect.try(() => Effect.gen(function* () { throw new Error('x'); }));"
+  good:
+    - "import { Effect } from 'effect';\nexport const f = Effect.gen(function* () { return yield* Effect.fail('x'); });"
+    - "import { Effect } from 'effect';\nexport const f = Effect.gen(function* () { return yield* Effect.try({ try: () => { throw new Error('x'); }, catch: error => String(error) }); });"

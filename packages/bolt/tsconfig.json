@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": true,
+		"noEmit": true,
+		"target": "ES2024"
+	},
+	"include": ["src/**/*.ts", "src/**/*.svelte"],
+	"exclude": ["build", "tests"]
+}

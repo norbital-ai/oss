@@ -1,0 +1,19 @@
+id: EFF7
+summary: Effect.gen only forwards a delegated result
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+rule:
+  all:
+    - kind: CallExpression
+    - fact: { name: redundantGenerator }
+examples:
+  bad:
+    - 'export const f = Effect.gen(function* () { return yield* Effect.succeed(1); });'
+  good:
+    - 'export const f = Effect.succeed(1);'
+    - 'export const f = Effect.gen(function* () { before(); return yield* work; });'
+    - 'export const f = Effect.gen(function* () { if (ready) return yield* work; return 0; });'
+    - 'export const f = Effect.gen(function* () { yield* work; });'
+    - 'export const f = Effect.gen(function* () { return () => { return work; }; });'
+    - 'export const f = Effect.gen(function* () { const result = yield* work; return result + 1; });'
+    - 'export const f = Effect.gen(function* () { return yield* work(yield* Service); });'

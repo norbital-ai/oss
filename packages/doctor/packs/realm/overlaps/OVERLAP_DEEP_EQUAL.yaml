@@ -1,0 +1,15 @@
+id: OVERLAP_DEEP_EQUAL
+summary: JSON.stringify comparison reimplements a library deep equal
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  any:
+    - pattern: 'JSON.stringify($A) === JSON.stringify($B)'
+    - pattern: 'JSON.stringify($A) == JSON.stringify($B)'
+examples:
+  bad:
+    - 'export const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);'
+    - 'export const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) == JSON.stringify(b);'
+  good:
+    - 'export const same = (a: unknown, b: unknown): boolean => deepEqual(a, b);'
+    - 'export const same = (a: unknown, b: unknown): boolean => a === b;'

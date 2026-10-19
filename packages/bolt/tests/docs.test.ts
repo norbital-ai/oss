@@ -1,0 +1,276 @@
+// The API reference (§7.3): `src/cli/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
+// the corpus the last build produced (`pnpm --dir oss build` first). Every symbol a workspace imports has a summary;
+// declaration functions carry their option shapes; the agent's `docs` tool reads the same corpus.
+import { expect, it } from '@effect/vitest';
+import { Effect, Stream } from 'effect';
+import { docs } from '../src/docs/index.ts';
+import { catalogue, jobs, type ToolContext } from '../src/engine/agent/tools.ts';
+import { mcpSessions } from '../src/engine/agent/mcp.ts';
+import type { AgentEngine } from '../src/engine/agent/index.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+
+it("the reference namespaces are §7.3's, and every symbol they export has a summary", () => {
+	const reference = docs
+		.index()
+		.namespaces.filter((n) => n.reference)
+		.map((n) => n.namespace);
+	expect(reference.filter((n) => !n.startsWith('std/'))).toEqual([
+		'bolt',
+		'bolt/page',
+		'bolt/test',
+		'ui',
+		'ui/capture',
+		'ui/layout'
+	]);
+	expect(reference.filter((n) => n.startsWith('std/')).length).toBeGreaterThan(10);
+	expect(docs.index().missing).toEqual([]);
+});
+
+it('one namespace per public entry, with its module and the entry summary', () => {
+	const names = docs.index().namespaces.map((n) => n.namespace);
+	expect(names).toEqual(
+		expect.arrayContaining([
+			'bolt',
+			'bolt/page',
+			'bolt/test',
+			'ui',
+			'ui/layout',
+			'std/date',
+			'std/zone',
+			'std/label'
+		])
+	);
+	expect(names).toEqual([...names].sort());
+	expect(docs.index().namespaces.find((n) => n.namespace === 'bolt/page')?.module).toBe(
+		'@norbital-ai/bolt/page'
+	);
+	for (const n of docs.index().namespaces.filter((x) => x.reference))
+		expect(n.summary, n.namespace).not.toBe('');
+});
+
+it('the declaration functions and native mask guard are documented, and spec parameters list their fields', () => {
+	const fns = docs
+		.namespace('bolt')!
+		.symbols.filter((s) => s.kind === 'function')
+		.map((s) => s.name);
+	expect(fns).toEqual([
+		'app',
+		'automation',
+		'collection',
+		'customField',
+		'envoy',
+		'group',
+		'integration',
+		'isMasked',
+		'kiosk',
+		'mcp',
+		'messages',
+		'model',
+		'pageServer',
+		'pipeline',
+		'policy',
+		'relationship',
+		'secrets',
+		'team',
+		'workspace'
+	]);
+	const model = docs.symbol('bolt', 'model')!;
+	expect(model.signature).toContain('function model');
+	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
+	expect(model.params?.[0]?.fields?.map((f) => f.name)).toContain('fields');
+	expect(docs.symbol('bolt', 'pageServer')?.params?.[0]?.fields?.map((f) => f.name)).toEqual([
+		'data',
+		'load'
+	]);
+});
+
+it('svelte components list their props with the props docs', () => {
+	const stack = docs.symbol('ui/layout', 'Stack')!;
+	expect(stack.kind).toBe('component');
+	expect(stack.props?.map((p) => p.name)).toContain('gap');
+	expect(docs.symbol('ui', 'Table')?.kind).toBe('component');
+});
+
+it('search ranks an exact name first and narrows by namespace', () => {
+	expect(docs.search('collection')[0]).toMatchObject({
+		namespace: 'bolt',
+		name: 'collection',
+		kind: 'function'
+	});
+	expect(
+		docs.search('add days', { namespaces: ['std/'] }).every((h) => h.namespace.startsWith('std/'))
+	).toBe(true);
+	expect(docs.search('zzzz-no-such-word')).toEqual([]);
+});
+
+// A complete native context with unrelated capabilities that fail if the docs tool calls them.
+const unexpected = () => Effect.die(new Error('The docs tool called an unrelated capability.'));
+const unexpectedSync = (): never => {
+	throw new Error('The docs tool called an unrelated capability.');
+};
+const manifest: AgentEngine['manifest'] = {
+	workspace: { tz: 'UTC', locale: 'en' },
+	models: {},
+	collections: {},
+	relationships: {},
+	integrations: {},
+	connections: {},
+	policies: {},
+	pipelines: {},
+	automations: {},
+	teams: {},
+	envoys: {},
+	mcp: {},
+	apps: {},
+	customFields: {},
+	agent: { skills: {} }
+};
+const engine: AgentEngine = {
+	manifest,
+	db: TenantDb.typed({ read: unexpected, write: unexpected, transaction: unexpected }),
+	live: {
+		publish: unexpectedSync,
+		syncChanged: unexpectedSync,
+		v: unexpected(),
+		connect: () => Stream.die(new Error('The docs tool opened a live connection.')),
+		register: unexpected,
+		drop: unexpected,
+		authorize: unexpected,
+		authorityOf: unexpected,
+		close: unexpected,
+		settled: unexpected(),
+		sweep: unexpected(),
+		retained: unexpected()
+	},
+	calls: {
+		query: unexpected,
+		action: unexpected,
+		acts: unexpected,
+		start: unexpected
+	},
+	read: unexpected,
+	act: unexpected,
+	approvals: { process: unexpected, view: unexpected, list: unexpected }
+};
+const docsTool = (external = false) =>
+	Effect.gen(function* () {
+		const context: ToolContext = {
+			engine,
+			authority: {
+				key: 'staff',
+				actor: {
+					kind: 'member',
+					id: 'ann',
+					email: null,
+					phone: null,
+					external,
+					teams: [],
+					teamPath: [],
+					admin: false,
+					party: null
+				},
+				admin: false,
+				policies: [],
+				collections: {},
+				automations: [],
+				capabilities: { apps: [], tools: [], mcp: [], skills: [] },
+				limits: [],
+				teamTree: [],
+				scopes: {}
+			},
+			conv: {
+				id: 'c',
+				title: null,
+				owner: 'ann',
+				envoy: null,
+				integration: null,
+				parent: null,
+				status: 'idle',
+				model: 'default',
+				plan: null,
+				goals: []
+			},
+			bindings: { now: '2026-10-13T00:00:00.000Z', today: '2026-10-13', tz: 'UTC', params: {} },
+			turn: 't',
+			mode: 'agent',
+			inApp: true,
+			delegation: false,
+			child: false,
+			skills: {},
+			agents: [],
+			mcp: yield* mcpSessions(manifest),
+			mcpTools: [],
+			hostTools: [],
+			receipts: [],
+			files: [],
+			jobs: yield* jobs(),
+			setPlan: unexpected,
+			setGoals: unexpected,
+			compact: unexpectedSync,
+			ask: unexpectedSync,
+			messages: unexpected,
+			row: unexpected,
+			output: unexpected,
+			history: unexpected,
+			subagent: {
+				spawn: unexpected,
+				list: unexpected,
+				read: unexpected,
+				message: unexpected,
+				stop: unexpected,
+				running: unexpected,
+				report: unexpected
+			}
+		};
+		return catalogue(context).find((tool) => tool.name === 'docs');
+	});
+
+it.effect(
+	'the agent reads the reference through docs: namespaces, a search, one symbol; host namespaces are not offered',
+	() =>
+		Effect.gen(function* () {
+			const tool = yield* docsTool();
+			if (tool === undefined) return yield* Effect.die('Staff has no docs tool.');
+			const list = yield* tool.run({}, 'c1');
+			expect(list).toMatchObject({
+				result: expect.arrayContaining([
+					{
+						namespace: 'bolt',
+						import: '@norbital-ai/bolt',
+						summary: expect.any(String),
+						symbols: expect.any(Number)
+					},
+					{
+						namespace: 'ui',
+						import: '@norbital-ai/ui',
+						summary: expect.any(String),
+						symbols: expect.any(Number)
+					},
+					{
+						namespace: 'std/date',
+						import: '@norbital-ai/std/date',
+						summary: expect.any(String),
+						symbols: expect.any(Number)
+					}
+				])
+			});
+			expect(list).not.toMatchObject({
+				result: expect.arrayContaining([expect.objectContaining({ namespace: 'bolt/engine' })])
+			});
+			expect(yield* tool.run({ symbol: 'collection', namespace: 'bolt' }, 'c2')).toMatchObject({
+				result: [{ import: '@norbital-ai/bolt', name: 'collection' }]
+			});
+			expect(yield* tool.run({ namespace: 'bolt/engine' }, 'c3')).toMatchObject({
+				result: { error: expect.stringMatching(/No namespace/) }
+			});
+			expect(yield* tool.run({ query: 'stack' }, 'c4')).toMatchObject({
+				result: expect.arrayContaining([expect.objectContaining({ name: 'Stack' })])
+			});
+		})
+);
+
+it.effect('an external member gets no docs tool', () =>
+	Effect.gen(function* () {
+		expect(yield* docsTool(true)).toBeUndefined();
+	})
+);

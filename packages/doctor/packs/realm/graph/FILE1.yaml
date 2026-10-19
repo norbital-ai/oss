@@ -1,0 +1,20 @@
+id: FILE1
+summary: production file is unreachable from a real entrypoint
+severity: error
+principles: [simplicity, modularity, colocation, no-bloat]
+rule:
+  all:
+    - kind: SourceFile
+    - fact:
+        name: unreferencedModule
+examples:
+  file: src/orphan.ts
+  goodFile: src/index.ts
+  fixture:
+    package.json: '{"name":"graph","type":"module","exports":"./src/index.ts"}'
+  bad:
+    - |
+      export const leftover = (): number => 0;
+  good:
+    - |
+      export const run = (): number => 1;

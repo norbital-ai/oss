@@ -1,0 +1,44 @@
+id: D1
+summary: duplicate non-trivial function, method, or class body
+severity: error
+principles: [simplicity, modularity, colocation, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: MethodDeclaration
+        - kind: FunctionExpression
+        - kind: ArrowFunction
+    - fact:
+        name: duplicateBody
+examples:
+  file: src/other.ts
+  fixture:
+    package.json: '{"name":"graph","type":"module","exports":"./src/index.ts"}'
+    src/index.ts: |
+      import './other.js';
+      export function summarise(rows: ReadonlyArray<{ amount: number; kind: string }>): string {
+        let total = 0;
+        const kinds = new Set<string>();
+        for (const row of rows) {
+          total += row.amount;
+          kinds.add(row.kind);
+        }
+        return `${total} across ${kinds.size} kinds`;
+      }
+  bad:
+    - |
+      export function summarise(rows: ReadonlyArray<{ amount: number; kind: string }>): string {
+        let total = 0;
+        const kinds = new Set<string>();
+        for (const row of rows) {
+          total += row.amount;
+          kinds.add(row.kind);
+        }
+        return `${total} across ${kinds.size} kinds`;
+      }
+  good:
+    - |
+      export function total(rows: ReadonlyArray<{ amount: number }>): number {
+        return rows.reduce((sum, row) => sum + row.amount, 0);
+      }

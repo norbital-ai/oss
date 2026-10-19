@@ -1,0 +1,143 @@
+name: Release packages
+
+# Runs after CI has passed on main, never beside it.
+#
+# This used to trigger on its own `push` filter and re-run `check:packages:ci` itself — the same
+# build, the same lint, the same nine-minute test suite CI was running at that moment on the same
+# commit. Two workflows proving one thing twice, in parallel, and a release that could not start
+# until it had re-derived a verdict that already existed. `workflow_run` consumes CI's verdict
+# instead: this job builds, packs, and publishes, and nothing else.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  PACKAGE_REGISTRY_URL: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
+
+jobs:
+  release:
+    # `workflow_run` fires on CI's failure and cancellation too, so the conclusion is the gate.
+    # A manual dispatch is its own authority and carries no CI run to read.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      # The commit CI actually passed, not whatever main points at now. Those differ whenever a
+      # second push lands while this job is queued, and publishing the newer tree would put bytes on
+      # the registry that nothing has run against.
+      - name: Checkout the commit CI passed
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      # No `registry-url`/`scope`. Those exist to write an npmrc holding `${NODE_AUTH_TOKEN}`, which
+      # pointed every pnpm process in the job at a credential none of them needed and could not
+      # expand — the `Failed to replace env in config` warnings. Only the publish step below talks to
+      # a registry, and it establishes its own credential for the length of that step.
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26.0.0
+          package-manager-cache: false
+
+      # npm owns the final normalized tar stream. Pinning it makes the package key independent of
+      # whichever npm patch release a floating Node.js image happens to bundle.
+      - name: Pin archive packer
+        run: |
+          npm install --global npm@11.12.1
+          test "$(npm --version)" = "11.12.1"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build publishable packages
+        run: pnpm build
+
+      # The release-only gate: pack every public archive and inspect it — declaration emit,
+      # local-protocol removal, license, provenance metadata, and one coherent version across the
+      # set. CI proved the code works; this proves the tarball is publishable.
+      - name: Check packed archives
+        run: pnpm publication:check
+
+      # Skipped, not failed, when this version is already on the registry.
+      #
+      # Most pushes to main do not bump the version — a test, a comment, a rename. Each one used to
+      # end in `409 Conflict - Cannot publish over existing version` and a red release, which is the
+      # shape of failure that teaches everyone to ignore a red release. The next one that meant
+      # something would have been ignored too.
+      #
+      # Checked per package rather than once, because the set must stay coherent: if a version is
+      # only partly published, the remaining packages still publish and the set converges without
+      # turning an ordinary source-only push into a failed release.
+      - name: Publish one coherent package set
+        run: |
+          set -euo pipefail
+
+          # The one place in this workflow that needs a credential, holding it for one step. Written
+          # with a private umask because it lands on the runner's disk in cleartext.
+          (umask 077 && printf '//%s/:_authToken=%s\n' \
+            "$(node -p 'new URL(process.env.PACKAGE_REGISTRY_URL).host')" \
+            "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/publish.npmrc")
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/publish.npmrc"
+
+          node scripts/resolve-published-packages.ts \
+            --source workspace \
+            --archive-base-url "$PACKAGE_REGISTRY_URL" \
+            --output dist/package-release.json \
+            --archive-output dist/package-archives
+
+          # The fingerprint of the exact bytes about to be published: a hash over every archive's
+          # name, version, and sha512. It is recorded, not asserted against a constant. A constant
+          # was tried and cannot work — the key changes with any change to built output, so it can
+          # only be filled in from a completed run, and by then the commit that would carry the new
+          # value also carries the code that changed it. Every release failed once by construction.
+          # `--provenance` below attests where these bytes were built, and GitHub Packages refuses
+          # to overwrite a published version; this line is the audit record between them.
+          key="$(node -p "require('./dist/package-release.json').packageKey")"
+          echo "::notice::packed package key $key"
+          echo "packed package key \`$key\`" >> "$GITHUB_STEP_SUMMARY"
+
+          published=0
+          skipped=0
+          mapfile -t packages < <(node --input-type=module -e \
+            "import { publicPackageDirectories } from './scripts/lib/package-release.ts'; console.log(publicPackageDirectories.join('\\n'))")
+          for package in "${packages[@]}"; do
+            name="$(node -p "require('./packages/$package/package.json').name")"
+            version="$(node -p "require('./packages/$package/package.json').version")"
+            if npm view "$name@$version" version --registry="$PACKAGE_REGISTRY_URL" >/dev/null 2>&1; then
+              echo "skip    $name@$version is already published"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            echo "publish $name@$version"
+            npm publish "dist/package-archives/$package.tgz" \
+              --access public \
+              --ignore-scripts \
+              --provenance \
+              --tag realm-v25 \
+              --registry="$PACKAGE_REGISTRY_URL"
+            published=$((published + 1))
+          done
+          echo "published=$published skipped=$skipped"
+          if [ "$published" -eq 0 ]; then
+            echo "::notice::Nothing to publish — every package is already at its declared version."
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}

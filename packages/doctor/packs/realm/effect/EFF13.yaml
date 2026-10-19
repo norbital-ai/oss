@@ -1,0 +1,14 @@
+id: EFF13
+summary: Effect.promise hides a platform rejection
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - pattern: Effect.promise($F)
+    - not:
+        fact: { name: neverRejectingPromise }
+examples:
+  bad:
+    - 'export const read = Effect.promise(() => file.text());'
+  good:
+    - 'export const read = Effect.tryPromise({ try: () => file.text(), catch: failure });'

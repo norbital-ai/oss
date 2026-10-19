@@ -1,0 +1,20 @@
+id: EFF16
+summary: module-scope Effect.fn enters a guest snapshot
+severity: error
+principles: [straightforwardness, testability, type-safety]
+files: ['**']
+rule:
+  all:
+    - pattern: Effect.fn($X)
+    - fact: { name: guestReachable }
+    - fact: { name: moduleScope }
+examples:
+  fixture:
+    src/automation/+probe.automation.ts: |
+      import { read } from '../data/probe.js';
+      export default { body: function* () { yield* read(); } };
+  file: src/data/probe.ts
+  bad:
+    - 'export const read = Effect.fn("read")(function* () { return yield* ctx.read(q); });'
+  good:
+    - 'export const read = Effect.fnUntraced(function* () { return yield* ctx.read(q); });'

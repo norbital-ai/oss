@@ -1,0 +1,28 @@
+id: OVERLAP_CHUNK
+summary: sliding slice loop reimplements a library chunk
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  all:
+    - kind: ForStatement
+    - regex: '\.slice\s*\('
+    - regex: '\.push\s*\('
+    - regex: '\+=\s*[A-Za-z_$]'
+examples:
+  bad:
+    - |
+      export function split(items: ReadonlyArray<number>, size: number): Array<Array<number>> {
+        const chunks: Array<Array<number>> = [];
+        for (let i = 0; i < items.length; i += size) {
+          chunks.push(items.slice(i, i + size));
+        }
+        return chunks;
+      }
+  good:
+    - 'export const split = (items: ReadonlyArray<number>, size: number) => chunk(items, size);'
+    - |
+      export function walk(items: ReadonlyArray<number>): void {
+        for (let i = 0; i < items.length; i++) {
+          use(items[i]);
+        }
+      }

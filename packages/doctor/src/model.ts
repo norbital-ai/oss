@@ -1,0 +1,247 @@
+/**
+ * One node model for every front-end. A file is one tree; `inside`/`has` cross languages.
+ */
+import type { Matcher } from './matcher.js';
+import { evaluateFact } from './facts.js';
+import { Predicate } from 'effect';
+import ts from 'typescript';
+
+export type Language = 'ts' | 'svelte' | 'css' | 'trivia' | 'sql';
+
+export type Range = Readonly<{ start: number; end: number }>;
+
+export type Node = {
+	kind: string;
+	field: string | undefined;
+	fields: Map<string, Array<Node>>;
+	children: Array<Node>;
+	parent: Node | undefined;
+	text: string;
+	range: Range;
+	language: Language;
+	origin: ts.Node | undefined;
+};
+
+type ModelHost = Readonly<{
+	file: string;
+	root: string;
+	source: ts.SourceFile;
+	original: string;
+}>;
+
+export function createNode(
+	kind: string,
+	language: Language,
+	original: string,
+	range: Range,
+	origin?: ts.Node
+): Node {
+	return {
+		kind,
+		field: undefined,
+		fields: new Map(),
+		children: [],
+		parent: undefined,
+		text: original.slice(range.start, range.end),
+		range,
+		language,
+		origin
+	};
+}
+
+export function attach(parent: Node, child: Node, field?: string): Node {
+	child.parent = parent;
+	child.field = field;
+	parent.children.push(child);
+	if (field !== undefined) {
+		const held = parent.fields.get(field) ?? [];
+		held.push(child);
+		parent.fields.set(field, held);
+	}
+	return child;
+}
+
+export function walk(node: Node, visit: (current: Node) => void): void {
+	visit(node);
+	for (const child of node.children) walk(child, visit);
+}
+
+export function lineOf(source: string, offset: number): number {
+	let line = 1;
+	const end = Math.min(Math.max(offset, 0), source.length);
+	for (let index = 0; index < end; index += 1) if (source.charCodeAt(index) === 10) line += 1;
+	return line;
+}
+
+function kindMatches(wanted: string, node: Node): boolean {
+	const name = wanted.startsWith('ts:') ? wanted.slice(3) : wanted;
+	if (name === node.kind || wanted === node.kind) return true;
+	if (node.kind.startsWith('ts:') && node.kind.slice(3) === name) return true;
+	const origin = node.origin;
+	if (origin === undefined || name.includes(':')) return false;
+	const numeric = ts.SyntaxKind[name as keyof typeof ts.SyntaxKind];
+	return Predicate.isNumber(numeric) && origin.kind === numeric;
+}
+
+function ancestors(node: Node): ReadonlyArray<Node> {
+	const chain: Array<Node> = [];
+	for (let parent = node.parent; parent !== undefined; parent = parent.parent) chain.push(parent);
+	return chain;
+}
+
+function descendants(node: Node): ReadonlyArray<Node> {
+	const found: Array<Node> = [];
+	const queue = [...node.children];
+	while (queue.length > 0) {
+		const current = queue.shift()!;
+		found.push(current);
+		queue.push(...current.children);
+	}
+	return found;
+}
+
+const NAMESPACED = /^(?:ts|svelte|css|trivia|sql):/;
+
+/** True when a matcher tree names a front-end kind the TypeScript walker cannot see. */
+export function hasNamespacedKind(matcher: Matcher): boolean {
+	if (Predicate.isString(matcher)) return false;
+	if ('kind' in matcher) return NAMESPACED.test(matcher.kind) && !matcher.kind.startsWith('ts:');
+	if ('inside' in matcher) return hasNamespacedKind(matcher.inside);
+	if ('has' in matcher) return hasNamespacedKind(matcher.has);
+	if ('follows' in matcher) return hasNamespacedKind(matcher.follows);
+	if ('precedes' in matcher) return hasNamespacedKind(matcher.precedes);
+	if ('not' in matcher) return hasNamespacedKind(matcher.not);
+	if ('all' in matcher) return matcher.all.some(hasNamespacedKind);
+	if ('any' in matcher) return matcher.any.some(hasNamespacedKind);
+	if ('of' in matcher) return matcher.of.some(hasNamespacedKind);
+	if ('count' in matcher) return hasNamespacedKind(matcher.count.of);
+	if ('fact' in matcher)
+		return Object.values(matcher.fact).some(
+			(value) =>
+				(Predicate.isString(value) || Predicate.isObject(value)) &&
+				hasNamespacedKind(value as Matcher)
+		);
+	return false;
+}
+
+type ModelCompiled = (node: Node, host: ModelHost) => boolean;
+
+/**
+ * An arm the model cannot evaluate refuses the rule at load: compiled to `() => false` it would
+ * report nothing, and zero findings must mean clean.
+ */
+function refuse(rule: string, arm: string): never {
+	throw new Error(
+		`norbital-doctor: ${rule} uses \`${arm}\`, which the front-end model cannot evaluate`
+	);
+}
+
+/** Compile `rule`'s matcher for the front-end model, once, when the rule loads. */
+export function compileModel(rule: string, matcher: Matcher): ModelCompiled {
+	const compile = (part: Matcher): ModelCompiled => compileModel(rule, part);
+	if (Predicate.isString(matcher))
+		return (node) =>
+			node.text.replace(/\s+/g, ' ').trim().includes(matcher.replace(/\s+/g, ' ').trim());
+	if ('kind' in matcher) return (node) => kindMatches(matcher.kind, node);
+	if ('regex' in matcher) {
+		// The model binds no metavariables, so there is no `$X` for `on` to read.
+		if (matcher.on !== undefined) refuse(rule, 'regex.on');
+		const expression = new RegExp(matcher.regex);
+		return (node) => expression.test(node.text);
+	}
+	if ('inside' in matcher) {
+		const inner = compile(matcher.inside);
+		const stop = matcher.stopBy ?? 'neighbor';
+		if (stop !== 'neighbor' && stop !== 'end') refuse(rule, 'inside.stopBy');
+		const field = matcher.field;
+		return (node, host) => {
+			const chain = ancestors(node);
+			const scope = stop === 'neighbor' ? chain.slice(0, 1) : chain;
+			return scope.some(
+				(parent) =>
+					(field === undefined ||
+						node.field === field ||
+						parent.fields.get(field)?.includes(node)) &&
+					inner(parent, host)
+			);
+		};
+	}
+	if ('has' in matcher) {
+		const inner = compile(matcher.has);
+		const stop = matcher.stopBy ?? 'neighbor';
+		if (stop !== 'neighbor' && stop !== 'end') refuse(rule, 'has.stopBy');
+		const field = matcher.field;
+		return (node, host) => {
+			const scope = stop === 'neighbor' ? node.children : descendants(node);
+			return scope.some(
+				(child) => (field === undefined || child.field === field) && inner(child, host)
+			);
+		};
+	}
+	if ('all' in matcher) {
+		const parts = matcher.all.map(compile);
+		return (node, host) => parts.every((part) => part(node, host));
+	}
+	if ('any' in matcher) {
+		const parts = matcher.any.map(compile);
+		return (node, host) => parts.some((part) => part(node, host));
+	}
+	if ('not' in matcher) {
+		const inner = compile(matcher.not);
+		return (node, host) => !inner(node, host);
+	}
+	if ('fact' in matcher) {
+		const described = matcher.fact as Readonly<{ name: string }> &
+			Readonly<Record<string, unknown>>;
+		const { name, ...params } = described;
+		return (node, host) => {
+			if (node.origin === undefined && name !== 'enclosingOwnerMatches') return false;
+			if (node.origin === undefined) {
+				return evaluateFact(name, params, {
+					node: host.source,
+					source: host.source,
+					bindings: new Map(),
+					file: host.file,
+					root: host.root
+				});
+			}
+			return evaluateFact(name, params, {
+				node: node.origin,
+				source: host.source,
+				bindings: new Map(),
+				file: host.file,
+				root: host.root
+			});
+		};
+	}
+	if ('atLeast' in matcher) {
+		const parts = matcher.of.map(compile);
+		const threshold = matcher.atLeast;
+		return (node, host) => {
+			const subtree = [node, ...descendants(node)];
+			let distinct = 0;
+			for (const part of parts) {
+				if (subtree.some((candidate) => part(candidate, host))) distinct += 1;
+				if (distinct >= threshold) return true;
+			}
+			return false;
+		};
+	}
+	// `pattern`, `nthChild`, `range`, `follows`, `precedes`, `matches`, `selfModule`, `aliasCovered`,
+	// `importsFrom`, `count` and `calls` need the TypeScript walker.
+	return refuse(
+		rule,
+		Object.keys(matcher)
+			.filter((key) => key !== 'stopBy')
+			.join(', ')
+	);
+}
+
+/** Run a compiled matcher against every node of a projected tree; returns the nodes that matched. */
+export function matchTree(run: ModelCompiled, root: Node, host: ModelHost): ReadonlyArray<Node> {
+	const found: Array<Node> = [];
+	walk(root, (node) => {
+		if (run(node, host)) found.push(node);
+	});
+	return found;
+}

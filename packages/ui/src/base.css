@@ -1,0 +1,1220 @@
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+@import 'leaflet/dist/leaflet.css';
+@import 'tailwindcss' source(none);
+/* Every ui component; the bolt bundler adds `@source` for the shell and the workspace's own pages. */
+@source './';
+@import 'tw-animate-css';
+@plugin '@tailwindcss/typography';
+@custom-variant dark (&:is(.dark *));
+
+/* tw-animate's enter/exit keyframes also animate `filter: blur()`, which Chrome cannot composite: every sheet, dialog
+   and popover then animated on the main thread, repainting each frame and stalling while its contents mounted. These
+   replace them with the same opacity/transform motion only (no `blur-in`/`blur-out`). */
+@theme inline {
+	@keyframes enter {
+		from {
+			opacity: var(--tw-enter-opacity, 1);
+			transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0)
+				scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1))
+				rotate(var(--tw-enter-rotate, 0));
+		}
+	}
+	@keyframes exit {
+		to {
+			opacity: var(--tw-exit-opacity, 1);
+			transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0)
+				scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), var(--tw-exit-scale, 1))
+				rotate(var(--tw-exit-rotate, 0));
+		}
+	}
+}
+
+.workspace-opening {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	display: grid;
+	place-items: center;
+	background: var(--background);
+	color: var(--foreground);
+	font:
+		500 0.875rem Geist,
+		system-ui,
+		sans-serif;
+}
+.workspace-opening > div {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 1rem;
+}
+.workspace-opening img {
+	width: 2.75rem;
+	height: 2.75rem;
+	border-radius: 0.5rem;
+}
+.workspace-opening p {
+	margin: 0;
+	opacity: 0.7;
+}
+.workspace-opening-track {
+	width: 8rem;
+	height: 2px;
+	overflow: hidden;
+	background: rgb(127 127 127 / 25%);
+}
+.workspace-opening-track::after {
+	content: '';
+	display: block;
+	width: 40%;
+	height: 100%;
+	background: var(--brand-500);
+	animation: workspace-opening 1.3s ease-in-out infinite alternate;
+}
+@keyframes workspace-opening {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.workspace-opening-track::after {
+		animation: none;
+		transform: translateX(75%);
+	}
+}
+
+:root {
+	/* Norbital DESIGN.md — light: warm cream surfaces, Norbital Dark text, oklab borders */
+	--radius: 0.5rem;
+
+	/* Compact presentation is a phone viewport state, not a consequence of a narrow
+	   desktop pane. CSS media queries restate 48rem and the sidebar watcher uses 768px. */
+	--size-compact: 48rem;
+	--size-narrow: 48rem;
+	--measure: 70ch;
+	--background: #f2f1ed;
+	--foreground: #26251e;
+	--card: #f7f7f4;
+	--card-foreground: #26251e;
+	--popover: #ffffff;
+	--popover-foreground: #26251e;
+	--primary: #26251e;
+	--primary-foreground: #f7f7f4;
+	--secondary: #e6e5e0;
+	--secondary-foreground: #26251e;
+	--muted: #ebeae5;
+	--muted-foreground: oklab(0.263084 -0.00230259 0.0124794 / 0.55);
+	--accent: #e1e0db;
+	--accent-foreground: #26251e;
+	--destructive: #cf2d56;
+	--destructive-foreground: oklch(0.99 0 0);
+	--success: #1f8a65;
+	--success-foreground: oklch(0.99 0 0);
+	--info: oklch(0.55 0.15 250);
+	--info-foreground: oklch(0.99 0 0);
+	--warning: oklch(0.75 0.12 80);
+	--warning-foreground: oklch(0.3 0.05 80);
+	--border: oklab(0.263084 -0.00230259 0.0124794 / 0.1);
+	--input: oklab(0.263084 -0.00230259 0.0124794 / 0.12);
+	--ring: var(--brand-500);
+	--chart-1: oklch(0.646 0.222 41.116);
+	--chart-2: oklch(0.6 0.118 184.704);
+	--chart-3: oklch(0.398 0.07 227.392);
+	--chart-4: oklch(0.828 0.189 84.429);
+	--chart-5: oklch(0.769 0.188 70.08);
+	--sidebar: #f7f7f4;
+	--sidebar-foreground: #26251e;
+	--sidebar-primary: #26251e;
+	--sidebar-primary-foreground: #f7f7f4;
+	--sidebar-accent: #ebeae5;
+	--sidebar-accent-foreground: #26251e;
+	--sidebar-border: oklab(0.263084 -0.00230259 0.0124794 / 0.1);
+	--sidebar-ring: var(--brand-500);
+
+	/* Brand */
+	--brand-50: oklch(0.985 0.02 52);
+	--brand-100: oklch(0.964 0.045 50);
+	--brand-200: oklch(0.926 0.082 49);
+	--brand-300: oklch(0.864 0.128 48);
+	--brand-400: oklch(0.786 0.161 47);
+	--brand-500: oklch(0.696 0.185 46.5);
+	--brand-600: oklch(0.622 0.187 44.5);
+	--brand-700: oklch(0.544 0.165 42.5);
+	--brand-800: oklch(0.455 0.136 40.5);
+	--brand-900: oklch(0.391 0.11 38.5);
+	--brand-950: oklch(0.274 0.07 36);
+	--brand: var(--brand-500);
+	--brand-foreground: oklch(0.99 0 0);
+	--brand-muted: var(--brand-100);
+	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
+	--product-icon-accent: var(--brand);
+
+	/* Motion: one ease-out, three durations, nothing over 300ms. Finger-driven surfaces (sheets,
+	   swipes) use springs instead — a duration on something the finger moves feels wrong. */
+	--motion-fast: 120ms;
+	--motion-base: 180ms;
+	--motion-slow: 260ms;
+	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+	/* Touch density: a phone thumb needs 44px; the tokens flip under (pointer: coarse) below. */
+	--hit-target: 0;
+}
+
+@media (pointer: coarse) {
+	:root {
+		--hit-target: 2.75rem;
+	}
+}
+
+.dark {
+	--background: oklch(0.185 0.012 95);
+	--foreground: oklch(0.96 0.008 95);
+	--card: oklch(0.245 0.012 95);
+	--card-foreground: oklch(0.96 0.008 95);
+	--popover: oklch(0.275 0.014 95);
+	--popover-foreground: oklch(0.96 0.008 95);
+	--primary: oklch(0.96 0.008 95);
+	--primary-foreground: oklch(0.185 0.012 95);
+	--secondary: oklch(0.285 0.014 95);
+	--secondary-foreground: oklch(0.96 0.008 95);
+	--muted: oklch(0.3 0.014 95);
+	--muted-foreground: oklch(0.76 0.018 95);
+	--accent: oklch(0.34 0.016 95);
+	--accent-foreground: oklch(0.96 0.008 95);
+	--destructive: oklch(0.62 0.2 18);
+	--destructive-foreground: oklch(0.99 0 0);
+	--success: oklch(0.65 0.15 162);
+	--success-foreground: oklch(0.21 0.012 95);
+	--info: oklch(0.65 0.15 250);
+	--info-foreground: oklch(0.21 0.012 95);
+	--warning: oklch(0.7 0.12 80);
+	--warning-foreground: oklch(0.21 0.012 95);
+	--border: oklch(0.96 0.008 95 / 16%);
+	--input: oklch(0.96 0.008 95 / 22%);
+	--ring: var(--brand-400);
+	--chart-1: oklch(0.488 0.243 264.376);
+	--chart-2: oklch(0.696 0.17 162.48);
+	--chart-3: oklch(0.769 0.188 70.08);
+	--chart-4: oklch(0.627 0.265 303.9);
+	--chart-5: oklch(0.645 0.246 16.439);
+	--sidebar: oklch(0.205 0.012 95);
+	--sidebar-foreground: oklch(0.96 0.008 95);
+	--sidebar-primary: oklch(0.96 0.008 95);
+	--sidebar-primary-foreground: oklch(0.185 0.012 95);
+	--sidebar-accent: oklch(0.29 0.014 95);
+	--sidebar-accent-foreground: oklch(0.96 0.008 95);
+	--sidebar-border: oklch(0.96 0.008 95 / 16%);
+	--sidebar-ring: var(--brand-400);
+
+	/* Brand */
+	--brand-50: oklch(0.985 0.02 52);
+	--brand-100: oklch(0.964 0.045 50);
+	--brand-200: oklch(0.926 0.082 49);
+	--brand-300: oklch(0.864 0.128 48);
+	--brand-400: oklch(0.786 0.161 47);
+	--brand-500: oklch(0.696 0.185 46.5);
+	--brand-600: oklch(0.622 0.187 44.5);
+	--brand-700: oklch(0.544 0.165 42.5);
+	--brand-800: oklch(0.455 0.136 40.5);
+	--brand-900: oklch(0.391 0.11 38.5);
+	--brand-950: oklch(0.274 0.07 36);
+	--brand: var(--brand-500);
+	--brand-foreground: oklch(0.985 0 0);
+	--brand-muted: var(--brand-900);
+	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
+	--product-icon-accent: var(--brand);
+
+	/* Dark mode elevation — slightly higher shadow opacity to remain perceptible */
+	--shadow-card:
+		rgba(0, 0, 0, 0.06) 0px 4px 18px, rgba(0, 0, 0, 0.04) 0px 2.025px 7.84688px,
+		rgba(0, 0, 0, 0.03) 0px 0.8px 2.925px, rgba(0, 0, 0, 0.015) 0px 0.175px 1.04062px;
+	--shadow-deep:
+		rgba(0, 0, 0, 0.015) 0px 1px 3px, rgba(0, 0, 0, 0.03) 0px 3px 7px,
+		rgba(0, 0, 0, 0.03) 0px 7px 15px, rgba(0, 0, 0, 0.06) 0px 14px 28px,
+		rgba(0, 0, 0, 0.075) 0px 23px 52px;
+
+	color-scheme: dark;
+}
+
+@theme inline {
+	--font-sans:
+		'Geist Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+		'Segoe UI Symbol', 'Noto Color Emoji';
+	--font-mono:
+		'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+		'Courier New', monospace;
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-brand: var(--brand);
+	--color-brand-50: var(--brand-50);
+	--color-brand-100: var(--brand-100);
+	--color-brand-200: var(--brand-200);
+	--color-brand-300: var(--brand-300);
+	--color-brand-400: var(--brand-400);
+	--color-brand-500: var(--brand-500);
+	--color-brand-600: var(--brand-600);
+	--color-brand-700: var(--brand-700);
+	--color-brand-800: var(--brand-800);
+	--color-brand-900: var(--brand-900);
+	--color-brand-950: var(--brand-950);
+	--color-brand-foreground: var(--brand-foreground);
+	--color-brand-muted: var(--brand-muted);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-success: var(--success);
+	--color-success-foreground: var(--success-foreground);
+	--color-info: var(--info);
+	--color-info-foreground: var(--info-foreground);
+	--color-warning: var(--warning);
+	--color-warning-foreground: var(--warning-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-chart-1: var(--chart-1);
+	--color-chart-2: var(--chart-2);
+	--color-chart-3: var(--chart-3);
+	--color-chart-4: var(--chart-4);
+	--color-chart-5: var(--chart-5);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-ring: var(--sidebar-ring);
+	--shadow-card:
+		rgba(0, 0, 0, 0.04) 0px 4px 18px, rgba(0, 0, 0, 0.027) 0px 2.025px 7.84688px,
+		rgba(0, 0, 0, 0.02) 0px 0.8px 2.925px, rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
+	--shadow-deep:
+		rgba(0, 0, 0, 0.01) 0px 1px 3px, rgba(0, 0, 0, 0.02) 0px 3px 7px,
+		rgba(0, 0, 0, 0.02) 0px 7px 15px, rgba(0, 0, 0, 0.04) 0px 14px 28px,
+		rgba(0, 0, 0, 0.05) 0px 23px 52px;
+
+	/* ================================================================ */
+	/* Canonical type scale (DESIGN.md §3)                              */
+	/* Marketing tiers are fluid; product tiers are fixed.              */
+	/* ================================================================ */
+	--text-display: clamp(1.875rem, 1.4rem + 1.6vw, 3rem);
+	--text-display--line-height: 1.1;
+	--text-display--letter-spacing: -0.04em;
+	--text-display--font-weight: 600;
+	--text-title: clamp(1.75rem, 1.45rem + 0.9vw, 2.25rem);
+	--text-title--line-height: 1.15;
+	--text-title--letter-spacing: -0.035em;
+	--text-title--font-weight: 600;
+	--text-section: clamp(1.375rem, 1.2rem + 0.55vw, 1.875rem);
+	--text-section--line-height: 1.2;
+	--text-section--letter-spacing: -0.03em;
+	--text-section--font-weight: 600;
+	--text-subhead: 1.25rem;
+	--text-subhead--line-height: 1.3;
+	--text-subhead--letter-spacing: -0.02em;
+	--text-subhead--font-weight: 600;
+	--text-lede: 1.125rem;
+	--text-lede--line-height: 1.75;
+	--text-lede--font-weight: 400;
+	/* Product tiers */
+	--text-heading: 1.125rem;
+	--text-heading--line-height: 1.3;
+	--text-heading--letter-spacing: -0.01em;
+	--text-heading--font-weight: 600;
+	--text-micro: 0.6875rem;
+	--text-tiny: 0.625rem;
+
+	/* ================================================================ */
+	/* Luxe Component Animations */
+	/* ================================================================ */
+	@keyframes flip {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	@keyframes kitrotate {
+		to {
+			transform: rotate(90deg);
+		}
+	}
+
+	@keyframes shine {
+		from {
+			background-position: 0 0;
+		}
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	@keyframes slide {
+		from {
+			transform: translateX(0);
+		}
+		to {
+			transform: translateX(calc(-100% - var(--gap)));
+		}
+	}
+
+	@keyframes spotlight {
+		0% {
+			opacity: 0;
+			transform: translate(-72%, -62%) scale(0.5);
+		}
+		100% {
+			opacity: 1;
+			transform: translate(-50%, -40%) scale(1);
+		}
+	}
+
+	@keyframes border-width {
+		from {
+			width: 10px;
+			opacity: 0;
+		}
+		to {
+			width: 100px;
+			opacity: 1;
+		}
+	}
+
+	@keyframes text-gradient {
+		to {
+			background-position: 200% center;
+		}
+	}
+
+	@keyframes text-shake {
+		15% {
+			transform: translateX(5px);
+		}
+		30% {
+			transform: translateX(-5px);
+		}
+		50% {
+			transform: translateX(3px);
+		}
+		80% {
+			transform: translateX(2px);
+		}
+		100% {
+			transform: translateX(0);
+		}
+	}
+
+	@keyframes text-glitch-to {
+		from {
+			transform: translateY(0);
+		}
+		to {
+			transform: translateY(-100%);
+		}
+	}
+
+	@keyframes text-glitch-from {
+		from {
+			transform: translateY(100%);
+		}
+		to {
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes text-scale {
+		0% {
+			transform: scaleX(0);
+			transform-origin: bottom left;
+		}
+		25% {
+			transform: scaleX(1);
+			transform-origin: bottom left;
+		}
+		75% {
+			transform: scaleX(1);
+			transform-origin: bottom right;
+		}
+		100% {
+			transform: scaleX(0);
+			transform-origin: bottom right;
+		}
+	}
+
+	@keyframes background-shine {
+		from {
+			background-position: 0 0;
+		}
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	/* Animation utility classes */
+	--animate-shimmer: shimmer 8s infinite;
+	--animate-flip: flip 6s infinite steps(2, end);
+	--animate-kitrotate: kitrotate 3s linear infinite both;
+	--animate-shine: shine 2s linear infinite;
+	--animate-slide: slide 40s linear infinite;
+	--animate-spotlight: spotlight 2s ease 0.75s 1 forwards;
+	--animate-border-width: border-width 3s infinite alternate;
+	--animate-text-gradient: text-gradient 2s linear infinite;
+	--animate-text-shake: text-shake 1s ease 1;
+	--animate-text-glitch-to: text-glitch-to 0.6s ease-in-out infinite;
+	--animate-text-glitch-from: text-glitch-from 0.6s ease-in-out infinite;
+	--animate-text-scale: text-scale 1s linear infinite forwards;
+	--animate-background-shine: background-shine 2s linear infinite;
+	--animate-pulse-slow: pulse 6s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+
+	body {
+		@apply bg-background text-foreground;
+	}
+}
+
+/* ================================================================ */
+/* 2b ▸ Type roles (DESIGN.md §3)                                    */
+/* ================================================================ */
+/*
+	The `--text-*` tokens above are a scale: they answer "how big", and each one carries
+	its own weight, leading and tracking so the size utility is the whole recipe. What
+	they cannot carry is colour or `text-transform`, and that is the seam every label in
+	the app fell through. One uppercase group label was `text-micro font-semibold
+	tracking-[0.08em] uppercase`, the sidebar's was `text-tiny font-normal tracking-wide
+	uppercase text-sidebar-foreground/70`, the calendar's `text-micro font-semibold
+	uppercase tracking-wider` — the same element, three sizes, three weights, three
+	trackings, because nothing existed to name the role and each author reassembled it.
+
+	These classes name the role. They live in `components` so any utility still overrides
+	them (`text-overline text-foreground` re-colours a label without reopening the size),
+	and they are defined in terms of the tokens so the scale stays the one source of
+	truth. Compose a role class with layout and state utilities; never restate the
+	`font-*`, `leading-*`, `tracking-*` or colour it already sets.
+*/
+@layer components {
+	/* Small uppercase heading over a group of things: sidebar sections, menu groups,
+		 the table-of-contents title, column-header bands, filter groups. The single
+		 sanctioned use of positive tracking. */
+	.text-overline {
+		@apply text-micro;
+		font-weight: 600;
+		line-height: 1.4;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--color-muted-foreground);
+	}
+
+	/* The name of a control: form fields, switches, filter inputs. `line-height: 1` is
+		 load-bearing — it lets a label sit on the same optical baseline as the input beside
+		 it without the parent compensating. */
+	.text-label {
+		@apply text-sm;
+		font-weight: 500;
+		line-height: 1;
+		color: var(--color-foreground);
+	}
+
+	/* Secondary metadata beside primary content: timestamps, counts, record ids, helper
+		 text under a field. Leading comes from `text-xs` rather than a value of its own: this
+		 role names what ~200 call sites were already writing as `text-xs
+		 text-muted-foreground`, and a role that silently restyles the thing it replaces is a
+		 migration, not a rename. */
+	.text-meta {
+		@apply text-xs;
+		font-weight: 400;
+		color: var(--color-muted-foreground);
+	}
+
+	/* `--text-lede` is a size token and so cannot carry colour, yet a lede is muted in
+		 every place one appears — which is why the website kept a `site-lede` alias whose
+		 only job was to add that colour. This completes the token instead: the utility
+		 still sets size, weight and leading, and this adds the one property it could not.
+		 `text-lede text-foreground` still un-mutes a lede that needs full contrast. */
+	.text-lede {
+		color: var(--color-muted-foreground);
+	}
+
+	/* The line above a marketing heading that says what section this is. */
+	.text-eyebrow {
+		@apply text-sm;
+		font-weight: 500;
+		line-height: 1.25;
+		color: var(--color-muted-foreground);
+	}
+
+	/* Long-form reading text outside `.prose`: marketing paragraphs, explanatory copy.
+		 The softened foreground is this role's own value and the reason the class exists —
+		 it is the one place the mix is written, instead of an opacity picked per page. */
+	.text-body {
+		@apply text-base;
+		font-weight: 400;
+		line-height: 1.75;
+		color: color-mix(in oklab, var(--color-foreground) 82%, transparent);
+	}
+
+	/* A note attached to something else: figure captions, footnotes, footer copy. Leading
+		 comes from `text-sm`, for the same reason as `text-meta` above. Plain de-emphasised UI
+		 text is *not* this role — `text-sm text-muted-foreground` is a size and a colour, which
+		 is exactly what rule 5 asks for, and does not need a name. */
+	.text-caption {
+		@apply text-sm;
+		font-weight: 400;
+		color: var(--color-muted-foreground);
+	}
+}
+
+/* ================================================================ */
+/* 3 ▸ Base resets & Tiptap typography (GitHub-inspired)             */
+/* ================================================================ */
+@layer base {
+	/* ---- Base element resets ---- */
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-border, currentColor);
+	}
+
+	body {
+		@apply bg-background font-sans text-foreground;
+		font-kerning: normal;
+		font-synthesis-weight: none;
+	}
+
+	[data-sonner-toaster] {
+		font-family: var(--font-sans);
+	}
+
+	/* ──────────────────────────────────────────────────────────────────── */
+	/* Tiptap / ProseMirror Content Styling                               */
+	/* ──────────────────────────────────────────────────────────────────── */
+
+	.tiptap {
+		@apply leading-relaxed; /* Base line-height for prose */
+	}
+
+	/* Reset margins for first/last elements in the editor */
+	.tiptap > :first-child {
+		@apply mt-0;
+	}
+	.tiptap > :last-child {
+		@apply mb-0;
+	}
+
+	/* ---- Headings ---- */
+	.tiptap h1,
+	.tiptap h2,
+	.tiptap h3,
+	.tiptap h4,
+	.tiptap h5,
+	.tiptap h6 {
+		@apply mt-6 mb-4 leading-tight font-semibold tracking-tight;
+	}
+
+	.tiptap h1 {
+		@apply border-b border-border pb-2 text-4xl lg:text-5xl;
+	}
+	.tiptap h2 {
+		@apply border-b border-border pb-2 text-3xl;
+	}
+	.tiptap h3 {
+		@apply text-2xl;
+	}
+	.tiptap h4 {
+		@apply text-xl;
+	}
+	.tiptap h5 {
+		@apply text-lg;
+	}
+	.tiptap h6 {
+		@apply text-base text-muted-foreground;
+	}
+
+	/* ---- Block Elements ---- */
+	.tiptap p {
+		@apply my-4;
+	}
+
+	/* ---- Documentation scale ---- */
+	.tiptap-documentation h1,
+	.tiptap-documentation h2,
+	.tiptap-documentation h3,
+	.tiptap-documentation h4,
+	.tiptap-documentation h5,
+	.tiptap-documentation h6 {
+		@apply border-0 pb-0;
+	}
+	.tiptap-documentation h1 {
+		@apply text-section mt-0 mb-3;
+	}
+	.tiptap-documentation h2 {
+		@apply text-subhead mt-8 mb-2;
+	}
+	.tiptap-documentation h3 {
+		@apply text-heading mt-6 mb-2;
+	}
+	.tiptap-documentation h4,
+	.tiptap-documentation h5,
+	.tiptap-documentation h6 {
+		@apply mt-5 mb-2 text-base;
+	}
+	.tiptap-documentation p {
+		@apply mt-0 mb-5;
+	}
+	.tiptap-documentation ul,
+	.tiptap-documentation ol {
+		@apply mt-0 mb-5;
+	}
+
+	/* ---- Reading scale ---- */
+	/*
+		The rules above are document-editor typography: an `h1` at `text-4xl lg:text-5xl` under a
+		full-width rule, an `h2` at `text-3xl` under another, and `my-4` between paragraphs. That is
+		right for a document being written and badly wrong for a chat transcript, where the same
+		markdown arrives inside a pane a few hundred pixels wide — a model writing `## Cause` got a
+		heading larger than the page title and a horizontal rule across the reply. `.tiptap-reading`
+		puts headings back on the app's own type scale and tightens the block rhythm to match the
+		surrounding UI. It only ever narrows: no new colours, no new families.
+	*/
+	.tiptap-reading h1,
+	.tiptap-reading h2,
+	.tiptap-reading h3,
+	.tiptap-reading h4,
+	.tiptap-reading h5,
+	.tiptap-reading h6 {
+		@apply mt-4 mb-2 border-0 pb-0;
+	}
+	.tiptap-reading h1 {
+		@apply text-subhead;
+	}
+	.tiptap-reading h2 {
+		@apply text-heading;
+	}
+	.tiptap-reading h3,
+	.tiptap-reading h4 {
+		@apply text-base;
+	}
+	.tiptap-reading h5,
+	.tiptap-reading h6 {
+		@apply text-sm text-muted-foreground;
+	}
+	.tiptap-reading p {
+		@apply my-2;
+	}
+	.tiptap-reading ul,
+	.tiptap-reading ol,
+	.tiptap-reading blockquote,
+	.tiptap-reading pre {
+		@apply my-2;
+	}
+	.tiptap-reading > :first-child {
+		@apply mt-0;
+	}
+	.tiptap-reading > :last-child {
+		@apply mb-0;
+	}
+
+	/* Compact Markdown inside summaries and plan panes uses product typography. */
+	.tiptap-compact {
+		@apply text-sm;
+		overflow-wrap: anywhere;
+	}
+	.tiptap-compact h1 {
+		@apply text-heading;
+	}
+	.tiptap-compact h2 {
+		@apply text-base tracking-normal;
+	}
+	.tiptap-compact h3,
+	.tiptap-compact h4,
+	.tiptap-compact h5,
+	.tiptap-compact h6 {
+		@apply text-sm tracking-normal;
+	}
+	.tiptap-compact pre {
+		@apply max-w-full overflow-x-auto;
+	}
+
+	.tiptap blockquote {
+		@apply my-4 border-l-2 border-border pl-4 text-muted-foreground;
+	}
+	.tiptap blockquote > :first-child {
+		@apply mt-0;
+	}
+	.tiptap blockquote > :last-child {
+		@apply mb-0;
+	}
+
+	.tiptap hr {
+		@apply my-8 h-px border-0 bg-border;
+	}
+
+	/* ---- Lists ---- */
+	.tiptap ul,
+	.tiptap ol {
+		@apply my-4 pl-6;
+	}
+
+	.tiptap li {
+		@apply my-1.5;
+	}
+
+	.tiptap li > p {
+		@apply mt-2 mb-0;
+	}
+
+	.tiptap ul {
+		@apply list-disc;
+	}
+	.tiptap ul ul {
+		list-style-type: circle;
+	}
+	.tiptap ul ul ul {
+		list-style-type: square;
+	}
+	.tiptap ol {
+		@apply list-decimal;
+	}
+	.tiptap ol ol {
+		list-style-type: lower-roman;
+	}
+	.tiptap ol ol ol {
+		list-style-type: lower-alpha;
+	}
+
+	.tiptap ::marker {
+		@apply text-muted-foreground;
+	}
+
+	/* ---- Inline Elements ---- */
+	.tiptap a {
+		@apply font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80;
+	}
+	.tiptap :where(h1, h2, h3, h4, h5, h6) > a {
+		color: inherit;
+		font: inherit;
+		text-decoration: none;
+	}
+
+	.tiptap img {
+		@apply max-w-full rounded-md border border-border;
+	}
+
+	/* THIS IS THE FIX: The selector now excludes code inside pre */
+	.tiptap :not(pre) > code {
+		@apply rounded bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground;
+		font-size: x-small;
+	}
+
+	/* only target code-blocks coming in via Tiptap’s CodeBlock extension */
+	.tiptap code[class*='language-'] {
+		background: transparent !important;
+		font-size: x-small;
+	}
+
+	.tiptap strong {
+		@apply font-bold;
+	}
+
+	.tiptap em {
+		@apply italic;
+	}
+
+	/* ---- Code Blocks ---- */
+	.tiptap pre {
+		background-color: var(--cm-bg, oklch(0.18 0 0));
+		color: var(--cm-fg, oklch(1 0 0));
+		@apply my-6 overflow-x-auto rounded-lg p-4 font-mono text-sm;
+	}
+	.tiptap pre code {
+		@apply border-0 bg-transparent p-0 text-inherit;
+		font-size: inherit;
+		white-space: pre;
+		word-break: normal;
+	}
+
+	/* ---- Tables ---- */
+	.tiptap table {
+		@apply block w-max max-w-full border-collapse overflow-auto rounded-md border border-border text-xs;
+	}
+	.tiptap tr {
+		@apply border-t border-border;
+	}
+	/* Striped rows */
+	.tiptap tbody tr:nth-child(2n) {
+		@apply bg-muted;
+	}
+	.tiptap th {
+		@apply border border-border px-2 text-left text-xs font-semibold;
+	}
+	.tiptap td {
+		@apply border border-border px-2 text-left;
+	}
+	.tiptap th[align='center'],
+	.tiptap td[align='center'] {
+		@apply text-center;
+	}
+	.tiptap th[align='right'],
+	.tiptap td[align='right'] {
+		@apply text-right;
+	}
+
+	/* ──────────────────────────────────────────────────────────────────── */
+	/* ProseMirror Editor-Specific Styles                                */
+	/* ──────────────────────────────────────────────────────────────────── */
+
+	.ProseMirror p.is-editor-empty:first-child::before {
+		color: var(--color-muted-foreground);
+		content: attr(data-placeholder);
+		float: left;
+		height: 0;
+		pointer-events: none;
+	}
+
+	.ProseMirror:focus {
+		@apply outline-none;
+	}
+
+	.ProseMirror-selectednode > *:first-child {
+		box-shadow: 0 0 0 3px var(--color-primary) !important;
+		outline: none !important;
+		@apply rounded-sm;
+	}
+
+	/* ---- Task Lists (Tiptap Extension) ---- */
+	.tiptap ul[data-type='taskList'] {
+		@apply my-4 list-none p-0;
+	}
+
+	.tiptap li[data-type='taskItem'] {
+		@apply my-2 flex items-start gap-x-3;
+	}
+
+	.tiptap li[data-type='taskItem'] > label {
+		@apply mt-1 flex-none;
+	}
+
+	.tiptap li[data-type='taskItem'] > div {
+		@apply flex-1;
+	}
+
+	.tiptap li[data-type='taskItem'] > div > p {
+		@apply my-0;
+	}
+
+	.tiptap li[data-type='taskItem'] input[type='checkbox'] {
+		@apply h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary;
+	}
+
+	.tiptap li[data-type='taskItem'][data-checked='true'] > div {
+		@apply text-muted-foreground line-through;
+	}
+}
+
+/* ---- scrollbars ----
+	A scroll bar is an affordance, not chrome. Painting the thumb unconditionally put a
+	permanent hairline down the inside edge of every pane in a dense layout — read as a
+	second border beside the real one, and doubly wrong on a rail whose content only just
+	overflows. The thumb is therefore transparent at rest and resolves to `--color-border`
+	while the pointer is inside the scroll container. Keeping programmatic and keyboard
+	scrolls from painting a thumb after the pointer has left is deliberate: the edge cue
+	below carries the persistent "there is more" signal, while the bar appears only when
+	the reader is interacting with that region.
+
+	What replaces the resting thumb as the "there is more below" signal is the edge fade
+	below, which — unlike a thumb — only appears on the edges that actually have more. */
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+	padding: 1px;
+}
+::-webkit-scrollbar-thumb {
+	background-color: transparent;
+	border-radius: 9999px;
+	border: 2px solid transparent;
+	background-clip: content-box;
+	min-height: 40px;
+	transition: background-color 0.2s ease;
+}
+:hover::-webkit-scrollbar-thumb {
+	background-color: var(--color-border);
+}
+:hover::-webkit-scrollbar-thumb:hover {
+	background-color: color-mix(in oklab, var(--color-border) 75%, var(--foreground));
+}
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
+/* Firefox has no thumb pseudo-element; `scrollbar-color` is the whole control. It
+	inherits, so the resting value has to be restated on `*` rather than set once on the
+	root — otherwise a hovered ancestor would light up every scroll bar beneath it. */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+}
+*:hover {
+	scrollbar-color: var(--color-border) transparent;
+}
+/* A table's scroll port: its vertical bar starts under the sticky header (h-9), not beside it. Chrome
+	reads the `::-webkit-scrollbar` rules only while both standard properties are `auto`; Firefox has no
+	track margin, so its bar still spans the header. */
+[data-table-wide] {
+	scrollbar-width: auto;
+	scrollbar-color: auto;
+}
+[data-table-wide]::-webkit-scrollbar-track:vertical {
+	margin-top: 2.25rem;
+}
+
+/* ---- overflow affordance ----
+	`scrollAffordance` stamps `data-overflow` with the edges that have content beyond
+	them, so a pane fades only where there is genuinely more to reach: nothing on a region
+	that fits, one edge at the ends of a list, both in the middle. Authors never write the
+	gradient — `<Scroll>` carries it, and any other scrollport opts in with `data-overflow`
+	plus the attachment.
+
+	The mask is declared on the *edge* selectors, not on `[data-overflow]` itself, so a
+	region whose content fits carries no mask at all. A mask is not free — it clips
+	non-portaled descendants to the padding box and forces the pane onto its own
+	composited layer — and paying that on every scrollport in the app to draw a gradient
+	from 0px to 0px would be a cost for nothing. */
+[data-overflow] {
+	/* Light surfaces need a longer runway: white content fading into a white shell otherwise
+		looks like ordinary whitespace rather than content continuing beyond the viewport. */
+	--overflow-fade: 2.5rem;
+	--overflow-fade-block-start: 0px;
+	--overflow-fade-block-end: 0px;
+	--overflow-fade-inline-start: 0px;
+	--overflow-fade-inline-end: 0px;
+}
+.dark [data-overflow] {
+	--overflow-fade: 1.75rem;
+}
+/* Contain scroll chaining only where there is content to scroll into: Chrome stops the
+	chain at every scroll container carrying `contain`, scrollable or not, so a region that
+	fits would otherwise swallow the wheel meant for the scrollport above it. */
+[data-overflow~='block-start'],
+[data-overflow~='block-end'] {
+	overscroll-behavior-y: contain;
+}
+[data-overflow~='inline-start'],
+[data-overflow~='inline-end'] {
+	overscroll-behavior-x: contain;
+}
+[data-overflow~='block-start']:not([data-fade='false']),
+[data-overflow~='block-end']:not([data-fade='false']),
+[data-overflow~='inline-start']:not([data-fade='false']),
+[data-overflow~='inline-end']:not([data-fade='false']) {
+	-webkit-mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0,
+			#000 var(--overflow-fade-block-start),
+			#000 calc(100% - var(--overflow-fade-block-end)),
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0,
+			#000 var(--overflow-fade-inline-start),
+			#000 calc(100% - var(--overflow-fade-inline-end)),
+			transparent 100%
+		);
+	mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0,
+			#000 var(--overflow-fade-block-start),
+			#000 calc(100% - var(--overflow-fade-block-end)),
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0,
+			#000 var(--overflow-fade-inline-start),
+			#000 calc(100% - var(--overflow-fade-inline-end)),
+			transparent 100%
+		);
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+}
+[data-overflow~='block-start'] {
+	--overflow-fade-block-start: var(--overflow-fade);
+}
+[data-overflow~='block-end'] {
+	--overflow-fade-block-end: var(--overflow-fade);
+}
+[data-overflow~='inline-start'] {
+	--overflow-fade-inline-start: var(--overflow-fade);
+}
+[data-overflow~='inline-end'] {
+	--overflow-fade-inline-end: var(--overflow-fade);
+}
+
+/* Side sheets and centred dialogs become reachable, thumb-friendly bottom sheets on narrow
+   viewports. The explicit contract wins over feature-local desktop width and height classes;
+   the tw-animate enter/exit vars turn the dialog's zoom into a slide from the bottom edge. */
+@media (max-width: 47.999rem) {
+	[data-mobile-bottom-sheet='true'] {
+		--tw-enter-translate-x: 0 !important;
+		--tw-enter-translate-y: 100% !important;
+		--tw-enter-scale: 1 !important;
+		--tw-exit-translate-x: 0 !important;
+		--tw-exit-translate-y: 100% !important;
+		--tw-exit-scale: 1 !important;
+		/* Tailwind's translate-x/y-[-50%] centring lives on `translate`; the keyframes on `transform`. */
+		translate: none !important;
+		inset: auto 0 0 !important;
+		width: 100% !important;
+		max-width: 100% !important;
+		height: var(--sheet-height, min(90dvh, 48rem)) !important;
+		max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+		border-radius: 0.75rem 0.75rem 0 0 !important;
+		padding-bottom: env(safe-area-inset-bottom) !important;
+	}
+
+	.sheet-content[data-fullscreen='true'] {
+		inset: 0 !important;
+		width: 100% !important;
+		max-width: 100% !important;
+		height: 100% !important;
+		max-height: 100% !important;
+		border-radius: 0 !important;
+		padding-bottom: env(safe-area-inset-bottom) !important;
+	}
+}
+
+/* prevent selection */
+::-webkit-scrollbar,
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-thumb {
+	-webkit-user-select: none;
+	user-select: none;
+	touch-action: none;
+}
+
+/* ================================================================ */
+/* Touch contract — behaviour branches on input, never on width      */
+/* ================================================================ */
+/* Pinch and double-tap zoom are what the OS does to *web content*; an app never zooms by
+   accident. Panning stays. Templates opt an image or map back in with `touch-action: pinch-zoom`. */
+html {
+	touch-action: pan-x pan-y;
+}
+button,
+a,
+label,
+input,
+select,
+textarea,
+[role='button'],
+[role='menuitem'],
+[role='option'],
+[role='tab'] {
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+/* Chrome (sidebar, headers, rails) is not prose: a long-press must not start a text selection. */
+[data-sidebar],
+[data-slot='sidebar'],
+[data-slot='page-header'],
+[data-slot='app-header'] {
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-touch-callout: none;
+}
+/* Only an installed app owns the whole screen; a browser tab keeps its pull-to-refresh. */
+@media (display-mode: standalone) {
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+}
+/* A thumb needs 44px. Tokens, so a component that must stay dense can zero `--hit-target`.
+   Text entry under 16px makes iOS zoom the page on focus; the floor is unlayered so it wins
+   over any `text-sm` utility a primitive still carries. */
+@media (pointer: coarse) {
+	input:not([type='checkbox']):not([type='radio']):not([type='range']),
+	textarea,
+	select,
+	[contenteditable='true'] {
+		font-size: max(1rem, 1em);
+	}
+	/* a field beside its button stands as tall as the button */
+	input:not([type='checkbox']):not([type='radio']):not([type='range']),
+	select {
+		min-block-size: var(--hit-target);
+	}
+	button:not([role='checkbox']),
+	a[data-button],
+	[role='button'],
+	[role='menuitem'],
+	[role='option'],
+	[role='tab'] {
+		min-block-size: var(--hit-target);
+		min-inline-size: var(--hit-target);
+	}
+	/* a checkbox keeps its box; its 44px reaches out around it */
+	[role='checkbox'] {
+		position: relative;
+	}
+	[role='checkbox']::before {
+		content: '';
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		inline-size: var(--hit-target);
+		block-size: var(--hit-target);
+		translate: -50% -50%;
+	}
+}
+/* Tailwind gates `hover:` behind (hover: hover), so a hover-only reveal is invisible on touch.
+   Show it: the affordance exists to be found, and there is no cursor to find it with. */
+@media (hover: none) {
+	[class~='group-hover:opacity-100'],
+	[class~='hover:opacity-100'] {
+		opacity: 1;
+	}
+}
+/* A route change cross-fades on the motion scale; the shell starts the transition, this times it. */
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation-duration: var(--motion-base);
+	animation-timing-function: var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	::before,
+	::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}

@@ -1,0 +1,29 @@
+// A conversation (§5.9, rules 57–63): an in-app agent thread, a sub-agent's, or one chat or mail thread of an
+// integration instance (`integration`, a relationship).
+import { model } from '../../../decl/model.ts';
+
+export default model({
+	description:
+		"A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.",
+	label: 'title',
+	fields: {
+		created_at: { kind: 'instant', default: { now: '' } },
+		title: { kind: 'text', optional: true },
+		owner: { kind: 'text', optional: true },
+		envoy: { kind: 'text', optional: true },
+		thread: { kind: 'text', optional: true },
+		kind: { kind: 'text', optional: true },
+		/** Provider membership for personal sync, shared by the conversation rather than copied into every message. */
+		participants: { kind: 'json', optional: true },
+		parent: { kind: 'text', optional: true },
+		status: { kind: 'text', default: 'idle' },
+		lease_until: { kind: 'instant', optional: true },
+		model: { kind: 'text', default: 'default' },
+		plan: { kind: 'json', optional: true },
+		goals: { kind: 'json', optional: true },
+		read: { kind: 'json', default: {} },
+		revision: { kind: 'int', default: 1 },
+		updated_at: { kind: 'instant', default: { now: '' } }
+	},
+	table: { primary: 'text' }
+});

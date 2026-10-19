@@ -1,0 +1,29 @@
+id: EXP1
+summary: exported declaration has no static consumer
+severity: error
+principles: [simplicity, modularity, colocation, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: ClassDeclaration
+        - kind: VariableDeclaration
+        - kind: InterfaceDeclaration
+        - kind: TypeAliasDeclaration
+        - kind: EnumDeclaration
+    - fact:
+        name: unreferencedExport
+examples:
+  file: src/helper.ts
+  fixture:
+    package.json: '{"name":"graph","type":"module","exports":"./src/index.ts"}'
+    src/index.ts: |
+      import { used } from './helper.js';
+      export const run = (): number => used();
+  bad:
+    - |
+      export const used = (): number => 1;
+      export const orphan = (): number => 3;
+  good:
+    - |
+      export const used = (): number => 1;

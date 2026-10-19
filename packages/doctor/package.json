@@ -1,0 +1,49 @@
+{
+	"name": "@norbital-ai/doctor",
+	"version": "0.0.1",
+	"description": "The static rules `bolt check` runs: four fixed workspace packs (boundaries, layout, svelte, reactive), plus the realm packs, over TypeScript and Svelte.",
+	"type": "module",
+	"license": "AGPL-3.0-only",
+	"files": [
+		"build",
+		"packs",
+		"package.json"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/doctor"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/doctor",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "pnpm build && vitest run tests"
+	},
+	"dependencies": {
+		"effect": "catalog:",
+		"typescript": "catalog:",
+		"yaml": "^2.9.0"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:",
+		"vitest": "4.1.11",
+		"@effect/platform-node": "catalog:"
+	}
+}

@@ -1,0 +1,55 @@
+// Type corpus for the built-in layer (`src/system/**`): workspace code names the system collections as it names its
+// own, typed by their declarations; the engine's private models (sessions, challenges, config) are no collection.
+import type { Insert, Patch } from '../../src/decl/ctx.ts';
+import type { CollectionName, ColumnValue, ReadField, SystemName } from '../../src/decl/names.ts';
+import type { Id, Json } from '../../src/decl/values.ts';
+import type { Where } from '../../src/decl/where.ts';
+import './registry.ts';
+
+type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const is = <T extends true>(): T => true as T;
+
+is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external'>>();
+is<Eq<ColumnValue<'sys_user', 'email'>, string | null>>();
+is<Eq<ColumnValue<'sys_user', 'team'>, Id<'sys_team'> | null>>();
+is<Eq<ColumnValue<'approval_request', 'id'>, Id<'approval_request'>>>();
+is<Eq<'sys_run' extends SystemName ? true : false, true>>();
+is<Eq<'sys_session' extends CollectionName ? true : false, false>>();
+const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
+// @ts-expect-error S1 a member's kind is staff or external (the old hand type said 'member')
+const member: Where<'sys_user'> = { kind: { eq: 'member' } };
+void staff;
+void member;
+
+// an instance is created naming its definition (and its member, when personal, or the envoy it carries); the host's
+// fence is no column of it
+is<
+	Eq<
+		Insert<'sys_integration'>,
+		{
+			readonly integration: string;
+			readonly name: string;
+			readonly owner?: Id<'sys_user'> | null;
+			readonly envoy?: string | null;
+			readonly configuration?: Json;
+		}
+	>
+>();
+is<Eq<ColumnValue<'sys_message', 'integration'>, Id<'sys_integration'> | null>>();
+is<
+	Eq<
+		Patch<'sys_integration'>,
+		{
+			readonly name?: string;
+			readonly envoy?: string | null;
+			readonly active?: boolean;
+			readonly configuration?: Json;
+		}
+	>
+>();
+// @ts-expect-error S2 an instance's definition never changes
+const moved: Patch<'sys_integration'> = { integration: 'email' };
+// @ts-expect-error S3 the host's fence is never readable
+const fence: ReadField<'sys_integration'> = 'epoch';
+void moved;
+void fence;

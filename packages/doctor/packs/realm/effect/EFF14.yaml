@@ -1,0 +1,11 @@
+id: EFF14
+summary: runSync result try adds a runtime to synchronous decoding
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  pattern: Effect.runSync(Effect.result(Effect.try($F)))
+examples:
+  bad:
+    - 'export const decode = Effect.runSync(Effect.result(Effect.try(() => parse(input))));'
+  good:
+    - 'export const decode = Result.try({ try: () => parse(input), catch: failure });'

@@ -1,0 +1,17 @@
+id: UI19
+summary: raw positioning class bypasses the Imposter primitive
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/layout/**'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*(?:absolute|fixed|sticky)$'
+examples:
+  bad:
+    - '<div class="absolute inset-0"></div>'
+  good:
+    - '<Imposter placement="top-end"><Badge>New</Badge></Imposter>'

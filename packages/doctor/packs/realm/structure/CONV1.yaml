@@ -1,0 +1,26 @@
+id: CONV1
+summary: the agent's durable model is a conversation, not a task
+severity: error
+principles: [straightforwardness, simplicity, modularity]
+rule:
+  any:
+    - all:
+        - kind: StringLiteral
+        - regex: '^[''"`](?:agent_task|agent_message|agent_run|agent_usage|agent_plan|agent_inbox|tasks\.(?:submit|execute|control|models|editMessage))[''"`]$'
+    - all:
+        - kind: Identifier
+        - regex: '^(?:AgentTask|AgentTaskRow|AgentRun|AgentRunRow|AgentMessage|AgentMessageRow|AgentPlan|AgentPlanRow|AgentUsageRow|TaskId|TaskAudience|TaskStatus|TaskSubmitRequest|TaskSubmitResult|TaskExecuteRequest|TaskExecuteResult|TaskControlRequest|TaskControlResult|DirectiveId|directiveIdFor|enqueueExecute|directive_id|claimed_run_id|reasoning_requested)$'
+examples:
+  bad:
+    - "export const rows = read('agent_task');"
+    - "export const rows = read('agent_inbox');"
+    - "export const sent = call('tasks.submit', body);"
+    - 'export const of = (id: TaskId) => id;'
+    - 'export const of = (row: { directive_id: string }) => row.directive_id;'
+  good:
+    - "export const rows = read('conversation');"
+    - "export const rows = read('conversation_message');"
+    - "export const sent = call('conversations.send', body);"
+    - 'export const of = (id: ConversationId) => id;'
+    - "export const queued = read('bolt_task');"
+    - 'export const of = (row: { task_id: string }) => row.task_id;'

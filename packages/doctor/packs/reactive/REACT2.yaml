@@ -1,0 +1,22 @@
+id: REACT2
+summary: generated query is refreshed imperatively instead of re-deriving
+severity: error
+principles: [straightforwardness, modularity, testability]
+rule:
+  all:
+    - any:
+        - pattern: '$Q.refresh()'
+        - pattern: '$Q.refetch()'
+        - pattern: '$Q.invalidate()'
+    - inside:
+        any:
+          - pattern: '$effect($X)'
+          - pattern: 'onMount($X)'
+          - pattern: 'afterUpdate($X)'
+          - pattern: 'beforeUpdate($X)'
+      stopBy: end
+examples:
+  bad:
+    - '$effect(() => { q.refresh(); });'
+  good:
+    - 'export const rows = $derived(client.db.things.findMany({}));'

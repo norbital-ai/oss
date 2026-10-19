@@ -1,0 +1,58 @@
+{
+	"name": "@norbital-ai/app-shell",
+	"version": "0.0.1",
+	"description": "A native iOS and Android shell for a Bolt workspace: one norbital.app.ts per app, generated Capacitor projects, and the norbital-app CLI that builds and uploads them.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/app-shell"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/app-shell",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"files": [
+		"build",
+		"templates",
+		"package.json"
+	],
+	"bin": {
+		"norbital-app": "./build/cli.js"
+	},
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts sh -c \"tsc -p tsconfig.json --outDir {} && vite build --config runtime/vite.config.ts --outDir {}/runtime\"",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/app-shell",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p runtime/tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@capacitor-community/background-geolocation": "1.2.26",
+		"@capacitor/app": "8.1.2",
+		"@capacitor/browser": "8.0.3",
+		"@capacitor/core": "8.5.2",
+		"@capacitor/keyboard": "8.0.6",
+		"@capacitor/local-notifications": "8.3.1",
+		"@effect/vitest": "catalog:",
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"vitest": "4.1.11"
+	}
+}

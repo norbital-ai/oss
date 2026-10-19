@@ -1,0 +1,45 @@
+# Build & generated artifacts
+**/.svelte-kit/
+**/.svelte-check/
+**/build/
+**/.generated/
+
+# Generated migration history. Not merely regenerated output — `migrationFingerprint` hashes the
+# RAW BYTES of every file under this directory into `historySha256`, so reformatting one rewrites
+# the fingerprint and the build reads that as a changed migration history.
+**/.norbital/migrations/
+
+# Tooling / CI
+.turbo/
+.tmp/
+**/.devtools/
+**/test-results/
+**/playwright-report/
+**/coverage/
+.claude/settings.local.json
+
+# Dependencies & lockfiles
+**/node_modules/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+**/package-lock.json
+**/yarn.lock
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+vite.config.js*
+
+# Reviewed Phase 0 sync-engine probes: `sync-sync-engine-receipt.test.ts` pins their sha256, so a
+# reformat reads as a tampered receipt.
+packages/bolt/tests/sync-sync-engine-pglite-probes.test.mjs
+packages/bolt/tests/sync-sync-engine-prefix-model.test.mjs
+
+# The authoring reference is the built declarations verbatim; scripts/authoring-reference.mjs writes it.
+**/*.generated.ts

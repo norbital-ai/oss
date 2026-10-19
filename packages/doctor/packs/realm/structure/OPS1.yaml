@@ -1,0 +1,27 @@
+id: OPS1
+summary: operational health or admission state is hard-coded
+severity: error
+principles: [straightforwardness, testability]
+ignore:
+  - '**/test/**'
+  - '**/tests/**'
+  - '**/fixtures/**'
+  - '**/*.test.*'
+  - '**/*.spec.*'
+rule:
+  all:
+    - kind: ObjectLiteralExpression
+    - fact:
+        name: enclosingOwnerMatches
+        regex: '(?:health|ready|status|operations?|capacity|admission|tenant[-_.]?matrix)'
+    - any:
+        - regex: '\b(?:health|status)\s*:\s*[''"]ready[''"]'
+        - all:
+            - regex: '\baccepting\s*:\s*true'
+            - regex: '\boutstanding\s*:\s*0'
+examples:
+  file: src/health.ts
+  bad:
+    - "export const route = { status: 'ready', service: 'host' };"
+  good:
+    - "export const route = { status: snapshot.ready ? 'ready' : 'starting' };"

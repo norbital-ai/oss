@@ -1,0 +1,20 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"include": ["src/**/*.ts"],
+	"exclude": ["tests", "node_modules", "build"],
+	"compilerOptions": {
+		"target": "ES2024",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": true,
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"outDir": "build",
+		"rootDir": "src",
+		"declaration": true,
+		"declarationMap": false,
+		"sourceMap": false,
+		"noEmit": false,
+		"types": ["node"]
+	}
+}

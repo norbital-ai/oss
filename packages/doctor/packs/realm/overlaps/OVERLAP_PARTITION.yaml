@@ -1,0 +1,19 @@
+id: OVERLAP_PARTITION
+summary: a predicate filtered twice reimplements a library partition
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  all:
+    - kind: VariableStatement
+    - count:
+        min: 2
+        of:
+          pattern: '$X.filter($...A)'
+    - regex: '!\s*[A-Za-z_$(]'
+examples:
+  bad:
+    - 'export const parts = { yes: items.filter(ok), no: items.filter((item) => !ok(item)) };'
+    - 'const yes = rows.filter(pred), no = rows.filter((row) => !pred(row));'
+  good:
+    - 'export const parts = partition(items, ok);'
+    - 'export const yes = items.filter(ok);'

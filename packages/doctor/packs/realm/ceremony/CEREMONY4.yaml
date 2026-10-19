@@ -1,0 +1,14 @@
+id: CEREMONY4
+summary: a Result is constructed for a value that cannot fail
+severity: error
+principles: [simplicity, no-bloat]
+rule:
+  any:
+    - 'Result.succeed($VALUE).pipe($...REST)'
+    - 'Effect.runSync(Effect.succeed($VALUE))'
+examples:
+  bad:
+    - 'const r = Result.succeed(value).pipe(Result.getOrElse(() => fallback));'
+  good:
+    - 'const r = Result.succeed(value);'
+    - 'const parsed = decode(input);'

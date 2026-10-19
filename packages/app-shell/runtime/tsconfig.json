@@ -1,0 +1,13 @@
+{
+	"extends": "../../../tsconfig.base.json",
+	"include": ["./*.ts"],
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"types": ["node"]
+	}
+}

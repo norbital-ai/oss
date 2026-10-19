@@ -1,0 +1,13 @@
+id: EFF12
+summary: catchDefect converts a defect to a typed failure
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - pattern: Effect.catchDefect($F)
+    - regex: "Effect\\.fail\\("
+examples:
+  bad:
+    - 'export const read = job.pipe(Effect.catchDefect(e => Effect.fail(e)));'
+  good:
+    - 'export const read = job.pipe(Effect.catchTag("Missing", recover));'

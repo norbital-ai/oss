@@ -1,0 +1,15 @@
+id: REACT4
+summary: component branches on the runtime environment instead of a lifecycle boundary
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*.svelte'
+rule:
+  any:
+    - pattern: typeof window
+    - pattern: typeof document
+examples:
+  bad:
+    - "if (typeof window === 'undefined') return;"
+  good:
+    - 'onMount(() => connect());'

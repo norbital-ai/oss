@@ -1,0 +1,27 @@
+id: LIVE2
+summary: a raw server-sent event stream outside the client; `live` reads ride the client's one stream
+severity: error
+principles: [simplicity, straightforwardness, modularity, testability]
+rule:
+  any:
+    - pattern: 'new EventSource($...A)'
+    - all:
+        - any:
+            - kind: StringLiteral
+            - kind: NoSubstitutionTemplateLiteral
+        - regex: 'text/event-stream'
+        - not:
+            inside:
+              any:
+                - pattern: '$A === $B'
+                - pattern: '$A == $B'
+                - pattern: '$A !== $B'
+                - pattern: '$A != $B'
+examples:
+  bad:
+    - "export const source = new EventSource('/events');"
+    - "export const headers = { accept: 'text/event-stream' };"
+  good:
+    - "export const rows = bolt.live(bolt.read('orders', { all: true }));"
+    - export const kind = 'text/plain';
+    - export const seen = header === 'text/event-stream';

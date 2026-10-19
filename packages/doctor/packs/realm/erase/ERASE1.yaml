@@ -1,0 +1,13 @@
+id: ERASE1
+summary: double unknown cast erases the decoded contract
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - kind: AsExpression
+    - regex: "as\\s+unknown\\s+as\\s"
+examples:
+  bad:
+    - 'export const row = value as unknown as Row;'
+  good:
+    - 'export const row = decode(value);'

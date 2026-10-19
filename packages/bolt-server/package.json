@@ -1,0 +1,55 @@
+{
+	"name": "@norbital-ai/bolt-server",
+	"version": "0.0.1",
+	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-server"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@norbital-ai/bolt": "workspace:*",
+		"@norbital-ai/providers": "workspace:*",
+		"effect": "catalog:",
+		"exceljs": "4.4.0",
+		"mammoth": "1.12.2",
+		"mssql": "11.0.1",
+		"pdfjs-dist": "6.3.289",
+		"pg": "^8.23.0",
+		"web-push": "^3.6.7",
+		"@norbital-ai/std": "workspace:*"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@types/mssql": "9.1.8",
+		"@types/node": "^26.2.0",
+		"@types/pg": "^8.23.1",
+		"@types/web-push": "^3.6.4",
+		"typescript": "catalog:",
+		"vitest": "4.1.11"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/bolt-server"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

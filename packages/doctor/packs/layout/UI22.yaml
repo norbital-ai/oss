@@ -1,0 +1,17 @@
+id: UI22
+summary: raw overflow-hidden bypasses Bound clipping
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/layout/**'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:[\w\[\]&>*@/.-]+:)*overflow-hidden$'
+examples:
+  bad:
+    - '<div class="overflow-hidden"></div>'
+  good:
+    - '<Bound clip><p>x</p></Bound>'

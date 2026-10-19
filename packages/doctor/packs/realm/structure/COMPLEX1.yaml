@@ -1,0 +1,19 @@
+id: COMPLEX1
+summary: function control flow nests four or more levels
+severity: error
+principles: [simplicity, testability, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: MethodDeclaration
+        - kind: ArrowFunction
+        - kind: FunctionExpression
+    - fact:
+        name: nestingDepth
+        atLeast: 4
+examples:
+  bad:
+    - 'export function f(a, b, c, d) { if (a) { if (b) { if (c) { if (d) { return 1; } } } } return 0; }'
+  good:
+    - 'export function f(a) { if (!a) return 0; return 1; }'

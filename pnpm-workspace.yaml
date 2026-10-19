@@ -1,0 +1,68 @@
+packages:
+  - packages/*
+catalog:
+  # One Effect release line for the realm; the unstable modules it ships are pinned with it.
+  '@effect/platform-node': 4.0.0-rc.112
+  '@effect/platform-node-shared': 4.0.0-rc.112
+  '@effect/vitest': 4.0.0-rc.112
+  effect: 4.0.0-rc.112
+  '@iconify/svelte': ^5.2.2
+  runed: ^0.37.1
+  svelte: ^5.57.1
+  # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists), and doctor uses the compiler API that the
+  # Go port's JS surface does not carry. Stay on latest 6.x; the override below holds the same pin.
+  typescript: 6.0.3
+  vite: ^8.2.2
+
+# Migrated from .npmrc / package.json#pnpm for pnpm 11.
+engineStrict: true
+injectWorkspacePackages: true
+linkWorkspacePackages: true
+syncInjectedDepsAfterScripts:
+  - build
+  - prepare
+publicHoistPattern:
+  - typescript
+  - es-toolkit
+  - '@norbital-ai/*'
+  - ws
+
+allowBuilds:
+  '@tailwindcss/oxide': true
+  esbuild: true
+  # Build the patched module code-cache support from source; shipped prebuilds omit it.
+  isolated-vm: true
+  msgpackr-extract: false
+  protobufjs: true
+  '@whiskeysockets/baileys': true
+
+patchedDependencies:
+  'isolated-vm@7.0.1': patches/isolated-vm@7.0.1.patch
+  # bolt-server's optional WhatsApp transport.
+  '@whiskeysockets/baileys@7.0.0-rc14': patches/@whiskeysockets__baileys@7.0.0-rc14.patch
+
+overrides:
+  # platform-node asks for `^4.0.0-rc.112`, which a stable 4.x satisfies; hold it on the rc line.
+  '@effect/platform-node-shared': 'catalog:'
+  kysely: ^0.29.4
+  # TS 7 breaks svelte2tsx / @sveltejs/package. Pin workspace to latest 6.x.
+  typescript: 6.0.3
+
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: '*'
+
+# @effect/platform-node declares `redis` as a required peer; only its Redis module imports it.
+packageExtensions:
+  '@effect/platform-node':
+    peerDependenciesMeta:
+      redis:
+        optional: true
+
+# The age gate guards against a compromised third-party release being pulled in before anyone
+# notices. Our own scope is not third-party, and pinning exact versions here meant editing this
+# list on every publish.
+minimumReleaseAgeExclude:
+  - '@norbital-ai/*'

@@ -1,0 +1,55 @@
+id: V1
+summary: $effect is last-resort external sync; prefer $derived or {@attach}
+severity: error
+principles: [simplicity, straightforwardness, testability]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: CallExpression
+    - pattern: '$effect($BODY)'
+    - regex: '\w+\s*=\s*[^=]'
+      on: BODY
+    - not:
+        regex: '\b(?:addEventListener|removeEventListener|setInterval|setTimeout|requestAnimationFrame|IntersectionObserver|ResizeObserver|document\.|window\.|fetch\()'
+        on: BODY
+    - not:
+        has:
+          all:
+            - kind: ReturnStatement
+            - has:
+                any:
+                  - kind: ArrowFunction
+                  - kind: FunctionExpression
+              stopBy: end
+        stopBy: end
+    - not:
+        has:
+          all:
+            - kind: ExpressionStatement
+            - has:
+                kind: CallExpression
+          stopBy: end
+        stopBy: end
+examples:
+  bad:
+    - |
+      let a = $state(1);
+      let total = $state(0);
+      $effect(() => {
+        total = a;
+      });
+  good:
+    - |
+      let published = $state(false);
+      $effect(() => {
+        published = true;
+        return () => {
+          published = false;
+        };
+      });
+    - |
+      let current = $state(0);
+      $effect(() => {
+        handle?.update(current);
+      });

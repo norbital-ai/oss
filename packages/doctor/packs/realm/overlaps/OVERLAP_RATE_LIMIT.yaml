@@ -1,0 +1,44 @@
+id: OVERLAP_RATE_LIMIT
+summary: timestamp compared against now before doing work reimplements a library rate limiter
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  all:
+    - kind: IfStatement
+    - has:
+        all:
+          - any:
+              - pattern: '$L > $R'
+              - pattern: '$L >= $R'
+              - pattern: '$L < $R'
+              - pattern: '$L <= $R'
+          - has:
+              all:
+                - pattern: '$A - $B'
+                - regex: '\b(?:[Ll][Aa][Ss][Tt]|[Pp][Rr][Ee][Vv](?:[Ii][Oo][Uu][Ss])?|[Ss][Ii][Nn][Cc][Ee]|[Cc][Oo][Oo][Ll][Dd][Oo][Ww][Nn]|[Tt][Hh][Rr][Oo][Tt][Tt][Ll][Ee]|[Dd][Ee][Bb][Oo][Uu][Nn][Cc][Ee]|[Ee][Ll][Aa][Pp][Ss][Ee][Dd])[A-Za-z]*\b'
+examples:
+  bad:
+    - |
+      let lastRun = 0;
+      export function tick(now: number): void {
+        if (now - lastRun > 1000) {
+          lastRun = now;
+          work();
+        }
+      }
+    - |
+      let previousAt = 0;
+      export function tick(now: number): void {
+        if (1000 <= now - previousAt) {
+          previousAt = now;
+          work();
+        }
+      }
+  good:
+    - |
+      export function tick(now: number): void {
+        if (now > 1000) {
+          work();
+        }
+      }
+    - 'export const limiter = RateLimiter.make({ limit: 1, interval: "1 second" });'

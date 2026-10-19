@@ -1,0 +1,15 @@
+id: STD3
+summary: unknown catch value is normalized to Error inline
+severity: error
+principles: [simplicity, colocation, testability]
+rule:
+  any:
+    - '$X instanceof Error ? $X : new Error(String($X))'
+    - '($X) => $X instanceof Error ? $X : new Error(String($X))'
+    - '($X: unknown) => $X instanceof Error ? $X : new Error(String($X))'
+    - '($X: unknown): Error => $X instanceof Error ? $X : new Error(String($X))'
+examples:
+  bad:
+    - 'export const normalize = (cause) => cause instanceof Error ? cause : new Error(String(cause));'
+  good:
+    - 'export const normalize = (cause) => toError(cause);'

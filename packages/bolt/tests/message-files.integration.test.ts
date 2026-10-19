@@ -1,0 +1,92 @@
+// A wire-shaped inbound attachment (`{ name, mime, bytes, bin }`, its bytes in the event's `bins`) is stored as a FileRef
+// `{ id, name, mime, bytes }` in its message's statement, or without `id` when its bytes never arrived (any other shape is
+// dropped); the transcript and the model context read that one shape. A `messages` feed's map reads it as stored
+// (conversations.integration.test.ts).
+import { expect, it } from '@effect/vitest';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
+import { messages } from '../src/engine/agent/context.ts';
+import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
+import { MSG } from '../src/engine/conversations/store.ts';
+import { decodeManifest } from '../src/engine/manifest.ts';
+import { TestWorkspace } from '../src/test/index.ts';
+
+const manifest = Result.getOrThrow(
+	decodeManifest({
+		workspace: { tz: 'UTC', locale: 'en' },
+		models: {},
+		relationships: {},
+		collections: {},
+		integrations: {},
+		pipelines: {},
+		policies: {},
+		teams: {},
+		connections: { desk_wa: { integration: 'whatsapp' } },
+		automations: {},
+		envoys: {},
+		mcp: {},
+		apps: {},
+		customFields: {},
+		agent: { skills: {} }
+	})
+);
+
+it.live(
+	'a wire-shaped inbound attachment is stored as a FileRef, and the transcript and model context see its name, mime and bytes',
+	() =>
+		Effect.gen(function* () {
+			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
+			const t = Context.get(context, TestWorkspace);
+			const pdf = new TextEncoder().encode('%PDF-1.7');
+			yield* t.receive(
+				'desk_wa',
+				{
+					id: 'W1',
+					thread: '6591234567@s.whatsapp.net',
+					sentAt: '2026-09-25T10:00:00.000Z',
+					from: { handle: '6591234567@s.whatsapp.net', name: 'Ben' },
+					text: 'the form',
+					attachments: [
+						{ name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength, bin: 0 },
+						{ name: 'site.mp4', mime: 'video/mp4', bytes: 9 },
+						{ fileName: 'old.pdf', mimeType: 'application/pdf', byteLength: 3 }
+					]
+				}, // not the wire's shape: dropped, never a file
+				{ bins: [pdf] }
+			);
+			const [result] = yield* t.db.read([
+				{ text: `SELECT ${MSG} FROM sys_message m WHERE direction = 'inbound'`, params: [] }
+			]);
+			if (result === undefined) throw new Error('inbound statement returned no result');
+			const [row] = yield* rowsOf(result.rows);
+			if (row === undefined) throw new Error('inbound message missing');
+			const files = yield* Schema.decodeUnknownEffect(
+				Schema.Array(
+					Schema.Struct({
+						id: Schema.optionalKey(Schema.String),
+						name: Schema.String,
+						mime: Schema.String,
+						bytes: Schema.Number
+					})
+				)
+			)(row.files);
+			const id = files[0]?.id;
+			if (id === undefined) throw new Error('received attachment has no file id');
+			expect(row.files).toEqual([
+				{ id, name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength },
+				{ name: 'site.mp4', mime: 'video/mp4', bytes: 9 }
+			]);
+			expect(transcriptRow(row, true, true)?.files).toEqual([
+				{ id, name: 'form.pdf', mime: 'application/pdf' },
+				{ name: 'site.mp4', mime: 'video/mp4' }
+			]);
+			const [message] = messages([row]);
+			if (message === undefined) throw new Error('model context message missing');
+			const content = String(message.content);
+			expect(content).toContain(
+				`[attachment seq ${row.seq} file 0: form.pdf · application/pdf · ${pdf.byteLength} bytes] file reference ${JSON.stringify({ id, name: 'form.pdf', mime: 'application/pdf' })}`
+			);
+			expect(content).toContain(
+				`[attachment seq ${row.seq} file 1: site.mp4 · video/mp4 · 9 bytes] not received`
+			);
+		})
+);

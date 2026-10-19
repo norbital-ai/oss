@@ -1,0 +1,24 @@
+id: V20
+summary: $effect delegates to a named function, so its dependencies are invisible
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*.svelte'
+  - '**/*.svelte.ts'
+rule:
+  any:
+    - all:
+        - pattern: '$effect(() => $FN())'
+        - regex: '^[A-Za-z_$][\w$]*$'
+          on: FN
+    - all:
+        - pattern: '$effect($FN)'
+        - regex: '^[A-Za-z_$][\w$]*$'
+          on: FN
+examples:
+  bad:
+    - '$effect(() => revealKeyboardIndicator());'
+    - '$effect(revealKeyboardIndicator);'
+  good:
+    - '$effect(() => { virtualizer.scrollToIndex(indexOf(state.target)); });'
+    - '$effect(() => track(commandState.inputMode));'

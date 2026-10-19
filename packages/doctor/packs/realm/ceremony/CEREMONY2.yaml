@@ -1,0 +1,18 @@
+id: CEREMONY2
+summary: an Effect is run for its side effect and its failure channel discarded
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  all:
+    - 'void Effect.runPromise($EFFECT)'
+    - not:
+        any:
+          - 'void Effect.runPromise($E.pipe($...REST))'
+          - 'void Effect.runPromise(Effect.tryPromise($ARG).pipe($...REST))'
+examples:
+  bad:
+    - 'void Effect.runPromise(save(record));'
+  good:
+    - 'void Effect.runPromise(save(record).pipe(Effect.catch(report)));'
+    - 'Effect.runFork(program.pipe(Effect.catch((error) => Effect.sync(() => fail(error)))));'
+    - 'await Effect.runPromise(save(record));'

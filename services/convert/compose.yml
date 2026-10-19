@@ -1,0 +1,20 @@
+# Norbital Convert on one host: N replicas on one volume share one durable queue. Scale with `--scale convert=N`
+# (or deploy.replicas); callers on the network reach any replica as http://convert:8080 and the queue spreads the work.
+services:
+  convert:
+    image: ghcr.io/norbital-ai/convert:${CONVERT_VERSION:-latest}
+    build: .
+    environment:
+      CONVERT_API_KEYS: ${CONVERT_API_KEYS:?comma-separated API keys}
+      CONVERT_CONCURRENCY: ${CONVERT_CONCURRENCY:-2}
+    volumes:
+      - convert-data:/var/lib/convert
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: '2', memory: 1g }
+    # A stopping replica finishes what it is converting (up to CONVERT_TIMEOUT_S) before it exits.
+    stop_grace_period: 90s
+    restart: unless-stopped
+volumes:
+  convert-data:

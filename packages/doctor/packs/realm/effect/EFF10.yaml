@@ -1,0 +1,15 @@
+id: EFF10
+summary: guest ctx batch needs explicit concurrency
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - any:
+        - pattern: Effect.all($X)
+        - pattern: Effect.forEach($X, $F)
+    - regex: "ctx\\."
+examples:
+  bad:
+    - 'export const read = Effect.all([ctx.read(q)]);'
+  good:
+    - "export const read = Effect.all([ctx.read(q)], { concurrency: 'unbounded' });"

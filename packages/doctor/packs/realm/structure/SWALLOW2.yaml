@@ -1,0 +1,20 @@
+id: SWALLOW2
+summary: Effect.catch handler returns an empty value, so corruption is indistinguishable from a legitimate empty result
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  any:
+    - all:
+        - pattern: 'Effect.catch(() => Effect.succeed($A))'
+        - regex: '^(?:\[\]|\{\}|null|undefined|["'']{2})$'
+          on: A
+    - all:
+        - pattern: 'Effect.catch((cause) => Effect.succeed($A))'
+        - regex: '^(?:\[\]|\{\}|null|undefined|["'']{2})$'
+          on: A
+examples:
+  bad:
+    - 'export const read = (path) => readFileEffect(path).pipe(Effect.catch(() => Effect.succeed([])));'
+  good:
+    - 'export const read = (path) => readFileEffect(path).pipe(Effect.catch((cause) => Effect.fail(cause)));'
+    - 'export const profile = (id) => readOwner(id).read.pipe(Effect.catch(() => Effect.succeedNone));'

@@ -1,0 +1,17 @@
+id: IDENT1
+summary: match handler returns its success value unchanged
+severity: error
+principles: [simplicity, no-bloat]
+rule:
+  any:
+    - pattern:
+        context: '({ onSuccess: ($V) => $V })'
+        selector: PropertyAssignment
+    - pattern:
+        context: '({ onSuccess: ($V) => { return $V; } })'
+        selector: PropertyAssignment
+examples:
+  bad:
+    - 'export const f = (r) => r.pipe(Effect.match({ onFailure: () => null, onSuccess: (value) => value }));'
+  good:
+    - 'export const f = (r) => r.pipe(Effect.orElseSucceed(() => null));'

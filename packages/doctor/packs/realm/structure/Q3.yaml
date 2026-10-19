@@ -1,0 +1,23 @@
+id: Q3
+summary: private function has one same-file direct call and forwards its parameters unchanged
+severity: error
+principles: [simplicity, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: VariableDeclaration
+    - fact:
+        name: callSites
+        exactly: 1
+        candidate: transparent-forwarder
+examples:
+  bad:
+    - |
+      const shim = (input) => bridge(input);
+      export const kickoff = (input) => shim(input);
+  good:
+    - 'export const kickoff = (input) => bridge(input);'
+    - |
+      export const shim = (input) => bridge(input);
+      export const kickoff = (input) => shim(input);

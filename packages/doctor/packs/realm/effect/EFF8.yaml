@@ -1,0 +1,23 @@
+id: EFF8
+summary: Effect runtime created outside an entry edge
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - kind: CallExpression
+    - fact:
+        name: calleeMatches
+        direct: true
+        regex: '^(?:Effect\.run\w*|ManagedRuntime\.make|\w+\.makeUnsafe)$'
+    - not:
+        fact: { name: runtimeEdgeAllowed }
+examples:
+  bad:
+    - 'export const read = () => Effect.runSync(work);'
+    - 'export const read = () => Effect.runPromiseExit(work);'
+    - 'export const start = () => Effect.runFork(work);'
+    - 'export const runtime = ManagedRuntime.make(layer);'
+    - 'export const context = Context.makeUnsafe(services);'
+  good:
+    - 'export const read = () => work;'
+    - 'export const run = Effect.runSync;'

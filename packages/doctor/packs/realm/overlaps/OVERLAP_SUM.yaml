@@ -1,0 +1,20 @@
+id: OVERLAP_SUM
+summary: reduce with addition reimplements a library sum
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  all:
+    - kind: CallExpression
+    - pattern: '$ARR.reduce($...ARGS)'
+    - has:
+        all:
+          - kind: ArrowFunction
+          - has:
+              regex: '^[A-Za-z_$][\w$]*\s*\+\s*[A-Za-z_$][\w$]*$'
+examples:
+  bad:
+    - 'export const total = items.reduce((acc, n) => acc + n);'
+    - 'export const total = items.reduce((acc, n) => acc + n, 0);'
+  good:
+    - 'export const total = sum(items);'
+    - 'export const total = items.reduce((acc, n) => acc + n * 2, 0);'

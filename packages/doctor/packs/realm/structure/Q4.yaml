@@ -1,0 +1,24 @@
+id: Q4
+summary: private function has one same-file direct call and a small mutation-free single expression
+severity: hint
+confidence: medium
+principles: [simplicity, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: VariableDeclaration
+    - fact:
+        name: callSites
+        exactly: 1
+        candidate: single-use-expression
+examples:
+  bad:
+    - |
+      const label = (name) => name.trim();
+      export const show = (name) => label(name);
+  good:
+    - 'export const show = (name) => name.trim();'
+    - |
+      const formatDisplayName = (name) => name.trim();
+      export const show = (name) => formatDisplayName(name);

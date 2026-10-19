@@ -1,0 +1,14 @@
+id: CEREMONY3
+summary: a component runs an Effect synchronously during render
+severity: error
+principles: [straightforwardness, modularity, testability]
+files:
+  - '**/*.svelte'
+rule: Effect.runSync($EFFECT)
+examples:
+  bad:
+    - 'const value = Effect.runSync(program);'
+  good:
+    - 'Effect.runFork(save(record).pipe(Effect.catch(report)));'
+    - 'const saved = client.db.things.create(input);'
+    - 'const rows = query.current ?? [];'

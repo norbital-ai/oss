@@ -1,0 +1,1085 @@
+// The runs area on PGlite (rules 48–56a, 70): the one queue, the deadlines port, buckets, event triggers written in the
+// causing statement, re-queues, attempts, the journal, webhooks, visibility, restart recovery.
+import { randomUUID } from 'node:crypto';
+import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
+import { describe, expect, it } from '@effect/vitest';
+import {
+	Clock,
+	ConfigProvider,
+	Context,
+	Deferred,
+	Effect,
+	Fiber,
+	Layer,
+	Option,
+	Queue,
+	Redacted,
+	Result,
+	Schema
+} from 'effect';
+import { TestClock } from 'effect/testing';
+import type { Json } from '../src/decl/values.ts';
+import type { Holder } from '../src/engine/access/authority.ts';
+import type { Invocation, Rows, Outcome as WriteOutcome } from '../src/engine/contracts.ts';
+import type { EngineManifest } from '../src/engine/manifest.ts';
+import { type EngineError } from '../src/engine/errors.ts';
+import { BoltError, CODES } from '../src/protocol/errors.ts';
+import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
+import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
+import { EngineLive } from '../src/engine/host.ts';
+import {
+	Activation,
+	Guest,
+	Identity,
+	RunHandlers,
+	Runs,
+	Writes,
+	type CrossCall,
+	type GuestShape,
+	type IdentityShape,
+	type RunHandler,
+	type RunsShape,
+	type WritesShape
+} from '../src/engine/services.ts';
+import {
+	Ai,
+	Convert,
+	DeadlinePort,
+	Drivers,
+	Files,
+	Geo,
+	Metering,
+	Speech,
+	Transport,
+	WebRead
+} from '../src/engine/ports.ts';
+import { Secrets, type SecretsShape } from '../src/engine/secrets.ts';
+import { RunsLive } from '../src/engine/runs/index.ts';
+import { parseCallable } from '../src/engine/callables/index.ts';
+import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { Outcome } from '../src/protocol/schema.ts';
+import type { Verb } from '../src/engine/write/act.ts';
+const base: EngineManifest = {
+	workspace: {
+		tz: 'UTC',
+		locale: 'en',
+		secrets: { HOOK: { label: 'Webhook bearer' } }
+	},
+	models: {
+		quotes: {
+			description: 'A quote',
+			label: 'title',
+			fields: {
+				title: { kind: 'text' },
+				status: { kind: 'enum', values: ['draft', 'sent'], default: 'draft' }
+			}
+		}
+	},
+	relationships: {},
+	collections: {
+		quotes: {
+			read: { fields: 'all' },
+			create: { input: { columns: ['title', 'status'] } },
+			update: { input: { columns: ['title', 'status'] } },
+			delete: {}
+		}
+	},
+	integrations: {},
+	pipelines: {},
+	teams: {},
+	connections: {},
+	envoys: {},
+	mcp: {},
+	apps: {},
+	customFields: {},
+	agent: { skills: {} },
+	policies: {
+		ops: {
+			description: 'Ops',
+			grants: { quotes: { read: true, create: true, update: true, delete: true } },
+			automations: ['classify']
+		}
+	},
+	automations: {
+		remind: {
+			description: 'Remind 3 days after a quote',
+			on: { created: 'quotes', delay: '3d' },
+			runAs: ['ops']
+		},
+		sent: {
+			description: 'A quote was sent',
+			on: { updated: 'quotes', fields: ['status'], where: { status: { eq: 'sent' } } },
+			runAs: ['ops']
+		},
+		gone: { description: 'A quote was deleted', on: { deleted: 'quotes' }, runAs: ['ops'] },
+		classify: { description: 'Re-queues itself while work is left', runAs: ['ops'] },
+		flaky: {
+			description: 'Fails transiently twice',
+			runAs: ['ops'],
+			retry: { attempts: 3, backoff: '1min' }
+		},
+		hook: {
+			description: 'A webhook',
+			on: { webhook: '/in', verify: { scheme: 'bearer', secret: 'HOOK' } },
+			runAs: ['ops']
+		}
+	}
+};
+const withCron: EngineManifest = {
+	...base,
+	automations: {
+		...base.automations,
+		digest: { description: 'Daily', on: { cron: '0 6 * * *' }, runAs: ['ops'] }
+	}
+};
+const empty: EngineManifest = { ...base, automations: {} };
+const T0 = Date.parse('2026-09-25T09:00:00Z');
+const DAY = 86400000;
+const iso = (ms: number) => new Date(ms).toISOString();
+type Body = (
+	input: Json,
+	ctx: {
+		attempt: string;
+		act(
+			callable: string,
+			input: Json,
+			options?: Extract<
+				CrossCall,
+				{
+					_tag: 'act';
+				}
+			>['options']
+		): Effect.Effect<Json, BoltError>;
+		schedule(
+			name: string,
+			input: Json,
+			options?: {
+				at?:
+					| string
+					| {
+							now: string;
+					  };
+				key?: string;
+			}
+		): Effect.Effect<Json, BoltError>;
+		notify(notices: Json): Effect.Effect<Json, BoltError>;
+	}
+) => Effect.Effect<Json | void, EngineError>;
+/** The fake guest shares the decoded crossing contract with the isolate runner. */
+function fakeGuest(
+	manifest: EngineManifest,
+	bodies: {
+		[name: string]: Body;
+	},
+	calls: Invocation[]
+): GuestShape {
+	return {
+		invokeProgram: () =>
+			Effect.die(new Error('This fixture does not execute supplied guest programs.')),
+		invoke: (inv, bridge) =>
+			Effect.gen(function* () {
+				calls.push(inv);
+				const cross = Effect.fn('TestGuest.cross')(function* (call: CrossCall) {
+					const [answer] = yield* bridge.cross([call]);
+					if (answer === undefined)
+						return yield* Effect.fail(
+							BoltError.make('badAnswer', 'guest', 'Missing crossing answer')
+						);
+					if (!answer.ok) {
+						const error = answer.error;
+						const code = Schema.decodeUnknownResult(Schema.Literals(CODES))(
+							'code' in error ? error.code : error.kind
+						);
+						return yield* Effect.fail(
+							BoltError.make(
+								Result.isSuccess(code) ? code.success : 'guestError',
+								'guest',
+								'message' in error
+									? error.message
+									: 'reason' in error
+										? error.reason
+										: 'A facility call failed'
+							)
+						);
+					}
+					return answer.value;
+				});
+				const body = bodies[inv.target];
+				if (body === undefined)
+					return {
+						kind: 'failed' as const,
+						error: BoltError.make('missingBody', 'guest', inv.target),
+						cpuMs: 0
+					};
+				return yield* body(inv.input, {
+					attempt: inv.id,
+					act: (name, input, options) =>
+						Effect.gen(function* () {
+							const parsed = parseCallable(name, manifest);
+							if (Result.isFailure(parsed)) return yield* Effect.fail(parsed.failure);
+							const callable = parsed.success;
+							const value = yield* cross({
+								_tag: 'act',
+								callable,
+								input,
+								...(options === undefined ? {} : { options })
+							});
+							const outcome = yield* Schema.decodeUnknownEffect(Outcome)(value).pipe(
+								Effect.mapError(() => BoltError.make('badAnswer', 'guest', 'Malformed act result'))
+							);
+							if (outcome.kind !== 'committed')
+								return yield* Effect.fail(
+									BoltError.make(
+										outcome.kind === 'refused'
+											? outcome.code
+											: outcome.kind === 'conflict'
+												? 'conflict'
+												: 'unknown',
+										'guest',
+										outcome.kind === 'refused' ? outcome.message : outcome.kind
+									)
+								);
+							return value;
+						}),
+					schedule: (automation, input, options = {}) =>
+						cross({ _tag: 'schedule', automation, input, ...options }),
+					notify: (notices) => cross({ _tag: 'notify', notices })
+				}).pipe(
+					Effect.map((output) => ({ kind: 'ok' as const, output: output ?? null, cpuMs: 0 })),
+					Effect.catch((error) =>
+						Effect.succeed({
+							kind: 'failed' as const,
+							error:
+								error._tag === 'BoltError'
+									? error
+									: BoltError.make('guestError', 'guest', error.message, error),
+							cpuMs: 0
+						})
+					)
+				);
+			})
+	};
+}
+type World = {
+	e: {
+		act: WritesShape['act'];
+		authority: IdentityShape['authority'];
+	};
+	r: RunsShape;
+	db: TenantDbShape;
+	secrets: SecretsShape;
+	statements: {
+		at: number;
+		text: string;
+	}[];
+	calls: Invocation[];
+	wakes: number[];
+	clock: {
+		ms: number;
+	};
+	act(collection: string, verb: Verb, input: Json): Effect.Effect<WriteOutcome, EngineError>;
+	until(ms: number): Effect.Effect<void, EngineError>;
+	sql(text: string, params?: Json[]): Effect.Effect<Rows['rows'], EngineError>;
+};
+const world = Effect.fn('TestRuns.world')(function* (
+	manifest: EngineManifest,
+	bodies: {
+		[name: string]: Body;
+	} = {},
+	extra: {
+		start?: readonly string[];
+		platform?: {
+			readonly [name: string]: RunHandler;
+		};
+	} = {}
+) {
+	const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
+	const inner = PgliteDb.make(pg),
+		clock = { ms: T0 };
+	yield* TestClock.setTime(T0);
+	const statements: {
+		at: number;
+		text: string;
+	}[] = [];
+	const db = TenantDb.typed({
+		read: (batch) =>
+			Effect.suspend(() => {
+				statements.push(...batch.map((x) => ({ at: clock.ms, text: x.text })));
+				return inner.read(batch);
+			}),
+		write: (statement, lock) =>
+			Effect.suspend(() => {
+				statements.push({ at: clock.ms, text: statement.text });
+				return inner.write(statement, lock);
+			}),
+		transaction: inner.transaction
+	});
+	let next: number | null = null;
+	const deadlines: DeadlinePort['Service'] = {
+		announce: (_, at) =>
+			Effect.sync(() => {
+				next = Math.min(next ?? Infinity, Date.parse(at));
+			}),
+		settle: (_, at) =>
+			Effect.sync(() => {
+				next = at === null ? null : Date.parse(at);
+			}),
+		teardown: () =>
+			Effect.sync(() => {
+				next = null;
+			})
+	};
+	yield* applyPlan(db, plan(null, manifest), { accept: true });
+	const host = Layer.mergeAll(
+		NodeCrypto.layer,
+		Layer.succeed(TenantDb, db),
+		Ai.unavailable,
+		Convert.unavailable,
+		Layer.succeed(DeadlinePort, deadlines),
+		Drivers.unavailable,
+		Files.unavailable,
+		Geo.unavailable,
+		Metering.unavailable,
+		Speech.unavailable,
+		Transport.unavailable,
+		WebRead.unavailable,
+		Layer.succeed(Activation, {
+			scope: 'ws',
+			epoch: '',
+			release: '',
+			publicUrl: 'http://localhost',
+			guest: Option.none(),
+			transforms: new Set<string>(),
+			projections: new Set<string>(),
+			start: extra.start ?? [],
+			secretsKey: Option.some(Redacted.make(new Uint8Array(32).fill(7)))
+		})
+	);
+	const context = yield* Layer.build(EngineLive(manifest).pipe(Layer.provideMerge(host)));
+	const calls: Invocation[] = [];
+	const runContext = yield* Layer.build(
+		RunsLive.pipe(
+			Layer.provide(
+				Layer.succeedContext(Context.add(context, Guest, fakeGuest(manifest, bodies, calls)))
+			),
+			Layer.provide(ConfigProvider.layer(Context.get(context, Secrets).config))
+		)
+	);
+	const r = Context.get(runContext, Runs),
+		writes = Context.get(context, Writes),
+		identity = Context.get(context, Identity);
+	const e = { act: writes.act, authority: identity.authority };
+	if (extra.platform !== undefined)
+		yield* Context.get(context, RunHandlers).register(extra.platform);
+	const admin: Holder = {
+		actor: {
+			kind: 'member',
+			id: randomUUID(),
+			email: null,
+			phone: null,
+			external: false,
+			teams: [],
+			teamPath: [],
+			admin: true,
+			party: null
+		},
+		policies: [],
+		admin: true
+	};
+	const wakes: number[] = [];
+	yield* r.boot;
+	statements.length = 0;
+	return {
+		e,
+		r,
+		db,
+		secrets: Context.get(context, Secrets),
+		statements,
+		calls,
+		wakes,
+		clock,
+		act: (collection: string, verb: Verb, input: Json) =>
+			Effect.gen(function* () {
+				return (yield* e.act({
+					collection,
+					verb,
+					input,
+					mode: { _tag: 'Direct' },
+					key: randomUUID(),
+					issuedAt: iso(clock.ms),
+					authority: yield* e.authority(admin),
+					bindings: {
+						now: iso(clock.ms),
+						today: iso(clock.ms).slice(0, 10),
+						tz: 'UTC',
+						params: {}
+					},
+					invocationId: randomUUID()
+				})).outcome;
+			}),
+		until: (end: number) =>
+			Effect.gen(function* () {
+				while (next !== null && next <= end) {
+					clock.ms = Math.max(clock.ms, next);
+					next = null;
+					wakes.push(clock.ms);
+					yield* TestClock.setTime(clock.ms);
+					yield* r.tick;
+				}
+				clock.ms = end;
+				yield* TestClock.setTime(end);
+			}),
+		sql: (text: string, params: Json[] = []) =>
+			Effect.map(inner.read([{ text, params }]), (rows) => rows[0]?.rows ?? [])
+	} satisfies World;
+});
+const setNow = (w: World, ms: number) =>
+	Effect.gen(function* () {
+		w.clock.ms = ms;
+		yield* TestClock.setTime(ms);
+	});
+describe('the deadlines port and the idle workspace (rule 52a)', () => {
+	it.effect(
+		'runs both automations sharing a cron expression and maintains their independent next slots',
+		() =>
+			Effect.gen(function* () {
+				const scheduled = {
+					...empty,
+					automations: {
+						first: { description: 'First task', on: { cron: '*/5 * * * *' }, runAs: ['ops'] },
+						second: { description: 'Second task', on: { cron: '*/5 * * * *' }, runAs: ['ops'] }
+					}
+				} satisfies EngineManifest;
+				const w = yield* world(scheduled, {
+					first: () => Effect.gen(function* () {}),
+					second: () => Effect.gen(function* () {})
+				});
+				yield* w.until(T0 + 5 * 60000);
+				expect(w.calls.map((call) => call.target).sort()).toEqual(['first', 'second']);
+				yield* w.until(T0 + 10 * 60000);
+				expect(w.calls.map((call) => call.target).sort()).toEqual([
+					'first',
+					'first',
+					'second',
+					'second'
+				]);
+			})
+	);
+	it.effect('an idle workspace issues zero statements over a simulated week', () =>
+		Effect.gen(function* () {
+			const w = yield* world(empty);
+			yield* w.until(T0 + 7 * DAY);
+			expect(w.statements).toEqual([]);
+			expect(w.wakes).toEqual([]);
+		})
+	);
+	it.effect(
+		'a daily cron wakes once per slot and issues statements only at its slots, pruning included',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(withCron, {
+					digest: () =>
+						Effect.gen(function* () {
+							return { ok: true };
+						})
+				});
+				yield* w.until(T0 + 7 * DAY);
+				const slots = Array.from(
+					{ length: 7 },
+					(_, i) => Date.parse('2026-09-26T06:00:00Z') + i * DAY
+				);
+				expect(w.wakes).toEqual(slots);
+				expect(new Set(w.statements.map((s) => s.at))).toEqual(new Set(slots));
+				expect(w.calls).toHaveLength(7);
+			})
+	);
+	it.effect(
+		'the daily prune drops aged events, closed rate windows and spent host nonces (rule 56, §5.11.6)',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(withCron, {
+					digest: () =>
+						Effect.gen(function* () {
+							return { ok: true };
+						})
+				});
+				const old = iso(T0 - 4 * DAY);
+				for (const text of [
+					`INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES ('${old}', 'info', 'old', 'i', '{}'), ('${iso(T0)}', 'info', 'new', 'i', '{}')`,
+					`INSERT INTO bolt_rate VALUES ('act', 'b', '${old}', 1), ('act', 'b', '${iso(T0)}', 1)`,
+					`INSERT INTO bolt_host_nonce VALUES ('nonce:a', '${iso(T0 - 3600000)}'), ('run:a', '${iso(T0 - 3600000)}'), ('run:b', '${iso(T0 - 31 * DAY)}')`
+				])
+					yield* w.db.write({ text, params: [] });
+				yield* w.until(T0 + DAY);
+				expect(yield* w.sql(`SELECT event FROM sys_event WHERE event IN ('old', 'new')`)).toEqual([
+					{ event: 'new' }
+				]);
+				expect(yield* w.sql(`SELECT count(*)::int AS n FROM bolt_rate`)).toEqual([{ n: 1 }]);
+				expect(yield* w.sql(`SELECT key FROM bolt_host_nonce`)).toEqual([{ key: 'run:a' }]);
+			})
+	);
+	it.effect(
+		'the daily prune enforces the history horizon of 256 revisions per row (rule 17, L-BOLT-182)',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(withCron, {
+					digest: () =>
+						Effect.gen(function* () {
+							return { ok: true };
+						})
+				});
+				yield* w.db.write({
+					text: `INSERT INTO bolt_history (collection, record, revision, op, cause) SELECT 'quotes', '00000000-0000-4000-8000-000000000001', g, 'update', 'direct' FROM generate_series(1, 260) g`,
+					params: []
+				});
+				yield* w.until(T0 + DAY);
+				expect(
+					yield* w.sql(
+						`SELECT count(*)::int AS n, min(revision) AS lo FROM bolt_history WHERE record = '00000000-0000-4000-8000-000000000001'`
+					)
+				).toEqual([{ n: 256, lo: 5 }]);
+			})
+	);
+	it.effect(
+		'a restart re-arms from one statement; a run that lost its lease is re-queued at once',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(base, { classify: () => Effect.gen(function* () {}) });
+				yield* w.sql(
+					`INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts) VALUES ('lost', 'classify', '{}', now(), 'start', 0, 'running', 1)`
+				);
+				yield* w.r.boot;
+				expect(w.statements).toHaveLength(1);
+				yield* w.until(T0);
+				expect(w.wakes).toEqual([T0]);
+				expect(yield* w.sql(`SELECT state, leases FROM sys_run WHERE id = 'lost'`)).toEqual([
+					{ state: 'succeeded', leases: 1 }
+				]);
+			})
+	);
+});
+describe('event triggers (rules 49, 50)', () => {
+	it.effect(
+		'a created + 3d delay over many rows is written by each causing statement and wakes once per bucket',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(base, {
+					remind: (input) =>
+						Schema.decodeUnknownEffect(Schema.Struct({ ids: Schema.Array(Schema.String) }))(
+							input
+						).pipe(
+							Effect.map((value) => ({ n: value.ids.length })),
+							Effect.mapError(() => BoltError.make('badAnswer', 'guest', 'Missing ids'))
+						)
+				});
+				// 60 quotes created 09:01:00–09:04:56 share the bucket 3 days after 09:05
+				for (let i = 0; i < 60; i++) {
+					yield* setNow(w, T0 + 60000 + i * 4000);
+					const before = w.statements.length;
+					expect(yield* w.act('quotes', 'create', { title: `q${i}` })).toMatchObject({
+						kind: 'committed'
+					});
+					expect(w.statements.length - before).toBe(1);
+				}
+				expect(
+					yield* w.sql(
+						`SELECT count(*)::int AS n, count(DISTINCT due_at)::int AS dues, min(due_at)::text AS due FROM sys_run WHERE automation = 'remind'`
+					)
+				).toEqual([{ n: 60, dues: 1, due: '2026-09-28 09:05:00+00' }]);
+				yield* w.until(T0 + 4 * DAY);
+				expect(w.wakes).toEqual([Date.parse('2026-09-28T09:05:00Z')]);
+				expect(
+					w.calls.map(
+						(c) =>
+							Schema.decodeUnknownSync(Schema.Struct({ ids: Schema.Array(Schema.String) }))(c.input)
+								.ids.length
+					)
+				).toEqual([60]);
+			})
+	);
+	it.effect(
+		'without delay the run is due at its exact commit; `where` and `fields` are judged once on the firing write',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(base, {
+					sent: () => Effect.gen(function* () {}),
+					gone: () => Effect.gen(function* () {}),
+					remind: () => Effect.gen(function* () {})
+				});
+				yield* setNow(w, T0 + 17000);
+				const created = yield* w.act('quotes', 'create', { title: 'a' });
+				expect(created.kind).toBe('committed');
+				if (created.kind !== 'committed' || created.records[0] === undefined)
+					throw new Error('Missing quote');
+				const id = created.records[0].id;
+				yield* w.act('quotes', 'update', { target: id, set: { title: 'b' } }); // status unchanged: no run
+				expect(
+					yield* w.sql(`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'sent'`)
+				).toEqual([{ n: 0 }]);
+				yield* setNow(w, T0 + 23000);
+				yield* w.act('quotes', 'update', { target: id, set: { status: 'sent' } });
+				yield* w.act('quotes', 'delete', { target: id });
+				yield* w.until(T0 + 60000);
+				expect(w.wakes).toEqual([T0 + 23000]);
+				const byName = Object.fromEntries(w.calls.map((c) => [c.target, c.input]));
+				expect(byName['sent']).toEqual({ collection: 'quotes', ids: [id] });
+				expect(byName['gone']).toMatchObject({
+					collection: 'quotes',
+					ids: [id],
+					rows: [{ id, title: 'b', status: 'sent' }]
+				});
+			})
+	);
+});
+describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
+	it.effect('backend acts preserve observed revisions and cannot overwrite a newer row', () =>
+		Effect.gen(function* () {
+			let target = '',
+				revision = 0;
+			const w = yield* world(
+				base,
+				{
+					classify: (_, ctx) =>
+						Effect.gen(function* () {
+							return yield* ctx.act(
+								'quotes.update',
+								{ target, set: { title: 'stale result' } },
+								{ observed: { [target]: revision } }
+							);
+						})
+				},
+				{ start: ['classify'] }
+			);
+			const created = Schema.decodeUnknownSync(
+				Schema.Struct({
+					kind: Schema.Literal('committed'),
+					records: Schema.Array(Schema.Struct({ id: Schema.String, revision: Schema.Number }))
+				})
+			)(yield* w.act('quotes', 'create', { title: 'original' }));
+			const row = created.records[0];
+			if (!row)
+				return yield* Effect.fail(BoltError.make('guestError', 'guest', 'Missing created quote'));
+			target = row.id;
+			revision = row.revision;
+			yield* w.act('quotes', 'update', { target, set: { title: 'newer edit' } });
+			yield* w.until(T0);
+			expect(yield* w.sql('SELECT title FROM quotes WHERE id = $1', [target])).toEqual([
+				{ title: 'newer edit' }
+			]);
+			expect(yield* w.sql("SELECT state FROM sys_run WHERE automation = 'classify'")).toEqual([
+				{ state: 'failed' }
+			]);
+		})
+	);
+	it.effect(
+		'a 1-minute re-queue is due at its exact time; the same key replaces; the chain ends by itself',
+		() =>
+			Effect.gen(function* () {
+				let left = 2;
+				const w = yield* world(
+					base,
+					{
+						classify: (_, ctx) =>
+							Effect.gen(function* () {
+								if (left-- <= 0) return;
+								yield* ctx.schedule(
+									'classify',
+									{},
+									{ at: { now: '+1min' }, key: 'classify_retry' }
+								);
+								yield* ctx.schedule(
+									'classify',
+									{},
+									{ at: { now: '+1min' }, key: 'classify_retry' }
+								);
+							})
+					},
+					{ start: ['classify'] }
+				);
+				yield* w.r.boot; // the seed's first admission queued one run; a second boot queues nothing
+				yield* w.until(T0 + DAY);
+				expect(w.wakes).toEqual([T0, T0 + 60000, T0 + 120000]);
+				expect(
+					yield* w.sql(`SELECT state, count(*)::int AS n FROM sys_run GROUP BY state`)
+				).toEqual([{ state: 'succeeded', n: 3 }]);
+			})
+	);
+	it.effect('only a Transient failure retries, on the same run; each effect happens once', () =>
+		Effect.gen(function* () {
+			const w = yield* world(
+				base,
+				{
+					flaky: (_, ctx) =>
+						Effect.gen(function* () {
+							yield* ctx.act('quotes.create', { title: 'once' });
+							if (!ctx.attempt.endsWith(':3'))
+								return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
+							return 'done';
+						})
+				},
+				{ start: ['flaky'] }
+			);
+			yield* w.until(T0 + DAY);
+			expect(w.wakes).toHaveLength(3);
+			expect(
+				yield* w.sql(
+					`SELECT state, attempts, output, jsonb_array_length(results) AS results FROM sys_run WHERE automation = 'flaky'`
+				)
+			).toEqual([{ state: 'succeeded', attempts: 3, output: 'done', results: 3 }]);
+			expect(yield* w.sql(`SELECT count(*)::int AS n FROM quotes WHERE title = 'once'`)).toEqual([
+				{ n: 1 }
+			]);
+		})
+	);
+	it.effect('a notice that names no recipient is refused and writes nothing (L-BOLT-340)', () =>
+		Effect.gen(function* () {
+			const w = yield* world(
+				base,
+				{
+					flaky: (_, ctx) =>
+						ctx.notify({ to: [], title: 'nowhere' }).pipe(
+							Effect.as('sent'),
+							Effect.catch((error) => Effect.succeed(error.code))
+						)
+				},
+				{ start: ['flaky'] }
+			);
+			yield* w.until(T0 + DAY);
+			expect(yield* w.sql(`SELECT state, output FROM sys_run WHERE automation = 'flaky'`)).toEqual([
+				{ state: 'succeeded', output: 'invalidInput' }
+			]);
+			expect(yield* w.sql(`SELECT count(*)::int AS n FROM sys_notification`)).toEqual([{ n: 0 }]);
+		})
+	);
+	it.effect(
+		'an automation resolves source-policy holders once across retries without granting descendants or external members',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(
+					{ ...base, teams: { ops: ['ops'], branch: { parent: 'ops', policies: [] } } },
+					{
+						flaky: (_, ctx) =>
+							Effect.gen(function* () {
+								yield* ctx.notify({
+									to: [{ policy: 'ops' }, { team: 'ops' }, { user: 'holder' }],
+									title: 'For ops',
+									once: 'source-policy-notice'
+								});
+								if (!ctx.attempt.endsWith(':3'))
+									return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
+								return 'done';
+							})
+					},
+					{ start: ['flaky'] }
+				);
+				yield* w.db.write({
+					text: `INSERT INTO sys_user(id,name,team,active,kind) VALUES
+			('holder','Holder','ops',true,'staff'), ('branch-holder','Branch','branch',true,'staff'),
+			('inactive-holder','Inactive','ops',false,'staff'), ('external-holder','External','ops',true,'external')`,
+					params: []
+				});
+				yield* w.until(T0 + DAY);
+				expect(
+					yield* w.sql("SELECT state, attempts FROM sys_run WHERE automation = 'flaky'")
+				).toEqual([{ state: 'succeeded', attempts: 3 }]);
+				expect(yield* w.sql('SELECT member,title FROM sys_notification')).toEqual([
+					{ member: 'holder', title: 'For ops' }
+				]);
+			})
+	);
+	it.effect(
+		'an inbox notice that reaches no member is not refused; the attempt reports it (L-BOLT-340, rule 21)',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(
+					base,
+					{
+						flaky: (_, ctx) =>
+							Effect.gen(function* () {
+								yield* ctx.notify({ to: { team: 'nobody' }, title: 'unheard' });
+								return 'sent';
+							})
+					},
+					{ start: ['flaky'] }
+				);
+				yield* w.until(T0 + DAY);
+				expect(
+					yield* w.sql(
+						`SELECT state, output, results->0->'warnings' AS warnings FROM sys_run WHERE automation = 'flaky'`
+					)
+				).toEqual([
+					{ state: 'succeeded', output: 'sent', warnings: [`notify: 'unheard' reached no member`] }
+				]);
+				expect(yield* w.sql(`SELECT count(*)::int AS n FROM sys_notification`)).toEqual([{ n: 0 }]);
+			})
+	);
+	it.effect('a refusal or a bug is never retried', () =>
+		Effect.gen(function* () {
+			const w = yield* world(
+				base,
+				{
+					flaky: () =>
+						Effect.gen(function* () {
+							return yield* Effect.fail(BoltError.make('guestError', 'guest', 'bug'));
+						})
+				},
+				{ start: ['flaky'] }
+			);
+			yield* w.until(T0 + DAY);
+			expect(yield* w.sql(`SELECT state, attempts, error->>'code' AS code FROM sys_run`)).toEqual([
+				{ state: 'failed', attempts: 1, code: 'guestError' }
+			]);
+		})
+	);
+});
+describe('webhooks and visibility (rules 56, 56a)', () => {
+	it.effect(
+		'verifies before reading, dedupes deliveries, and acknowledges after the run row commits',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(base, {
+					hook: (input) =>
+						Effect.gen(function* () {
+							return input;
+						})
+				});
+				yield* w.secrets.set('workspace', 'HOOK', 'tok');
+				w.statements.length = 0;
+				const body = new TextEncoder().encode('{"order":1}');
+				expect(
+					yield* w.r.webhook('/in', {
+						method: 'POST',
+						headers: { authorization: 'Bearer nope' },
+						body
+					})
+				).toEqual({ status: 401 });
+				expect(w.statements).toEqual([]);
+				const ok = { method: 'POST', headers: { authorization: 'Bearer tok' }, body };
+				expect(yield* w.r.webhook('/in', ok)).toEqual({ status: 200 });
+				expect(yield* w.r.webhook('/in', ok)).toEqual({ status: 200 });
+				expect(
+					yield* w.r.webhook('/in', { ...ok, body: new TextEncoder().encode('not json') })
+				).toEqual({ status: 400 });
+				yield* w.until(T0);
+				expect(w.calls.map((c) => c.input)).toEqual([{ order: 1 }]);
+				expect(
+					yield* w.sql(
+						`SELECT state, count(*)::int AS n FROM sys_run GROUP BY state ORDER BY state`
+					)
+				).toEqual([
+					{ state: 'failed', n: 1 },
+					{ state: 'succeeded', n: 1 }
+				]);
+			})
+	);
+	it.effect(
+		'a run is readable in full by automations holders and admins; the causing actor sees status and error code only',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(base, {
+					sent: () =>
+						Effect.gen(function* () {
+							return yield* Effect.fail(BoltError.make('guestError', 'guest', 'secret detail'));
+						})
+				});
+				const member: Holder = {
+					actor: {
+						kind: 'member',
+						id: randomUUID(),
+						email: null,
+						phone: null,
+						external: false,
+						teams: [],
+						teamPath: [],
+						admin: false,
+						party: null
+					},
+					policies: ['ops'],
+					admin: false
+				};
+				if (member.actor.kind !== 'member') throw new Error('Expected a member actor');
+				const created = (yield* w.e.act({
+					collection: 'quotes',
+					mode: { _tag: 'Direct' },
+					verb: 'create',
+					input: { title: 'x', status: 'draft' },
+					key: randomUUID(),
+					issuedAt: iso(T0),
+					authority: yield* w.e.authority(member),
+					bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} },
+					invocationId: randomUUID()
+				})).outcome;
+				expect(created.kind).toBe('committed');
+				if (created.kind !== 'committed' || created.records[0] === undefined)
+					throw new Error('Missing created quote');
+				const id = created.records[0].id;
+				yield* w.e.act({
+					collection: 'quotes',
+					mode: { _tag: 'Direct' },
+					verb: 'update',
+					input: { target: id, set: { status: 'sent' } },
+					key: randomUUID(),
+					issuedAt: iso(T0),
+					authority: yield* w.e.authority(member),
+					bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} },
+					invocationId: randomUUID()
+				});
+				yield* w.until(T0);
+				const [run] = yield* w.sql(`SELECT id FROM sys_run WHERE automation = 'sent'`);
+				if (run === undefined) throw new Error('Missing sent run');
+				const runId = String(run['id']);
+				expect(Option.getOrNull(yield* w.r.view(yield* w.e.authority(member), runId))).toEqual(
+					expect.objectContaining({ status: 'failed', error: { code: 'guestError' } })
+				);
+				expect(
+					Option.getOrNull(yield* w.r.view(yield* w.e.authority(member), runId))
+				).not.toHaveProperty('input');
+				const other = yield* w.e.authority({
+					...member,
+					actor: { ...member.actor, id: randomUUID() }
+				});
+				expect(Option.getOrNull(yield* w.r.view(other, runId))).toBeNull();
+				const admin = yield* w.e.authority({ ...member, admin: true });
+				expect(Option.getOrNull(yield* w.r.view(admin, runId))).toMatchObject({
+					error: { code: 'guestError', message: 'secret detail' },
+					input: { ids: [id] }
+				});
+			})
+	);
+});
+describe('lanes: a long automation never holds an agent.triage decision (rules 48, 51)', () => {
+	const queue = (w: World, id: string, automation: string, due: number) =>
+		w.db.write({
+			text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth)
+		VALUES ($1, $2, '{"conversation":"c","waits":0}'::jsonb, $3::timestamptz, 'schedule', 0)`,
+			params: [id, automation, iso(due)]
+		});
+	const states = (w: World) =>
+		w.sql(
+			`SELECT automation, state FROM sys_run WHERE automation IN ('classify', 'agent.triage') ORDER BY automation`
+		);
+	/** `classify` holds until `agent.triage` has run: run one after the other, the wake never ends (the test times out). */
+	const gated = () =>
+		Effect.gen(function* () {
+			const release = yield* Deferred.make<void>();
+			return {
+				released: Deferred.await(release),
+				platform: {
+					'agent.triage': () =>
+						Deferred.succeed(release, undefined).pipe(Effect.as({ decided: true }))
+				}
+			};
+		});
+	it.effect('a triage due with a long automation completes while the automation still runs', () =>
+		Effect.gen(function* () {
+			const g = yield* gated();
+			const w = yield* world(
+				base,
+				{
+					classify: () =>
+						Effect.gen(function* () {
+							yield* g.released;
+							return { done: true };
+						})
+				},
+				{ platform: g.platform }
+			);
+			yield* queue(w, randomUUID(), 'classify', T0 - 1000); // claimed first
+			yield* queue(w, randomUUID(), 'agent.triage', T0);
+			yield* w.r.tick;
+			expect(yield* states(w)).toEqual([
+				{ automation: 'agent.triage', state: 'succeeded' },
+				{ automation: 'classify', state: 'succeeded' }
+			]);
+		})
+	);
+	it.effect(
+		'workspace automations due together run one after the other, never side by side (no revision conflict between them)',
+		() =>
+			Effect.gen(function* () {
+				const order: string[] = [];
+				const body = (name: string) => () =>
+					Effect.gen(function* () {
+						order.push(`${name}:start`);
+						yield* Effect.yieldNow;
+						order.push(`${name}:end`);
+						return { done: true };
+					});
+				const w = yield* world(base, { classify: body('a'), flaky: body('b') });
+				yield* queue(w, randomUUID(), 'classify', T0 - 1000);
+				yield* queue(w, randomUUID(), 'flaky', T0 - 1000);
+				yield* w.r.tick;
+				expect(order).toEqual(
+					order[0] === 'a:start'
+						? ['a:start', 'a:end', 'b:start', 'b:end']
+						: ['b:start', 'b:end', 'a:start', 'a:end']
+				);
+			})
+	);
+	it.effect('a triage queued while the long automation runs is claimed by the open wake', () =>
+		Effect.gen(function* () {
+			const g = yield* gated();
+			const w: World = yield* world(
+				base,
+				{
+					classify: () =>
+						Effect.gen(function* () {
+							yield* queue(w, randomUUID(), 'agent.triage', w.clock.ms);
+							yield* w.r.nudge(iso(w.clock.ms));
+							yield* g.released;
+							return { done: true };
+						})
+				},
+				{ platform: g.platform }
+			);
+			yield* queue(w, randomUUID(), 'classify', T0);
+			yield* w.r.tick;
+			expect(yield* states(w)).toEqual([
+				{ automation: 'agent.triage', state: 'succeeded' },
+				{ automation: 'classify', state: 'succeeded' }
+			]);
+		})
+	);
+	/** Without the cron's next slot reaching the open wake, the second `Queue.take` never returns (the test times out). */
+	it.effect('a cron keeps firing its slots while a long platform run holds the open wake', () =>
+		Effect.gen(function* () {
+			const release = yield* Deferred.make<void>(),
+				ran = yield* Queue.unbounded<number>();
+			const w = yield* world(
+				{
+					...empty,
+					automations: {
+						pulse: { description: 'Pulse', on: { cron: '*/5 * * * *' }, runAs: ['ops'] }
+					}
+				},
+				{
+					pulse: () =>
+						Effect.gen(function* () {
+							yield* Queue.offer(ran, yield* Clock.currentTimeMillis);
+						})
+				},
+				{
+					platform: {
+						'agent.triage': () => Deferred.await(release).pipe(Effect.as({ decided: true }))
+					}
+				}
+			);
+			yield* queue(w, randomUUID(), 'agent.triage', T0);
+			yield* setNow(w, T0 + 5 * 60000);
+			const ticking = yield* Effect.forkChild(w.r.tick);
+			expect(yield* Queue.take(ran)).toBe(T0 + 5 * 60000);
+			yield* setNow(w, T0 + 10 * 60000);
+			expect(yield* Queue.take(ran)).toBe(T0 + 10 * 60000);
+			yield* setNow(w, T0 + 15 * 60000);
+			expect(yield* Queue.take(ran)).toBe(T0 + 15 * 60000);
+			expect(yield* w.sql(`SELECT state FROM sys_run WHERE automation = 'agent.triage'`)).toEqual([
+				{ state: 'running' }
+			]);
+			yield* Deferred.succeed(release, undefined);
+			yield* Fiber.join(ticking);
+			expect(yield* w.sql(`SELECT state FROM sys_run WHERE automation = 'agent.triage'`)).toEqual([
+				{ state: 'succeeded' }
+			]);
+		})
+	);
+});

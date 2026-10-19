@@ -1,0 +1,13 @@
+id: EQ1
+summary: JSON serialization is used as equality
+severity: error
+principles: [simplicity, straightforwardness, testability, efficiency, no-bloat]
+rule:
+  any:
+    - 'JSON.stringify($LEFT) === JSON.stringify($RIGHT)'
+    - 'JSON.stringify($LEFT) !== JSON.stringify($RIGHT)'
+examples:
+  bad:
+    - 'const same = JSON.stringify(a) === JSON.stringify(b);'
+  good:
+    - 'const same = Equal.equals(a, b);'

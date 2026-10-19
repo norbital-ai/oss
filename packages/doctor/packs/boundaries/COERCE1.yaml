@@ -1,0 +1,33 @@
+id: COERCE1
+summary: Number() decodes IO instead of a schema
+severity: error
+principles: [type-safety, straightforwardness]
+ignore:
+  - '**/std/src/date/**'
+  - '**/std/src/finance/**'
+  - '**/std/src/billing/**'
+  - '**/std/src/reckon/**'
+  - '**/std/src/json/number.ts'
+  - '**/doctor/src/**'
+  - '**/scripts/**'
+rule:
+  all:
+    - pattern: Number($X)
+    - not:
+        any:
+          - pattern: Number($A.includes($B))
+          - pattern: Number($A === $B)
+          - pattern: Number($A !== $B)
+          - pattern: Number($A.typeOnly)
+          - pattern: Number($A.crossConcept)
+          - pattern: Number(true)
+          - pattern: Number(false)
+          - pattern: Number($A.toFixed($B))
+examples:
+  bad:
+    - 'export const qty = (input) => Number(input.quantity);'
+    - "export const port = Number(process.env.PORT ?? '3100');"
+  good:
+    - 'export const qty = (input) => decodeNumber(input.quantity);'
+    - 'export const n = Number.NaN;'
+    - 'export const ok = Number.isFinite(value);'

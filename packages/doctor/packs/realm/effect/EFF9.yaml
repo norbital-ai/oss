@@ -1,0 +1,13 @@
+id: EFF9
+summary: floating Effect is never executed
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - kind: ExpressionStatement
+    - regex: "^Effect\\.(?:succeed|fail|sync|gen|sleep|all|forEach)\\("
+examples:
+  bad:
+    - 'Effect.succeed(1);'
+  good:
+    - 'export const work = Effect.succeed(1);'

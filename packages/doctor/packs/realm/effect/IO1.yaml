@@ -1,0 +1,31 @@
+id: IO1
+summary: runtime code performs blocking synchronous Node IO
+severity: error
+principles: [straightforwardness, testability, efficiency]
+ignore:
+  - '**/scripts/**'
+  - '**/script/**'
+  - '**/bin/**'
+  - '**/cli/**'
+  - '**/tools/**'
+  - '**/*.config.ts'
+  - '**/*.config.js'
+  - '**/*.config.mjs'
+  - '**/*.config.cjs'
+  - '**/*.config.mts'
+  - '**/*.config.cts'
+rule:
+  all:
+    - kind: CallExpression
+    - fact:
+        name: calleeMatches
+        direct: true
+        imports: '^(?:node:)?(?:fs|child_process)$'
+        regex: '(?:^|\.)(?:readFileSync|writeFileSync|existsSync|readdirSync|statSync|mkdirSync|rmSync|appendFileSync|execSync|execFileSync|spawnSync)$'
+examples:
+  bad:
+    - "import { readFileSync } from 'node:fs';\nexport const f = () => readFileSync('/x', 'utf8');"
+    - "import { readFileSync as read } from 'node:fs';\nexport const f = () => read('/x', 'utf8');"
+    - "import fs from 'node:fs';\nconst { readFileSync: read } = fs; export const f = () => read('/x', 'utf8');"
+  good:
+    - "export const f = () => fs.readFile('/x');"

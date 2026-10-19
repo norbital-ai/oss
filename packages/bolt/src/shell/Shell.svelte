@@ -1,0 +1,944 @@
+<!--
+	The workspace shell (§5.10): boots the caller, routes the URL, and renders a page inside the sidebar shell, or
+	a visitor page with no chrome, or the sign-in and invitation pages. `$bolt` is created from the boot
+	before any page chunk loads.
+-->
+<script lang="ts">
+	import { attach, fork, run } from '@norbital-ai/ui/effect';
+	import { Effect, Exit, FiberHandle, Scope, Stream } from 'effect';
+	import { setContext, tick, type Component } from 'svelte';
+	import { watch } from 'runed';
+	import { PersistedState } from 'runed';
+	import { MediaQuery, SvelteMap } from 'svelte/reactivity';
+	import {
+		Bound,
+		Center,
+		Cover,
+		INSET_X_CLASS,
+		Inline,
+		Stack,
+		setAppIdentitySlot,
+		type AppIdentitySlot
+	} from '@norbital-ai/ui/layout';
+	import {
+		Button,
+		Drawer,
+		Icon,
+		Sheet,
+		TAB_LEVEL,
+		Toaster,
+		cn,
+		openRecord,
+		provideBolt,
+		provideKinds,
+		provideRepresentations,
+		setUiText,
+		type ViewBolt
+	} from '@norbital-ai/ui';
+	import { NorbiusStrip } from '@norbital-ai/ui/brand';
+	import type { ShellMountConfig } from './mount.ts';
+	import {
+		based,
+		isOpenRoute,
+		logical,
+		recordsOf,
+		route,
+		withRecords,
+		type NavNode,
+		type ShellBoot
+	} from './nav.ts';
+	import { chosenLocale, frameworkText, setLocale, uiTextFor } from './i18n.ts';
+	import type { SyncStatus } from '../page/bolt.ts';
+	import { activeApp, media, navigationModel, NORBIUS } from './model.ts';
+	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
+	import {
+		agentPanel,
+		challengeQueue,
+		setCurrentBolt,
+		shellApi,
+		shellBolt,
+		type AgentRequest,
+		type ShellBolt,
+		bolt as moduleBolt
+	} from './runtime.ts';
+	import Access from './auth/Access.svelte';
+	import SignIn from './auth/SignIn.svelte';
+	import Invite from './auth/Invite.svelte';
+	import AgentPanel from './agent/Agent.svelte';
+	import Inbox from './inbox/Inbox.svelte';
+	import Connections from './integration/Connections.svelte';
+	import Settings from './settings/Settings.svelte';
+	import Studio from './studio/Studio.svelte';
+	import RecordSheet from './RecordSheet.svelte';
+	import Turnstile from './auth/Turnstile.svelte';
+	import Nav from './Nav.svelte';
+	import MediaHeader from './MediaHeader.svelte';
+	import Finder from './finder/Finder.svelte';
+	import Home from './Home.svelte';
+	import Bell from './Bell.svelte';
+	import DeviceWall from './DeviceWall.svelte';
+	import { deviceAccess } from './device-access.ts';
+	import { resolveDevice } from '../page/device.ts';
+	import { deviceSession, openExternal } from './device-session.ts';
+
+	let { config }: { config: ShellMountConfig } = $props();
+
+	// svelte-ignore state_referenced_locally
+	const api = shellApi(config.fetch);
+	const agent = agentPanel();
+	let challenge = $state<import('./runtime.ts').ChallengeQueue | null>(null);
+	// the framework's own copy in the viewer's locale (their choice, else the workspace's); the workspace's messages win
+	// svelte-ignore state_referenced_locally
+	const locale = chosenLocale(config.manifest.workspace.locale);
+	const framework = frameworkText(locale);
+	const t = (key: string) => config.messages?.[key] ?? framework[key] ?? key;
+	setUiText(uiTextFor(locale));
+	// the appearance: the document applied the stored choice before paint; a change of choice or of the system's follows
+	let theme = $state<Theme>('system');
+	fork(
+		storedTheme.pipe(
+			Effect.tap((stored) =>
+				Effect.sync(() => {
+					theme = stored;
+				})
+			)
+		)
+	);
+	const systemDark = new MediaQuery('prefers-color-scheme: dark');
+	watch([() => theme, () => systemDark.current], ([x, dark]) => applyTheme(x, dark));
+	const dark = $derived(theme === 'dark' || (theme === 'system' && systemDark.current));
+	const chooseTheme = (x: Theme) => {
+		fork(storeTheme(x));
+		theme = x;
+	};
+
+	/** The page's URL as the workspace names it: without the base path the host serves it under. */
+	const here = () => logical(location.href) ?? new URL(location.href);
+	let url = $state(here());
+	let boot = $state<ShellBoot | null>(null);
+	// a signed-out caller's boot is refused, but names the workspace the access pages show
+	let guest = $state<ShellBoot['workspace'] | null>(null);
+	const workspace = $derived(boot?.workspace ?? guest);
+	let bolt = $state.raw<ShellBolt | null>(null);
+	let failure = $state<{ code: string; message: string; status: number } | null>(null);
+	let agentRequest = $state<AgentRequest | null>(null);
+	// Norbius is `?agent=<conversation>` (`new`: a new one) beside any `?record=` stack, as the record sheets are: opening
+	// it pushes the param, closing removes it, a switch of conversation replaces it; a reload, back, forward or a shared
+	// link reopens it on that conversation
+	function agentUrl(value: string | null, replace = false): void {
+		const next = here();
+		if (value === null) next.searchParams.delete('agent');
+		else next.searchParams.set('agent', value);
+		if (next.href !== here().href) navigate(next.href, replace);
+	}
+	agent.subscribe((r) => {
+		if (r === agentRequest) return; // the subscription's first call: the URL decides (below)
+		agentRequest = r;
+		const open = new URL(location.href).searchParams.get('agent');
+		if (r === null && open !== null) agentUrl(null);
+		else if (r !== null && open === null) agentUrl(r.conversation ?? 'new');
+	});
+	const agentParam = $derived(url.searchParams.get('agent'));
+	watch(
+		() => agentParam,
+		(p) => {
+			if (p === null) return void (agentRequest !== null && agent.close());
+			const conversation = p === 'new' ? null : p;
+			// a panel that has not reported its conversation yet keeps the one it chose
+			if (
+				agentRequest === null ||
+				(agentRequest.conversation !== undefined && agentRequest.conversation !== conversation)
+			)
+				agent.open({ ...agentRequest, conversation });
+		}
+	);
+	/** The panel switched conversation: the URL follows without a history entry. */
+	function agentConversation(id: string | null): void {
+		if (agentRequest !== null) agentRequest = { ...agentRequest, conversation: id };
+		agentUrl(id ?? 'new', true);
+	}
+	// ui's generated forms and record views: the caller's exposure from the boot, pickers paging through `bolt.read`
+	provideKinds({
+		get catalog() {
+			return boot?.catalog;
+		},
+		get locale() {
+			return locale;
+		},
+		get zone() {
+			return boot?.workspace.tz;
+		},
+		// a money field without its own currency reads in the workspace's (X-8)
+		get currency() {
+			return config.manifest.workspace.currency;
+		},
+		read: (collection, options) => moduleBolt.read(collection, options),
+		// a generated form's file field: bytes to `<collection>.<field>`, links to the stored file
+		upload: (file, target) =>
+			moduleBolt
+				.upload(file, target)
+				.pipe(Effect.map((ref) => ({ id: ref.id, name: ref.name, mime: ref.mime }))),
+		fileUrl: (ref, options) => moduleBolt.fileUrl(ref, options),
+		get customFields() {
+			return config.customFields;
+		}
+	});
+	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
+	// a page's AppShell publishes its identity and actions here; the hero above the page renders them
+	const identity = $state<AppIdentitySlot>({ current: null });
+	setAppIdentitySlot(identity);
+	// svelte-ignore state_referenced_locally
+	provideRepresentations(config.representations ?? {});
+
+	// ui's views on a page (`Table`, `Board`, …) read `$bolt` from context; pages render only after the boot sets it
+	provideBolt(moduleBolt);
+
+	const current = $derived(route(config.manifest, url));
+	// the record-sheet stack (rule 10): every `?record=`, the last on top
+	const records = $derived(recordsOf(url));
+	// a `portal: true` page or any kiosk page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
+	// the device access the open app declares (`requires`); its pages wait behind the wall until it is granted
+	const requires = $derived(
+		current.kind === 'page' ? (config.manifest.apps[current.app]?.requires ?? []) : []
+	);
+	const device = $derived(bolt?.device ?? resolveDevice(config.device));
+	const access = $derived(deviceAccess(device));
+	const portal = $derived(
+		current.kind === 'kiosk' ||
+			(current.kind === 'page' &&
+				config.manifest.apps[current.app]?.pages[current.page]?.portal === true)
+	);
+	const publicApp = $derived(
+		current.kind === 'page' && isOpenRoute(config.manifest, current) ? current.app : undefined
+	);
+	let firstPageReady = $state(false);
+	const initialPageMounted = attach(() =>
+		Effect.promise(tick).pipe(
+			Effect.tap(() =>
+				Effect.sync(() => {
+					firstPageReady = true;
+				})
+			)
+		)
+	);
+	watch(
+		() =>
+			failure !== null ||
+			(boot !== null &&
+				((current.kind !== 'page' && current.kind !== 'kiosk') ||
+					firstPageReady ||
+					pageKey === null ||
+					config.pages[pageKey] === undefined)) ||
+			current.kind === 'signIn' ||
+			current.kind === 'invite',
+		(ready) => {
+			if (ready)
+				void (config.ready ?? Promise.resolve())
+					.then(tick)
+					.then(() => document.getElementById('bolt-loading')?.remove());
+		}
+	);
+
+	/** `href` is a workspace URL (`/inbox`); the history entry carries the base path. */
+	function navigate(href: string, replace = false): void {
+		const next = new URL(href, url);
+		if (next.origin !== location.origin) return void fork(openExternal(device, next.href));
+		const destination = route(config.manifest, next);
+		const publicKey =
+			destination.kind === 'page'
+				? `app/${destination.app}/${destination.page}`
+				: destination.kind === 'kiosk'
+					? `kiosk/${destination.kiosk}/${destination.page}`
+					: null;
+		if (publicKey !== null && config.publicRoutes?.includes(publicKey)) {
+			location.assign(`${based(next.pathname)}${next.search}${next.hash}`);
+			return;
+		}
+		history[replace ? 'replaceState' : 'pushState'](
+			null,
+			'',
+			`${based(next.pathname)}${next.search}${next.hash}`
+		);
+		url = next;
+	}
+	/** Settings → Automations' open run is `?run=<id>`, beside whatever the table keeps in the URL. */
+	function openRun(id: string | null): void {
+		const next = here();
+		if (id === null) next.searchParams.delete('run');
+		else next.searchParams.set('run', id);
+		navigate(next.href);
+	}
+	// in-app links are plain anchors; the shell keeps them in the page
+	function intercept(event: MouseEvent): void {
+		const a = (event.target as Element | null)?.closest?.('a');
+		// a link out of the workspace opens through the shell, when it has a way
+		if (
+			a !== null &&
+			a !== undefined &&
+			!event.defaultPrevented &&
+			event.button === 0 &&
+			device.navigation !== undefined &&
+			new URL(a.href, location.href).origin !== location.origin
+		) {
+			event.preventDefault();
+			fork(openExternal(device, a.href));
+			return;
+		}
+		if (
+			a === null ||
+			a === undefined ||
+			event.defaultPrevented ||
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey ||
+			a.target ||
+			a.hasAttribute('download') ||
+			a.hasAttribute('data-sveltekit-reload')
+		)
+			return;
+		const next = logical(a.href);
+		if (next === null || next.pathname.startsWith('/__bolt/')) return;
+		event.preventDefault();
+		navigate(next.href);
+	}
+
+	/**
+	 * The boot follows the audience, and a public page boots its visitor, so the audience changes as the reader moves. Boots
+	 * overlap, so each carries a ticket: a boot a later change superseded must commit nothing, or its `bolt` would replace —
+	 * and close — the newer one, and its `boot` would describe a route the reader has left.
+	 */
+	let pageScope: Scope.Closeable | null = null;
+	/** A signed-in staff member's device environment (notices, push, the shell's notice service). */
+	let environment: { readonly signOut: Effect.Effect<void> } | null = null;
+	let requestLoad: ((app: string | undefined, kiosk: string | null) => void) | null = null;
+	const load = (app: string | undefined, kiosk: string | null) =>
+		Effect.gen(function* () {
+			const result = yield* Effect.result(api.boot(app, kiosk ?? undefined));
+			if (result._tag === 'Failure') {
+				boot = null;
+				guest = result.failure.workspace ?? null;
+				if (result.failure.status === 401 && !isOpenRoute(config.manifest, current))
+					navigate(`/sign-in?next=${encodeURIComponent(url.pathname + url.search)}`, true);
+				else if (
+					result.failure.status !== 401 ||
+					(current.kind !== 'signIn' && current.kind !== 'invite')
+				)
+					failure = {
+						code: result.failure.code,
+						message: result.failure.message,
+						status: result.failure.status
+					};
+				return;
+			}
+			if (pageScope !== null) yield* Scope.close(pageScope, Exit.void);
+			const scope = yield* Scope.make();
+			pageScope = scope;
+			const client = yield* shellBolt(result.success, {
+				messages: { ...framework, ...config.messages },
+				...(config.integrationSetups === undefined
+					? {}
+					: { integrationSetups: config.integrationSetups }),
+				...(config.device === undefined ? {} : { device: config.device }),
+				...(challenge === null ? {} : { challenge }),
+				agent,
+				kiosk: () => {
+					const next = route(config.manifest, url);
+					return next.kind === 'kiosk' ? next.kiosk : null;
+				},
+				...(config.fetch === undefined ? {} : { fetch: config.fetch }),
+				...(config.openStream === undefined ? {} : { openStream: config.openStream })
+			}).pipe(Effect.provideService(Scope.Scope, scope));
+			failure = null;
+			boot = result.success;
+			bolt = client;
+			setCurrentBolt(client);
+			environment = result.success.surfaces.inbox
+				? yield* deviceSession(client.device, {
+						inbox: client.live({ read: { m: 'inbox', a: [] } }),
+						vapid: result.success.push,
+						navigate,
+						store: (body) => api.push(body)
+					}).pipe(Effect.provideService(Scope.Scope, scope))
+				: null;
+			yield* client.sync.pipe(
+				Stream.runForEach((state) =>
+					Effect.sync(() => {
+						const wasClosed = sync === 'closed';
+						sync = state;
+						if (wasClosed || state !== 'closed') return;
+						const leaving = new Event('beforeunload', { cancelable: true });
+						window.dispatchEvent(leaving);
+						if (!leaving.defaultPrevented) location.reload();
+					})
+				),
+				Effect.forkIn(scope)
+			);
+		});
+	const mountLifecycle = attach(() =>
+		Effect.gen(function* () {
+			challenge = yield* challengeQueue();
+			const submit = yield* FiberHandle.makeRuntime<never, never, void>();
+			requestLoad = (app, kiosk) => {
+				submit(load(app, kiosk));
+			};
+			requestLoad(publicApp, kioskRoute);
+			yield* Effect.addFinalizer(() =>
+				Effect.gen(function* () {
+					requestLoad = null;
+					setCurrentBolt(null);
+					if (pageScope !== null) yield* Scope.close(pageScope, Exit.void);
+					pageScope = null;
+				})
+			);
+			yield* Effect.never;
+		})
+	);
+	// the boot follows the audience: a public page boots its visitor, a kiosk its kiosk, everything else the session
+	const kioskRoute = $derived(current.kind === 'kiosk' ? current.kiosk : null);
+	watch(
+		() => [publicApp, kioskRoute] as const,
+		([app, kiosk]) => requestLoad?.(app, kiosk)
+	);
+
+	function pageOf(key: string): Promise<Component> | null {
+		const chunk = config.pages[key];
+		return chunk === undefined ? null : chunk().then((m) => m.default);
+	}
+	// keyed by a string: a query change (`?record=`) re-derives `current` but must not remount the page
+	const pageKey = $derived(
+		bolt === null
+			? null
+			: current.kind === 'page'
+				? `${current.app}/${current.page}`
+				: current.kind === 'kiosk'
+					? `kiosk/${current.kiosk}/${current.page}`
+					: null
+	);
+	// a page chunk loads once: switching between an app's pages keeps its banner and tabs mounted, shows the page at once
+	// when it has loaded before, and keeps the previous page of the same app on screen until a new chunk arrives
+	const loaded = new SvelteMap<string, Component>();
+	const unloadable = new SvelteMap<string, unknown>();
+	const loading = new Set<string>();
+	const loadPage = (key: string) => {
+		const chunk = loaded.has(key) || loading.has(key) ? null : pageOf(key);
+		if (chunk === null) return;
+		loading.add(key);
+		chunk.then(
+			(component) => loaded.set(key, component),
+			(cause: unknown) => unloadable.set(key, cause)
+		);
+	};
+	watch(
+		() => [pageKey, strip] as const,
+		([key, pages]) => {
+			if (key !== null) loadPage(key);
+			// the open app's other pages load beside it, so its first tab switch is instant too
+			for (const p of pages ?? []) loadPage(p.key);
+		}
+	);
+	let held: { key: string; Page: Component } | undefined;
+	const Page = $derived.by(() => {
+		const ready = pageKey === null ? undefined : loaded.get(pageKey);
+		if (pageKey !== null && ready !== undefined) held = { key: pageKey, Page: ready };
+		const sameApp = held !== undefined && pageKey?.split('/')[0] === held.key.split('/')[0];
+		return ready ?? (sameApp ? held?.Page : undefined);
+	});
+
+	const signOut = Effect.fn('Shell.signOut')(function* () {
+		if (environment !== null) yield* environment.signOut;
+		yield* Effect.result(api.signOut());
+		location.assign(based('/sign-in'));
+	});
+	const endPreview = Effect.fn('Shell.endPreview')(function* () {
+		yield* Effect.result(api.preview(null));
+		location.reload();
+	});
+	// ⌘K (Ctrl+K) opens Norbius, or closes it when open; ⌘/ (Ctrl+/) opens the finder; ⌘B (Ctrl+B) folds the sidebar
+	let finding = $state(false);
+	function shortcut(event: KeyboardEvent): void {
+		if (!(event.metaKey || event.ctrlKey) || boot === null || boot.visitor !== null) return;
+		if (event.key === '/') {
+			event.preventDefault();
+			finding = !finding;
+			return;
+		}
+		if (event.key.toLowerCase() === 'b' && !narrow.current) {
+			event.preventDefault();
+			expanded.current = !expanded.current;
+			return;
+		}
+		if (event.key.toLowerCase() !== 'k' || !boot.surfaces.agent) return;
+		event.preventDefault();
+		if (agentRequest === null) agent.open();
+		else agent.close();
+	}
+	// L-BOLT-499: the live link's state; `closed` means a new release closed it, and only a reload continues
+	let sync = $state<SyncStatus>('idle');
+	// the sidebar on wide screens; on narrow ones ui's Drawer, which closes once its user navigates (owner rule)
+	const expanded = new PersistedState('workspace-shell.sidebar-expanded', true);
+	// the phone's top bar: a drawer expands up to its lower edge (`--shell-header-height`)
+	let headerHeight = $state(0);
+	let navOpen = $state(false);
+	/** What waits on the viewer, as the inbox last counted it (boot's count until then). */
+	let waiting = $state<number | null>(null);
+	const model = $derived(
+		boot === null
+			? null
+			: navigationModel(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t)
+	);
+	const sessionApps = (nodes: readonly NavNode[]): string[] =>
+		nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : sessionApps(node.children)));
+	const sessions = $derived(
+		boot?.visitor === null
+			? sessionApps(boot.nav).flatMap((name) =>
+					config.sessions?.[name] === undefined ? [] : [{ name, component: config.sessions[name] }]
+				)
+			: []
+	);
+	const app = $derived(model === null ? null : activeApp(model));
+	// the open app's pages strip is tab level 1 (ui's `TAB_LEVEL` context): a page's own Tabs nest under it as level 2
+	const strip = $derived(
+		current.kind === 'page' && !portal && boot?.visitor === null ? (app?.pages ?? null) : null
+	);
+	setContext(TAB_LEVEL, {
+		get level() {
+			return strip === null ? undefined : 1;
+		},
+		get shown() {
+			return strip?.map((p) => p.label) ?? [];
+		}
+	});
+	const mobileTitle = $derived(
+		identity.current?.title ??
+			app?.label ??
+			model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ??
+			boot?.workspace.name ??
+			''
+	);
+	const mobileDescription = $derived(identity.current?.description ?? app?.description ?? null);
+	// an administrator's team preview from the account menu: the teams Settings lists
+	const teams = Effect.fn('Shell.teams')(function* () {
+		const r = yield* Effect.result(api.settings());
+		return r._tag === 'Success'
+			? r.success.teams.map((x) => ({ id: String(x['id']), name: String(x['name'] ?? x['id']) }))
+			: [];
+	});
+	const previewTeam = Effect.fn('Shell.previewTeam')(function* (team: string) {
+		yield* Effect.result(api.preview({ team }));
+		location.reload();
+	});
+	/** A staff member the workspace lets make integration instances: the account menu offers their own connections. */
+	const connectable = $derived(
+		boot?.actor?.kind === 'member' &&
+			!boot.actor.external &&
+			boot.catalog['sys_integration']?.create !== undefined
+	);
+	// the 48rem breakpoint base.css restates: below it the sidebar is a drawer
+	const narrow = new MediaQuery('max-width: 47.999rem');
+	const go = (href: string) => {
+		if (href !== NORBIUS) return navigate(href);
+		navOpen = false;
+		agent.open();
+	};
+	// closing a sheet closes every sheet stacked on it
+	const closeRecord = (depth: number) => navigate(withRecords(url, depth).href);
+</script>
+
+{#if bolt !== null}
+	{#key bolt}
+		{#each sessions as session (session.name)}
+			{@const Session = session.component}
+			<Session />
+		{/each}
+	{/key}
+{/if}
+
+<span hidden {@attach mountLifecycle}></span>
+
+<svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
+
+{#snippet content()}
+	{#if current.kind === 'home' && model !== null}
+		<Home {model} {t} onNavigate={navigate} />
+	{:else if current.kind === 'page' || current.kind === 'kiosk'}
+		{#if pageKey === null || config.pages[pageKey] === undefined}
+			<Center><p>{t('Not found or no access')}</p></Center>
+		{:else if unloadable.has(pageKey)}
+			{@const cause = unloadable.get(pageKey)}
+			<span hidden {@attach initialPageMounted}></span>
+			<!-- a page chunk that fails to load says which page and why (final-ui §7.2, L-BOLT-515) -->
+			<Center
+				><p role="alert">
+					{t('The page {page} could not be loaded:').replace('{page}', pageKey)}
+					{cause instanceof Error ? cause.message : String(cause)}
+				</p></Center
+			>
+		{:else if Page === undefined}
+			<Center><p>{t('Loading…')}</p></Center>
+		{:else}
+			<span hidden {@attach initialPageMounted}></span>
+			<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
+			{#if !portal && (identity.current !== null || (app !== null && boot?.visitor === null))}
+				{#if narrow.current}
+					{#if identity.current?.actions}
+						<div class={cn(INSET_X_CLASS, 'shrink-0 py-2')} data-app-actions>
+							{@render identity.current.actions()}
+						</div>
+					{/if}
+				{:else}
+					<MediaHeader
+						src={identity.current?.banner === undefined || identity.current.banner === null
+							? (app?.thumbnail ?? null)
+							: media(identity.current.banner)}
+						icon={identity.current?.icon ?? app?.icon ?? null}
+						title={identity.current?.title ?? app?.label ?? null}
+						description={identity.current?.description ?? app?.description ?? null}
+						{...identity.current?.actions === undefined
+							? {}
+							: { actions: identity.current.actions }}
+					/>
+				{/if}
+			{/if}
+			{#if strip !== null}
+				<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
+					<Inline
+						gap="none"
+						class="gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]"
+					>
+						{#each strip as p (p.key)}
+							<a
+								href={based(p.href)}
+								aria-current={p.active ? 'page' : undefined}
+								class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm"
+							>
+								{#if p.icon}<Icon name={p.icon} class="size-3.5" />{/if}{p.label}
+							</a>
+						{/each}
+					</Inline>
+				</nav>
+			{/if}
+			<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
+			{#if requires.length === 0}
+				<Bound size="full" inset><Page /></Bound>
+			{:else}
+				<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
+					<Bound size="full" inset><Page /></Bound>
+				</DeviceWall>
+			{/if}
+		{/if}
+	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
+		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
+	{:else if current.kind === 'connections' && connectable && boot?.actor?.kind === 'member' && bolt}
+		<Connections {api} {bolt} me={boot.actor.id} {t} {locale} />
+	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
+		<Settings
+			{api}
+			{bolt}
+			{t}
+			tab={current.tab}
+			workspace={boot.workspace}
+			run={url.searchParams.get('run')}
+			onRun={openRun}
+			integrationSetups={config.integrationSetups}
+		/>
+	{:else if current.kind === 'studio' && boot?.surfaces.studio}
+		<Studio
+			{api}
+			{t}
+			admin={boot.admin}
+			tab={current.tab ?? 'workbench'}
+			onTab={(x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`)}
+		/>
+	{:else}
+		<Center><p>{t('Not found or no access')}</p></Center>
+	{/if}
+	{#if bolt !== null}
+		{#each records as r, i (`${i}:${r.collection}/${r.id}`)}
+			<RecordSheet collection={r.collection} id={r.id} onClose={() => closeRecord(i)} />
+		{/each}
+	{/if}
+{/snippet}
+
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+<!-- hook:view-ui — the sidebar's width, the left bound of a maximised or widened right sheet (0 where no sidebar shows) -->
+<div
+	class="contents"
+	onclick={intercept}
+	style="--shell-sidebar-width: {boot !== null &&
+	boot.visitor === null &&
+	!portal &&
+	!narrow.current &&
+	failure === null
+		? expanded.current
+			? '16rem'
+			: '3rem'
+		: '0px'}; --shell-header-height: {narrow.current && headerHeight > 0
+		? `${headerHeight}px`
+		: 'env(safe-area-inset-top)'}"
+>
+	{#if failure !== null}
+		<Access
+			{t}
+			environment={workspace?.environment}
+			{locale}
+			onLocale={(locale) => fork(setLocale(locale))}
+			apex={device.pinned ? undefined : workspace?.apex}
+			{dark}
+			onTheme={() => chooseTheme(dark ? 'light' : 'dark')}
+		>
+			<Stack gap="lg" role="alert">
+				<Stack gap="sm">
+					<p class="text-xs text-muted-foreground">
+						{failure.status === 0 ? t('Connection error') : `HTTP ${failure.status}`} · {failure.code}
+					</p>
+					<h1 class="text-title">{t('Unable to open the workspace')}</h1>
+					<p class="text-sm leading-relaxed text-muted-foreground">{t(failure.message)}</p>
+				</Stack>
+				<Button onclick={() => location.reload()}>{t('Try again')}</Button>
+			</Stack>
+		</Access>
+	{:else if current.kind === 'signIn' || current.kind === 'invite'}
+		<Access
+			{t}
+			environment={workspace?.environment}
+			{locale}
+			onLocale={(locale) => fork(setLocale(locale))}
+			apex={device.pinned ? undefined : workspace?.apex}
+			{dark}
+			onTheme={() => chooseTheme(dark ? 'light' : 'dark')}
+		>
+			{#if current.kind === 'signIn'}
+				<SignIn
+					{api}
+					{t}
+					next={current.next ?? '/'}
+					workspace={workspace?.name}
+					handle={workspace?.handle}
+				/>
+			{:else}
+				<Invite
+					{api}
+					{t}
+					id={current.id}
+					signedIn={boot?.actor?.kind === 'member'}
+					workspace={workspace?.name}
+				/>
+			{/if}
+		</Access>
+	{:else if boot === null}
+		<Center><p>{t('Loading…')}</p></Center>
+	{:else if boot.visitor !== null}
+		<!-- a visitor page: only its own app, no switcher, inbox, agent, settings or runs -->
+		<Cover as="main" class="min-h-dvh">
+			{@render content()}
+			{#if boot.visitor.siteKey !== undefined}
+				{#if challenge !== null}<Turnstile siteKey={boot.visitor.siteKey} queue={challenge} />{/if}
+			{/if}
+		</Cover>
+	{:else if portal}
+		<Toaster />
+		<div class="h-dvh min-h-0 overflow-clip">{@render content()}</div>
+	{:else}
+		{#snippet navigation(open: boolean)}
+			<Nav
+				{api}
+				pinned={device.pinned === true}
+				push={boot?.push ?? null}
+				model={model!}
+				expanded={open}
+				mobile={narrow.current}
+				{t}
+				environment={boot?.workspace.environment ?? null}
+				{locale}
+				onLocale={(locale) => fork(setLocale(locale))}
+				{theme}
+				onTheme={chooseTheme}
+				{sync}
+				previewing={boot?.preview !== null}
+				onEndPreview={() => fork(endPreview())}
+				{...boot?.admin && boot.surfaces.settings && boot.preview === null
+					? {
+							loadTeams: () => run(teams()),
+							onPreviewTeam: (team: string) => fork(previewTeam(team))
+						}
+					: {}}
+				onSearch={() => {
+					navOpen = false;
+					finding = true;
+				}}
+				onNavigate={go}
+				onSignOut={signOut}
+				{...connectable
+					? {
+							onConnections: () => {
+								navOpen = false;
+								navigate('/connections');
+							}
+						}
+					: {}}
+				notice={boot?.notice}
+				{...narrow.current ? {} : { onToggle: () => (expanded.current = !expanded.current) }}
+			>
+				{#snippet bell(wide)}{#if bolt !== null && !narrow.current}<Bell
+							{api}
+							{bolt}
+							{t}
+							expanded={wide}
+							onNavigate={(href) => {
+								navOpen = false;
+								navigate(href);
+							}}
+						/>{/if}{/snippet}
+			</Nav>
+		{/snippet}
+		<Toaster />
+		<div class="flex h-dvh min-h-0 overflow-clip">
+			{#if !narrow.current}
+				<!-- Sidebar: 16rem, or a 3rem icon rail; the rail on its edge toggles it (⌘B) -->
+				<aside
+					class="group relative shrink-0 border-r transition-[width] duration-200 ease-linear"
+					data-state={expanded.current ? 'expanded' : 'collapsed'}
+					style="width: {expanded.current ? '16rem' : '3rem'}"
+				>
+					{@render navigation(expanded.current)}
+					<button
+						type="button"
+						tabindex={-1}
+						aria-label={t('Toggle sidebar')}
+						title={t('Toggle sidebar')}
+						onclick={() => (expanded.current = !expanded.current)}
+						class={cn(
+							'absolute inset-y-0 -right-2 z-20 w-4 after:absolute after:inset-y-0 after:left-[calc(50%-1px)] after:w-[2px] hover:after:bg-sidebar-border',
+							expanded.current ? 'cursor-w-resize' : 'cursor-e-resize'
+						)}
+					></button>
+				</aside>
+			{/if}
+			<main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-clip bg-background">
+				{#if narrow.current}
+					<div class="shrink-0" bind:offsetHeight={headerHeight}>
+						<Inline
+							as="header"
+							gap="sm"
+							shrink={false}
+							class="border-b bg-background px-[max(1rem,env(safe-area-inset-left))] pt-[calc(env(safe-area-inset-top)+0.25rem)] pb-1"
+						>
+							<Button
+								variant="ghost"
+								size="icon"
+								class="size-11"
+								aria-label={t('Open navigation')}
+								onclick={() => (navOpen = true)}
+							>
+								<Icon name="lucide:panel-bottom" class="size-4" />
+							</Button>
+							<Stack gap="none" grow>
+								<h1 class="truncate text-sm font-medium">{mobileTitle}</h1>
+								{#if mobileDescription}<p
+										class="line-clamp-2 text-xs leading-snug text-muted-foreground"
+									>
+										{mobileDescription}
+									</p>{/if}
+							</Stack>
+							<Inline gap="xs" shrink={false} class="pr-[env(safe-area-inset-right)]">
+								{#if bolt !== null}<Bell
+										{api}
+										{bolt}
+										{t}
+										expanded={false}
+										header
+										onNavigate={navigate}
+									/>{/if}
+								{#if boot.surfaces.agent}
+									<Button
+										variant="ghost"
+										size="icon"
+										class="size-11"
+										aria-label={t('Norbius')}
+										aria-haspopup="dialog"
+										onclick={() => agent.open()}
+									>
+										<NorbiusStrip size={20} />
+									</Button>
+								{/if}
+							</Inline>
+						</Inline>
+					</div>
+				{/if}
+				<Stack gap="none" fill class="min-h-0 pb-[env(safe-area-inset-bottom)] md:pb-0">
+					{#if sync === 'closed'}
+						<Inline role="alert" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
+							<span
+								>{t('This workspace was updated. Reload to continue with the new version.')}</span
+							>
+							<Button size="sm" variant="outline" onclick={() => location.reload()}
+								>{t('Reload')}</Button
+							>
+						</Inline>
+					{/if}
+					{#if boot.preview !== null}
+						<Inline role="status" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
+							<span
+								>{'team' in boot.preview
+									? t('Previewing as a team. Its grants apply; you are recorded as the previewer.')
+									: t(
+											'Previewing as another member. Their grants apply; you are recorded as the previewer.'
+										)}</span
+							>
+							<Button size="sm" variant="outline" onclick={() => fork(endPreview())}
+								>{t('End preview')}</Button
+							>
+						</Inline>
+					{/if}
+					{@render content()}
+				</Stack>
+			</main>
+			{#if narrow.current}
+				<Drawer bind:open={navOpen} path={url.pathname + url.search} title={boot.workspace.name}
+					>{@render navigation(true)}</Drawer
+				>
+			{/if}
+		</div>
+		{#if bolt !== null}
+			<Finder
+				bind:open={finding}
+				nav={boot.nav}
+				catalog={boot.catalog}
+				read={(c, o) => bolt!.read(c, o)}
+				{t}
+				onNavigate={navigate}
+				onOpenRecord={(c, id) => openRecord(c, id)}
+				onAsk={boot.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
+			/>
+		{/if}
+		{#if boot.surfaces.agent && bolt !== null}
+			<!-- non-modal, as every side sheet: the page stays usable; only Esc or × closes it -->
+			<Sheet
+				open={agentRequest !== null}
+				title={t('Norbius')}
+				onOpenChange={(open) => {
+					if (!open) agent.close();
+				}}
+			>
+				{#if agentRequest !== null && config.agent !== undefined}
+					{@const Agent = config.agent}
+					<Agent {bolt} request={agentRequest} onClose={() => agent.close()} />
+				{:else if agentRequest !== null}
+					<AgentPanel
+						{api}
+						{bolt}
+						{t}
+						request={agentRequest}
+						unconfigured={boot.aiUnconfigured === true}
+						admin={boot.admin}
+						envoys={boot.envoys ?? {}}
+						onClose={() => agent.close()}
+						onConversation={agentConversation}
+					/>
+				{/if}
+			</Sheet>
+		{/if}
+	{/if}
+</div>

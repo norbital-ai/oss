@@ -1,0 +1,28 @@
+id: UI25
+summary: class string composed in the script is unreachable as tokens
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/layout/**'
+rule:
+  all:
+    - kind: svelte:Attribute
+    - regex: '^class=\{'
+    - has:
+        kind: svelte:Interpolation
+    - not:
+        regex: '^class=\{[\s\S]*[''"`]'
+    - not:
+        regex: 'class=\{[^}]*[''"`][a-z-]+-\[\$\{'
+    # A component forwarding its own `class` prop composes nothing: the caller's literals are the tokens.
+    - not:
+        regex: '^class=\{\s*className\s*\}$'
+examples:
+  bad:
+    - '<div class={shell}></div>'
+  good:
+    - '<div class={className}></div>'
+    - '<div class="flex gap-2"></div>'
+    - '<div class={fixed ? "fixed inset-0" : ""}></div>'

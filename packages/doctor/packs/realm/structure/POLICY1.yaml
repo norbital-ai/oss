@@ -1,0 +1,31 @@
+id: POLICY1
+summary: policy or admission service ignores the identity it is meant to isolate
+severity: error
+principles: [simplicity, straightforwardness, testability]
+rule:
+  all:
+    - kind: Parameter
+    - regex: '(?:^|\W)_?(?:tenant|workspace|account|organization|subject|principal|user)(?:Id|Key)?\b'
+    - inside:
+        any:
+          - kind: ArrowFunction
+          - kind: FunctionDeclaration
+          - kind: FunctionExpression
+          - kind: MethodDeclaration
+      stopBy: end
+    - fact:
+        name: enclosingOwnerMatches
+        regex: '(?:capacity|admission|authori[sz]|access|permissions?|policy|quota|routing?|rbac|acl|gate)'
+    - not:
+        fact:
+          name: flowsInto
+          excluding:
+            fact:
+              name: calleeMatches
+              regex: '(?:^|\.)(?:log|debug|trace|info|warn|error|metric|record|observe)$'
+examples:
+  file: src/capacity.ts
+  bad:
+    - 'export const admit = (tenantId: string, work: () => void) => { void tenantId; return work(); };'
+  good:
+    - 'export const admit = (tenantId: string, work: () => void) => schedule(tenantId, work);'

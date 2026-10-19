@@ -1,0 +1,112 @@
+{
+	"name": "@norbital-ai/std",
+	"version": "0.0.1",
+	"description": "Value libraries for Bolt workspaces: decimals, dates, calendars, sheets, formulas, pricing and billing.",
+	"type": "module",
+	"sideEffects": [
+		"./build/decimal.js",
+		"./src/decimal.ts"
+	],
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/std"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/std",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"exports": {
+		"./csv": {
+			"types": "./build/csv.d.ts",
+			"default": "./build/csv.js"
+		},
+		"./billing": {
+			"types": "./build/billing/index.d.ts",
+			"default": "./build/billing/index.js"
+		},
+		"./calendar": {
+			"types": "./build/calendar.d.ts",
+			"default": "./build/calendar.js"
+		},
+		"./date": {
+			"types": "./build/date.d.ts",
+			"default": "./build/date.js"
+		},
+		"./decimal": {
+			"types": "./build/decimal.d.ts",
+			"default": "./build/decimal.js"
+		},
+		"./facts": {
+			"types": "./build/facts.d.ts",
+			"default": "./build/facts.js"
+		},
+		"./formula": {
+			"types": "./build/formula.d.ts",
+			"default": "./build/formula.js"
+		},
+		"./host-op": {
+			"types": "./build/host-op.d.ts",
+			"default": "./build/host-op.js"
+		},
+		"./json": {
+			"types": "./build/json.d.ts",
+			"default": "./build/json.js"
+		},
+		"./kind": {
+			"types": "./build/kind.d.ts",
+			"default": "./build/kind.js"
+		},
+		"./label": {
+			"types": "./build/label.d.ts",
+			"default": "./build/label.js"
+		},
+		"./pricing": {
+			"types": "./build/pricing.d.ts",
+			"default": "./build/pricing.js"
+		},
+		"./sheet": {
+			"types": "./build/sheet.d.ts",
+			"default": "./build/sheet.js"
+		},
+		"./versioned": {
+			"types": "./build/versioned.d.ts",
+			"default": "./build/versioned.js"
+		},
+		"./wire": {
+			"types": "./build/wire.d.ts",
+			"default": "./build/wire.js"
+		},
+		"./zone": {
+			"types": "./build/zone.d.ts",
+			"default": "./build/zone.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/std",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@marcbachmann/cel-js": "^8.0.0"
+	},
+	"peerDependencies": {
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:",
+		"vitest": "4.1.11"
+	}
+}

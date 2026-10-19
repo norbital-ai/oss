@@ -1,0 +1,12 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"rootDir": "..",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"types": ["node"]
+	},
+	"include": ["./**/*.ts", "./**/*.svelte", "../src/**/*.d.ts"],
+	"exclude": []
+}

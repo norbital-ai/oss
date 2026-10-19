@@ -1,0 +1,30 @@
+id: R1
+summary: any in a signature or annotation
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  all:
+    - kind: AnyKeyword
+    - not:
+        inside:
+          any:
+            - kind: AsExpression
+            - kind: TypeAssertionExpression
+        stopBy: end
+    - inside:
+        any:
+          - kind: Parameter
+          - kind: PropertySignature
+          - kind: PropertyDeclaration
+          - kind: VariableDeclaration
+          - kind: MethodSignature
+          - kind: FunctionDeclaration
+          - kind: MethodDeclaration
+          - kind: ArrowFunction
+          - kind: FunctionExpression
+      stopBy: end
+examples:
+  bad:
+    - 'export function f(v: any) { return v; }'
+  good:
+    - 'export function f(v: unknown) { return v; }'

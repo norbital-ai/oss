@@ -1,0 +1,265 @@
+import { required, textOf } from './view-fixture.ts';
+import { element } from './elements.ts';
+import { Effect } from 'effect';
+import './dom.ts';
+import assert from 'node:assert/strict';
+import { it, afterEach } from '@effect/vitest';
+import { viewFixture, browser } from './view-fixture.ts';
+import type { TableProps, TableSource } from '../src/table/Table.svelte';
+import type { Value } from '@norbital-ai/std/kind';
+import type { KindsHost } from '../src/kinds/context.ts';
+const { flushSync, mount, tick, unmount } = await import('svelte');
+const { default: Harness } = await import('./view-harness.svelte');
+const mounted: (() => Promise<void>)[] = [];
+const settle = async () => {
+	for (let i = 0; i < 3; i++) {
+		flushSync();
+		await tick();
+		await new Promise((r) => setTimeout(r, 0));
+	}
+	flushSync();
+};
+afterEach(async () => {
+	for (const close of mounted.splice(0).reverse()) await close();
+	document.body.replaceChildren();
+	localStorage.clear();
+});
+async function show(
+	rows: TableSource,
+	columns: TableProps['columns'] = ['name'],
+	onOpen?: TableProps['onOpen'],
+	layout?: TableProps['layout']
+) {
+	const calls: Value[] = [];
+	const { bolt } = await viewFixture();
+	const target = document.createElement('div');
+	document.body.append(target);
+	const app = mount(Harness, {
+		target,
+		props: {
+			bolt,
+			catalog: {},
+			part: 'table',
+			props: {
+				of: rows,
+				columns,
+				...(onOpen === undefined ? {} : { onOpen }),
+				...(layout === undefined ? {} : { layout }),
+				toolbar: {
+					title: false,
+					search: false,
+					filter: false,
+					export: false,
+					new: false,
+					actions: [
+						{
+							icon: 'lucide:download',
+							name: 'Export selected',
+							requiresSelection: true,
+							run: (ids) => void calls.push(ids)
+						}
+					]
+				}
+			}
+		}
+	});
+	mounted.push(async () => {
+		await unmount(app);
+		target.remove();
+	});
+	await settle();
+	return { target, calls };
+}
+const button = (text: string) =>
+	[...document.querySelectorAll<HTMLButtonElement>('button')].find(
+		(b) => textOf(b).includes(text) || b.getAttribute('aria-label') === text
+	);
+async function menu() {
+	element<HTMLButtonElement>(document, '[data-view-actions]').click();
+	await settle();
+}
+
+it.live(
+	'local record projections select stable IDs and pass only the selection to a callback',
+	() =>
+		Effect.gen(function* () {
+			const { target, calls } = yield* browser(() =>
+				show([
+					{ id: 'run-a', name: 'January' },
+					{ id: 'run-b', name: 'February' }
+				])
+			);
+			assert.equal(
+				target.querySelectorAll<HTMLInputElement>('tbody input[type=checkbox]').length,
+				2
+			);
+			yield* browser(() => menu());
+			assert.equal(required(button('Export selected')).disabled, true);
+			element<HTMLButtonElement>(document, '[data-view-actions]').click();
+			yield* browser(() => settle());
+			const box = required(
+				target.querySelectorAll<HTMLInputElement>('tbody input[type=checkbox]')[1]
+			);
+			box.click();
+			yield* browser(() => settle());
+			yield* browser(() => menu());
+			assert.equal(required(button('Export selected')).disabled, false);
+			required(button('Export selected')).click();
+			yield* browser(() => settle());
+			assert.deepEqual(calls, [['run-b']]);
+		})
+);
+
+it.live('select all uses record IDs rather than local row positions', () =>
+	Effect.gen(function* () {
+		const { target, calls } = yield* browser(() =>
+			show([
+				{ id: 'run-a', name: 'January' },
+				{ id: 'run-b', name: 'February' }
+			])
+		);
+		element<HTMLInputElement>(target, 'thead input[type=checkbox]').click();
+		yield* browser(() => settle());
+		yield* browser(() => menu());
+		required(button('Export selected')).click();
+		yield* browser(() => settle());
+		assert.deepEqual(calls, [['run-a', 'run-b']]);
+	})
+);
+
+for (const [label, rows] of [
+	['missing IDs', [{ name: 'January' }]],
+	['blank IDs', [{ id: ' ', name: 'January' }]]
+] as const)
+	it.live(`local rows with ${label} cannot manufacture an action selection`, () =>
+		Effect.gen(function* () {
+			const { target, calls } = yield* browser(() => show(rows));
+			assert.equal(
+				target.querySelectorAll<HTMLInputElement>('tbody input[type=checkbox]').length,
+				0
+			);
+			yield* browser(() => menu());
+			assert.equal(required(button('Export selected')).disabled, true);
+			assert.deepEqual(calls, []);
+		})
+	);
+
+for (const [label, input, expected] of [
+	['unpaged named query', { warehouse: { kind: 'text' } }, { warehouse: 'main' }],
+	[
+		'paged named query',
+		{
+			warehouse: { kind: 'text' },
+			limit: { kind: 'int', optional: true },
+			after: { kind: 'text', optional: true }
+		},
+		{ warehouse: 'main', limit: 25 }
+	]
+] as const)
+	it.live(`${label} receives only pagination inputs it declares`, () =>
+		Effect.gen(function* () {
+			const calls: Value[] = [];
+			const { bolt } = yield* browser(() =>
+				viewFixture({
+					query: (name, args) => {
+						calls.push({ name, args });
+						return [{ name: 'Resin A' }];
+					}
+				})
+			);
+			const target = document.body.appendChild(document.createElement('div'));
+			const app = mount(Harness, {
+				target,
+				props: {
+					bolt,
+					catalog: {
+						stock: {
+							label: ['name'],
+							fields: { name: { kind: 'text' } },
+							queries: {
+								availability: {
+									input,
+									description: 'Stock availability',
+									output: {
+										kind: 'list',
+										of: { kind: 'object', fields: { name: { kind: 'text' } } }
+									}
+								}
+							}
+						}
+					},
+					part: 'table',
+					props: {
+						of: { query: 'stock.availability', input: { warehouse: 'main' } },
+						columns: ['name'],
+						toolbar: { new: false }
+					}
+				}
+			});
+			mounted.push(async () => {
+				await unmount(app);
+				target.remove();
+			});
+			yield* browser(() => settle());
+			assert.deepEqual(calls, [{ name: 'stock.availability', args: expected }]);
+			assert.equal(textOf(target).includes('Resin A'), true);
+		})
+	);
+
+it.live('phone cards reveal extra report values without opening the row', () =>
+	Effect.gen(function* () {
+		const opened: Value[] = [];
+		const { target } = yield* browser(() =>
+			show(
+				[
+					{
+						name: 'Sales',
+						reference: 'INV-1',
+						date: '2026-10-11',
+						partner: 'Customer',
+						sku: 'Resin A',
+						net: '6.80',
+						tax: '0.72'
+					}
+				],
+				['name', 'reference', 'date', 'partner', 'sku', 'net', 'tax'],
+				(row) => opened.push(row)
+			)
+		);
+		const extra = element<HTMLDetailsElement>(target, '[data-table-list] [data-row-extra-fields]');
+		assert.ok(extra);
+		assert.equal(extra.open, false);
+		element<HTMLElement>(extra, 'summary').click();
+		yield* browser(() => settle());
+		assert.equal(extra.open, true);
+		assert.ok(textOf(extra).includes('6.80'));
+		assert.ok(textOf(extra).includes('0.72'));
+		assert.deepEqual(opened, []);
+		element<HTMLElement>(extra, 'summary').click();
+		yield* browser(() => settle());
+		assert.equal(extra.open, false);
+	})
+);
+
+it.live('financial grid keeps all columns and right-aligned amounts on narrow screens', () =>
+	Effect.gen(function* () {
+		const { target } = yield* browser(() =>
+			show(
+				[{ name: 'Sales', amount: '12.00' }],
+				['name', { field: 'amount', align: 'end' }],
+				undefined,
+				'grid'
+			)
+		);
+		assert.equal(target.querySelector('[data-table-list]'), null);
+		assert.equal(
+			element<HTMLElement>(target, '[data-table-wide]').classList.contains('hidden'),
+			false
+		);
+		assert.ok(
+			element<HTMLElement>(target, '[data-table-wide] tbody td:last-child').classList.contains(
+				'tabular-nums'
+			)
+		);
+	})
+);

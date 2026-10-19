@@ -1,0 +1,33 @@
+id: EFF15
+summary: guest timing combinator cannot execute in the isolate
+severity: error
+principles: [straightforwardness, testability, type-safety]
+files: ['**']
+rule:
+  all:
+    - any:
+        - pattern: Effect.sleep($X)
+        - pattern: Effect.timeout($X)
+        - pattern: Effect.timeout($X, $O)
+        - pattern: Effect.timeoutOption($X)
+        - pattern: Effect.timeoutOption($X, $O)
+        - pattern: Effect.timeoutOrElse($X)
+        - pattern: Effect.timeoutOrElse($X, $O)
+        - pattern: Effect.delay($X)
+        - pattern: Effect.delay($X, $O)
+        - pattern: Schedule.spaced($X)
+        - pattern: Schedule.fixed($X)
+        - pattern: Schedule.cron($X)
+        - pattern: Stream.tick($X)
+        - pattern: Schedule.exponential($X)
+    - fact: { name: guestReachable }
+examples:
+  fixture:
+    src/automation/+probe.automation.ts: |
+      import { pause } from '../data/probe.js';
+      export default { body: function* () { yield* pause; } };
+  file: src/data/probe.ts
+  bad:
+    - 'export const pause = Effect.sleep(10);'
+  good:
+    - 'export const pause = ctx.read(q);'

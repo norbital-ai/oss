@@ -1,0 +1,139 @@
+{
+	"name": "@norbital-ai/bolt",
+	"version": "0.0.1",
+	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
+	"type": "module",
+	"sideEffects": [
+		"**/*.css"
+	],
+	"license": "AGPL-3.0-only",
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		},
+		"./errors": {
+			"types": "./build/decl/errors.d.ts",
+			"default": "./build/decl/errors.js"
+		},
+		"./page": {
+			"types": "./build/page/index.d.ts",
+			"default": "./build/page/index.js"
+		},
+		"./page/integrations": {
+			"types": "./build/page/integration.d.ts",
+			"svelte": "./build/page/integration.js",
+			"default": "./build/page/integration.js"
+		},
+		"./engine": {
+			"types": "./build/engine/index.d.ts",
+			"default": "./build/engine/index.js"
+		},
+		"./artifact": {
+			"types": "./build/engine/artifact/read.d.ts",
+			"default": "./build/engine/artifact/read.js"
+		},
+		"./protocol": {
+			"types": "./build/protocol/index.d.ts",
+			"default": "./build/protocol/index.js"
+		},
+		"./protocol/cursor": {
+			"types": "./build/protocol/cursor.d.ts",
+			"default": "./build/protocol/cursor.js"
+		},
+		"./host-api": {
+			"types": "./build/protocol/host-api.d.ts",
+			"default": "./build/protocol/host-api.js"
+		},
+		"./type-service": {
+			"types": "./build/tooling/type-service.d.ts",
+			"default": "./build/tooling/type-service.js"
+		},
+		"./docs": {
+			"types": "./build/docs/index.d.ts",
+			"default": "./build/docs/index.js"
+		},
+		"./isolate-globals": {
+			"types": "./build/engine/guest/globals.d.ts",
+			"default": "./build/engine/guest/globals.js"
+		},
+		"./test": {
+			"types": "./build/test/index.d.ts",
+			"default": "./build/test/index.js"
+		},
+		"./test/browser": {
+			"types": "./build/test/browser.d.ts",
+			"default": "./build/test/browser.js"
+		}
+	},
+	"bin": {
+		"bolt": "./build/cli/main.js"
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json && node src/cli/docs.ts",
+		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"types:compat": "tsc -p tests/tsconfig.json --noEmit",
+		"test:integration": "BOLT_TEST_SUITE=integration vitest run",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
+	},
+	"dependencies": {
+		"@cfworker/json-schema": "4.1.1",
+		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
+		"@electric-sql/pglite": "^0.5.5",
+		"@electric-sql/pglite-pgvector": "^0.0.6",
+		"@iconify-json/lucide": "1.2.142",
+		"@iconify/svelte": "catalog:",
+		"@jridgewell/trace-mapping": "^0.3.31",
+		"@modelcontextprotocol/client": "2.0.0",
+		"@norbital-ai/doctor": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@tailwindcss/vite": "4.3.3",
+		"effect": "catalog:",
+		"exifr": "7.1.3",
+		"fast-png": "8.0.0",
+		"isolated-vm": "7.0.1",
+		"jpeg-js": "0.4.4",
+		"libheif-js": "1.23.2",
+		"pdq-wasm": "0.3.9",
+		"runed": "catalog:",
+		"svelte2tsx": "0.7.61",
+		"tailwindcss": "4.3.3",
+		"terser": "5.51.2",
+		"typescript": "catalog:",
+		"vite": "catalog:"
+	},
+	"peerDependencies": {
+		"svelte": "^5.0.0"
+	},
+	"devDependencies": {
+		"@iconify-json/vscode-icons": "1.2.89",
+		"@sveltejs/package": "^2.5.8",
+		"@types/node": "^26.2.0",
+		"@types/pg": "^8.23.1",
+		"@vitest/browser-playwright": "4.1.11",
+		"happy-dom": "^20.11.6",
+		"pg": "^8.23.0",
+		"playwright": "1.63.0",
+		"svelte": "^5.57.1",
+		"svelte-check": "^4.7.6",
+		"typescript": "catalog:",
+		"vitest": "4.1.11"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/bolt"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

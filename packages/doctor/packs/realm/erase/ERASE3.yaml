@@ -1,0 +1,16 @@
+id: ERASE3
+summary: object guard duplicated outside std
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: VariableStatement
+    - regex: "(?:function|const)\\s+isObj(?:ect)?\\b"
+ignore: ['**/std/**']
+examples:
+  bad:
+    - 'export const isObj = (value) => value !== null && typeof value === "object";'
+  good:
+    - 'export const read = (value) => Predicate.isObject(value);'

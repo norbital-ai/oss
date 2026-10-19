@@ -1,0 +1,13 @@
+id: ERASE2
+summary: JSON.parse cast bypasses decoding
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - kind: AsExpression
+    - regex: "JSON\\.parse\\([^;]*\\)\\s+as\\s"
+examples:
+  bad:
+    - 'export const row = JSON.parse(text) as Row;'
+  good:
+    - 'export const row = Schema.decodeUnknownResult(Schema.fromJsonString(Row))(text);'

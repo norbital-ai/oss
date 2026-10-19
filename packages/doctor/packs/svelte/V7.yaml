@@ -1,0 +1,17 @@
+id: V7
+summary: async $effect
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*.svelte'
+rule:
+  any:
+    - '$effect(async () => $BODY)'
+    - '$effect(async () => { $...BODY })'
+    - '$effect(async function () { $...BODY })'
+    - '$effect(async function* () { $...BODY })'
+examples:
+  bad:
+    - '$effect(async () => { await load(); });'
+  good:
+    - '$effect(() => { void load(); });'

@@ -1,0 +1,14 @@
+id: VOID1
+summary: native Promise is discarded with void
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  any:
+    - 'void Promise.resolve($X)'
+    - 'void Promise.resolve($X).catch($H)'
+    - 'void Promise.resolve($X).then($H)'
+examples:
+  bad:
+    - 'export const f = (p) => { void Promise.resolve(p).catch(report); };'
+  good:
+    - 'export const f = (p) => { return Promise.resolve(p).catch(report); };'
