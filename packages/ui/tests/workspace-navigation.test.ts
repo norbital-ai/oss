@@ -24,12 +24,16 @@ const link = () => {
 	return node;
 };
 
-it('covers a workspace link synchronously before its normal navigation can start', async () => {
+it('reports a workspace handoff without replacing its current screen', async () => {
 	const node = link();
+	node.focus();
 	const event = new MouseEvent('click', { button: 0, bubbles: true, cancelable: true });
 	node.dispatchEvent(event);
 	expect(cover()?.textContent).toContain('Opening workspace…');
 	expect(cover()?.getAttribute('role')).toBe('status');
+	expect(cover()?.classList.contains('access-loading-track')).toBe(true);
+	expect(cover()?.querySelector('img')).toBeNull();
+	expect(document.activeElement).toBe(node);
 	expect(event.defaultPrevented).toBe(false);
 	expect(location.hash).toBe('#workspace-option');
 	await Promise.resolve();
@@ -59,14 +63,14 @@ it('preserves modified clicks, other targets, downloads and cancelled navigation
 	expect(cover()).toBeNull();
 });
 
-it('clears a failed or aborted navigation and restores keyboard focus', () => {
+it('clears a failed or aborted navigation without disturbing keyboard focus', () => {
 	const navigation = new EventTarget();
 	vi.stubGlobal('navigation', navigation);
 	const button = document.createElement('button');
 	document.body.append(button);
 	button.focus();
 	disposers.push(beginWorkspaceNavigation('Opening workspace…'));
-	expect(document.activeElement).toBe(cover());
+	expect(document.activeElement).toBe(button);
 	navigation.dispatchEvent(new Event('navigateerror'));
 	expect(cover()).toBeNull();
 	expect(document.activeElement).toBe(button);

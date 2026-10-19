@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/ui",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Svelte views, inputs, primitives, layout and design tokens for Bolt workspaces.",
 	"type": "module",
 	"sideEffects": false,
@@ -50,6 +50,7 @@
 			"default": "./build/effect/index.js"
 		},
 		"./base.css": "./build/base.css",
+		"./brand/access.css": "./build/brand/access.css",
 		"./assets/*": "./assets/*"
 	},
 	"scripts": {

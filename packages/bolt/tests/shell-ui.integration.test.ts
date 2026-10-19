@@ -400,6 +400,28 @@ describe('the shell renders a page (§5.10)', () => {
 		)
 	);
 
+	it.live('keeps the app banner and tabs mounted while its first page chunk loads', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* workspace({ manifest });
+				const chunk = yield* Deferred.make<void>();
+				const { target } = yield* open(context, '/app/desk/hero', {
+					'desk/hero': () =>
+						Effect.runPromise(Deferred.await(chunk)).then(() => ({ default: Hero }))
+				});
+				yield* until(() => target.querySelector('nav[aria-label=Pages]') !== null);
+				const tabs = target.querySelector('nav[aria-label=Pages]');
+				const banner = target.querySelector('[data-layout=app-media-header]');
+				expect(banner).not.toBeNull();
+				expect(target.querySelector('[data-body]')).toBeNull();
+				yield* Deferred.succeed(chunk, undefined);
+				yield* until(() => target.querySelector('[data-body]') !== null);
+				expect(target.querySelector('nav[aria-label=Pages]')).toBe(tabs);
+				expect(target.querySelector('[data-layout=app-media-header]')).toBe(banner);
+			})
+		)
+	);
+
 	it.live(
 		'a generated form uploads a file to <collection>.<field>, and its submit waits for the upload',
 		() =>
@@ -1350,6 +1372,61 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 });
 
 describe('workspace boot error recovery', () => {
+	it.live(
+		'names the workspace before boot and retains its access card and footer when boot arrives',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const boot = yield* Deferred.make<void>();
+					const fetch: typeof globalThis.fetch = async (input) => {
+						const url = new URL(
+							typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+							ORIGIN
+						);
+						if (url.pathname === '/__bolt/session/methods')
+							return Response.json({
+								value: { email: true, phone: false, whatsapp: false, signup: [], locale: 'en' }
+							});
+						await Effect.runPromise(Deferred.await(boot));
+						return Response.json(
+							{
+								error: {
+									code: 'unauthenticated',
+									message: 'Sign in first.',
+									workspace: {
+										name: 'Acme',
+										handle: 'acme',
+										locale: 'en',
+										tz: 'UTC',
+										apex: '/workspaces'
+									}
+								}
+							},
+							{ status: 401 }
+						);
+					};
+					const target = yield* mountAt('/sign-in', {
+						manifest,
+						workspaceName: 'Acme',
+						pages: {},
+						fetch
+					});
+					yield* until(() => target.querySelector('#bolt-email') !== null);
+					const panel = target.querySelector('.access-panel');
+					const identity = target.querySelector('.access-sign-in > header');
+					const footer = target.querySelector('.access-switch');
+					expect(identity?.textContent).toContain('Acme');
+					expect(footer).not.toBeNull();
+					expect(footer?.querySelector('a')).toBeNull();
+					yield* Deferred.succeed(boot, undefined);
+					yield* until(() => target.querySelector('.access-switch a') !== null);
+					expect(target.querySelector('.access-panel')).toBe(panel);
+					expect(target.querySelector('.access-sign-in > header')).toBe(identity);
+					expect(target.querySelector('.access-switch')).toBe(footer);
+				})
+			)
+	);
+
 	for (const status of [403, 404, 429, 500, 503])
 		it.live(`shows the reason and retry control for HTTP ${status}`, () =>
 			Effect.scoped(
@@ -1403,7 +1480,14 @@ describe('workspace boot error recovery', () => {
 					);
 				};
 				const target = yield* mountAt('/sign-in', { manifest, pages: {}, fetch });
-				yield* until(() => target.querySelector('#bolt-email') !== null);
+				// The real form is present before boot; this assertion needs the signed-out boot's metadata.
+				yield* until(
+					() =>
+						target
+							.querySelector('.access-sign-in > header')
+							?.textContent?.includes(workspace.name) === true
+				);
+				expect(target.querySelector('#bolt-email')).not.toBeNull();
 				expect(target.textContent).not.toContain('Unable to open the workspace');
 				expect(target.textContent).toContain('Sign in');
 				expect(target.textContent).toContain('Acme');

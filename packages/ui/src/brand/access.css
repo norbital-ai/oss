@@ -1,0 +1,223 @@
+/* Access geometry is shared by the first document paint and the mounted access pages. */
+.access-frame {
+	position: relative;
+	min-height: 100svh;
+	background: var(--background, #f2f1ed);
+	color: var(--foreground, #26251e);
+	font-family: var(--font-sans, Geist, system-ui, sans-serif);
+}
+.dark .access-frame {
+	background: var(--background, #191815);
+	color: var(--foreground, #f7f7f4);
+}
+.access-content {
+	box-sizing: border-box;
+	position: relative;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	width: 100%;
+	max-width: 32rem;
+	min-height: 100svh;
+	margin-inline: auto;
+	padding: calc(max(1.5rem, env(safe-area-inset-top)) + 3.5rem)
+		max(1.25rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom))
+		max(1.25rem, env(safe-area-inset-left));
+}
+.access-content-wide {
+	max-width: 48rem;
+}
+.access-header {
+	box-sizing: border-box;
+	position: absolute;
+	inset: 0 0 auto;
+	padding: max(1.5rem, env(safe-area-inset-top)) max(1.25rem, env(safe-area-inset-right)) 0
+		max(1.25rem, env(safe-area-inset-left));
+}
+.access-header-content,
+.access-brand {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-height: 2.75rem;
+}
+.access-header-content {
+	justify-content: space-between;
+	gap: 1rem;
+}
+.access-brand {
+	font-size: 0.875rem;
+	font-weight: 600;
+	letter-spacing: -0.025em;
+}
+.access-mark {
+	box-sizing: border-box;
+	width: 2rem;
+	height: 2rem;
+	border: 1px solid var(--border, #deddd6);
+	border-radius: 0.125rem;
+	background: var(--card, #f7f7f4);
+}
+.access-mark img {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+.access-panel {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	/* Email, code and phone/WhatsApp share one card without moving its edges. */
+	min-block-size: 32rem;
+	padding: 1.25rem;
+	border: 1px solid color-mix(in srgb, var(--border, #deddd6) 80%, transparent);
+	border-radius: var(--radius, 0.5rem);
+	background: color-mix(in srgb, var(--card, #f7f7f4) 95%, transparent);
+	box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+	backdrop-filter: blur(8px);
+}
+.dark .access-panel {
+	background: color-mix(in srgb, var(--card, #22211d) 95%, transparent);
+}
+.access-identity {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	min-block-size: 3.25rem;
+}
+.access-switch {
+	box-sizing: border-box;
+	min-block-size: 2.5rem;
+	margin: 0;
+	padding-top: 1rem;
+	text-align: center;
+	font-size: 0.875rem;
+	line-height: 1.25rem;
+}
+.access-loading-body {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	justify-content: center;
+	gap: 1rem;
+}
+.access-loading-body p {
+	margin: 0;
+	font-size: 0.875rem;
+	line-height: 1.5rem;
+	color: var(--muted-foreground, #6b695e);
+}
+.access-loading-name {
+	margin: 0;
+	font-size: var(--text-subhead, 1.25rem);
+	line-height: var(--text-subhead--line-height, 1.3);
+	font-weight: 600;
+	letter-spacing: var(--text-subhead--letter-spacing, -0.02em);
+	overflow-wrap: anywhere;
+}
+.access-loading-eyebrow {
+	block-size: calc(var(--text-micro, 0.6875rem) * 1.4);
+}
+.access-loading-track {
+	height: 2px;
+	overflow: hidden;
+	background: var(--muted, #ebeae5);
+}
+.access-loading-track::after {
+	content: '';
+	display: block;
+	width: 40%;
+	height: 100%;
+	background: var(--brand-500, #e87432);
+	animation: access-opening 1.3s ease-in-out infinite alternate;
+}
+@keyframes access-opening {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.access-loading-track::after {
+		animation: none;
+		transform: translateX(75%);
+	}
+}
+@media (min-width: 640px) {
+	.access-content,
+	.access-header {
+		padding-inline: 2rem;
+	}
+	.access-panel {
+		padding: 1.75rem;
+	}
+}
+@media (max-width: 639px), (max-height: 500px) and (pointer: coarse) {
+	.access-backdrop {
+		display: none;
+	}
+	.access-frame .access-content {
+		justify-content: flex-start;
+		min-height: 100dvh;
+		padding-top: calc(max(1rem, env(safe-area-inset-top)) + 5rem);
+		padding-left: max(1.25rem, env(safe-area-inset-left));
+		padding-right: max(1.25rem, env(safe-area-inset-right));
+		padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+	}
+	.access-frame .access-header {
+		padding-left: max(1.25rem, env(safe-area-inset-left));
+		padding-right: max(1.25rem, env(safe-area-inset-right));
+		padding-top: max(1rem, env(safe-area-inset-top));
+	}
+	.access-frame .access-panel {
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+		padding: 0;
+		box-shadow: none;
+		backdrop-filter: none;
+	}
+	.access-frame input {
+		font-size: 1rem;
+		min-height: 2.75rem;
+	}
+	.access-frame button {
+		min-height: 2.75rem;
+	}
+}
+@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+	.access-frame .access-content {
+		max-width: 56rem;
+		padding-top: calc(env(safe-area-inset-top) + 3.5rem);
+		padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+	}
+	.access-frame .access-header {
+		padding-top: env(safe-area-inset-top);
+	}
+	.access-frame .access-header .text-overline {
+		display: none;
+	}
+}
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 640px) and (pointer: coarse) {
+	.access-frame .access-panel {
+		min-block-size: 20rem;
+	}
+}
+@media (orientation: landscape) and (max-height: 300px) and (min-width: 640px) and (pointer: coarse) {
+	.access-frame:has(.access-panel input:focus) .access-header,
+	.access-frame:has(.access-panel input:focus) .access-panel > header,
+	.access-frame:has(.access-panel input:focus) .access-panel > [data-layout='inline'] {
+		display: none;
+	}
+	.access-frame:has(.access-panel input:focus) .access-content {
+		padding-top: max(0.75rem, env(safe-area-inset-top));
+	}
+	.access-frame:has(.access-panel input:focus) .access-panel {
+		display: flex;
+		min-block-size: 0;
+	}
+}

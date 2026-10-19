@@ -24,6 +24,7 @@ it.effect('the ui package exports exactly its entries', () =>
 			'./capture',
 			'./effect',
 			'./base.css',
+			'./brand/access.css',
 			'./assets/*'
 		]);
 	})

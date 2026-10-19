@@ -48,17 +48,15 @@
 	}}
 >
 	<Stack gap="none" class="w-full">
-		<div
-			class="access-panel w-full rounded-lg border border-border/80 bg-card/95 p-5 shadow-xs backdrop-blur-sm sm:p-7"
-		>
+		<div class="access-panel">
 			{@render children()}
 		</div>
-		{#if apex}
-			<p class="pt-4 text-center text-sm text-muted-foreground">
+		<p class="access-switch text-muted-foreground">
+			{#if apex}
 				<a href={apex} class="underline underline-offset-4 hover:text-foreground"
 					>{t('Change workspace')}</a
 				>
-			</p>
-		{/if}
+			{/if}
+		</p>
 	</Stack>
 </AccessFrame>

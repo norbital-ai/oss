@@ -71,7 +71,8 @@ const document = (
 	title: string,
 	entry: string,
 	css: readonly string[],
-	modules: readonly string[]
+	modules: readonly string[],
+	accessStyles: string
 ) => `<!doctype html>
 <html lang="en">
 <head>
@@ -91,21 +92,14 @@ const document = (
 <script>(function(){var t;try{t=localStorage.getItem('bolt.theme')}catch(e){}var d=t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');document.documentElement.style.colorScheme=d?'dark':'light'})()</script>
 <style>
 body{margin:0}
-#bolt-loading{position:fixed;inset:0;z-index:1;display:grid;place-items:center;background:var(--background,#f2f1ed);color:var(--foreground,#26251e);font:500 .875rem Geist,system-ui,sans-serif}
-.dark #bolt-loading{background:var(--background,#191815);color:var(--foreground,#f7f7f4)}
-#bolt-loading-content{display:flex;flex-direction:column;align-items:center;gap:1rem}
-#bolt-loading img{width:2.75rem;height:2.75rem;border-radius:.5rem}
-#bolt-loading p{margin:0;opacity:.7}
-#bolt-loading-track{width:8rem;height:2px;overflow:hidden;background:rgba(127,127,127,.25)}
-#bolt-loading-track::after{content:"";display:block;width:40%;height:100%;background:var(--brand-500,#e87432);animation:bolt-opening 1.3s ease-in-out infinite alternate}
-@keyframes bolt-opening{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
-@media(prefers-reduced-motion:reduce){#bolt-loading-track::after{animation:none;transform:translateX(75%)}}
+${accessStyles}
+#bolt-loading{position:fixed;inset:0;z-index:1;overflow:auto}
 </style>
 ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 <script type="application/json" id="bolt-initial-modules">${key({ modules, css }).replaceAll('<', '\\u003c')}</script>
 <script type="module" src="/${entry}"></script>
 </head>
-<body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite"><div id="bolt-loading-content"><img src="/assets/bolt-apple-icon.png" alt=""><strong>Norbital</strong><p>Opening workspace…</p><div id="bolt-loading-track" aria-hidden="true"></div></div></div></body>
+<body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite" class="access-frame"><div class="access-content"><header class="access-header"><div class="access-header-content"><div class="access-brand"><span class="access-mark"><img src="/assets/bolt-apple-icon.png" alt=""></span><span>Norbital</span></div></div></header><main><section class="access-panel"><header class="access-identity"><div class="access-loading-eyebrow" aria-hidden="true"></div><h1 class="access-loading-name">${escape(title)}</h1></header><div class="access-loading-body"><p>Opening workspace…</p><div class="access-loading-track" aria-hidden="true"></div></div></section><div class="access-switch" aria-hidden="true"></div></main></div></div></body>
 </html>
 `;
 
@@ -176,7 +170,7 @@ ${renderers.map((r, i) => `import F${i} from ${key(join(root, r.path))};`).join(
 const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`).join(', ')} };
 const tag = navigator.languages.map((l) => l.toLowerCase()).flatMap((l) => [l, l.split('-')[0]]).find((l) => l in locales);
 const ready = initializeShellAssets(import.meta.url);
-ready.then(() => mountShell(document.getElementById('bolt'), { ready, publicRoutes: ${key(publicFiles.map((file) => `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`))}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
+ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key(publicFiles.map((file) => `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`))}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
 	integrationSetups: { ${integrationSetups.join(', ')} }, representations: { ${reps.join(', ')} }, customFields: { ${customFields.join(', ')} } })).catch((cause) => {
@@ -370,7 +364,13 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, publicRout
 		yield* fs.copy(join(root, 'assets'), join(out, 'assets'), { overwrite: true });
 	yield* fs.writeFileString(
 		join(out, 'index.html'),
-		document(title, internal.entry, internal.css, internal.modules)
+		document(
+			title,
+			internal.entry,
+			internal.css,
+			internal.modules,
+			yield* fs.readFileString(require.resolve('@norbital-ai/ui/brand/access.css'))
+		)
 	);
 	const publicPages: Record<string, { entry: string; css: string[] }> = {};
 	const publicEntries: Record<string, string> = {};

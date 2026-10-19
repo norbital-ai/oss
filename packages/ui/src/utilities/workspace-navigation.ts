@@ -1,36 +1,17 @@
-/** Cover the current document while its normal workspace handoff is still waiting for a response. */
+/** Report a normal workspace handoff without replacing its current screen or moving focus. */
 export function beginWorkspaceNavigation(message: string): () => void {
 	const cover = document.createElement('div');
-	cover.className = 'workspace-opening';
+	cover.className = 'workspace-opening access-loading-track';
 	cover.setAttribute('role', 'status');
 	cover.setAttribute('aria-live', 'polite');
 	cover.setAttribute('aria-busy', 'true');
-	const content = document.createElement('div');
-	const icon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
-	if (icon !== null) {
-		const image = document.createElement('img');
-		image.src = icon.href;
-		image.alt = '';
-		content.append(image);
-	}
-	const brand = document.createElement('strong');
-	brand.textContent = 'Norbital';
 	const status = document.createElement('p');
 	status.textContent = message;
-	const track = document.createElement('div');
-	track.className = 'workspace-opening-track';
-	track.setAttribute('aria-hidden', 'true');
-	content.append(brand, status, track);
-	cover.append(content);
-	const focused = document.activeElement;
-	cover.tabIndex = -1;
+	cover.append(status);
 	document.body.append(cover);
-	cover.focus({ preventScroll: true });
 	const navigation = window.navigation;
 	let signal: AbortSignal | undefined;
 	const stop = () => {
-		if (document.activeElement === cover && focused instanceof HTMLElement)
-			focused.focus({ preventScroll: true });
 		cover.remove();
 		window.removeEventListener('pagehide', stop);
 		window.removeEventListener('pageshow', stop);

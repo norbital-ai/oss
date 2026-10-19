@@ -446,6 +446,8 @@
 		return ready ?? (sameApp ? held?.Page : undefined);
 	});
 
+	const pageIdentity = $derived(Page === undefined ? null : identity.current);
+
 	const signOut = Effect.fn('Shell.signOut')(function* () {
 		if (environment !== null) yield* environment.signOut;
 		yield* Effect.result(api.signOut());
@@ -511,13 +513,13 @@
 		}
 	});
 	const mobileTitle = $derived(
-		identity.current?.title ??
+		pageIdentity?.title ??
 			app?.label ??
 			model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ??
 			boot?.workspace.name ??
 			''
 	);
-	const mobileDescription = $derived(identity.current?.description ?? app?.description ?? null);
+	const mobileDescription = $derived(pageIdentity?.description ?? app?.description ?? null);
 	// an administrator's team preview from the account menu: the teams Settings lists
 	const teams = Effect.fn('Shell.teams')(function* () {
 		const r = yield* Effect.result(api.settings());
@@ -563,6 +565,44 @@
 	{#if current.kind === 'home' && model !== null}
 		<Home {model} {t} onNavigate={navigate} />
 	{:else if current.kind === 'page' || current.kind === 'kiosk'}
+		<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
+		{#if !portal && (pageIdentity !== null || (app !== null && boot?.visitor === null))}
+			{#if narrow.current}
+				{#if pageIdentity?.actions}
+					<div class={cn(INSET_X_CLASS, 'shrink-0 py-2')} data-app-actions>
+						{@render pageIdentity.actions()}
+					</div>
+				{/if}
+			{:else}
+				<MediaHeader
+					src={pageIdentity?.banner === undefined || pageIdentity.banner === null
+						? (app?.thumbnail ?? null)
+						: media(pageIdentity.banner)}
+					icon={pageIdentity?.icon ?? app?.icon ?? null}
+					title={pageIdentity?.title ?? app?.label ?? null}
+					description={pageIdentity?.description ?? app?.description ?? null}
+					{...pageIdentity?.actions === undefined ? {} : { actions: pageIdentity.actions }}
+				/>
+			{/if}
+		{/if}
+		{#if strip !== null}
+			<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
+				<Inline
+					gap="none"
+					class="gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]"
+				>
+					{#each strip as p (p.key)}
+						<a
+							href={based(p.href)}
+							aria-current={p.active ? 'page' : undefined}
+							class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm"
+						>
+							{#if p.icon}<Icon name={p.icon} class="size-3.5" />{/if}{p.label}
+						</a>
+					{/each}
+				</Inline>
+			</nav>
+		{/if}
 		{#if pageKey === null || config.pages[pageKey] === undefined}
 			<Center><p>{t('Not found or no access')}</p></Center>
 		{:else if unloadable.has(pageKey)}
@@ -579,46 +619,6 @@
 			<Center><p>{t('Loading…')}</p></Center>
 		{:else}
 			<span hidden {@attach initialPageMounted}></span>
-			<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
-			{#if !portal && (identity.current !== null || (app !== null && boot?.visitor === null))}
-				{#if narrow.current}
-					{#if identity.current?.actions}
-						<div class={cn(INSET_X_CLASS, 'shrink-0 py-2')} data-app-actions>
-							{@render identity.current.actions()}
-						</div>
-					{/if}
-				{:else}
-					<MediaHeader
-						src={identity.current?.banner === undefined || identity.current.banner === null
-							? (app?.thumbnail ?? null)
-							: media(identity.current.banner)}
-						icon={identity.current?.icon ?? app?.icon ?? null}
-						title={identity.current?.title ?? app?.label ?? null}
-						description={identity.current?.description ?? app?.description ?? null}
-						{...identity.current?.actions === undefined
-							? {}
-							: { actions: identity.current.actions }}
-					/>
-				{/if}
-			{/if}
-			{#if strip !== null}
-				<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
-					<Inline
-						gap="none"
-						class="gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]"
-					>
-						{#each strip as p (p.key)}
-							<a
-								href={based(p.href)}
-								aria-current={p.active ? 'page' : undefined}
-								class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm"
-							>
-								{#if p.icon}<Icon name={p.icon} class="size-3.5" />{/if}{p.label}
-							</a>
-						{/each}
-					</Inline>
-				</nav>
-			{/if}
 			<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
 			{#if requires.length === 0}
 				<Bound size="full" inset><Page /></Bound>
@@ -714,7 +714,7 @@
 					{api}
 					{t}
 					next={current.next ?? '/'}
-					workspace={workspace?.name}
+					workspace={workspace?.name ?? config.workspaceName}
 					handle={workspace?.handle}
 				/>
 			{:else}
@@ -723,7 +723,7 @@
 					{t}
 					id={current.id}
 					signedIn={boot?.actor?.kind === 'member'}
-					workspace={workspace?.name}
+					workspace={workspace?.name ?? config.workspaceName}
 				/>
 			{/if}
 		</Access>

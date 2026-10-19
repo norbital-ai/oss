@@ -5,6 +5,7 @@
 /* Every ui component; the bolt bundler adds `@source` for the shell and the workspace's own pages. */
 @source './';
 @import 'tw-animate-css';
+@import './brand/access.css';
 @plugin '@tailwindcss/typography';
 @custom-variant dark (&:is(.dark *));
 
@@ -30,61 +31,22 @@
 	}
 }
 
+/* A normal workspace handoff keeps the current screen and its focus in place. */
 .workspace-opening {
 	position: fixed;
-	inset: 0;
+	inset: 0 0 auto;
 	z-index: 2147483647;
-	display: grid;
-	place-items: center;
-	background: var(--background);
-	color: var(--foreground);
-	font:
-		500 0.875rem Geist,
-		system-ui,
-		sans-serif;
-}
-.workspace-opening > div {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 1rem;
-}
-.workspace-opening img {
-	width: 2.75rem;
-	height: 2.75rem;
-	border-radius: 0.5rem;
+	pointer-events: none;
 }
 .workspace-opening p {
-	margin: 0;
-	opacity: 0.7;
-}
-.workspace-opening-track {
-	width: 8rem;
-	height: 2px;
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
 	overflow: hidden;
-	background: rgb(127 127 127 / 25%);
-}
-.workspace-opening-track::after {
-	content: '';
-	display: block;
-	width: 40%;
-	height: 100%;
-	background: var(--brand-500);
-	animation: workspace-opening 1.3s ease-in-out infinite alternate;
-}
-@keyframes workspace-opening {
-	from {
-		transform: translateX(-100%);
-	}
-	to {
-		transform: translateX(250%);
-	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.workspace-opening-track::after {
-		animation: none;
-		transform: translateX(75%);
-	}
+	clip-path: inset(50%);
+	white-space: nowrap;
 }
 
 :root {

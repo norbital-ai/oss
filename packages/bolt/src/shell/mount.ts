@@ -78,6 +78,8 @@ export const initializeShellAssets = (entry: string): Promise<void> =>
 /** Browser shell configuration, including optional Device supplied by its host. */
 export type ShellMountConfig = {
 	manifest: ShellManifest;
+	/** The artifact's display name, available before the caller's boot response arrives. */
+	workspaceName?: string;
 	/** Native builds initialize all main-thread release modules before mounting the shell. */
 	ready?: Promise<void>;
 	/** Server-rendered routes use a document navigation to admit and load the new public page. */
