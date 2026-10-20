@@ -108,9 +108,11 @@ export const validatePackagePublication = Effect.scoped(
 		});
 		const workspace = path.join(output, 'workspace');
 		yield* copyWorkspace(repositoryRoot, workspace);
+		// The frozen lockfile pins every resolution; the scratch copy may sit on another filesystem whose
+		// pnpm store is empty (a CI runner's tmpdir), so tarballs it lacks are fetched, never re-resolved.
 		yield* capture(
 			'pnpm',
-			['install', '--frozen-lockfile', '--offline', '--ignore-scripts'],
+			['install', '--frozen-lockfile', '--prefer-offline', '--ignore-scripts'],
 			workspace
 		);
 		for (const directory of publicPackageDirectories) {
