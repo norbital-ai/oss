@@ -276,6 +276,50 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 );
 
 it.live(
+	"re-derives only its own contract's schema: a pinned older release keeps its recorded schema",
+	() =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem,
+				path = yield* Path.Path;
+			const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-artifact-pinned-' });
+			const text = `${JSON.stringify(manifest)}\n`,
+				source = 'export default {};';
+			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
+			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+			const write = (contract: string) =>
+				Effect.gen(function* () {
+					const body: Omit<ArtifactJson, 'hash'> = {
+						format: 1,
+						contract,
+						handle: 'pinned',
+						name: 'Pinned',
+						// an older engine's system layer fingerprints the same manifest differently
+						schema: sha256Hex('an older system layer'),
+						transforms: [],
+						projections: [],
+						client: { entry: '', css: [] },
+						pages: {},
+						hashes: {
+							manifest: sha256Hex(text),
+							guest: sha256Hex(source),
+							client: yield* treeHash(path.join(dir, 'client')),
+							server: yield* treeHash(path.join(dir, 'server'))
+						}
+					};
+					yield* fs.writeFileString(
+						path.join(dir, 'artifact.json'),
+						JSON.stringify({ ...body, hash: yield* artifactHash(dir, body) })
+					);
+				});
+			const older = sha256Hex('@norbital-ai/bolt@0.0.1');
+			yield* write(older);
+			expect((yield* readArtifact(dir, [older])).manifest).toEqual(manifest);
+			yield* write(CONTRACT);
+			expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schemaMismatch' });
+		}).pipe(Effect.provide(NodeServices.layer))
+);
+
+it.live(
 	'authenticates historical snapshot metadata without reading or trusting its native bytes',
 	() =>
 		Effect.gen(function* () {

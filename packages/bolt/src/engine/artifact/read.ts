@@ -179,7 +179,9 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 			decodeManifest
 		)
 	);
-	if (fingerprint(schemaSlice(manifest)) !== artifact.schema)
+	// The fingerprint folds in this engine's system layer: only an artifact of this contract can be re-derived here.
+	// A pinned older release's schema is verified by its own graph's HOST_API; its digest still binds the manifest.
+	if (artifact.contract === CONTRACT && fingerprint(schemaSlice(manifest)) !== artifact.schema)
 		return yield* BoltError.make(
 			'schemaMismatch',
 			'admission',
