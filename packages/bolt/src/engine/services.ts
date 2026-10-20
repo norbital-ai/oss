@@ -8,7 +8,7 @@ import { Context } from 'effect';
 import type { Effect, Option, Redacted, Result, Schema, Scope, Stream } from 'effect';
 import type { Json } from '../decl/values.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
-import type { Frame } from '../protocol/schema.ts';
+import type { Frame, ImportStart } from '../protocol/schema.ts';
 import type { Actor, Pred, ReadIR } from '../protocol/ir-types.ts';
 import { LIMITS } from './contracts.ts';
 import type {
@@ -426,7 +426,8 @@ export type ConversationsShape = {
 	/** Inbound messages and delivery reports an instance's link hands over (§4.5). */
 	readonly receive: (
 		instance: string,
-		event: Exclude<DriverEvent, { kind: 'invalidate' }>
+		event: Exclude<DriverEvent, { kind: 'invalidate' }>,
+		expectedImportStart?: ImportStart | null
 	) => Effect.Effect<void, EngineError>;
 	/** A custom conversation's webhook, its signature verified host-side. */
 	readonly webhook: (

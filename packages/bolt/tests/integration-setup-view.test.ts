@@ -8,7 +8,11 @@ import { mountEdge, run } from '@norbital-ai/ui/effect';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
-import type { InstanceStatus, ProviderChoice } from '../src/protocol/instance-status.ts';
+import type {
+	ImportStartInput,
+	InstanceStatus,
+	ProviderChoice
+} from '../src/protocol/instance-status.ts';
 import Setup from '../src/shell/integration/Setup.svelte';
 import type { IntegrationSetupEntry, IntegrationSetupLoader } from '../src/page/integration.ts';
 import { reactive } from './support/reactive.svelte.ts';
@@ -72,6 +76,7 @@ function show(props: {
 	setup?: IntegrationSetupEntry;
 }) {
 	const paired: Json[] = [];
+	const boundaries: ImportStartInput[] = [];
 	const pairedReady = Deferred.makeUnsafe<void>(),
 		unpairedReady = Deferred.makeUnsafe<void>();
 	let unpaired = 0;
@@ -103,7 +108,12 @@ function show(props: {
 					unpaired++;
 					Deferred.doneUnsafe(unpairedReady, Effect.void);
 				}),
-			test: () => Effect.void
+			test: () => Effect.void,
+			importStart: (input: ImportStartInput) =>
+				Effect.sync(() => {
+					boundaries.push(input);
+					return true;
+				})
 		}
 	});
 	views.push(async () => {
@@ -113,6 +123,7 @@ function show(props: {
 	return {
 		el: target,
 		paired,
+		boundaries,
 		waitPair: () => run(Deferred.await(pairedReady)),
 		waitUnpair: () => run(Deferred.await(unpairedReady)),
 		unpaired: () => unpaired,
@@ -120,13 +131,110 @@ function show(props: {
 	};
 }
 const button = (el: HTMLElement, label: string) =>
-	[...el.querySelectorAll<HTMLButtonElement>('button')].find(
+	[...el.querySelectorAll<HTMLButtonElement | HTMLAnchorElement>('button, a')].find(
 		(b) => b.textContent?.trim() === label
 	);
 const type = (input: HTMLInputElement, value: string) => {
 	input.value = value;
 	input.dispatchEvent(new Event('input', { bubbles: true }));
 };
+
+it('keeps a saved From now instant when pairing is retried without editing the import start', async () => {
+	vi.spyOn(window, 'open').mockReturnValue(null);
+	const { el, paired, waitPair } = show({
+		connection: base({
+			providers: [
+				{
+					id: 'google',
+					label: 'Gmail',
+					importStart: { kind: 'timestamp' },
+					setup: { kind: 'oauth', steps: [] }
+				}
+			],
+			importStart: {
+				kind: 'since',
+				at: '2026-10-20T16:00:00.000Z',
+				zone: 'Asia/Singapore',
+				origin: 'now'
+			}
+		})
+	});
+	await settle();
+	expect(el.querySelector('[data-import-start]')?.textContent).toContain('From now');
+	expect(el.querySelector<HTMLInputElement>('input[name=import-start-zone]')?.value).toBe(
+		'Asia/Singapore'
+	);
+	button(el, 'Gmail')!.click();
+	await waitPair();
+	expect(paired).toEqual([{}]);
+});
+
+it('collects an import date on the standalone pairing view only when explicitly selected', async () => {
+	vi.spyOn(window, 'open').mockReturnValue(null);
+	const { el, paired, waitPair } = show({
+		connection: base({
+			providers: [
+				{
+					id: 'google',
+					label: 'Gmail',
+					importStart: { kind: 'timestamp' },
+					setup: { kind: 'oauth', steps: [] }
+				}
+			],
+			importStart: null
+		})
+	});
+	await settle();
+	expect(el.querySelector('[data-import-start]')?.textContent).toContain('All available history');
+	expect(paired).toEqual([]);
+	el.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')!.click();
+	await settle();
+	document.querySelector<HTMLButtonElement>('[role=option][data-value=since] button')!.click();
+	await settle();
+	type(el.querySelector<HTMLInputElement>('input[name=import-start-date]')!, '2026-10-21');
+	type(el.querySelector<HTMLInputElement>('input[name=import-start-zone]')!, 'Asia/Singapore');
+	await settle();
+	button(el, 'Gmail')!.click();
+	await waitPair();
+	expect(paired).toEqual([
+		{ importStart: { kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' } }
+	]);
+});
+
+it('does not move an edited From now boundary again after the host saves it and pairing fails', async () => {
+	vi.spyOn(window, 'open').mockReturnValue(null);
+	const google: ProviderChoice = {
+		id: 'google',
+		label: 'Gmail',
+		importStart: { kind: 'timestamp' },
+		setup: { kind: 'oauth', steps: [] }
+	};
+	const { el, paired, state, waitPair } = show({
+		connection: base({ providers: [google], importStart: null })
+	});
+	await settle();
+	el.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')!.click();
+	await settle();
+	document.querySelector<HTMLButtonElement>('[role=option][data-value=now] button')!.click();
+	await settle();
+	button(el, 'Gmail')!.click();
+	await waitPair();
+	expect(paired[0]).toMatchObject({ importStart: { kind: 'now' } });
+	state.connection = base({
+		providers: [google],
+		state: 'error',
+		importStart: {
+			kind: 'since',
+			at: '2026-10-20T16:00:00.000Z',
+			zone: 'Asia/Singapore',
+			origin: 'now'
+		}
+	});
+	await settle();
+	button(el, 'Try again')!.click();
+	await vi.waitFor(() => expect(paired).toHaveLength(2));
+	expect(paired[1]).toEqual({});
+});
 
 it('asks which provider first when the driver has several, then draws that provider’s steps and form', async () => {
 	const { el } = show({ connection: base() });
@@ -267,6 +375,39 @@ it('switches from Setup to the Connected summary when the host says connected, a
 	expect(unpaired()).toBe(1);
 });
 
+it('shows connection progress after pairing, keeps disconnect, and restores setup if pairing is needed again', async () => {
+	const { el, state, unpaired, waitUnpair } = show({
+		connection: base({
+			provider: 'linked',
+			state: 'connecting',
+			stored: true,
+			detail: 'Catching up on missed messages'
+		})
+	});
+	await settle();
+	const progress = el.querySelector('[data-connection-progress]');
+	expect(progress?.querySelector('[data-accretion-disc]')).not.toBeNull();
+	expect(progress?.querySelector('[role=status]')?.textContent).toContain(
+		'Catching up on missed messages'
+	);
+	expect(el.querySelector('[data-setup-steps]')).toBeNull();
+	expect(el.querySelector('[data-setup-form]')).toBeNull();
+	expect(el.textContent).not.toContain('The code appears when the provider publishes it.');
+	expect(el.textContent?.match(/Linked device/g)).toHaveLength(1);
+	button(el, 'Disconnect')!.click();
+	await waitUnpair();
+	expect(unpaired()).toBe(1);
+	state.connection = base({
+		provider: 'linked',
+		state: 'pairing',
+		pairing: { kind: 'qr', value: '2@abc' }
+	});
+	await settle();
+	expect(el.querySelector('[data-connection-progress]')).toBeNull();
+	expect(el.querySelector('[data-setup-steps]')).not.toBeNull();
+	expect(el.querySelector('[data-pairing=qr]')).not.toBeNull();
+});
+
 it('an OAuth mailbox: the redirect URI to register, a choice field, then a sign-in button that opens a popup', async () => {
 	const ms: ProviderChoice = {
 		id: 'microsoft',
@@ -334,6 +475,24 @@ it('an OAuth mailbox: the redirect URI to register, a choice field, then a sign-
 	expect(el.querySelector('[data-setup-form]')).toBeNull();
 	button(el, 'Sign in with Microsoft')!.click();
 	expect(opened).toEqual(['https://login.example/authorize?state=s']);
+	expect(el.querySelector<HTMLAnchorElement>('[data-pairing=oauth] a')?.href).toBe(
+		'https://login.example/authorize?state=s'
+	);
+});
+
+it('distinguishes an unread status and a failed read from a loaded host with no provider', async () => {
+	const { el, state } = show({ connection: null });
+	await settle();
+	expect(el.textContent).toContain('Asking the host…');
+	expect(el.textContent).not.toContain('This host offers no provider');
+	state.error = 'The connection could not be loaded.';
+	await settle();
+	expect(el.querySelector('[role=alert]')?.textContent).toContain('could not be loaded');
+	expect(el.textContent).not.toContain('This host offers no provider');
+	state.connection = base({ providers: [] });
+	state.error = null;
+	await settle();
+	expect(el.textContent).toContain('This host offers no provider');
 });
 
 it('draws a definition with the workspace’s own file in place of the generic views, loading it once', async () => {

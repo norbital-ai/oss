@@ -20,7 +20,7 @@ import {
 	Scope
 } from 'effect';
 import { FetchHttpClient, HttpClient } from 'effect/unstable/http';
-import { toDrivers } from '@norbital-ai/providers';
+import { defaultProviders, toDrivers } from '@norbital-ai/providers';
 import { PairingInvalid } from '@norbital-ai/providers/errors';
 import { program } from '../../bolt/tests/support/guest-fixture.ts';
 import { CONTRACT } from '../../bolt/src/compiler/artifact/index.ts';
@@ -66,6 +66,7 @@ const manifest = {
 	pipelines: {},
 	teams: {},
 	integrations: {
+		calendar: { description: 'Google Calendar', driver: 'calendar' },
 		erp: {
 			description: 'The ERP',
 			driver: 'http',
@@ -95,6 +96,7 @@ const manifest = {
 		}
 	},
 	connections: {
+		calendar: { integration: 'calendar' },
 		wa_sales: { integration: 'whatsapp' },
 		wa_ops: { integration: 'whatsapp' },
 		tg: { integration: 'telegram' },
@@ -240,6 +242,8 @@ const config = () =>
 					BOLT_PGLITE_DIR: join(root, 'db'),
 					BOLT_FILES_PROVIDER: 'local',
 					BOLT_FILES_ENDPOINT: join(root, 'files'),
+					BOLT_GOOGLE_OAUTH_CLIENT_ID: 'host-google-client',
+					BOLT_GOOGLE_OAUTH_CLIENT_SECRET: 'host-google-secret',
 					BOLT_MASTER_KEY: createHash('sha256').update('master').digest('hex')
 				})
 			)
@@ -300,7 +304,11 @@ class TestServer extends Context.Service<TestServer>()('integrations-test/TestSe
 		yield* writeFixture;
 		const run = yield* FiberSet.makeRuntimePromise<HttpClient.HttpClient>();
 		const native = yield* toDrivers(
-			[httpProvider({ fetch: network }), sqlServerProvider(database)],
+			[
+				httpProvider({ fetch: network }),
+				sqlServerProvider(database),
+				...defaultProviders().filter((provider) => provider.driver === 'calendar')
+			],
 			(effect, options) => run(Effect.result(effect), options).then(Result.getOrThrow)
 		);
 		const providers = [
@@ -368,6 +376,29 @@ layer(
 	),
 	{ timeout: '60 seconds', excludeTestServices: true }
 )('integration instances on bolt start', (it) => {
+	it.effect('uses the configured host Google app for the real Calendar provider sign-in', () =>
+		Effect.gen(function* () {
+			const t = yield* TestServer;
+			expect((yield* t.state('calendar')).providers).toMatchObject([
+				{ id: 'google', setup: { kind: 'oauth' } }
+			]);
+			expect((yield* t.state('calendar')).providers?.[0]?.available).not.toBe(false);
+			const paired = yield* json(
+				yield* t.call('POST', '/__bolt/integrations/calendar/pair', {}),
+				PairingReply
+			);
+			expect(paired.value.pairing.kind).toBe('oauth');
+			const authorize = new URL(paired.value.pairing.value);
+			expect(authorize.origin).toBe('https://accounts.google.com');
+			expect(Object.fromEntries(authorize.searchParams)).toMatchObject({
+				client_id: 'host-google-client',
+				scope: 'https://www.googleapis.com/auth/calendar.readonly',
+				redirect_uri: 'http://localhost:3100/hooks/oauth/callback'
+			});
+			expect(JSON.stringify(paired)).not.toContain('host-google-secret');
+			expect((yield* t.call('POST', '/__bolt/integrations/calendar/unpair', {})).status).toBe(200);
+		})
+	);
 	it.effect(
 		'refuses a visitor; answers every instance with its providers and its own webhook URL',
 		() =>

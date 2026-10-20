@@ -26,6 +26,9 @@ export function idsOf<C extends string>(ids: readonly string[]): readonly IdOf<C
 
 export type Act = ViewBolt['act'];
 
+/** One invariant a registered rule finds broken: `field` is any key the rule chooses (`repayments.3.amount`). */
+export type SemanticIssue = { readonly field: string; readonly message: string };
+
 /**
  * The draft of one mounted `Form`: values, errors, notice and pending state, shared with its `Field`s; values survive a field unmounting.
  */
@@ -62,6 +65,9 @@ export class FormState {
 	#beforeOutcomes = new Set<(outcome: Outcome) => void>();
 	#resets = new Set<() => void>();
 	#validators = new Set<() => Effect.Effect<boolean>>();
+	#rules = $state.raw<readonly (() => readonly SemanticIssue[])[]>([]);
+	/** Every registered rule's current issues; kept apart from `errors` so fixing a value clears its issue at once. */
+	readonly semanticErrors: readonly SemanticIssue[] = $derived(this.#rules.flatMap((rule) => rule()));
 
 	constructor(
 		spec: FormSpec,
@@ -129,6 +135,26 @@ export class FormState {
 			this.capabilities?.update.allowed === true ||
 			this.capabilities?.update.proposal === true
 		);
+	}
+	/** Permission plus validity: Save stays disabled while any error or broken invariant remains. */
+	get canSave(): boolean {
+		return (
+			this.canSubmit &&
+			!this.pending &&
+			this.errors.size === 0 &&
+			this.semanticErrors.length === 0
+		);
+	}
+	/** Registers a synchronous invariant rule, re-evaluated reactively; returns its unregister. */
+	addValidation(rule: () => readonly SemanticIssue[]): () => void {
+		this.#rules = [...this.#rules, rule];
+		return () => {
+			this.#rules = this.#rules.filter((r) => r !== rule);
+		};
+	}
+	/** The first broken invariant's message for exactly this key. */
+	semanticError(field: string): string | undefined {
+		return this.semanticErrors.find((issue) => issue.field === field)?.message;
 	}
 	get requestingApproval(): boolean {
 		if (this.spec.proposalOnly === true) return true;
@@ -241,7 +267,7 @@ export class FormState {
 	}
 	validate(): boolean {
 		this.errors = check(this.spec, this.values);
-		return this.errors.size === 0;
+		return this.errors.size === 0 && this.semanticErrors.length === 0;
 	}
 	prepare(): Effect.Effect<boolean> {
 		return Effect.gen({ self: this }, function* () {

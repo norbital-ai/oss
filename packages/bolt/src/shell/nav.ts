@@ -48,15 +48,18 @@ export const COOKIES = {
 	preview: '__Secure-bolt-preview',
 	visitor: '__Secure-bolt-visitor'
 } as const;
+/** Plain HTTP must not depend on browser exceptions for Secure cookies. */
+export const cookieNames = (secure: boolean) =>
+	secure ? COOKIES : { session: 'bolt-session', preview: 'bolt-preview', visitor: 'bolt-visitor' };
 /**
  * The cookies' site attributes: over https, partitioned and sent in frames, so a portal page embedded in another site keeps
  * its own sign-in (kept apart from the top-level one: a framing site never borrows a member's session); over plain http
- * (`bolt dev`), `Lax`. Every cookie is Secure, has no Domain and the workspace's `basePath` as its Path: workspaces
+ * (`bolt dev`), `Lax` without Secure. Every cookie has no Domain and the workspace's `basePath` as its Path: workspaces
  * served under paths of one host keep their sign-ins apart (`__Host-` would force `Path=/`).
  * Cross-site writes are refused by `crossSite`, not by `SameSite`.
  */
 export const cookieSite = (secure: boolean): string =>
-	secure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax; Secure';
+	secure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
 /**
  * A browser write another site started (a forged form post or fetch): refused before it reaches a handler. A request from
  * a page of this workspace, framed or not, is `same-origin`; a server calling a webhook sends neither header.

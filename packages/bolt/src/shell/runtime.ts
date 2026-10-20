@@ -22,7 +22,7 @@ import { fileRef } from '../page/file-ref.ts';
 import { toast } from '@norbital-ai/ui';
 import { run } from '@norbital-ai/ui/effect';
 import type { ShellMountConfig } from './mount.ts';
-import { integrationClient, integrationOffers } from '../page/integrations.ts';
+import { integrationClients, integrationOffers } from '../page/integrations.ts';
 import type { IntegrationSetupEntry } from '../page/integration.ts';
 import { resolveDevice, type DeviceApi } from '../page/device.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
@@ -62,6 +62,7 @@ export function shellApi(
 	options: { readonly base?: string } = {}
 ): ShellApi {
 	let contract: string | undefined;
+	const instances = integrationClients({ base: based(`${BOLT}/integrations/`), fetch: f });
 	const transport = browserTransport({ ...options, fetch: f });
 	const transportError = (error: ProtocolFailed | TransportFailed) =>
 		error instanceof TransportFailed && error.status === 0
@@ -184,14 +185,13 @@ export function shellApi(
 				}`
 			),
 		run: (id: string) =>
-			call<import('../engine/runs/index.ts').RunView>('GET', `${SHELL}/runs${q('id', id)}`),
+			call<import('./api-types.ts').RunDetail>('GET', `${SHELL}/runs${q('id', id)}`),
 		stopRun: (id: string) =>
 			call<import('../engine/runs/index.ts').RunView>('POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
 		settings: () => call<import('./settings/data.ts').Settings>('GET', `${SHELL}/settings`),
 		settingsOp: (op: string, input: Json) => call<Json>('POST', `${SHELL}/settings`, { op, input }),
 		/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`); the host authorizes "may update this row". */
-		integration: (instance: string) =>
-			integrationClient(instance, { base: based(`${BOLT}/integrations/`), fetch: f }),
+		integration: instances,
 		integrationOffers: () => integrationOffers({ base: based(`${BOLT}/integrations/`), fetch: f }),
 		/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (name: string, logo: string | null) =>
@@ -522,14 +522,14 @@ export function shellBolt(
 		});
 		const agent = options.agent ?? agentPanel();
 		const api = shellApi(options.fetch);
+		const instances = integrationClients({
+			base: based(`${BOLT}/integrations/`),
+			...(f === undefined ? {} : { fetch: f })
+		});
 		return Object.assign(client, {
 			device: resolveDevice(options.device),
 			/** An integration instance's host verbs: its status, pairing, test and status stream (`IntegrationSetup` draws them). */
-			integration: (instance: string) =>
-				integrationClient(instance, {
-					base: based(`${BOLT}/integrations/`),
-					...(f === undefined ? {} : { fetch: f })
-				}),
+			integration: instances,
 			/** A definition's own setup component (`integration/<name>/+integration.svelte`), loaded only when its UI opens. */
 			integrationSetup: (name: string) => options.integrationSetups?.[name]?.load,
 			/** The path of an app page, optionally opening a record: `bolt.href(app, page?, record?)`. */

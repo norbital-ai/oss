@@ -23,7 +23,7 @@ import { PATHS } from '../protocol/wire.ts';
 import { renderMode } from '../protocol/pages.ts';
 import { decodePublicHydration, PUBLIC_HYDRATION_ID } from '../protocol/public-page.ts';
 import { mountShell, type ShellMountConfig } from '../shell/mount.ts';
-import { audienceOf, COOKIES, nav, surfaces, type NavNode } from '../shell/nav.ts';
+import { audienceOf, nav, surfaces, type NavNode } from '../shell/nav.ts';
 import { KitInvalid, type KitFailure, TestWorkspace } from './effect.ts';
 export { mountShell, type ShellMountConfig };
 
@@ -121,12 +121,7 @@ const mountVisit = (
 		const traffic: string[] = [],
 			state = { inflight: 0, last: yield* milliseconds };
 		let jar = Cookies.empty;
-		if (who !== null && !('visitor' in who))
-			jar = Cookies.setUnsafe(
-				jar,
-				COOKIES.session,
-				(yield* t.session(who.id)).slice(COOKIES.session.length + 1)
-			);
+		if (who !== null && !('visitor' in who)) jar = Cookies.fromSetCookie(yield* t.session(who.id));
 		const fetch: typeof globalThis.fetch = (input, init = {}) =>
 			run(
 				Effect.uninterruptibleMask((restore) =>

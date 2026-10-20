@@ -9,7 +9,7 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // descriptor (no `id`) and a malformed message is logged: neither is a failure the link would redeliver forever.
 // Replies are matched to the outbound row they answer — a redelivered one again, since a match that failed after its row
 // was stored is what the provider redelivers it for; every send is a queued row `integrations.deliver` delivers.
-import { Clock, Crypto, Effect, Layer, Predicate, Schema } from 'effect';
+import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import { teams } from '../manifest.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { enqueue, nextDue } from '../runs/queue.ts';
@@ -17,7 +17,7 @@ import type { Json } from '../../decl/values.ts';
 import type { DriverEvent } from '../contracts.ts';
 import { Drivers, Files } from '../ports.ts';
 import { Port } from '../port.ts';
-import { TenantDb } from '../db/tenant-db.ts';
+import { TenantDb, TenantTx } from '../db/tenant-db.ts';
 import {
 	Conversations as ConversationsTag,
 	Manifest,
@@ -36,8 +36,10 @@ import type { AgentEngine } from '../agent/index.ts';
 import type { Bindings } from '../contracts.ts';
 import { conversationOf, definitionOf, integrationBody } from '../integrations/instances.ts';
 import { messageFeedRuns } from '../integrations/feeds.ts';
-import { Chain } from '../write/sql.ts';
+import { canonical, Chain } from '../write/sql.ts';
 import { InboundMessage, normalizeInbound, type Inbound } from './inbound.ts';
+import { ImportStart } from '../../protocol/schema.ts';
+import { permitsImport } from '../integrations/import-start.ts';
 import { prepareSend, sendPiece } from './outbound.ts';
 import { isAutoReply, isReported } from './status.ts';
 import {
@@ -68,10 +70,12 @@ type Instance = {
 	integration: string;
 	owner: string | null;
 	kind: 'chat' | 'email';
+	importStart: ImportStart | null;
+	importStartRaw: Json;
 };
 /** An admitted row (`role` set) keeps its transcript content; only unadmitted history is rewritten by an edit or a revoke. */
 const KEEP = (col: string) =>
-	`CASE WHEN sys_message.role IS NULL THEN excluded.${col} ELSE sys_message.${col} END`;
+	`CASE WHEN sys_message.role IS NULL AND excluded.version > sys_message.version THEN excluded.${col} ELSE sys_message.${col} END`;
 const TOMBSTONE = `text = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.text END, preview = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.preview END,
 	files = CASE WHEN sys_message.role IS NULL THEN '[]'::jsonb ELSE sys_message.files END, email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
 export function conversations(cfg: ConversationsConfig) {
@@ -84,21 +88,38 @@ export function conversations(cfg: ConversationsConfig) {
 	const clock =
 		cfg.clock ?? Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString()));
 	const instanceOf = Effect.fn('Agents.instanceOf')(function* (id: string) {
-		const [res] = yield* db.read([
-			sql('SELECT integration, owner FROM sys_integration WHERE id = $1', id)
-		]);
-		const row = res!.rows[0],
-			def = row === undefined ? undefined : definitionOf(m, String(row['integration']));
+		const found = yield* db.one(
+			Schema.Struct({
+				integration: Schema.String,
+				owner: Schema.NullOr(Schema.String),
+				import_start: Schema.NullOr(Schema.Json)
+			}),
+			{
+				text: 'SELECT integration, owner, import_start FROM sys_integration WHERE id = $1',
+				params: [id]
+			}
+		);
+		const row = Option.getOrUndefined(found),
+			def = row === undefined ? undefined : definitionOf(m, row.integration);
 		const conv = def === undefined ? undefined : conversationOf(def);
-		if (conv === undefined)
+		if (row === undefined || conv === undefined)
 			return yield* Effect.fail(
 				BoltError.make('notFound', 'decode', `no conversation instance '${id}'`)
 			);
+		const importStart = yield* Schema.decodeUnknownEffect(Schema.NullOr(ImportStart))(
+			row.import_start
+		).pipe(
+			Effect.mapError(() =>
+				BoltError.make('invalidInput', 'admission', 'The integration import start is invalid.')
+			)
+		);
 		return {
 			id,
-			integration: String(row!['integration']),
-			owner: (row!['owner'] ?? null) as string | null,
-			kind: conv.kind
+			integration: row.integration,
+			owner: row.owner,
+			kind: conv.kind,
+			importStart,
+			importStartRaw: row.import_start
 		};
 	});
 	const files = Effect.fn('Agents.files')(function* (
@@ -133,8 +154,8 @@ export function conversations(cfg: ConversationsConfig) {
 			const id = stableId('file', instance, inbound.id, String(i));
 			c.cte(
 				`f${i}`,
-				`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) VALUES (${c.p(id)}, ${c.p(a.name)}, ${c.p(a.mime)},
-				${c.p(data.byteLength)}, ${c.p(blob.key)}, ${c.p(blob.sha256)}, 'sys_message.files', ${c.p(now)}::timestamptz) ON CONFLICT (id) DO NOTHING RETURNING id`
+				`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) SELECT ${c.p(id)}, ${c.p(a.name)}, ${c.p(a.mime)},
+				${c.p(data.byteLength)}, ${c.p(blob.key)}, ${c.p(blob.sha256)}, 'sys_message.files', ${c.p(now)}::timestamptz WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO NOTHING RETURNING id`
 			);
 			out.push({ id, ...named });
 		}
@@ -213,97 +234,186 @@ export function conversations(cfg: ConversationsConfig) {
 			);
 			return null;
 		}
+		if (!permitsImport(inst.importStart, inbound.sourceAt ?? undefined)) {
+			if (!inbound.deleted || inbound.sourceAt !== null) return null;
+			const previous = yield* db.one(Schema.Struct({ source_at: Schema.NullOr(Schema.String) }), {
+				text: 'SELECT source_at::text AS source_at FROM sys_message WHERE id = $1 AND integration = $2',
+				params: [messageId(inst.id, inbound.id), inst.id]
+			});
+			if (
+				Option.isNone(previous) ||
+				!permitsImport(inst.importStart, previous.value.source_at ?? undefined)
+			)
+				return null;
+		}
+		// The row lock and equality fence make a concurrent boundary change precede or follow this whole ingest.
+		c.cte(
+			'source',
+			`SELECT id FROM sys_integration WHERE id = ${c.p(inst.id)} AND import_start IS NOT DISTINCT FROM ${c.p(inst.importStartRaw)}::jsonb FOR SHARE`
+		);
 		const personal = inst.owner !== null,
 			origin = inbound.history || personal ? 'sync' : 'live';
 		const conv = conversationId(inst.id, inbound.thread),
 			id = messageId(inst.id, inbound.id);
-		if (inbound.deleted && inbound.thread === '') {
-			// a bare revoke: tombstone the row, or hold the id so the message never lands
-			c.cte(
-				'msg',
-				`SELECT * FROM ${messagePiece(c, `UPDATE sys_message SET deleted_at = ${c.p(now)}::timestamptz, ${TOMBSTONE} WHERE id = ${c.p(id)} AND deleted_at IS NULL`, 'false AS inserted')}`
-			);
-			messagePiece(
-				c,
-				`INSERT INTO sys_message (id, integration, direction, origin, provider_id, text, preview, deleted_at, created_at)
+
+		const content =
+			inbound.deleted || !inbound.attachments.some((attachment) => attachment.bin !== undefined)
+				? true
+				: yield* db
+						.one(Schema.Struct({ version: Schema.NullOr(Schema.String) }), {
+							text: 'SELECT version FROM sys_message WHERE id = $1',
+							params: [id]
+						})
+						.pipe(
+							Effect.map(
+								(row) =>
+									Option.isNone(row) ||
+									row.value.version === null ||
+									row.value.version < inbound.version
+							)
+						);
+		let nextDueAt: string | undefined;
+		const persist = (write: typeof db.write) =>
+			Effect.gen(function* () {
+				if (inbound.deleted && inbound.thread === '') {
+					// a bare revoke: tombstone the row, or hold the id so the message never lands
+					c.cte(
+						'msg',
+						`SELECT * FROM ${messagePiece(c, `UPDATE sys_message SET deleted_at = ${c.p(now)}::timestamptz, ${TOMBSTONE} WHERE id = ${c.p(id)} AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM source)`, 'false AS inserted')}`
+					);
+					messagePiece(
+						c,
+						`INSERT INTO sys_message (id, integration, direction, origin, provider_id, text, preview, deleted_at, created_at)
 				SELECT ${c.p(id)}, ${c.p(inst.id)}, 'inbound', ${c.p(origin)}, ${c.p(inbound.id)}, '', '', ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz
-				WHERE NOT EXISTS (SELECT 1 FROM sys_message WHERE id = ${c.p(id)}) ON CONFLICT (id) DO NOTHING`,
-				'id'
-			);
-			const runs = queue(c, inst, 'msg', id, inbound.version, null, now, true);
-			const [row] = (yield* db.write(
-				c.sql(`${counted(runs)} AS queued, ${nextDue(c)}::text AS next_due`)
-			)).rows;
-			if (typeof row?.['next_due'] === 'string')
-				yield* cfg.announce?.(row['next_due']) ?? Effect.void;
-			return null;
-		}
-		const stored = inbound.deleted ? [] : yield* files(inst.id, inbound, bins, c, now);
-		// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it;
-		// `envoy` is the instance's at this message (display: admission reads the instance as it is then)
-		c.cte(
-			'conv',
-			`INSERT INTO sys_conversation (id, integration, thread, kind, envoy, title, participants) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
+				WHERE EXISTS (SELECT 1 FROM source) AND NOT EXISTS (SELECT 1 FROM sys_message WHERE id = ${c.p(id)}) ON CONFLICT (id) DO NOTHING`,
+						'id'
+					);
+					const runs = queue(c, inst, 'msg', id, inbound.version, null, now, true);
+					const [row] = (yield* write(
+						c.sql(
+							`EXISTS (SELECT 1 FROM source) AS admitted, ${counted(runs)} AS queued, ${nextDue(c)}::text AS next_due`
+						)
+					)).rows;
+					if (row?.['admitted'] !== true)
+						return yield* Effect.fail(
+							BoltError.make(
+								'sourceChanged',
+								'admission',
+								'The integration import start changed; redeliver this message.'
+							)
+						);
+					if (typeof row?.['next_due'] === 'string') nextDueAt = row['next_due'];
+					return null;
+				}
+				c.cte('previous', `SELECT version FROM sys_message WHERE id = ${c.p(id)}`);
+				const stored =
+					inbound.deleted || !content ? [] : yield* files(inst.id, inbound, bins, c, now);
+				// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it;
+				// `envoy` is the instance's at this message (display: admission reads the instance as it is then)
+				c.cte(
+					'conv',
+					`INSERT INTO sys_conversation (id, integration, thread, kind, envoy, title, participants) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
 			${c.p(inbound.group ? 'group' : 'dm')}, (SELECT i.envoy FROM sys_integration i WHERE i.id = ${c.p(inst.id)} AND i.owner IS NULL), ${c.p(inbound.title)},
-			${c.p(personal ? (inbound.participants ?? null) : null)}::jsonb ON CONFLICT (id) DO UPDATE SET
+			${c.p(personal ? (inbound.participants ?? null) : null)}::jsonb WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO UPDATE SET
 			envoy = excluded.envoy, title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants)
 			WHERE sys_conversation.envoy IS DISTINCT FROM excluded.envoy OR (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
 			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) RETURNING id`
-		);
-		const text = inbound.deleted ? '' : inbound.text;
-		// a personal account's own sent message is imported as outbound; it is history, never a send
-		const direction =
-			personal && Predicate.isObject(message) && message['direction'] === 'outbound'
-				? 'outbound'
-				: 'inbound';
-		c.cte(
-			'msg',
-			`SELECT * FROM ${messagePiece(
-				c,
-				`INSERT INTO sys_message (id, conversation, integration, direction, origin, provider_id, version, sender, sender_name, sent_at, invocation,
+				);
+				const text = inbound.deleted ? '' : inbound.text;
+				// a personal account's own sent message is imported as outbound; it is history, never a send
+				const direction =
+					personal && Predicate.isObject(message) && message['direction'] === 'outbound'
+						? 'outbound'
+						: 'inbound';
+				c.cte(
+					'msg',
+					`SELECT * FROM ${messagePiece(
+						c,
+						`INSERT INTO sys_message (id, conversation, integration, direction, origin, provider_id, version, sender, sender_name, sent_at, source_at, invocation,
 			preview, text, email, files, reply_to, deleted_at, created_at)
-		VALUES (${c.p(id)}, ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(direction)}, ${c.p(origin)}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
-			${c.p(inbound.sender)}, ${c.p(inbound.senderName)}, ${c.p(inbound.sentAt)}::timestamptz, ${c.p(inbound.invocation)}, ${c.p(preview(text))}, ${c.p(text)},
-			${c.p(inbound.email)}::jsonb, ${c.p(stored)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'}, ${c.p(now)}::timestamptz)
+		SELECT ${c.p(id)}, ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(direction)}, ${c.p(origin)}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
+			${c.p(inbound.sender)}, ${c.p(inbound.senderName)}, ${c.p(inbound.sentAt)}::timestamptz, ${c.p(inbound.sourceAt)}::timestamptz, ${c.p(inbound.invocation)}, ${c.p(preview(text))}, ${c.p(text)},
+			${c.p(inbound.email)}::jsonb, ${c.p(stored)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'}, ${c.p(now)}::timestamptz WHERE EXISTS (SELECT 1 FROM source)
 		ON CONFLICT (id) DO UPDATE SET ${
 			inbound.deleted
 				? `deleted_at = excluded.deleted_at, ${TOMBSTONE} WHERE sys_message.deleted_at IS NULL`
 				: // an admitted row is the agent's transcript: an edit never rewrites what the model already saw
-					`text = ${KEEP('text')}, preview = ${KEEP('preview')}, email = ${KEEP('email')}, files = ${KEEP('files')}, version = excluded.version,
-				sender_name = coalesce(excluded.sender_name, sys_message.sender_name), edited_at = ${c.p(now)}::timestamptz
-			WHERE sys_message.deleted_at IS NULL AND excluded.version > sys_message.version`
+					`text = ${KEEP('text')}, preview = ${KEEP('preview')}, email = ${KEEP('email')}, files = ${KEEP('files')}, source_at = coalesce(sys_message.source_at, excluded.source_at), version = greatest(sys_message.version, excluded.version),
+				sender_name = CASE WHEN excluded.version > sys_message.version THEN coalesce(excluded.sender_name, sys_message.sender_name) ELSE sys_message.sender_name END, edited_at = CASE WHEN excluded.version > sys_message.version THEN ${c.p(now)}::timestamptz ELSE sys_message.edited_at END
+			WHERE sys_message.deleted_at IS NULL AND (excluded.version > sys_message.version OR (sys_message.source_at IS NULL AND excluded.source_at IS NOT NULL))`
 		}
 		`,
-				'(xmax = 0) AS inserted'
-			)}`
-		);
-		const live = origin === 'live' && !inbound.deleted && direction === 'inbound';
-		const runs = queue(
-			c,
-			inst,
-			'msg',
-			id,
-			inbound.version,
-			live ? { mentions: inbound.mentions } : null,
-			now,
-			inbound.deleted
-		);
-		const [row] = (yield* db.write(
-			c.sql(
-				`(SELECT inserted FROM msg) AS inserted, (SELECT count(*) FROM msg)::int AS n, ${counted(runs)} AS queued, ${nextDue(c)}::text AS next_due`
-			)
-		)).rows;
-		if (typeof row?.['next_due'] === 'string')
-			yield* cfg.announce?.(row['next_due']) ?? Effect.void;
-		// `moved` false: a redelivery, an older version, or a change to a tombstone
-		return {
-			inbound,
-			row: id,
-			conversation: conv,
-			inserted: row!['inserted'] === true,
-			moved: row!['n'] !== 0,
-			files: stored
-		};
+						'(xmax = 0) AS inserted'
+					)}`
+				);
+				c.cte(
+					'changed',
+					`SELECT * FROM msg WHERE inserted OR ${inbound.deleted ? 'true' : 'false'} OR EXISTS (SELECT 1 FROM previous WHERE version < ${c.p(inbound.version)})`
+				);
+				const live = origin === 'live' && !inbound.deleted && direction === 'inbound';
+				const runs = queue(
+					c,
+					inst,
+					'changed',
+					id,
+					inbound.version,
+					live ? { mentions: inbound.mentions } : null,
+					now,
+					inbound.deleted
+				);
+				const [row] = (yield* write(
+					c.sql(
+						`EXISTS (SELECT 1 FROM source) AS admitted, (SELECT inserted FROM msg) AS inserted, (SELECT count(*) FROM msg)::int AS n, ${counted(runs)} AS queued, ${nextDue(c)}::text AS next_due`
+					)
+				)).rows;
+				if (row?.['admitted'] !== true)
+					return yield* Effect.fail(
+						BoltError.make(
+							'sourceChanged',
+							'admission',
+							'The integration import start changed; redeliver this message.'
+						)
+					);
+				if (typeof row?.['next_due'] === 'string') nextDueAt = row['next_due'];
+				// `moved` false: a redelivery, an older version, or a change to a tombstone
+				return {
+					inbound,
+					row: id,
+					conversation: conv,
+					inserted: row!['inserted'] === true,
+					moved: row!['n'] !== 0,
+					files: stored
+				};
+			});
+		const binary =
+			!inbound.deleted &&
+			content &&
+			inbound.attachments.some((attachment) => attachment.bin !== undefined);
+		const result = yield* binary
+			? db.transaction(
+					Effect.gen(function* () {
+						const tx = yield* TenantTx;
+						const locked = yield* tx.query(
+							sql(
+								'SELECT id FROM sys_integration WHERE id = $1 AND import_start IS NOT DISTINCT FROM $2::jsonb FOR SHARE',
+								inst.id,
+								inst.importStartRaw
+							)
+						);
+						if (locked.rows.length === 0)
+							return yield* Effect.fail(
+								BoltError.make(
+									'sourceChanged',
+									'admission',
+									'The integration import start changed; redeliver this message.'
+								)
+							);
+						return yield* persist(tx.query);
+					})
+				)
+			: persist(db.write);
+		if (nextDueAt !== undefined) yield* cfg.announce?.(nextDueAt) ?? Effect.void;
+		return result;
 	});
 	const replied = Effect.fn('Agents.replied')(function* (
 		instance: string,
@@ -350,7 +460,8 @@ export function conversations(cfg: ConversationsConfig) {
 			{
 				kind: 'invalidate';
 			}
-		>
+		>,
+		expectedImportStart?: ImportStart | null
 	) {
 		if (event.kind === 'delivery') {
 			if (isReported(event.report.kind))
@@ -358,6 +469,17 @@ export function conversations(cfg: ConversationsConfig) {
 			return;
 		}
 		const inst = yield* instanceOf(instance);
+		if (
+			expectedImportStart !== undefined &&
+			canonical(expectedImportStart) !== canonical(inst.importStart)
+		)
+			return yield* Effect.fail(
+				BoltError.make(
+					'sourceChanged',
+					'admission',
+					'The integration import start changed; reopen the link before importing.'
+				)
+			);
 		for (const message of event.messages) {
 			const got = yield* ingest(inst, message, event.bins, event.history === true);
 			// a new message, or a redelivered one (its match may be what failed; a recorded match records nothing again), never an edit

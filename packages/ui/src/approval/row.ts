@@ -47,3 +47,16 @@ export const lockText = (bolt: Pick<ViewBolt, 't'>, a: RowApproval | null): stri
 		: msg(bolt, 'approval.lockedBy', 'Under approval: {who} may change it', {
 				who: a.waitingOn.join(` ${msg(bolt, 'approval.or', 'or')} `)
 			});
+
+/** One status label shared by the current request and collapsed past requests. */
+export function approvalStatus(bolt: Pick<ViewBolt, 't'>, status: string): string {
+	const words: Readonly<Record<string, string>> = {
+		ONGOING: 'Pending',
+		CHANGES_REQUESTED: 'Changes requested',
+		APPROVED: 'Approved',
+		REJECTED: 'Rejected',
+		WITHDRAWN: 'Withdrawn',
+		SUPERSEDED: 'Superseded'
+	};
+	return msg(bolt, `approval.status.${status}`, words[status] ?? status);
+}

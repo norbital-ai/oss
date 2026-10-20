@@ -58,6 +58,8 @@ export type Config = {
 		| null;
 	masterKey: Buffer | null;
 	opsKey: Buffer | null;
+	/** Host Google app shared by Gmail and Calendar where the workspace declares none of its own. */
+	googleOAuth: { id: string; secret: string } | null;
 	/**
 	 * `BOLT_TRANSACTIONAL_EMAIL` (`resend` or `sinch`) and `BOLT_TRANSACTIONAL_PHONE` (`twilio`, `sinch` or `none`) with
 	 * their providers' keys: the host's own messaging (sign-in codes, invitations; `mail.ts`). `null` when neither is set;
@@ -120,6 +122,8 @@ const KNOWN = new Set([
 	'BOLT_FILES_CREDENTIAL',
 	'BOLT_MASTER_KEY',
 	'BOLT_OPS_KEY',
+	'BOLT_GOOGLE_OAUTH_CLIENT_ID',
+	'BOLT_GOOGLE_OAUTH_CLIENT_SECRET',
 	'BOLT_TRANSACTIONAL_EMAIL',
 	'BOLT_TRANSACTIONAL_PHONE',
 	'BOLT_RESEND_API_KEY',
@@ -483,6 +487,13 @@ function decodeValues(
 			message: 'BOLT_AI_SPEECH_PROVIDER needs BOLT_AI_TRANSCRIBE_MODEL or BOLT_AI_SPEAK_MODEL'
 		});
 
+	const googleId = get('BOLT_GOOGLE_OAUTH_CLIENT_ID'),
+		googleSecret = get('BOLT_GOOGLE_OAUTH_CLIENT_SECRET');
+	if ((googleId === undefined) !== (googleSecret === undefined))
+		throw new ConfigError({
+			message:
+				'set both BOLT_GOOGLE_OAUTH_CLIENT_ID and BOLT_GOOGLE_OAUTH_CLIENT_SECRET, or neither'
+		});
 	const vpub = get('BOLT_VAPID_PUBLIC_KEY'),
 		vpriv = get('BOLT_VAPID_PRIVATE_KEY');
 	if ((vpub === undefined) !== (vpriv === undefined))
@@ -515,6 +526,7 @@ function decodeValues(
 		files,
 		masterKey: key32('BOLT_MASTER_KEY', get('BOLT_MASTER_KEY')),
 		opsKey: key32('BOLT_OPS_KEY', get('BOLT_OPS_KEY')),
+		googleOAuth: googleId === undefined ? null : { id: googleId, secret: googleSecret ?? '' },
 		transactional: transactional(get, pub.hostname),
 		mode: flags.dev
 			? 'dev'

@@ -48,6 +48,23 @@ describe('bolt start configuration (§5.11.6)', () => {
 		BOLT_PUBLIC_URL: 'https://acme.example',
 		BOLT_PGLITE_DIR: '/db'
 	};
+	it.effect('accepts a complete host Google OAuth client and refuses either missing half', () =>
+		Effect.gen(function* () {
+			expect((yield* config(base)).googleOAuth).toBeNull();
+			const google = {
+				BOLT_GOOGLE_OAUTH_CLIENT_ID: 'google-client',
+				BOLT_GOOGLE_OAUTH_CLIENT_SECRET: 'google-secret'
+			};
+			expect((yield* config({ ...base, ...google })).googleOAuth).toEqual({
+				id: 'google-client',
+				secret: 'google-secret'
+			});
+			for (const [name, value] of Object.entries(google))
+				expect((yield* Effect.flip(config({ ...base, [name]: value }))).message).toMatch(
+					/set both BOLT_GOOGLE_OAUTH_CLIENT_ID and BOLT_GOOGLE_OAUTH_CLIENT_SECRET/
+				);
+		})
+	);
 	it.effect('decodes the defaults and the flags', () =>
 		Effect.gen(function* () {
 			const c = yield* config(base, {

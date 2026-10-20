@@ -513,6 +513,193 @@ describe('the WhatsApp Web link', () => {
 });
 
 describe('the ingest gate', () => {
+	it.live(
+		'filters earlier live and history messages before metadata or media work, retaining the boundary',
+		() =>
+			Effect.gen(function* () {
+				const f = fake(),
+					h = yield* open(
+						f,
+						{ creds: CREDS },
+						{
+							personal: true,
+							importStart: {
+								kind: 'since',
+								at: new Date(1_790_000_000_000).toISOString(),
+								zone: 'UTC',
+								origin: 'date'
+							}
+						}
+					);
+				expect(f.provider.importStart).toEqual({ kind: 'timestamp', precision: 'second' });
+				const s = yield* f.socket();
+				let groups = 0,
+					phones = 0;
+				const media: string[] = [];
+				s.socket.groupMetadata = async (jid) => {
+					groups++;
+					return { id: jid, owner: undefined, subject: 'Group', participants: [] };
+				};
+				s.socket.signalRepository = {
+					lidMapping: {
+						getLIDForPN: async () => null,
+						getPNForLID: async () => {
+							phones++;
+							return null;
+						}
+					}
+				};
+				s.media = async (message) => {
+					const { key } = Schema.decodeUnknownSync(
+						Schema.Struct({ key: Schema.Struct({ id: Schema.String }) })
+					)(message);
+					media.push(key.id);
+					return key.id === 'VOICE'
+						? { name: 'voice.ogg', mime: 'audio/ogg', bytes: 2, data: new Uint8Array([1, 2]) }
+						: null;
+				};
+				s.ready();
+				yield* until(() => h.status?.state === 'connected');
+				const writes = h.writes.length;
+				const older = (id: string) =>
+					raw(id, '', {
+						key: { id, remoteJid: '120363123@g.us', participant: 'old@lid' },
+						messageTimestamp: 1_789_999_999,
+						message: { audioMessage: { ptt: true, mimetype: 'audio/ogg' } }
+					});
+				yield* sdk(() => s.deliver(older('OLD-LIVE')));
+				yield* sdk(() => s.config.beforeHistory([older('OLD-HISTORY')]));
+				yield* sdk(() =>
+					s.deliver(raw('UNDATED-LIVE', 'missing time', { messageTimestamp: undefined }))
+				);
+				yield* sdk(() =>
+					s.config.beforeHistory([
+						raw('UNDATED-HISTORY', 'missing time', { messageTimestamp: undefined })
+					])
+				);
+				expect(s.receipts).toEqual(['OLD-LIVE', 'UNDATED-LIVE']);
+				expect(h.events).toEqual([]);
+				expect({ groups, phones, media }).toEqual({ groups: 0, phones: 0, media: [] });
+				expect(h.writes).toHaveLength(writes);
+				yield* sdk(() => s.deliver(raw('EQUAL', 'at the boundary')));
+				yield* sdk(() =>
+					s.deliver(
+						raw('SELF', 'sent later', {
+							key: { id: 'SELF', remoteJid: '659@s.whatsapp.net', fromMe: true },
+							messageTimestamp: 1_790_000_001
+						})
+					)
+				);
+				yield* sdk(() =>
+					s.deliver(
+						raw('VOICE', '', {
+							messageTimestamp: 1_790_000_001,
+							message: { audioMessage: { ptt: true, mimetype: 'audio/ogg' } }
+						})
+					)
+				);
+				yield* sdk(() =>
+					s.config.beforeHistory([
+						raw('H-EQUAL'),
+						raw('H-NEW', 'later history', { messageTimestamp: 1_790_000_002 })
+					])
+				);
+				expect(s.receipts).toEqual(['OLD-LIVE', 'UNDATED-LIVE', 'EQUAL', 'SELF', 'VOICE']);
+				expect(messagesOf(h.events)).toMatchObject([
+					{
+						id: 'EQUAL',
+						direction: 'inbound',
+						sourceAt: new Date(1_790_000_000_000).toISOString()
+					},
+					{
+						id: 'SELF',
+						direction: 'outbound',
+						sourceAt: new Date(1_790_000_001_000).toISOString()
+					},
+					{ id: 'VOICE', attachments: [{ name: 'voice.ogg', mime: 'audio/ogg' }] },
+					{ id: 'H-EQUAL', sourceAt: new Date(1_790_000_000_000).toISOString() },
+					{ id: 'H-NEW' }
+				]);
+				expect(media).toEqual(['EQUAL', 'SELF', 'VOICE', 'H-EQUAL', 'H-NEW']);
+				expect(h.events.at(-1)).toMatchObject({ kind: 'messages', history: true });
+				yield* h.link.close ?? Effect.void;
+			})
+	);
+
+	it.live('includes the saved From now second despite the SDK timestamp precision', () =>
+		Effect.gen(function* () {
+			const f = fake(),
+				h = yield* open(
+					f,
+					{ creds: CREDS },
+					{
+						personal: true,
+						importStart: {
+							kind: 'since',
+							at: '2026-09-21T14:13:20.000Z',
+							zone: 'UTC',
+							origin: 'now'
+						}
+					}
+				);
+			const socket = yield* f.socket();
+			socket.ready();
+			yield* until(() => h.status?.state === 'connected');
+			for (const message of [
+				raw('BEFORE-NOW', 'previous second', { messageTimestamp: 1_789_999_999 }),
+				raw('SAME-NOW', 'same second'),
+				raw('AFTER-NOW', 'next second', { messageTimestamp: 1_790_000_001 })
+			])
+				yield* sdk(() => socket.deliver(message));
+			expect(socket.receipts).toEqual(['BEFORE-NOW', 'SAME-NOW', 'AFTER-NOW']);
+			expect(messagesOf(h.events)).toMatchObject([
+				{ id: 'SAME-NOW', sourceAt: '2026-09-21T14:13:20.000Z' },
+				{ id: 'AFTER-NOW', sourceAt: '2026-09-21T14:13:21.000Z' }
+			]);
+			yield* h.link.close ?? Effect.void;
+		})
+	);
+	it.live(
+		'reopens existing credentials with all history or a cleared boundary and accepts older replay',
+		() =>
+			Effect.gen(function* () {
+				const first = fake(),
+					h = yield* open(
+						first,
+						{ creds: CREDS },
+						{
+							personal: true,
+							importStart: {
+								kind: 'since',
+								at: new Date(1_790_000_001_000).toISOString(),
+								zone: 'UTC',
+								origin: 'now'
+							}
+						}
+					);
+				const s = yield* first.socket();
+				s.ready();
+				yield* sdk(() => s.deliver(raw('OLD')));
+				yield* sdk(() => s.config.beforeHistory([raw('OLD-HISTORY')]));
+				expect(messagesOf(h.events)).toEqual([]);
+				expect(s.receipts).toEqual(['OLD']);
+				const saved = Object.fromEntries(h.values);
+				yield* h.link.close ?? Effect.void;
+				for (const importStart of [{ kind: 'all' }, null] as const) {
+					const next = fake(),
+						reopened = yield* open(next, saved, { personal: true, importStart });
+					const socket = yield* next.socket();
+					socket.ready();
+					yield* sdk(() => socket.deliver(raw('OLD')));
+					yield* sdk(() => socket.config.beforeHistory([raw('OLD-HISTORY')]));
+					expect(messagesOf(reopened.events)).toMatchObject([{ id: 'OLD' }, { id: 'OLD-HISTORY' }]);
+					expect(socket.receipts).toEqual(['OLD']);
+					expect(socket.config.store.creds).toEqual(saved['creds']);
+					yield* reopened.link.close ?? Effect.void;
+				}
+			})
+	);
+
 	it.live('a message is stored before its receipt; a transient refusal is retried in place', () =>
 		Effect.gen(function* () {
 			let refusals = 1;
@@ -706,6 +893,68 @@ describe('the ingest gate', () => {
 					}
 				])
 			);
+			yield* h.link.close ?? Effect.void;
+		})
+	);
+	it.live('history waits for bounded durable batches', () =>
+		Effect.gen(function* () {
+			let land: (() => void) | undefined;
+			let reads = 0;
+			const f = fake(),
+				h = yield* open(
+					f,
+					{ creds: CREDS },
+					{
+						emit: (event) =>
+							event.kind === 'messages' && land === undefined
+								? new Promise<void>((resolve) => {
+										land = resolve;
+									})
+								: Promise.resolve()
+					}
+				);
+			const s = f.opened[0]!;
+			s.media = async () => {
+				reads++;
+				return null;
+			};
+			s.ready();
+			yield* until(() => h.status?.state === 'connected');
+			const messages = Array.from({ length: 205 }, (_, i) => raw(`H${i}`));
+			const pending = s.config.beforeHistory(messages);
+			yield* until(() => land !== undefined);
+			expect(reads).toBe(100);
+			expect(h.events).toEqual([]);
+			land!();
+			yield* sdk(() => pending);
+			expect(
+				h.events.map((event) => (event.kind === 'messages' ? event.messages.length : 0))
+			).toEqual([100, 100, 5]);
+			expect(messagesOf(h.events)).toHaveLength(205);
+			yield* h.link.close ?? Effect.void;
+		})
+	);
+	it.effect('failed group lookups cool down and refresh after expiry or membership changes', () =>
+		Effect.gen(function* () {
+			const f = fake(),
+				h = yield* open(f, { creds: CREDS });
+			const s = f.opened[0]!;
+			let reads = 0;
+			s.socket.groupMetadata = async () => {
+				reads++;
+				throw new Error('rate-overlimit');
+			};
+			s.ready();
+			yield* TestClock.withLive(until(() => h.status?.state === 'connected'));
+			for (let i = 0; i < 3; i++)
+				expect(yield* sdk(() => s.config.cachedGroupMetadata('120363123@g.us'))).toBeUndefined();
+			expect(reads).toBe(1);
+			yield* TestClock.adjust('30 seconds');
+			expect(yield* sdk(() => s.config.cachedGroupMetadata('120363123@g.us'))).toBeUndefined();
+			expect(reads).toBe(2);
+			s.ev.emit('group-participants.update', { id: '120363123@g.us' });
+			expect(yield* sdk(() => s.config.cachedGroupMetadata('120363123@g.us'))).toBeUndefined();
+			expect(reads).toBe(3);
 			yield* h.link.close ?? Effect.void;
 		})
 	);

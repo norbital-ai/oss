@@ -253,6 +253,48 @@ describe('pipeline import: xlsx, template, scope, findings', () => {
 	);
 
 	it.live(
+		'ISO date cells use their written calendar day while invalid timestamps return row findings',
+		() =>
+			Effect.gen(function* () {
+				const { sheet, shifts } = yield* setup();
+				expect(
+					yield* sheet([
+						['Person', 'Day', 'hours'],
+						['ann', '2026-06-03T00:00:00.000Z', 8],
+						['bob', '2026-06-03T00:30:00+08:00', 8],
+						['cy', '2026-06-03T23:30:00-08:00', 8],
+						['dee', '2026-06-03T08:00:00', 8],
+						['eve', 46176, 8]
+					])
+				).toEqual({ applied: true, created: 5, updated: 0, deleted: 0, findings: [] });
+				const before = yield* shifts();
+				expect(before).toEqual([
+					['ann', '2026-06-03', 8],
+					['bob', '2026-06-03', 8],
+					['cy', '2026-06-03', 8],
+					['dee', '2026-06-03', 8],
+					['eve', '2026-06-03', 8]
+				]);
+				expect(
+					yield* sheet([
+						['Person', 'Day', 'hours'],
+						['ann', 'not-a-date', 7],
+						['bob', '2026-02-30T00:00:00Z', 7],
+						['cy', '2026-06-03T25:00:00Z', 7]
+					])
+				).toMatchObject({
+					applied: false,
+					findings: [
+						{ row: 2, column: 'Day', severity: 'refuse' },
+						{ row: 3, column: 'Day', severity: 'refuse' },
+						{ row: 4, column: 'Day', severity: 'refuse' }
+					]
+				});
+				expect(yield* shifts()).toEqual(before);
+			})
+	);
+
+	it.live(
 		'a set over the scope: per person, the days from first to last the file leaves out are deleted, in one statement',
 		() =>
 			Effect.gen(function* () {

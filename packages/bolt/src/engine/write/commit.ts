@@ -501,8 +501,8 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 	return c.sql(`${result}, (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'op', op, 'revision', revision,
 		'old', ${numericText(cat, tables, 'o')}, 'new', ${numericText(cat, tables, 'n')}, 'cause', cause)), '[]'::jsonb) FROM allp) || ${noticeCaptures(c)} AS captured, ${nextDue(c)} AS next_due,
 		(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM allp WHERE c = 'sys_integration'
-		AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy')
-		IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy'))) AS changed_instances${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}`);
+		AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy', o->'import_start')
+		IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy', n->'import_start'))) AS changed_instances${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}`);
 }
 
 /**

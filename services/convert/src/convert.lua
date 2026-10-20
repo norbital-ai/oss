@@ -8,7 +8,13 @@ function Meta(meta)
   if FORMAT ~= 'typst' then return end
   local header = meta['header-includes']
   header = header == nil and pandoc.List{} or pandoc.utils.type(header) == 'List' and header or pandoc.List{header}
-  header:insert(1, pandoc.RawBlock('typst', '#set text(font: ("Libertinus Serif", "Noto Sans CJK SC"))\n#show figure.where(kind: table): set block(breakable: true)'))
+  header:insert(1, pandoc.RawBlock('typst', [[#set text(font: ("Libertinus Serif", "Noto Sans CJK SC"))
+#show figure.where(kind: table): set block(breakable: true)
+#show table: it => {
+  set align(left)
+  set par(justify: false)
+  it
+}]]))
   if meta.landscape then header:insert(pandoc.RawBlock('typst', '#set page(flipped: true)')) end
   meta.landscape = nil
   meta['header-includes'] = header
@@ -29,7 +35,25 @@ end
 
 function Table(tbl)
   if FORMAT ~= 'typst' then return end
-  local function rows(list) for _, row in ipairs(list) do for _, cell in ipairs(row.cells) do escape(cell.contents) end end end
+  local function rows(list)
+    for _, row in ipairs(list) do
+      for _, cell in ipairs(row.cells) do
+        escape(cell.contents)
+        -- Raw code does not break numeric identifiers at punctuation. Layout-only zero-width spacing lets UUIDs,
+        -- paths and field names wrap without putting invisible characters into copied PDF text.
+        cell.contents = cell.contents:walk({Code = function(code)
+          local parts = pandoc.Inlines{}
+          for part in code.text:gmatch('[^%-%_%.:/]*[%-%_%.:/]?') do
+            if part ~= '' then
+              if #parts > 0 then parts:insert(pandoc.RawInline('typst', '#text(spacing: 0pt, " ")')) end
+              parts:insert(pandoc.Code(part, code.attr))
+            end
+          end
+          return parts
+        end})
+      end
+    end
+  end
   rows(tbl.head.rows)
   for _, body in ipairs(tbl.bodies) do rows(body.head); rows(body.body) end
   rows(tbl.foot.rows)

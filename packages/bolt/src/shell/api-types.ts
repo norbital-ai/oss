@@ -3,6 +3,7 @@
 // show). Agent acts answer their `Outcome`: a refusal there is a business answer the panel renders (rule 32). Pinned for
 // R6a (the implementation in `runtime.ts`) and R6b (the Svelte components that run it on the ui edge).
 import { Schema, type Effect } from 'effect';
+import type { FileRef } from '@norbital-ai/std/kind';
 import type { Attachment } from '../decl/runtime/integration.ts';
 import type { Json } from '../decl/values.ts';
 import type { AiModel, Outcome } from '../engine/contracts.ts';
@@ -40,6 +41,8 @@ export class ShellError extends Schema.TaggedError<ShellError>()('ShellError', {
 }) {}
 
 type Call<A> = Effect.Effect<A, ShellError>;
+/** Declared file outputs on a run whose result the caller may read in full. */
+export type RunDetail = RunView & { readonly files?: readonly FileRef[] };
 /** One agent act: its outcome (a refusal included), or the route's refusal. */
 type AgentAct = Call<Outcome>;
 /** An invitation as its link shows it. */
@@ -65,7 +68,7 @@ export type ShellApi = {
 	markNoticesRead(ids: readonly string[]): Call<Outcome>;
 	markAllNoticesRead(): Call<Outcome>;
 	runs(o?: { automation?: string; limit?: number }): Call<readonly RunRow[]>;
-	run(id: string): Call<RunView>;
+	run(id: string): Call<RunDetail>;
 	stopRun(id: string): Call<RunView>;
 	settings(): Call<Settings>;
 	settingsOp(op: string, input: Json): Call<Json>;

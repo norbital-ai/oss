@@ -145,7 +145,7 @@ import {
 	authorityOf,
 	type ShellHostConfig
 } from '../shell/host.ts';
-import { COOKIES } from '../shell/nav.ts';
+import { cookieNames } from '../shell/nav.ts';
 
 /**
  * Effect-aware Vitest helpers: `it.effect` scopes each test, `layer` shares a scoped service layer across a suite,
@@ -1093,8 +1093,14 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				);
 				const hostPorts =
 					overrides === undefined ? ports : Layer.merge(ports, Layer.succeedContext(overrides));
-				const { envoys: envoyConfig, agent: agentConfig, ...shellConfig } = options.host ?? {};
+				const {
+					envoys: envoyConfig,
+					agent: agentConfig,
+					secure: hostSecure,
+					...shellConfig
+				} = options.host ?? {};
 				const publicUrl = shellConfig.publicUrl ?? 'http://localhost';
+				const secure = hostSecure ?? new URL(publicUrl).protocol === 'https:';
 				const base = Layer.mergeAll(
 					NodeCrypto.layer,
 					Layer.succeed(EnvoyConfig, envoyConfig ?? {}),
@@ -1194,7 +1200,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					Layer.succeed(ShellConfig, {
 						publicUrl,
 						workspace: { name: 'Test', handle: 'test' },
-						secure: new URL(publicUrl).protocol === 'https:',
+						secure,
 						...shellConfig
 					}),
 					Layer.succeedContext(engineContext)
@@ -1714,7 +1720,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					handle,
 					session: (id) =>
 						mint(identityHost, id).pipe(
-							Effect.map((session) => `${COOKIES.session}=${session.token}`),
+							Effect.map((session) => `${cookieNames(secure).session}=${session.token}`),
 							Effect.mapError(invalid)
 						)
 				};

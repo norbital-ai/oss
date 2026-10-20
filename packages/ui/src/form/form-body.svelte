@@ -211,7 +211,7 @@
 				{@render actions?.(form)}
 				{#if !readonly && !settled && ownSubmit}<Button
 						type="submit"
-						disabled={form.pending || controls.disabled || (update && !form.dirty)}
+						disabled={!form.canSave || controls.disabled || (update && !form.dirty)}
 					>
 						{#if form.pending}<Spinner class="size-4" />{t('saving')}{:else}{form.requestingApproval
 								? t('requestApproval')

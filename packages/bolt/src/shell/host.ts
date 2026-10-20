@@ -69,6 +69,7 @@ import { events, type LogLevel } from './logs/data.ts';
 import { inbox } from './inbox/data.ts';
 import { instanceMessages } from './integration/messages.ts';
 import { runList } from './runs/data.ts';
+import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings } from './settings/data.ts';
 import { exposure } from '../engine/access/exposure.ts';
 import { StudioOp, studioView, type StudioPort } from './studio/model.ts';
@@ -78,7 +79,7 @@ import {
 	challengeOf,
 	holdsPublic,
 	kioskNav,
-	COOKIES,
+	cookieNames,
 	cookieSite,
 	environmentLabel,
 	nav,
@@ -259,8 +260,10 @@ const refused = (code: string, message: string, status: number, retryAfter?: num
 		status,
 		retryAfter === undefined ? {} : { 'retry-after': String(retryAfter) }
 	);
-const duplicateCredentials = (request: HttpServerRequest.HttpServerRequest): boolean => {
-	const names: ReadonlySet<string> = new Set(Object.values(COOKIES));
+const duplicateCredentials = (
+	request: HttpServerRequest.HttpServerRequest,
+	names: ReadonlySet<string>
+): boolean => {
 	const seen = new Set<string>();
 	for (const part of (getHeader(request, 'cookie') ?? '').split(';')) {
 		const at = part.indexOf('=');
@@ -287,8 +290,11 @@ function cookies(request: HttpServerRequest.HttpServerRequest): Map<string, stri
 	return out;
 }
 /** The request's canonical session token, or `null`. */
-const sessionToken = (request: HttpServerRequest.HttpServerRequest): string | null => {
-	const token = cookies(request).get(COOKIES.session);
+const sessionToken = (
+	request: HttpServerRequest.HttpServerRequest,
+	name: string
+): string | null => {
+	const token = cookies(request).get(name);
 	return token === undefined || token === '' ? null : token;
 };
 /** The common shell boot; members and visitors only add their own data and host capabilities. */
@@ -329,6 +335,8 @@ const makeShell = Effect.gen(function* () {
 		announce: h.now.pipe(Effect.flatMap((now) => runs.nudge(now.toISOString())))
 	};
 	const secure = c.secure ?? true;
+	const names = cookieNames(secure);
+	const credentialNames: ReadonlySet<string> = new Set(Object.values(names));
 	const crypto = yield* Crypto.Crypto;
 	const uuid = crypto.randomUUIDv4.pipe(
 		Effect.mapError((error) =>
@@ -392,7 +400,7 @@ const makeShell = Effect.gen(function* () {
 	const signedIn = Effect.fn('shell.signedIn')(function* (
 		request: HttpServerRequest.HttpServerRequest
 	) {
-		const token = sessionToken(request);
+		const token = sessionToken(request, names.session);
 		if (token === null) return null;
 		const s = yield* authenticate(h, token).pipe(
 			Effect.catchTag('IdentityRefusal', () => Effect.succeed(null))
@@ -411,12 +419,9 @@ const makeShell = Effect.gen(function* () {
 		if (kiosk === null) return x;
 		const me = x.authority !== null && x.authority.actor.kind === 'member' ? x.authority : null;
 		const authority = Option.getOrNull(
-			yield* kioskAuthority(
-				m,
-				kiosk,
-				me,
-				cookies(scoped).get(COOKIES.visitor) ?? (yield* uuid)
-			).pipe(Effect.provideService(Identity, identity))
+			yield* kioskAuthority(m, kiosk, me, cookies(scoped).get(names.visitor) ?? (yield* uuid)).pipe(
+				Effect.provideService(Identity, identity)
+			)
 		);
 		if (authority === null)
 			return yield* Effect.fail(
@@ -427,7 +432,7 @@ const makeShell = Effect.gen(function* () {
 	const baseCaller = Effect.fn('shell.baseCaller')(function* (
 		request: HttpServerRequest.HttpServerRequest
 	): Effect.fn.Return<Caller, EngineError> {
-		if (duplicateCredentials(request))
+		if (duplicateCredentials(request, credentialNames))
 			return yield* Effect.fail(
 				BoltError.make('invalid', 'admission', 'Duplicate credentials are refused.')
 			);
@@ -441,7 +446,7 @@ const makeShell = Effect.gen(function* () {
 			if (s !== null && me !== null && holdsPublic(me, app))
 				return { authority: me, real: me, token: s.token, preview: null, expiresAt: s.expiresAt };
 			return {
-				authority: authorities.visitor(app, jar.get(COOKIES.visitor) ?? (yield* uuid)),
+				authority: authorities.visitor(app, jar.get(names.visitor) ?? (yield* uuid)),
 				real: null,
 				token: null,
 				preview: null
@@ -457,7 +462,7 @@ const makeShell = Effect.gen(function* () {
 			token = s?.token ?? null;
 		const expiresAt = s === null ? {} : { expiresAt: s.expiresAt };
 		const real = s === null ? null : yield* authorities.member(h.db, s.user);
-		const target = jar.get(COOKIES.preview);
+		const target = jar.get(names.preview);
 		if (real !== null && target !== undefined && real.admin) {
 			{
 				const team = target.startsWith(TEAM) ? target.slice(TEAM.length) : null;
@@ -592,7 +597,7 @@ const makeShell = Effect.gen(function* () {
 		const kioskName = Option.getOrNull(requestKiosk(request, true));
 		if (kioskName !== null) {
 			const jar = cookies(request),
-				id = jar.get(COOKIES.visitor) ?? (yield* uuid);
+				id = jar.get(names.visitor) ?? (yield* uuid);
 			const meAuth = x.authority?.actor.kind === 'member' ? x.authority : null;
 			const opened = yield* kioskBoot(m, kioskName, meAuth, id).pipe(
 				Effect.provideService(Identity, identity)
@@ -632,13 +637,13 @@ const makeShell = Effect.gen(function* () {
 			return ready(
 				b,
 				auth,
-				jar.has(COOKIES.visitor) ? {} : { 'set-cookie': cookie(COOKIES.visitor, id, VISITOR_S) }
+				jar.has(names.visitor) ? {} : { 'set-cookie': cookie(names.visitor, id, VISITOR_S) }
 			);
 		}
 		// a visitor page (unless the member signed in holds it): the visitor cookie is minted when absent, and the page sees only its own app
 		if (app !== null && !(x.authority !== null && holdsPublic(x.authority, app))) {
 			const jar = cookies(request),
-				id = jar.get(COOKIES.visitor) ?? (yield* uuid);
+				id = jar.get(names.visitor) ?? (yield* uuid);
 			const auth = authorities.visitor(app, id);
 			const siteKey = challengeOf(m, app) === undefined ? undefined : turnstile?.siteKey;
 			const b = {
@@ -648,7 +653,7 @@ const makeShell = Effect.gen(function* () {
 			return ready(
 				b,
 				auth,
-				jar.has(COOKIES.visitor) ? {} : { 'set-cookie': cookie(COOKIES.visitor, id, VISITOR_S) }
+				jar.has(names.visitor) ? {} : { 'set-cookie': cookie(names.visitor, id, VISITOR_S) }
 			);
 		}
 		const auth = x.authority;
@@ -692,7 +697,7 @@ const makeShell = Effect.gen(function* () {
 		return ready(
 			b,
 			auth,
-			left > 0 && x.token !== null ? { 'set-cookie': cookie(COOKIES.session, x.token, left) } : {}
+			left > 0 && x.token !== null ? { 'set-cookie': cookie(names.session, x.token, left) } : {}
 		);
 	});
 	const boot = (request: HttpServerRequest.HttpServerRequest, x: Caller) =>
@@ -707,10 +712,10 @@ const makeShell = Effect.gen(function* () {
 		request: HttpServerRequest.HttpServerRequest,
 		target: PublicPageRoute
 	): Effect.fn.Return<PublicPageCaller, EngineError> {
-		if (duplicateCredentials(request))
+		if (duplicateCredentials(request, credentialNames))
 			return rejected(refused('invalid', 'Duplicate credentials are refused.', 400));
 		const jar = cookies(request);
-		const id = jar.get(COOKIES.visitor) ?? (yield* uuid);
+		const id = jar.get(names.visitor) ?? (yield* uuid);
 		const url = requestUrl(request);
 		url.searchParams.delete('app');
 		url.searchParams.delete('kiosk');
@@ -720,11 +725,11 @@ const makeShell = Effect.gen(function* () {
 		);
 		let headers = Headers.remove(Headers.remove(request.headers, VISITOR_APP), HEADERS.kiosk);
 		if (target.kind === 'app') headers = Headers.set(headers, VISITOR_APP, target.app);
-		if (!jar.has(COOKIES.visitor))
+		if (!jar.has(names.visitor))
 			headers = Headers.set(
 				headers,
 				'cookie',
-				[getHeader(request, 'cookie'), `${COOKIES.visitor}=${encodeURIComponent(id)}`]
+				[getHeader(request, 'cookie'), `${names.visitor}=${encodeURIComponent(id)}`]
 					.filter((value) => value !== null && value !== '')
 					.join('; ')
 			);
@@ -739,8 +744,8 @@ const makeShell = Effect.gen(function* () {
 			base: new URL(c.publicUrl).pathname.replace(/\/$/, ''),
 			headers: {
 				...state.headers,
-				...(!jar.has(COOKIES.visitor) && state.authority.actor.kind === 'visitor'
-					? { 'set-cookie': cookie(COOKIES.visitor, id, VISITOR_S) }
+				...(!jar.has(names.visitor) && state.authority.actor.kind === 'visitor'
+					? { 'set-cookie': cookie(names.visitor, id, VISITOR_S) }
 					: {})
 			}
 		};
@@ -797,12 +802,12 @@ const makeShell = Effect.gen(function* () {
 					Option.getOrElse(request.remoteAddress, () => '0.0.0.0')
 				);
 				return json({ value: { user: session.user } }, 200, {
-					'set-cookie': cookie(COOKIES.session, session.token, SESSION_S)
+					'set-cookie': cookie(names.session, session.token, SESSION_S)
 				});
 			}),
 		[`POST ${PATHS.session.signout}`]: (request) =>
 			Effect.gen(function* () {
-				const token = sessionToken(request);
+				const token = sessionToken(request, names.session);
 				if (token !== null) {
 					yield* h.db.write({
 						text: 'DELETE FROM sys_session WHERE token_hash = $1',
@@ -813,24 +818,24 @@ const makeShell = Effect.gen(function* () {
 				return HttpServerResponse.empty({ status: 204 }).pipe(
 					HttpServerResponse.setCookiesUnsafe([
 						[
-							COOKIES.session,
+							names.session,
 							'',
 							{
 								path: basePath(c.publicUrl) || '/',
 								httpOnly: true,
-								secure: true,
+								secure,
 								partitioned: secure,
 								sameSite: secure ? 'none' : 'lax',
 								maxAge: 0
 							}
 						],
 						[
-							COOKIES.preview,
+							names.preview,
 							'',
 							{
 								path: basePath(c.publicUrl) || '/',
 								httpOnly: true,
-								secure: true,
+								secure,
 								partitioned: secure,
 								sameSite: secure ? 'none' : 'lax',
 								maxAge: 0
@@ -916,7 +921,20 @@ const makeShell = Effect.gen(function* () {
 				const run = yield* runs.view(auth, id).pipe(Effect.map(Option.getOrNull));
 				return run === null
 					? refused('notFound', 'Not found or no access.', 404)
-					: json({ value: run });
+					: json({
+							value: {
+								...run,
+								...(run.result === undefined
+									? {}
+									: {
+											files: outputFiles(
+												m.automations[run.automation]?.output,
+												run.result,
+												m.customFields
+											)
+										})
+							}
+						});
 			}
 			case 'POST /runs/stop': {
 				// hook:runtime — rule 56: whoever reads the run in full may stop it
@@ -1051,13 +1069,13 @@ const makeShell = Effect.gen(function* () {
 				if (user === null || team === null)
 					return HttpServerResponse.empty({
 						status: 204,
-						headers: { 'set-cookie': cookie(COOKIES.preview, '', 0) }
+						headers: { 'set-cookie': cookie(names.preview, '', 0) }
 					});
 				if (typeof team === 'string') {
 					yield* previewAs(x.real, authorities, h.db, { team });
 					return HttpServerResponse.empty({
 						status: 204,
-						headers: { 'set-cookie': cookie(COOKIES.preview, `${TEAM}${team}`, null) }
+						headers: { 'set-cookie': cookie(names.preview, `${TEAM}${team}`, null) }
 					});
 				}
 				if (typeof user !== 'string')
@@ -1067,7 +1085,7 @@ const makeShell = Effect.gen(function* () {
 				yield* previewAs(x.real, authorities, h.db, user);
 				return HttpServerResponse.empty({
 					status: 204,
-					headers: { 'set-cookie': cookie(COOKIES.preview, user, null) }
+					headers: { 'set-cookie': cookie(names.preview, user, null) }
 				});
 			}
 			case 'GET /explain': {
@@ -1118,7 +1136,7 @@ const makeShell = Effect.gen(function* () {
 	const handle: Handler = (request) =>
 		Effect.gen(function* () {
 			const path = requestUrl(request).pathname;
-			if (duplicateCredentials(request))
+			if (duplicateCredentials(request, credentialNames))
 				return Option.some(refused('invalid', 'Duplicate credentials are refused.', 400));
 			const origin = getHeader(request, 'origin'),
 				site = getHeader(request, 'sec-fetch-site');

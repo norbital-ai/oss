@@ -11,6 +11,8 @@
 	color: var(--foreground, #f7f7f4);
 }
 .access-content {
+	--access-space-before: calc(max(1.5rem, env(safe-area-inset-top)) + 3.5rem);
+	--access-space-after: max(1.5rem, env(safe-area-inset-bottom));
 	box-sizing: border-box;
 	position: relative;
 	z-index: 20;
@@ -21,9 +23,8 @@
 	max-width: 32rem;
 	min-height: 100svh;
 	margin-inline: auto;
-	padding: calc(max(1.5rem, env(safe-area-inset-top)) + 3.5rem)
-		max(1.25rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom))
-		max(1.25rem, env(safe-area-inset-left));
+	padding: var(--access-space-before) max(1.25rem, env(safe-area-inset-right))
+		var(--access-space-after) max(1.25rem, env(safe-area-inset-left));
 }
 .access-content-wide {
 	max-width: 48rem;
@@ -66,17 +67,22 @@
 }
 .access-panel {
 	box-sizing: border-box;
-	display: flex;
-	flex-direction: column;
 	width: 100%;
-	/* Room for either sign-in step, including the phone delivery choices. */
-	min-block-size: 26rem;
-	padding: 1.25rem;
+	max-block-size: calc(
+		100dvh - var(--access-space-before) - var(--access-space-after) -
+			var(--access-footer-space, 0px)
+	);
+	overflow: auto;
+	overflow-wrap: anywhere;
 	border: 1px solid color-mix(in srgb, var(--border, #deddd6) 80%, transparent);
 	border-radius: var(--radius, 0.5rem);
 	background: color-mix(in srgb, var(--card, #f7f7f4) 95%, transparent);
 	box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
 	backdrop-filter: blur(8px);
+}
+.access-panel-body {
+	display: flow-root;
+	padding: 1.25rem;
 }
 .dark .access-panel {
 	background: color-mix(in srgb, var(--card, #22211d) 95%, transparent);
@@ -185,7 +191,7 @@
 	.access-header {
 		padding-inline: 2rem;
 	}
-	.access-panel {
+	.access-panel-body {
 		padding: 1.5rem;
 	}
 }
@@ -194,12 +200,13 @@
 		display: none;
 	}
 	.access-frame .access-content {
+		--access-space-before: calc(max(1rem, env(safe-area-inset-top)) + 5rem);
 		justify-content: flex-start;
 		min-height: 100dvh;
-		padding-top: calc(max(1rem, env(safe-area-inset-top)) + 5rem);
+		padding-top: var(--access-space-before);
 		padding-left: max(1.25rem, env(safe-area-inset-left));
 		padding-right: max(1.25rem, env(safe-area-inset-right));
-		padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+		padding-bottom: var(--access-space-after);
 	}
 	.access-frame .access-header {
 		padding-left: max(1.25rem, env(safe-area-inset-left));
@@ -207,13 +214,14 @@
 		padding-top: max(1rem, env(safe-area-inset-top));
 	}
 	.access-frame .access-panel {
-		min-block-size: 24rem;
 		border: 0;
 		border-radius: 0;
 		background: transparent;
-		padding: 0;
 		box-shadow: none;
 		backdrop-filter: none;
+	}
+	.access-frame .access-panel-body {
+		padding: 0;
 	}
 	.access-frame input {
 		font-size: 1rem;
@@ -225,9 +233,11 @@
 }
 @media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
 	.access-frame .access-content {
+		--access-space-before: calc(env(safe-area-inset-top) + 3.5rem);
+		--access-space-after: max(0.75rem, env(safe-area-inset-bottom));
 		max-width: 56rem;
-		padding-top: calc(env(safe-area-inset-top) + 3.5rem);
-		padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+		padding-top: var(--access-space-before);
+		padding-bottom: var(--access-space-after);
 	}
 	.access-frame .access-header {
 		padding-top: env(safe-area-inset-top);
@@ -236,22 +246,17 @@
 		display: none;
 	}
 }
-@media (orientation: landscape) and (max-height: 500px) and (min-width: 640px) and (pointer: coarse) {
-	.access-frame .access-panel {
-		min-block-size: 20rem;
-	}
-}
 @media (orientation: landscape) and (max-height: 300px) and (min-width: 640px) and (pointer: coarse) {
 	.access-frame:has(.access-panel input:focus) .access-header,
-	.access-frame:has(.access-panel input:focus) .access-panel > header,
-	.access-frame:has(.access-panel input:focus) .access-panel > [data-layout='inline'] {
+	.access-frame:has(.access-panel input:focus) .access-panel-body > [data-layout='stack'] > header,
+	.access-frame:has(.access-panel input:focus)
+		.access-panel-body
+		> [data-layout='stack']
+		> [data-layout='inline'] {
 		display: none;
 	}
 	.access-frame:has(.access-panel input:focus) .access-content {
-		padding-top: max(0.75rem, env(safe-area-inset-top));
-	}
-	.access-frame:has(.access-panel input:focus) .access-panel {
-		display: flex;
-		min-block-size: 0;
+		--access-space-before: max(0.75rem, env(safe-area-inset-top));
+		padding-top: var(--access-space-before);
 	}
 }

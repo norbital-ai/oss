@@ -244,6 +244,7 @@ export const activate = Effect.fn('server.activate')(function* (
 		credentials: yield* credentials(db, codec),
 		publicUrl: config.publicUrl,
 		secrets,
+		oauth: config.googleOAuth === null ? {} : { google: config.googleOAuth },
 		log,
 		enter
 	});

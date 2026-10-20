@@ -268,7 +268,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 		const admin = exposure(em, { ...member([]), admin: true })['sys_integration'];
 		expect(admin).toMatchObject({
 			create: { columns: ['integration', 'name', 'owner', 'envoy', 'configuration'] },
-			update: { columns: ['name', 'envoy', 'active', 'configuration'] },
+			update: { columns: ['name', 'envoy', 'active', 'configuration', 'import_start'] },
 			relations: { owner: { targets: ['sys_user'], optional: true } }
 		});
 		expect(admin?.fields).not.toHaveProperty('epoch');

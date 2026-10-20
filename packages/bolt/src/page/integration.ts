@@ -8,6 +8,8 @@ export type {
 } from '../shell/integration/setup.ts';
 export {
 	localText,
+	type ImportStart,
+	type ImportStartInput,
 	type InstanceStatus,
 	type LocalText,
 	type ProviderChoice

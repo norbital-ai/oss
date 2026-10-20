@@ -7,6 +7,9 @@ import type { Json } from '../decl/values.ts';
 import { InstanceStatus, type LocalText } from './schema.ts';
 
 export type {
+	ImportStart,
+	ImportStartInput,
+	ImportStartCapability,
 	InstanceState,
 	InstanceStatus,
 	IntegrationOffer,

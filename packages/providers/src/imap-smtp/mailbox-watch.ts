@@ -47,10 +47,16 @@ type WatchOptions = {
 	readonly box: Mailbox;
 	readonly personal: boolean;
 	readonly plain: boolean;
+	/** A frozen source timestamp boundary; changing it replays the newly requested import scope. */
+	readonly after?: string | undefined;
 	readonly login: () => Effect.Effect<Login, ProviderFailure>;
 	readonly cursor: () => Cursor | null;
 	readonly advance: (cursor: Cursor) => Effect.Effect<void, ProviderFailure>;
-	readonly deliver: (source: Uint8Array, fallback: string) => Effect.Effect<void, ProviderFailure>;
+	readonly deliver: (
+		source: Uint8Array,
+		fallback: string,
+		receivedAt: string | undefined
+	) => Effect.Effect<void, ProviderFailure>;
 	readonly connected: Effect.Effect<void, ProviderFailure>;
 };
 
@@ -66,41 +72,112 @@ export const mailboxWatch = Effect.fn('Mailbox.watch')(function* (options: Watch
 				client.mailboxOpen(options.box.folder, { readOnly: options.personal })
 			);
 			const validity = String(folder.uidValidity);
-			if (options.cursor()?.validity !== validity)
-				yield* options.advance({ validity, uid: options.personal ? 0 : folder.uidNext - 1 });
+			const scope = options.after === undefined ? {} : { after: options.after };
+			const previous = options.cursor();
+			if (previous?.validity !== validity || previous?.after !== options.after)
+				yield* options.advance({
+					validity,
+					uid: options.personal
+						? 0
+						: previous?.validity === validity
+							? previous.uid
+							: folder.uidNext - 1,
+					...scope
+				});
 			yield* options.connected;
+			// IMAP date searches ignore time and timezone. Keep a guard day, then enforce the exact INTERNALDATE instant.
+			const day =
+				options.after === undefined
+					? undefined
+					: new Date(Date.parse(`${options.after.slice(0, 10)}T00:00:00Z`) - 86_400_000);
+			const search = (uid: string) =>
+				client.search({ uid, ...(day === undefined ? {} : { since: day }) }, { uid: true });
 			const redrain = yield* Semaphore.make(1);
+			let history: number[] = [],
+				historyAt = 0,
+				historyThrough = 0;
+			const deliver = (ids: readonly number[], accepted: (uid: number) => void) =>
+				Effect.gen(function* () {
+					if (ids.length === 0) return;
+					const batch = yield* Stream.fromAsyncIterable(
+						client.fetch(
+							ids.join(','),
+							{ uid: true, source: true, internalDate: true },
+							{ uid: true }
+						),
+						serverFailure('read IMAP messages')
+					).pipe(Stream.runCollect);
+					for (const message of [...batch].sort((left, right) => left.uid - right.uid)) {
+						if (message.source === undefined) continue;
+						const received =
+							message.internalDate === undefined ? undefined : new Date(message.internalDate);
+						yield* options.deliver(
+							message.source,
+							`imap-${validity}-${message.uid}`,
+							received === undefined || Number.isNaN(received.getTime())
+								? undefined
+								: received.toISOString()
+						);
+						accepted(message.uid);
+					}
+				});
 			const pull = redrain.withPermit(
 				Effect.gen(function* () {
 					const from = options.cursor();
-					if (from === null) return;
-					const found = yield* mailCall('search IMAP messages', () =>
-						client.search({ uid: `${from.uid + 1}:*` }, { uid: true })
-					);
+					if (from === null) return false;
+					const found = yield* mailCall('search IMAP messages', () => search(`${from.uid + 1}:*`));
 					const ids = (found || [])
 						.filter((uid) => uid > from.uid)
 						.sort((left, right) => left - right);
+					const recent = options.personal ? ids.slice(-25) : ids.slice(0, 25);
+					// A skipped interval remains durable while current mail moves the high watermark forward.
+					const backfill =
+						from.backfill ??
+						(options.personal && ids.length > recent.length ? from.uid : undefined);
 					let at = from.uid;
 					const moved = () =>
-						at === from.uid ? Effect.void : options.advance({ validity: from.validity, uid: at });
-					yield* Effect.gen(function* () {
-						for (let offset = 0; offset < ids.length; offset += 25) {
-							const batch = yield* Stream.fromAsyncIterable(
-								client.fetch(
-									ids.slice(offset, offset + 25).join(','),
-									{ uid: true, source: true },
-									{ uid: true }
-								),
-								serverFailure('read IMAP messages')
-							).pipe(Stream.runCollect);
-							for (const message of [...batch].sort((left, right) => left.uid - right.uid)) {
-								if (message.source === undefined) continue;
-								yield* options.deliver(message.source, `imap-${from.validity}-${message.uid}`);
-								at = message.uid;
-							}
-							yield* moved();
-						}
+						at === from.uid
+							? Effect.void
+							: options.advance({
+									validity,
+									...scope,
+									uid: at,
+									...(backfill === undefined ? {} : { backfill })
+								});
+					yield* deliver(recent, (uid) => {
+						at = uid;
 					}).pipe(Effect.onExit(() => Effect.suspend(moved)));
+					const current = options.cursor();
+					if (current?.backfill === undefined) return ids.length > recent.length;
+					const start = current.backfill;
+					if (historyAt >= history.length) {
+						const pending = yield* mailCall('search IMAP history', () =>
+							search(`${start + 1}:${current.uid}`)
+						);
+						history = (pending || [])
+							.filter((uid) => uid > start && uid <= current.uid)
+							.sort((left, right) => left - right);
+						historyAt = 0;
+						historyThrough = current.uid;
+					}
+					const older = history.slice(historyAt, historyAt + 25);
+					let low = start;
+					const movedHistory = () =>
+						low === start
+							? Effect.void
+							: options.advance({
+									validity,
+									...scope,
+									uid: current.uid,
+									backfill: low
+								});
+					yield* deliver(older, (uid) => {
+						low = uid;
+					}).pipe(Effect.onExit(() => Effect.suspend(movedHistory)));
+					historyAt += older.length;
+					if (historyAt < history.length || historyThrough < current.uid) return true;
+					yield* options.advance({ validity, uid: current.uid, ...scope });
+					return false;
 				})
 			);
 			const events = Stream.callback<'drain' | 'closed'>((queue) =>
@@ -117,7 +194,7 @@ export const mailboxWatch = Effect.fn('Mailbox.watch')(function* (options: Watch
 				Stream.runForEach((event) =>
 					event === 'closed'
 						? Effect.fail(new ProviderUnavailable({ message: 'IMAP connection closed' }))
-						: pull
+						: pull.pipe(Effect.repeat({ until: (more) => !more }))
 				)
 			);
 		})

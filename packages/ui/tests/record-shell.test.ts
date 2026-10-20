@@ -375,6 +375,33 @@ it.live('a held record shows Under approval and its request timeline, without a 
 	})
 );
 
+it.live('a change request keeps its header compact and explains RFC on keyboard focus', () =>
+	Effect.gen(function* () {
+		const v = yield* browser(() =>
+			show(LIVE, catalog, undefined, undefined, [{ id: 'r1', status: 'CHANGES_REQUESTED' }])
+		);
+		const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
+		assert.equal(textOf(badge).trim(), 'RFC');
+		assert.equal(badge.getAttribute('aria-label'), 'Request for change');
+		assert.equal(badge.getAttribute('role'), 'status');
+		assert.equal(badge.tabIndex, 0);
+		yield* browser(async () => {
+			badge.focus();
+			await settle();
+		});
+		assert.match(
+			textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
+			/Request for change/
+		);
+		element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
+		yield* browser(settle);
+		assert.match(
+			textOf(element<HTMLElement>(v.target, '[data-view=approval]')),
+			/Changes requested/
+		);
+	})
+);
+
 it.live('the record lists its past requests collapsed, oldest first, with the newest open', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() =>
@@ -398,6 +425,12 @@ it.live('the record lists its past requests collapsed, oldest first, with the ne
 		element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
 		yield* browser(() => settle());
 		const past = [...v.target.querySelectorAll<HTMLDetailsElement>('details[data-request]')];
+		const previous = element<HTMLDetailsElement>(v.target, '[data-view=approval-past]');
+		assert.equal(previous.open, false);
+		assert.ok(
+			element(v.target, '[data-view=approval]').compareDocumentPosition(previous) &
+				Node.DOCUMENT_POSITION_FOLLOWING
+		);
 		assert.deepEqual(
 			past.map((d) => [d.dataset['request'], d.open]),
 			[['r1', false]]
@@ -433,7 +466,7 @@ it.live('a completed approval remains readable from the record without a pending
 	})
 );
 
-it.live('under the approval lock, Edit is disabled and the row says who may change it', () =>
+it.live('under the approval lock, Edit is disabled and the compact chip says who may change it', () =>
 	Effect.gen(function* () {
 		const held = {
 			...LIVE,
@@ -465,8 +498,21 @@ it.live('under the approval lock, Edit is disabled and the row says who may chan
 		const button = required(edit(v.target));
 		assert.equal(button.disabled, true);
 		assert.equal(button.title, 'Under approval: Finance may change it');
+		assert.equal(v.target.querySelector('[data-view=approval-lock]'), null);
+		assert.doesNotMatch(
+			textOf(element<HTMLElement>(v.target, '[data-record-head]')),
+			/Finance may change it/
+		);
+		const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
+		assert.equal(textOf(badge).trim(), 'Under approval');
+		assert.equal(badge.getAttribute('aria-label'), 'Under approval: Finance may change it');
+		assert.equal(badge.tabIndex, 0);
+		yield* browser(async () => {
+			badge.focus();
+			await settle();
+		});
 		assert.match(
-			textOf(element<HTMLElement>(v.target, '[data-view=approval-lock]')),
+			textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
 			/Under approval: Finance may change it/
 		);
 	})

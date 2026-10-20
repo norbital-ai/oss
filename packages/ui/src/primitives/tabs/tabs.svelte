@@ -129,7 +129,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 						value={tab.name}
 						disabled={tab.disabled}
 						class={cn(
-							'max-sm:min-h-11 inline-flex shrink-0 items-center gap-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 data-[state=active]:text-foreground',
+							'[--hit-target:2rem] inline-flex shrink-0 items-center gap-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 data-[state=active]:text-foreground',
 							vertical ? RAIL_TRIGGER : TRIGGER[variant]
 						)}
 					>

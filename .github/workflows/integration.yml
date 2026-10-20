@@ -54,5 +54,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Build native development host
+        run: pnpm exec turbo run build --filter=@norbital-ai/bolt-server --concurrency=1
+
       - name: Run database-backed tests
         run: pnpm test:integration

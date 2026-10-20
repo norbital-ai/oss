@@ -3,6 +3,7 @@
 // list the envoy conversations with an unread mark; `read_attachment` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@effect/vitest';
+import { parseInstant } from '@norbital-ai/std/date';
 import { Context, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
@@ -355,5 +356,48 @@ describe('read_attachment on an xlsx', () => {
 		expect(xlsxCells(book)).toEqual([['name', null, 'ok'], [], ['Acme & Co', 12.5, true]]);
 		expect(xlsxCells(book, 1)).toEqual([['L*', 31.05]]);
 		expect(() => xlsxCells(book, 2)).toThrow('worksheet 2 does not exist');
+	});
+	it('reads namespace-prefixed workbook parts and absolute worksheet relationships', () => {
+		const book = xlsx({
+			'xl/workbook.xml':
+				'<x:workbook xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><x:sheets><x:sheet name="Work &amp; hours" sheetId="1" rel:id="rId7"/><x:sheet name="Notes" sheetId="2" rel:id="rId8"/></x:sheets></x:workbook>',
+			'xl/_rels/workbook.xml.rels':
+				'<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships"><p:Relationship Id="rId7" Type="ws" Target="/xl/worksheets/work.xml"/><p:Relationship Id="rId8" Type="ws" Target="worksheets/notes.xml"/></p:Relationships>',
+			'xl/sharedStrings.xml':
+				'<x:sst xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:si><x:t>Employee</x:t></x:si><x:si xml:space="preserve"><x:r><x:t>Alex</x:t></x:r><x:r><x:t xml:space="preserve"> &amp; Co</x:t></x:r></x:si></x:sst>',
+			'xl/worksheets/work.xml':
+				'<x:worksheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheetData><x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c><x:c r="C1" t="inlineStr"><x:is><x:t xml:space="preserve">Hours</x:t></x:is></x:c></x:row><x:row r="2"/>' +
+				'<x:row r="3"><x:c r="A3" t="s"><x:v>1</x:v></x:c><x:c r="B3"/><x:c r="C3"><x:f>8+0.5</x:f><x:v>8.5</x:v></x:c><x:c r="D3" t="b"><x:v>0</x:v></x:c><x:c r="E3" t="str"><x:v>Ready &amp; checked</x:v></x:c><x:c r="F3" t="e"><x:v>#N/A</x:v></x:c></x:row></x:sheetData></x:worksheet>',
+			'xl/worksheets/notes.xml':
+				'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Public sample</t></is></c></row></sheetData></worksheet>'
+		});
+		expect(xlsxSheets(book)).toEqual(['Work & hours', 'Notes']);
+		expect(xlsxCells(book)).toEqual([
+			['Employee', null, 'Hours'],
+			[],
+			['Alex & Co', null, 8.5, false, 'Ready & checked', '#N/A']
+		]);
+		expect(xlsxCells(book, 1)).toEqual([['Public sample']]);
+	});
+	it('retains ISO date cells and clock offsets without producing NaN for invalid dates', () => {
+		const book = xlsx({
+			'xl/workbook.xml':
+				'<workbook><sheets><sheet name="Dates" sheetId="1"/></sheets></workbook>',
+			'xl/worksheets/sheet1.xml':
+				'<worksheet><sheetData><row r="1"><c r="A1" t="d"><v>2026-06-03T00:00:00.000Z</v></c><c r="B1" t="d"><v>2026-06-03T08:15:30.125+08:00</v></c><c r="C1" t="d"><v>2026-06-03</v></c><c r="D1" t="d"><v>not-a-date</v></c><c r="E1" t="d"><v>2026-02-30T00:00:00Z</v></c></row></sheetData></worksheet>'
+		});
+		const cells = xlsxCells(book);
+		expect(cells).toEqual([
+			[
+				'2026-06-03T00:00:00.000Z',
+				'2026-06-03T08:15:30.125+08:00',
+				'2026-06-03',
+				'not-a-date',
+				'2026-02-30T00:00:00Z'
+			]
+		]);
+		const clock = cells[0]?.[1];
+		if (typeof clock !== 'string') throw new Error('ISO clock cell missing');
+		expect(parseInstant(clock, 'Asia/Kuala_Lumpur')).toBe('2026-06-03T00:15:30.125Z');
 	});
 });

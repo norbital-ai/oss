@@ -3,11 +3,11 @@
 // snapshot), watches sealed before they register and renewed by replacement, and notifications acknowledged only once
 // the engine queued the read.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, FiberSet, Schema } from 'effect';
+import { Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { DriverEvent, DriverOpen, DriverPage, Json } from '@norbital-ai/bolt/engine';
 import { googleCalendar } from '../src/google-calendar/index.ts';
-import { fakeFetch, host, json, type Host, type Route } from './kit.ts';
+import { fakeFetch, host, json, until, type Host, type HostOptions, type Route } from './kit.ts';
 
 const NOW = Date.parse('2026-10-12T08:00:00Z');
 const HOOK = 'https://host.example/acme/hooks/integration/desk',
@@ -29,7 +29,8 @@ const definition: DriverOpen['definition'] = {
 const fixture = Effect.fn('CalendarTest.fixture')(function* (
 	routes: Route[] = [],
 	stored: { [name: string]: Json } = { token: TOKEN },
-	webhookUrl = HOOK
+	webhookUrl = HOOK,
+	beforeWrite?: HostOptions['write']
 ) {
 	yield* TestClock.setTime(NOW);
 	let queueFails = false,
@@ -43,6 +44,7 @@ const fixture = Effect.fn('CalendarTest.fixture')(function* (
 		secrets: { GOOGLE_CLIENT: 'client-1', GOOGLE_SECRET: 'shh' },
 		write: async (changes) => {
 			if (stateFails && changes.has('state')) throw new Error('sealed store unavailable');
+			await beforeWrite?.(changes);
 		},
 		emit: async (e) => {
 			if (queueFails && e.kind === 'invalidate') throw new Error('queue unavailable');
@@ -637,10 +639,180 @@ describe('the Google Calendar sign-in', () => {
 				expect(invalidations(f.h)).toEqual([
 					{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
 				]);
-				// used once
+				// A consumed callback still reports its completion without exchanging its code again.
 				expect(
 					(yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`))).status
-				).toBe(400);
+				).toBe(200);
+				expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
+				yield* f.link.close ?? Effect.void;
+			})
+	);
+	it.effect(
+		'completes concurrent duplicate callbacks once and resets only the pairing attempt',
+		() =>
+			Effect.gen(function* () {
+				const entered = Promise.withResolvers<void>(),
+					allow = Promise.withResolvers<void>();
+				yield* Effect.addFinalizer(() => Effect.sync(() => allow.resolve()));
+				const f = yield* fixture(
+					[
+						(call) => {
+							if (call.url !== 'https://oauth2.googleapis.com/token') return undefined;
+							entered.resolve();
+							return allow.promise.then(() =>
+								json({ access_token: 'at-1', refresh_token: 'rt-1' })
+							);
+						},
+						google(() => json({}))
+					],
+					{}
+				);
+				yield* f.link.pair!({});
+				const state = authorize(f.h).searchParams.get('state')!;
+				const callback = (nonce = state) =>
+					f.link.webhook!(new Request(`${REDIRECT}?state=${nonce}&code=c1`));
+				const abandoned = yield* Effect.forkChild(callback());
+				yield* Effect.promise(() => entered.promise);
+				const running = yield* Effect.forkChild(
+					Effect.all([callback(), callback()], { concurrency: 2 })
+				);
+				yield* Fiber.interrupt(abandoned);
+				expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
+				allow.resolve();
+				const responses = yield* Fiber.join(running);
+				const bodies = yield* Effect.promise(() => Promise.all(responses.map((r) => r.text())));
+				expect(responses.map((r) => r.status)).toEqual([200, 200]);
+				expect(bodies).toEqual([
+					'Signed in. You can close this window.',
+					'Signed in. You can close this window.'
+				]);
+				const repeated = yield* callback();
+				expect(yield* Effect.promise(() => repeated.text())).toBe(bodies[0]);
+				expect(f.h.writes.filter((write) => write.has('token'))).toHaveLength(1);
+				expect(invalidations(f.h)).toHaveLength(1);
+				expect(f.h.status).toEqual({ state: 'connected', account: 'ana@example.com' });
+				expect((yield* callback('forged')).status).toBe(400);
+				yield* f.now(NOW + 11 * 60_000);
+				expect((yield* callback()).status).toBe(400);
+				const sealed = f.h.values.get('token');
+				yield* f.link.pair!({});
+				const next = authorize(f.h).searchParams.get('state')!;
+				expect((yield* callback()).status).toBe(400);
+				expect(f.h.values.get('token')).toEqual(sealed);
+				yield* f.link.unpair!();
+				expect((yield* callback(next)).status).toBe(400);
+				expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
+				yield* f.link.close ?? Effect.void;
+			})
+	);
+	it.effect('replays a refused callback without exchanging the consumed code again', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture([google(() => json({ error: 'invalid_grant' }, 400))], {});
+			yield* f.link.pair!({});
+			const state = authorize(f.h).searchParams.get('state')!;
+			const callback = () =>
+				f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=refused`));
+			const first = yield* callback();
+			const body = yield* Effect.promise(() => first.text());
+			const again = yield* callback();
+			expect(again.status).toBe(400);
+			expect(yield* Effect.promise(() => again.text())).toBe(body);
+			expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
+			expect(f.h.statuses.filter((status) => status.state === 'error')).toHaveLength(1);
+			yield* f.link.close ?? Effect.void;
+		})
+	);
+	it.effect(
+		'disconnecting during a callback prevents the old attempt from restoring the link afterward',
+		() =>
+			Effect.gen(function* () {
+				const entered = Promise.withResolvers<void>(),
+					allow = Promise.withResolvers<void>(),
+					answered = Promise.withResolvers<void>();
+				yield* Effect.addFinalizer(() => Effect.sync(() => allow.resolve()));
+				const f = yield* fixture(
+					[
+						(call) => {
+							if (call.url !== 'https://oauth2.googleapis.com/token') return undefined;
+							entered.resolve();
+							return allow.promise.then(() => {
+								answered.resolve();
+								return json({ access_token: 'at-1', refresh_token: 'rt-1' });
+							});
+						},
+						google(() => json({}))
+					],
+					{}
+				);
+				yield* f.link.pair!({});
+				const state = authorize(f.h).searchParams.get('state')!;
+				const callback = () => f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				const signingIn = yield* Effect.forkChild(Effect.exit(callback()));
+				yield* Effect.promise(() => entered.promise);
+				const disconnecting = yield* Effect.forkChild(f.link.unpair!());
+				yield* Fiber.join(disconnecting);
+				expect(Exit.isFailure(yield* Fiber.join(signingIn))).toBe(true);
+				expect(f.h.values.has('token')).toBe(false);
+				expect((yield* callback()).status).toBe(400);
+				expect(yield* Effect.flip(f.link.discover!())).toMatchObject({ _tag: 'OAuthRefused' });
+				allow.resolve();
+				yield* Effect.promise(() => answered.promise);
+				expect(f.h.values.has('token')).toBe(false);
+				expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
+				yield* f.link.close ?? Effect.void;
+			})
+	);
+	it.effect(
+		'disconnect waits for an irreversible calendar credential write before wiping its keys',
+		() =>
+			Effect.gen(function* () {
+				const entered = Promise.withResolvers<void>(),
+					allow = Promise.withResolvers<void>();
+				yield* Effect.addFinalizer(() => Effect.sync(() => allow.resolve()));
+				const f = yield* fixture(
+					[google(() => json({ access_token: 'at-1', refresh_token: 'rt-1' }))],
+					{},
+					HOOK,
+					async (changes) => {
+						if (!changes.has('token')) return;
+						entered.resolve();
+						await allow.promise;
+					}
+				);
+				yield* f.link.pair!({});
+				const state = authorize(f.h).searchParams.get('state')!;
+				const callback = () => f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				const signingIn = yield* Effect.forkChild(callback());
+				yield* Effect.promise(() => entered.promise);
+				let disconnected = false;
+				const wiped: string[] = [];
+				const disconnecting = yield* Effect.forkChild(
+					f.link.unpair!().pipe(
+						Effect.tap(() =>
+							Effect.sync(() => {
+								// The host wipes the keys known after the provider's unpair completes.
+								wiped.push(...f.h.values.keys());
+								f.h.values.clear();
+								disconnected = true;
+							})
+						)
+					),
+					{ startImmediately: true }
+				);
+				yield* Effect.yieldNow;
+				expect(disconnected).toBe(false);
+				allow.resolve();
+				yield* Fiber.join(disconnecting);
+				expect(Exit.isFailure(yield* Fiber.await(signingIn))).toBe(true);
+				yield* until(() => f.h.writes.some((changes) => changes.has('token')));
+				expect(wiped).toEqual(expect.arrayContaining(['token', 'state']));
+				expect([...f.h.values]).toEqual([]);
+				const statuses = f.h.statuses.length,
+					events = f.h.events.length;
+				expect((yield* callback()).status).toBe(400);
+				expect(f.h.statuses).toHaveLength(statuses);
+				expect(f.h.events).toHaveLength(events);
+				expect(yield* Effect.flip(f.link.discover!())).toMatchObject({ _tag: 'OAuthRefused' });
 				yield* f.link.close ?? Effect.void;
 			})
 	);
@@ -665,6 +837,9 @@ describe('the Google Calendar sign-in', () => {
 				const response = yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				expect(response.status).toBe(status);
 				expect(response.headers.get('location')).toBe(location);
+				const again = yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				expect(again.status).toBe(status);
+				expect(again.headers.get('location')).toBe(location);
 				expect(f.h.status?.state).toBe('connected');
 				yield* f.link.close ?? Effect.void;
 			})

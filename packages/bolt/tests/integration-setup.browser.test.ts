@@ -34,11 +34,12 @@ it('the shared instance setup renders and pairs in Chromium without server-only 
 	};
 	const client: Pick<
 		IntegrationClient,
-		'instance' | 'status' | 'pair' | 'unpair' | 'test' | 'watch'
+		'instance' | 'status' | 'pair' | 'importStart' | 'unpair' | 'test' | 'watch'
 	> = {
 		instance: 'erp',
 		status: () => Effect.sync(() => status),
 		pair: () => Effect.sync(() => (status = { ...status, state: 'connected', stored: true })),
+		importStart: () => Effect.sync(() => status),
 		unpair: () => Effect.sync(() => status),
 		test: () => Effect.sync(() => status),
 		watch: () => Stream.never

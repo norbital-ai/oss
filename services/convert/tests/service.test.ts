@@ -240,6 +240,7 @@ test('a job whose replica died is queued again, then failed after three attempts
 });
 
 const hasPandoc = Result.isSuccess(Result.try(() => execFileSync('pandoc', ['--version'])));
+const hasPdfText = Result.isSuccess(Result.try(() => execFileSync('pdftotext', ['-v'])));
 test.skipIf(!hasPandoc)('pandoc and Typst write every target', async () => {
 	const convert = pandoc({ timeoutMs: 30_000, heap: '512m' });
 	const md = '# Report\n\n| Panel | R-E (MΩ) |\n|---|--:|\n| 2A | 20,000 |\n\n45 µΩ at 31 °C';
@@ -315,5 +316,62 @@ test.skipIf(!hasPandoc)(
 		const xml = execFileSync('unzip', ['-p', out, 'word/document.xml']).toString();
 		assert.match(xml, /<w:pgSz w:h="16838" w:w="11906"/);
 		assert.doesNotMatch(xml, /descr="data:/);
+	}
+);
+
+test.skipIf(!hasPandoc || !hasPdfText)(
+	'long table code references wrap without truncation, while prose code and Word text stay unchanged',
+	async () => {
+		const id = '01a15a24-311c-7431-85a2-3f583c558501';
+		const other = '01a15a1d-7cf6-7501-a7ce-f1d84d4b1aa2';
+		const outside = `Outside \`${id}\`.`;
+		const row = `| R-01 | File intake against this job | Capture all supplied messages | Review required before sending | \`${id}\`; \`${other}\` |`;
+		const source = `${outside}\n\n| Requirement ID | Requirement | Included behaviour | Dependencies | Evidence |\n| --- | --- | --- | --- | --- |\n${Array(12).fill(row).join('\n')}`;
+		const filter = new URL('../src/convert.lua', import.meta.url).pathname;
+		for (const from of ['markdown', 'html'] as const) {
+			const input =
+				from === 'markdown'
+					? source
+					: `<p>Outside <code>${id}</code>.</p><table><tr><th>Name</th><th>Evidence</th></tr><tr><td>Intake</td><td><code>${id}</code>; <code>${other}</code></td></tr></table>`;
+			const typst = execFileSync(
+				'pandoc',
+				['--standalone', '-f', from, '-t', 'typst', `--lua-filter=${filter}`],
+				{ input }
+			).toString();
+			assert.match(typst, /set align\(left\)/);
+			assert.match(typst, /set par\(justify: false\)/);
+			assert.ok(typst.includes('`#text(spacing: 0pt, " ")`'));
+			assert.ok(typst.includes(outside));
+			assert.ok(!typst.includes('\u200b'));
+			const joined = typst.replaceAll('`#text(spacing: 0pt, " ")`', '');
+			assert.equal(joined.split(id).length - 1, from === 'markdown' ? 13 : 2);
+			assert.equal(joined.split(other).length - 1, from === 'markdown' ? 12 : 1);
+		}
+		const convert = pandoc({ timeoutMs: 30_000, heap: '512m' });
+		const pdf = await Effect.runPromise(convert({ from: 'markdown', to: 'pdf', source }, null));
+		assert.equal(new TextDecoder().decode(pdf.subarray(0, 4)), '%PDF');
+		const pdfPath = join(dir, 'wrapped-table-references.pdf');
+		writeFileSync(pdfPath, pdf);
+		const extracted = execFileSync('pdftotext', ['-raw', pdfPath, '-']).toString();
+		assert.doesNotMatch(extracted, /[\u200b\u00ad]/);
+		const text = extracted.replace(/\s/g, '');
+		assert.equal(text.split(id).length - 1, 13);
+		assert.equal(text.split(other).length - 1, 12);
+		const bounds = execFileSync('pdftotext', ['-bbox', pdfPath, '-']).toString();
+		const pageWidth = Number(/<page width="([\d.]+)"/.exec(bounds)?.[1]);
+		assert.ok(pageWidth > 0);
+		const rightEdges = [...bounds.matchAll(/<word [^>]*xMax="([\d.]+)"/g)].map((m) => Number(m[1]));
+		assert.ok(rightEdges.length > 0);
+		// The default A4 document has 90pt margins; allow 10pt for normal glyph overhang, never overflowing cells.
+		assert.ok(rightEdges.every((x) => x <= pageWidth - 80));
+		const out = join(dir, 'unmodified-table-references.docx');
+		writeFileSync(
+			out,
+			await Effect.runPromise(convert({ from: 'markdown', to: 'docx', source }, null))
+		);
+		const xml = execFileSync('unzip', ['-p', out, 'word/document.xml']).toString();
+		assert.ok(xml.includes(id));
+		assert.ok(xml.includes(other));
+		assert.ok(!xml.includes('\u200b'));
 	}
 );

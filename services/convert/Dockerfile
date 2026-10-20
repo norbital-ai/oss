@@ -39,8 +39,11 @@ FROM dependencies AS test-dependencies
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 FROM runtime AS test
+USER root
+RUN apk add --no-cache poppler-utils
 COPY --from=test-dependencies /app/node_modules ./node_modules
 COPY tests ./tests
+USER convert
 CMD ["node", "node_modules/vitest/vitest.mjs", "run"]
 
 FROM runtime AS final

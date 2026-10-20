@@ -44,6 +44,7 @@ is<
 			readonly envoy?: string | null;
 			readonly active?: boolean;
 			readonly configuration?: Json;
+			readonly import_start?: Json;
 		}
 	>
 >();

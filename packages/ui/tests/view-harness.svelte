@@ -6,6 +6,12 @@
 	const Table = NativeTable<TableSource>;
 	export type ViewPart =
 		| { part: 'table'; props: ComponentProps<typeof Table> }
+		| {
+				part: 'matrix';
+				props: ComponentProps<typeof Matrix>;
+				onTrailing?: () => void;
+				onColumn?: (col: import('../src/client/contract.js').Json) => void;
+		  }
 		| { part: 'board'; props: ComponentProps<typeof Board> }
 		| { part: 'record'; props: ComponentProps<typeof RecordShell> }
 		| { part: 'point'; props: ComponentProps<typeof PointInput> }
@@ -38,6 +44,9 @@
 	import { provideBolt } from '../src/client/context.js';
 	import { type Page } from '../src/collection/types.js';
 	import Board from '../src/board/Board.svelte';
+	import Matrix from '../src/matrix/Matrix.svelte';
+	import Button from '../src/primitives/button/button.svelte';
+	import Icon from '../src/primitives/icon/icon-wrapper.svelte';
 	import type { BoardProps } from '../src/board/Board.svelte';
 	import Form from '../src/form/form.svelte';
 	import RecordShell from '../src/record/RecordShell.svelte';
@@ -94,6 +103,31 @@
 	/>
 {:else if fixture.part === 'board'}
 	<Board {...fixture.props} {...boardScope === undefined ? {} : { where: boardScope }} />
+{:else if fixture.part === 'matrix'}
+	{#snippet trailing()}
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			aria-label="Schedule details"
+			onclick={fixture.onTrailing}><Icon name="lucide:info" /></Button
+		>
+	{/snippet}
+	{#snippet columnHeader({
+		col,
+		label
+	}: {
+		col: import('../src/client/contract.js').Json;
+		label: string;
+	})}
+		<Button variant="ghost" size="sm" onclick={() => fixture.onColumn?.(col)}>{label}</Button>
+	{/snippet}
+	<Matrix
+		{...fixture.props}
+		{...fixture.onColumn === undefined ? {} : { columnHeader }}
+		{...fixture.onTrailing === undefined
+			? {}
+			: { toolbar: { ...(fixture.props.toolbar || {}), trailing } }}
+	/>
 {:else if fixture.part === 'point'}
 	<PointInput {...fixture.props} />
 {:else if fixture.part === 'form'}

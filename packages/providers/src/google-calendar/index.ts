@@ -14,6 +14,7 @@ import { answerFailure, LinkClosed, PairingInvalid, ProviderUnavailable } from '
 import {
 	attempt,
 	authorizeUrl,
+	callbackCompletion,
 	grant,
 	STATE_MS,
 	tokenHolder,
@@ -118,6 +119,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		: { watches: [] };
 	let pending: { state: string; verifier: string; at: number; returnTo: string | null } | null =
 		null;
+	const completion = yield* callbackCompletion;
 	let closed = false;
 	const writes = yield* Semaphore.make(1);
 	const holder = yield* tokenHolder(app, client, tokens, (next) =>
@@ -465,103 +467,116 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		yield* invalidate(watch.calendar);
 		return new Response(null, { status: 204 });
 	});
-	const callback = Effect.fn('GoogleCalendar.callback')(function* (query: URLSearchParams) {
-		const pairing = pending;
-		if (
-			pairing === null ||
-			!same(query.get('state') ?? '', pairing.state) ||
-			(yield* Clock.currentTimeMillis) - pairing.at > STATE_MS
-		)
-			return new Response('This sign-in is unknown or has expired; start it again.', {
-				status: 400
-			});
-		pending = null;
-		return yield* Effect.gen(function* () {
-			const error = query.get('error');
-			if (error !== null)
-				return yield* Effect.fail(
-					new ProviderUnavailable({ message: `the sign-in was refused (${error})` })
-				);
-			const granted = yield* withFetch(
-				ctx,
-				grant(app, yield* client(), {
-					grant_type: 'authorization_code',
-					code: query.get('code') ?? '',
-					redirect_uri: ctx.redirectUrl,
-					code_verifier: pairing.verifier
+	const callback = (query: URLSearchParams) =>
+		completion.run(
+			query.get('state') ?? '',
+			() => pending,
+			() =>
+				new Response('This sign-in is unknown or has expired; start it again.', {
+					status: 400
+				}),
+			(pairing) =>
+				Effect.gen(function* () {
+					pending = null;
+					return yield* Effect.gen(function* () {
+						const error = query.get('error');
+						if (error !== null)
+							return yield* Effect.fail(
+								new ProviderUnavailable({ message: `the sign-in was refused (${error})` })
+							);
+						const granted = yield* withFetch(
+							ctx,
+							grant(app, yield* client(), {
+								grant_type: 'authorization_code',
+								code: query.get('code') ?? '',
+								redirect_uri: ctx.redirectUrl,
+								code_verifier: pairing.verifier
+							})
+						);
+						const account = (yield* list(granted.access)).find((calendar) => calendar.primary)?.id;
+						const next: State = { watches: [], ...(account === undefined ? {} : { account }) };
+						// Host persistence cannot be canceled; finish adoption before disconnect can wipe its keys.
+						yield* Effect.gen(function* () {
+							yield* hostCall('store calendar pairing', () =>
+								ctx.credentials.write(
+									new Map<string, Json>([
+										['token', granted],
+										['state', next]
+									])
+								)
+							);
+							tokens = granted;
+							state = next;
+							yield* holder.set(granted);
+							yield* hostCall('report calendar pairing', () =>
+								ctx.status({ state: 'connected', account: account ?? null })
+							);
+							for (const calendar of calendars()) yield* invalidate(calendar);
+						}).pipe(Effect.uninterruptible);
+						return pairing.returnTo === null
+							? new Response('Signed in. You can close this window.', {
+									headers: { 'content-type': 'text/plain; charset=utf-8' }
+								})
+							: Response.redirect(pairing.returnTo, 303);
+					}).pipe(
+						Effect.catch((error) =>
+							hostCall('report calendar pairing', () =>
+								ctx.status({
+									state: 'error',
+									error: `${error.message}. Check the OAuth client and sign in again.`
+								})
+							).pipe(
+								Effect.as(new Response(`Not connected: ${error.message}`, { status: 400 })),
+								Effect.uninterruptible
+							)
+						)
+					);
 				})
-			);
-			const account = (yield* list(granted.access)).find((calendar) => calendar.primary)?.id;
-			const next: State = { watches: [], ...(account === undefined ? {} : { account }) };
-			yield* hostCall('store calendar pairing', () =>
-				ctx.credentials.write(
-					new Map<string, Json>([
-						['token', granted],
-						['state', next]
-					])
-				)
-			);
-			tokens = granted;
-			state = next;
-			yield* holder.set(granted);
-			yield* hostCall('report calendar pairing', () =>
-				ctx.status({ state: 'connected', account: account ?? null })
-			);
-			for (const calendar of calendars()) yield* invalidate(calendar);
-			return pairing.returnTo === null
-				? new Response('Signed in. You can close this window.', {
-						headers: { 'content-type': 'text/plain; charset=utf-8' }
-					})
-				: Response.redirect(pairing.returnTo, 303);
-		}).pipe(
-			Effect.catch((error) =>
-				hostCall('report calendar pairing', () =>
-					ctx.status({
-						state: 'error',
-						error: `${error.message}. Check the OAuth client and sign in again.`
-					})
-				).pipe(Effect.as(new Response(`Not connected: ${error.message}`, { status: 400 })))
-			)
 		);
-	});
-	if (tokens !== null)
-		yield* hostCall('report calendar status', () =>
-			ctx.status({ state: 'connected', account: state.account ?? null })
-		);
+	yield* hostCall('report calendar status', () =>
+		ctx.status(
+			tokens === null
+				? { state: 'unpaired' }
+				: { state: 'connected', account: state.account ?? null }
+		)
+	);
 	return {
 		pair: (input: Json) =>
-			Effect.gen(function* () {
-				const pairing = attempt(ctx.state()),
-					account = yield* client();
-				const url = authorizeUrl(
-					app,
-					account.id,
-					ctx.redirectUrl,
-					pairing.state,
-					pairing.challenge
-				);
-				const path =
-					Predicate.isObject(input) && typeof input['returnTo'] === 'string'
-						? input['returnTo']
-						: null;
-				const target =
-					path === null
-						? null
-						: yield* Effect.try({
-								try: () => new URL(path, ctx.webhookUrl),
-								catch: () => new PairingInvalid({ message: 'The return URL is invalid' })
-							});
-				pending = {
-					state: pairing.state,
-					verifier: pairing.verifier,
-					at: yield* Clock.currentTimeMillis,
-					returnTo: target?.origin === new URL(ctx.webhookUrl).origin ? target.href : null
-				};
-				yield* Effect.sync(() =>
-					ctx.pairing({ kind: 'oauth', value: url, label: 'Sign in with Google' })
-				);
-				yield* hostCall('report calendar pairing', () => ctx.status({ state: 'pairing' }));
-			}),
+			completion.reset(
+				Effect.gen(function* () {
+					pending = null;
+					const pairing = attempt(ctx.state()),
+						account = yield* client();
+					const url = authorizeUrl(
+						app,
+						account.id,
+						ctx.redirectUrl,
+						pairing.state,
+						pairing.challenge
+					);
+					const path =
+						Predicate.isObject(input) && typeof input['returnTo'] === 'string'
+							? input['returnTo']
+							: null;
+					const target =
+						path === null
+							? null
+							: yield* Effect.try({
+									try: () => new URL(path, ctx.webhookUrl),
+									catch: () => new PairingInvalid({ message: 'The return URL is invalid' })
+								});
+					pending = {
+						state: pairing.state,
+						verifier: pairing.verifier,
+						at: yield* Clock.currentTimeMillis,
+						returnTo: target?.origin === new URL(ctx.webhookUrl).origin ? target.href : null
+					};
+					yield* Effect.sync(() =>
+						ctx.pairing({ kind: 'oauth', value: url, label: 'Sign in with Google' })
+					);
+					yield* hostCall('report calendar pairing', () => ctx.status({ state: 'pairing' }));
+				})
+			),
 		test: (_input: Json) => list().pipe(Effect.asVoid),
 		discover: () =>
 			list().pipe(Effect.map((calendars) => calendars.map(({ id, label }) => ({ id, label })))),
@@ -572,19 +587,22 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 				? callback(new URL(request.url).searchParams)
 				: notification(request),
 		unpair: () =>
-			Effect.gen(function* () {
-				for (const watch of [...state.watches]) yield* stop(watch);
-				const now = yield* Clock.currentTimeMillis;
-				if (state.watches.some((watch) => watch.resource === null && watch.expiration > now))
-					return yield* Effect.fail(
-						new ProviderUnavailable({
-							message: 'A pending calendar watch must reconcile or expire before disconnect'
-						})
-					);
-				tokens = null;
-				state = { watches: [] };
-				yield* holder.set(null);
-			}),
+			completion.reset(
+				Effect.gen(function* () {
+					pending = null;
+					for (const watch of [...state.watches]) yield* stop(watch);
+					const now = yield* Clock.currentTimeMillis;
+					if (state.watches.some((watch) => watch.resource === null && watch.expiration > now))
+						return yield* Effect.fail(
+							new ProviderUnavailable({
+								message: 'A pending calendar watch must reconcile or expire before disconnect'
+							})
+						);
+					tokens = null;
+					state = { watches: [] };
+					yield* holder.set(null);
+				})
+			),
 		close: writes.withPermit(
 			Effect.sync(() => {
 				closed = true;

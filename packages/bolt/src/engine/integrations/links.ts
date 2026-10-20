@@ -19,7 +19,12 @@ import { localOf } from '@norbital-ai/std/zone';
 import { DRIVERS, type DriverName, type IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { under } from '../../protocol/wire.ts';
-import { LinkStatus as LinkStatusSchema } from '../../protocol/schema.ts';
+import {
+	ImportStart,
+	ImportStartInput,
+	LinkStatus as LinkStatusSchema
+} from '../../protocol/schema.ts';
+import { resolveImportStart } from './import-start.ts';
 import type {
 	InstanceStatus,
 	IntegrationOffer,
@@ -34,7 +39,7 @@ import { Fenced, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Drivers } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
-import { Conversations, Feeds, Links, Live, Manifest, Reads, Wake } from '../services.ts';
+import { Conversations, Feeds, Links, Live, Manifest, Reads, Wake, Writes } from '../services.ts';
 import { mayUpdate } from '../write/act.ts';
 import { canonical } from '../write/sql.ts';
 import type { Credentials, InstanceRow } from './credentials.ts';
@@ -48,7 +53,8 @@ export const HOOKS = '/hooks/integration/';
 export const OAUTH_CALLBACK = '/hooks/oauth/callback';
 export const webhookUrl = (publicUrl: string, instance: string): string =>
 	under(publicUrl, `${HOOKS}${encodeURIComponent(instance)}`);
-export type LinkAdmission = TenantDb | Manifest | Conversations | Feeds | Live | Wake | Reads;
+export type LinkAdmission =
+	TenantDb | Manifest | Conversations | Feeds | Live | Wake | Reads | Writes;
 export type LinksHost = {
 	readonly providers: readonly Provider[];
 	readonly enter: <A, E>(
@@ -69,8 +75,18 @@ export type LinkManager = {
 	readonly state: (instance: string) => Effect.Effect<InstanceStatus | undefined, LinkError>;
 	/** Every definition with the providers this host offers for it, personal and workspace. */
 	readonly offers: Effect.Effect<readonly IntegrationOffer[], LinkError>;
-	readonly watch: (instance: string) => Stream.Stream<InstanceStatus, LinkError>;
-	readonly pair: (instance: string, input: Json) => Effect.Effect<void, LinkError>;
+	/** All instances when omitted; the HTTP batch route applies the viewer's authority to every status. */
+	readonly watch: (instance?: string) => Stream.Stream<InstanceStatus, LinkError>;
+	readonly pair: (
+		instance: string,
+		input: Json,
+		authority?: Authority
+	) => Effect.Effect<void, LinkError>;
+	readonly importStart: (
+		instance: string,
+		input: ImportStartInput,
+		authority: Authority
+	) => Effect.Effect<void, LinkError>;
 	readonly unpair: (instance: string) => Effect.Effect<void, LinkError>;
 	readonly test: (instance: string, input: Json) => Effect.Effect<void, LinkError>;
 	readonly discover: (
@@ -99,7 +115,8 @@ const RowSchema = Schema.Struct({
 	owner: Schema.NullOr(Schema.String),
 	active: Schema.Boolean,
 	status: Schema.Json,
-	stored: Schema.Boolean
+	stored: Schema.Boolean,
+	import_start: Schema.NullOr(ImportStart)
 });
 type Row = {
 	integration: string;
@@ -108,12 +125,14 @@ type Row = {
 	active: boolean;
 	status: Json;
 	stored: boolean;
+	importStart: ImportStart | null;
 };
 type Held = {
 	instance: string;
 	integration: string;
 	definition: IntegrationSpec;
 	personal: boolean;
+	importStart: ImportStart | null;
 	provider: Provider;
 	request: boolean;
 	epoch: string | null;
@@ -124,6 +143,8 @@ type Held = {
 	pairing: Pairing | null;
 	written: string | null;
 	replaced: boolean;
+	/** Shared with the opened copy: set when a new import start retires this link, so its late imports are refused. */
+	boundary: { changed: boolean };
 	stop?: Effect.Effect<void, PortFailure> | undefined;
 };
 type HeldState = Omit<Held, 'calls'>;
@@ -191,6 +212,7 @@ export const integrationLinks = (
 				...(provider.name === undefined ? {} : { name: provider.name }),
 				...(provider.description === undefined ? {} : { description: provider.description }),
 				...(provider.icon === undefined ? {} : { icon: provider.icon }),
+				...(provider.importStart === undefined ? {} : { importStart: provider.importStart }),
 				...(provider.describe?.({ personal, definition }) ?? {
 					label: provider.label,
 					setup: provider.setup
@@ -206,7 +228,7 @@ export const integrationLinks = (
 					const db = yield* TenantDb;
 					const manifest = yield* Manifest;
 					const found = yield* db.one(RowSchema, {
-						text: `SELECT integration, owner, active, status, EXISTS (SELECT 1 FROM bolt_credential c WHERE c.instance = i.id) AS stored FROM sys_integration i WHERE i.id = $1`,
+						text: `SELECT integration, owner, active, status, import_start, EXISTS (SELECT 1 FROM bolt_credential c WHERE c.instance = i.id) AS stored FROM sys_integration i WHERE i.id = $1`,
 						params: [instance]
 					});
 					if (Option.isNone(found)) return undefined;
@@ -220,7 +242,8 @@ export const integrationLinks = (
 								personal: x.owner !== null,
 								active: x.active,
 								status: x.status,
-								stored: x.stored
+								stored: x.stored,
+								importStart: x.import_start
 							};
 				})
 			);
@@ -254,6 +277,7 @@ export const integrationLinks = (
 					? { test: held.provider.test }
 					: {}),
 				providers,
+				importStart: x.importStart,
 				about: {
 					...(Schema.is(Schema.Record(Schema.String, Schema.Json))(about) ? about : {}),
 					...(providers.some((provider) => provider.setup.webhook === true)
@@ -344,8 +368,142 @@ export const integrationLinks = (
 					held.written = key;
 				}
 			});
+		const checkedStart = (provider: Provider, value: Json | null) =>
+			Effect.gen(function* () {
+				const start = yield* Schema.decodeUnknownEffect(Schema.NullOr(ImportStart))(value).pipe(
+					Effect.mapError(() =>
+						BoltError.make('invalidInput', 'admission', 'Choose a valid import start.')
+					)
+				);
+				if (start === null || start.kind === 'all') return start;
+				if (start.kind === 'since') {
+					if (provider.importStart?.kind !== 'timestamp')
+						return yield* Effect.fail(
+							unavailable('This provider does not support a time-based import start.')
+						);
+					return start;
+				}
+				const capability = provider.importStart,
+					validate = provider.validateImportStart?.bind(provider);
+				if (
+					start.provider !== provider.id ||
+					capability?.kind !== 'native' ||
+					validate === undefined ||
+					capability.fields.some((field) => field.secret === true)
+				)
+					return yield* Effect.fail(
+						unavailable('This provider does not support that import position.')
+					);
+				if (
+					Object.keys(start.values).some(
+						(key) => !capability.fields.some((field) => field.name === key)
+					)
+				)
+					return yield* Effect.fail(
+						BoltError.make(
+							'invalidInput',
+							'admission',
+							'The import position contains an unknown field.'
+						)
+					);
+				const values = yield* Port.attempt('link.importStart', () => validate(start.values)).pipe(
+					Effect.flatMap((values) =>
+						Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.String))(values).pipe(
+							Effect.mapError(() =>
+								BoltError.make(
+									'badAnswer',
+									'facility',
+									'The provider returned an invalid import position.'
+								)
+							)
+						)
+					)
+				);
+				if (
+					Object.keys(values).some((key) => !capability.fields.some((field) => field.name === key))
+				)
+					return yield* Effect.fail(
+						BoltError.make(
+							'badAnswer',
+							'facility',
+							'The provider returned an unknown import field.'
+						)
+					);
+				return { ...start, values };
+			});
+		const saveImportStart = (
+			instance: string,
+			input: ImportStartInput,
+			authority: Authority,
+			providerId?: string
+		) =>
+			Effect.gen(function* () {
+				const loaded = yield* h.credentials.read(instance),
+					def = yield* definition(loaded.row);
+				const provider = pick(
+					def.driver,
+					providerId ?? loaded.values.get(PROVIDER),
+					loaded.row.owner !== null
+				);
+				if (provider === undefined)
+					return yield* Effect.fail(
+						unavailable('Choose a provider before setting the import start.')
+					);
+				const now = yield* Clock.currentTimeMillis;
+				const start = yield* checkedStart(
+					provider,
+					yield* resolveImportStart(
+						input,
+						now,
+						provider.importStart?.kind === 'timestamp' ? provider.importStart.precision : undefined
+					)
+				);
+				const key = yield* uuid;
+				const outcome = yield* h.enter(
+					Effect.gen(function* () {
+						const writes = yield* Writes,
+							manifest = yield* Manifest;
+						const at = new Date(now).toISOString();
+						return (yield* writes.act({
+							collection: 'sys_integration',
+							verb: 'update',
+							input: { target: instance, set: { import_start: start } },
+							mode: { _tag: 'Direct' },
+							key,
+							issuedAt: at,
+							authority,
+							invocationId: key,
+							bindings: {
+								now: at,
+								today: localOf(now, manifest.workspace.tz).date,
+								tz: manifest.workspace.tz,
+								params: {}
+							}
+						})).outcome;
+					})
+				);
+				if (outcome.kind !== 'committed')
+					return yield* Effect.fail(
+						BoltError.make(
+							outcome.kind === 'refused'
+								? outcome.code
+								: outcome.kind === 'pendingApproval'
+									? 'pendingApproval'
+									: 'conflict',
+							'admission',
+							outcome.kind === 'refused' ? outcome.message : 'The import start was not applied.'
+						)
+					);
+				const held = live.get(instance);
+				if (held !== undefined && canonical(held.importStart) !== canonical(start)) {
+					held.boundary.changed = true;
+					yield* port.changed(instance);
+				}
+				yield* publish(instance);
+			});
 		const acquire = (instance: string, provider: Provider, o: Opened) =>
 			Effect.gen(function* () {
+				const importStart = yield* checkedStart(provider, o.row.import_start);
 				const scope = yield* Scope.Scope;
 				const run = yield* FiberSet.makeRuntimePromise<never, unknown, LinkError>();
 				const signalScope = yield* Effect.acquireRelease(Scope.make(), (owned) =>
@@ -360,6 +518,7 @@ export const integrationLinks = (
 					integration: o.row.integration,
 					definition: o.definition,
 					personal: o.row.owner !== null,
+					importStart,
 					provider,
 					request: isRequest(o.definition.driver),
 					epoch: o.epoch,
@@ -369,6 +528,7 @@ export const integrationLinks = (
 					pairing: null,
 					written: null,
 					replaced: false,
+					boundary: { changed: false },
 					stop: abort
 				};
 				const value = yield* Port.attempt('link', () =>
@@ -377,6 +537,7 @@ export const integrationLinks = (
 						definition: o.definition,
 						personal: o.row.owner !== null,
 						configuration: o.row.configuration,
+						importStart,
 						webhookUrl: webhookUrl(h.publicUrl, instance),
 						redirectUrl: under(h.publicUrl, OAUTH_CALLBACK),
 						signal,
@@ -413,17 +574,25 @@ export const integrationLinks = (
 						emit: (event) =>
 							held.replaced
 								? Promise.reject(new Fenced({ instance, message: REPLACED }))
-								: run(
-										h.enter(
-											event.kind === 'invalidate'
-												? Effect.flatMap(Feeds, (feeds) =>
-														feeds.invalidate(instance, event.feed, event.partition)
-													)
-												: Effect.flatMap(Conversations, (conversations) =>
-														conversations.receive(instance, event)
-													)
+								: held.boundary.changed
+									? Promise.reject(
+											BoltError.make(
+												'sourceChanged',
+												'admission',
+												'The import start changed; reopen the link before importing.'
+											)
 										)
-									).then(() => {}),
+									: run(
+											h.enter(
+												event.kind === 'invalidate'
+													? Effect.flatMap(Feeds, (feeds) =>
+															feeds.invalidate(instance, event.feed, event.partition)
+														)
+													: Effect.flatMap(Conversations, (conversations) =>
+															conversations.receive(instance, event, importStart)
+														)
+											)
+										).then(() => {}),
 						status: (patch) =>
 							held.replaced ? Promise.resolve() : run(report(held, patch)).then(() => {}),
 						pairing: (pairing) => {
@@ -678,86 +847,128 @@ export const integrationLinks = (
 				Stream.unwrap(
 					Effect.gen(function* () {
 						const subscription = yield* PubSub.subscribe(events);
-						const initial = yield* state(instance);
+						const ids =
+							instance === undefined
+								? yield* h
+										.enter(
+											Effect.flatMap(TenantDb, (db) =>
+												db.rows(Schema.Struct({ id: Schema.String }), {
+													text: 'SELECT id FROM sys_integration ORDER BY id',
+													params: []
+												})
+											)
+										)
+										.pipe(Effect.map((rows) => rows.map((row) => row.id)))
+								: [instance];
+						const initial = yield* Effect.forEach(ids, state);
 						return Stream.concat(
-							initial === undefined ? Stream.empty : Stream.succeed(initial),
+							Stream.fromArray(initial.filter((value) => value !== undefined)),
 							Stream.fromSubscription(subscription).pipe(
-								Stream.filter((value) => value.instance === instance)
+								Stream.filter((value) => instance === undefined || value.instance === instance)
 							)
 						);
 					})
 				),
-			pair: (instance, input) =>
-				serial(
-					instance,
-					Effect.gen(function* () {
-						const x = yield* row(instance);
-						if (x === undefined) return yield* Effect.fail(gone(instance));
-						const body = Predicate.isObject(input) ? input : {},
-							ps = choices(x.definition.driver, x.personal);
-						if (ps.length === 0)
+			importStart: (instance, input, authority) => saveImportStart(instance, input, authority),
+			pair: (instance, input, authority) =>
+				Effect.gen(function* () {
+					if (Predicate.isObject(input) && input['importStart'] !== undefined) {
+						if (authority === undefined)
 							return yield* Effect.fail(
-								unavailable(`this host has no registered ${x.definition.driver} provider`)
+								BoltError.make('forbidden', 'admission', 'Sign in to change the import start.')
 							);
-						const provider =
-							typeof body['provider'] === 'string'
-								? ps.find((p) => p.id === body['provider'])
-								: ps.length === 1
-									? ps[0]
-									: undefined;
-						if (provider === undefined)
-							return yield* Effect.fail(
-								BoltError.make(
-									'invalidInput',
-									'facility',
-									`choose how to connect this ${x.definition.driver} instance: ${ps.map((p) => p.id).join(', ')}`
+						const start = yield* Schema.decodeUnknownEffect(ImportStartInput)(
+							input['importStart']
+						).pipe(
+							Effect.mapError(() =>
+								BoltError.make('invalidInput', 'decode', 'Choose a valid import start.')
+							)
+						);
+						yield* saveImportStart(
+							instance,
+							start,
+							authority,
+							typeof input['provider'] === 'string' ? input['provider'] : undefined
+						);
+					}
+					return yield* serial(
+						instance,
+						Effect.gen(function* () {
+							const x = yield* row(instance);
+							if (x === undefined) return yield* Effect.fail(gone(instance));
+							const body = Predicate.isObject(input) ? input : {},
+								ps = choices(x.definition.driver, x.personal);
+							if (ps.length === 0)
+								return yield* Effect.fail(
+									unavailable(`this host has no registered ${x.definition.driver} provider`)
+								);
+							const provider =
+								typeof body['provider'] === 'string'
+									? ps.find((p) => p.id === body['provider'])
+									: ps.length === 1
+										? ps[0]
+										: undefined;
+							if (provider === undefined)
+								return yield* Effect.fail(
+									BoltError.make(
+										'invalidInput',
+										'facility',
+										`choose how to connect this ${x.definition.driver} instance: ${ps.map((p) => p.id).join(', ')}`
+									)
+								);
+							const { provider: _, importStart: _start, ...rest } = body;
+							const current = live.get(instance);
+							if (
+								current !== undefined &&
+								current.provider.id === provider.id &&
+								!current.replaced
+							) {
+								yield* current.calls.pair(rest).pipe(Effect.ensuring(logged(publish(instance))));
+								return;
+							}
+							yield* shut(instance);
+							const loaded = yield* h.credentials.open(instance);
+							const fresh =
+								loaded.values.get(PROVIDER) !== provider.id || current?.replaced === true;
+							const epoch =
+								fresh && loaded.values.size > 0
+									? yield* h.credentials.write(
+											instance,
+											loaded.epoch,
+											wipe(loaded.values.keys()),
+											isRequest(x.definition.driver)
+										)
+									: loaded.epoch;
+							selected.set(instance, {
+								provider,
+								opened: {
+									epoch,
+									row: loaded.row,
+									values: fresh ? new Map() : loaded.values,
+									definition: x.definition
+								}
+							});
+							yield* start(instance).pipe(
+								Effect.ensuring(
+									Effect.sync(() => {
+										selected.delete(instance);
+									})
 								)
 							);
-						const { provider: _, ...rest } = body;
-						const current = live.get(instance);
-						if (current !== undefined && current.provider.id === provider.id && !current.replaced) {
-							yield* current.calls.pair(rest).pipe(Effect.ensuring(logged(publish(instance))));
-							return;
-						}
-						yield* shut(instance);
-						const loaded = yield* h.credentials.open(instance);
-						const fresh = loaded.values.get(PROVIDER) !== provider.id || current?.replaced === true;
-						const epoch =
-							fresh && loaded.values.size > 0
-								? yield* h.credentials.write(
-										instance,
-										loaded.epoch,
-										wipe(loaded.values.keys()),
-										isRequest(x.definition.driver)
+							const next = yield* linked(instance);
+							yield* next.calls.pair(rest).pipe(
+								Effect.andThen(persist(next, new Map([[PROVIDER, provider.id]]))),
+								Effect.onError(() =>
+									shut(instance).pipe(
+										Effect.andThen(logged(persist(next, wipe(next.values.keys()))))
 									)
-								: loaded.epoch;
-						selected.set(instance, {
-							provider,
-							opened: {
-								epoch,
-								row: loaded.row,
-								values: fresh ? new Map() : loaded.values,
-								definition: x.definition
-							}
-						});
-						yield* start(instance).pipe(
-							Effect.ensuring(
-								Effect.sync(() => {
-									selected.delete(instance);
-								})
-							)
-						);
-						const next = yield* linked(instance);
-						yield* next.calls.pair(rest).pipe(
-							Effect.andThen(persist(next, new Map([[PROVIDER, provider.id]]))),
-							Effect.onError(() =>
-								shut(instance).pipe(Effect.andThen(logged(persist(next, wipe(next.values.keys())))))
-							)
-						);
-						if (next.request && next.status.state !== 'pairing') yield* shut(instance);
-						yield* publish(instance);
-					})
-				),
+								)
+							);
+							if (next.request && next.status.state !== 'pairing') yield* shut(instance);
+							yield* publish(instance);
+						})
+					);
+				}),
 			unpair: (instance) =>
 				serial(
 					instance,

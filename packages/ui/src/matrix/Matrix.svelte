@@ -6,6 +6,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import type { Snippet } from 'svelte';
 	import type { Json } from '../client/contract.js';
 	import type { Row } from '../collection/types.js';
+	import type { Toolbar } from '../collection/ViewToolbar.svelte';
 
 	/** A background overlay per column (holidays, closures), optionally per row (M3). */
 	export type MatrixMark = { of: string; at: string; row?: string; label: string };
@@ -27,7 +28,11 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		/** Column width in px (required: memory matrix-columns-default-150px). */
 		colWidth: number;
 		where?: Json;
+		/** Optional native view toolbar; omitted keeps the matrix without toolbar chrome. */
+		toolbar?: Toolbar;
 		marks?: MatrixMark;
+		/** An optional control in each column heading (for example an editable repayment date). */
+		columnHeader?: Snippet<[{ col: Json; label: string }]>;
 		cell?: Snippet<[{ row: Row; col: Json; items: readonly Row[]; marks: readonly Row[] }]>;
 		/** A click on an empty cell opens the create view with `{ [row], [col] }`. */
 		edit?: true;
@@ -58,6 +63,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import ReadGate from '../read/ReadGate.svelte';
 	import RecordShell from '../record/RecordShell.svelte';
 	import Value from '../cell/Value.svelte';
+	import ViewToolbar from '../collection/ViewToolbar.svelte';
+	import { useKinds } from '../kinds/context.js';
 
 	let {
 		rows,
@@ -70,13 +77,16 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		select,
 		colWidth,
 		where,
+		toolbar,
 		marks,
+		columnHeader,
 		cell,
 		edit,
 		move,
 		selection = []
 	}: MatrixProps = $props();
 	const bolt = useBolt();
+	const kinds = useKinds();
 	const columnConfig = (
 		value: MatrixProps['cols'][number]
 	): value is { value: Json; label: string } =>
@@ -188,6 +198,9 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	class="flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2"
 	data-view="matrix"
 >
+	{#if toolbar !== undefined && toolbar !== false}
+		<ViewToolbar config={toolbar} collection={of} catalog={kinds.catalog ?? {}} />
+	{/if}
 	{#if notice}<p role="alert" class="text-destructive text-sm">{notice}</p>{/if}
 	{#if selection.length > 0}
 		<div class="flex items-center gap-2">
@@ -235,7 +248,11 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 							{#each columns as c (JSON.stringify(c.value))}
 								<th
 									class="bg-background sticky top-0 z-10 border-b p-1 text-left text-xs font-medium"
-									style={`width:${colWidth}px;min-width:${colWidth}px`}>{c.label}</th
+									style={`width:${colWidth}px;min-width:${colWidth}px`}
+									>{#if columnHeader}{@render columnHeader({
+											col: c.value,
+											label: c.label
+										})}{:else}{c.label}{/if}</th
 								>
 							{/each}
 						</tr>

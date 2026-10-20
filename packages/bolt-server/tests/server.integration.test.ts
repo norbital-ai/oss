@@ -331,8 +331,10 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 				.map((c) => c.split(';')[0])
 				.join('; ');
 			t.setCookie(cookie);
-			expect(cookie).toContain('__Secure-bolt-session=');
-			expect(r.headers.getSetCookie()[0]).toContain('Secure');
+			expect(cookie).toContain('bolt-session=');
+			expect(cookie).not.toContain('__Secure-');
+			expect(r.headers.getSetCookie()[0]).not.toMatch(/(?:^|;)\s*Secure(?:;|$)/i);
+			expect(r.headers.getSetCookie()[0]).toContain('SameSite=Lax');
 			expect(r.headers.getSetCookie()[0]).toContain('Path=/');
 			expect(r.headers.getSetCookie()[0]).not.toMatch(/(?:^|;)\s*Domain=/i);
 		})

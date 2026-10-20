@@ -1,3 +1,4 @@
+import type { ImportStart } from '../../src/protocol/schema.ts';
 // Type corpus for the engine service contracts (K2): each pinned member's parameters and answer, exactly. Never run,
 // only checked (`tsgo -p tests/tsconfig.json`): a Shape that drifts from its pin is a type error on its line.
 import type { Effect, Option, Result, Scope, Stream } from 'effect';
@@ -236,7 +237,11 @@ is<Eq<Args<FeedsShape['invalidate']>, [instance: string, feed: string, partition
 is<
 	Eq<
 		Args<ConversationsShape['receive']>,
-		[instance: string, event: Exclude<DriverEvent, { kind: 'invalidate' }>]
+		[
+			instance: string,
+			event: Exclude<DriverEvent, { kind: 'invalidate' }>,
+			expectedImportStart?: ImportStart | null | undefined
+		]
 	>
 >();
 is<Eq<EnvoysShape['settled'], Effect.Effect<void>>>();

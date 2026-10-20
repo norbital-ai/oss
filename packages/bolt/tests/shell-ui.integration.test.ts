@@ -762,6 +762,169 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 	);
 
 	it.live(
+		'the inbox requests changes through a labeled reason dialog and keeps the full reason',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					vi.stubGlobal('prompt', () => {
+						throw new Error('Native prompts are not part of the approval flow.');
+					});
+					const source = Result.getOrThrow(
+						decodeManifest({
+							...manifest,
+							teams: { clerks: ['clerk'], reviewers: [] },
+							policies: {
+								clerk: {
+									description: 'Clerk',
+									capabilities: { apps: ['desk'] },
+									grants: {
+										docs: { read: true, approval: { create: [{ steps: [['reviewers']] }] } }
+									}
+								}
+							}
+						})
+					);
+					const context = yield* workspace({ manifest: source });
+					const t = Context.get(context, TestWorkspace);
+					const member = t.member(['clerk']);
+					const reviewer = t.member([]);
+					for (const [id, team] of [
+						[member.id, 'clerks'],
+						[reviewer.id, 'reviewers']
+					] as const) {
+						yield* t.db.write({
+							text: 'UPDATE sys_user SET team = $2 WHERE id = $1',
+							params: [id, team]
+						});
+					}
+					const caller = yield* new Authorities(source, 'inbox-reason-ui').member(t.db, member.id);
+					if (caller === null) throw new Error('Missing proposal requester.');
+					const route = yield* routeFixture(context);
+					const outcome = (yield* actReply(route, caller, {
+						callable: 'docs.create',
+						input: { title: 'A prospective document' },
+						issuedAt: t.clock.now()
+					})).outcome;
+					if (outcome.kind !== 'pendingApproval') throw new Error('Expected a proposal.');
+					const { target } = yield* visit('/inbox', reviewer, { pages: {} }).pipe(
+						Effect.provide(context)
+					);
+					yield* until(() => target.querySelector('[aria-label="More actions"]') !== null);
+					press(present(target.querySelector<HTMLElement>('[aria-label="More actions"]')));
+					yield* until(() => button(document.body, 'Request changes') !== undefined);
+					press(present(button(document.body, 'Request changes')));
+					yield* until(() => document.body.querySelector('[role=dialog] textarea') !== null);
+					const note = present(
+						document.body.querySelector<HTMLTextAreaElement>('[role=dialog] textarea')
+					);
+					const dialog = present(note.closest<HTMLElement>('[role=dialog]'));
+					expect(dialog.querySelector('label')?.htmlFor).toBe(note.id);
+					expect(present(button(dialog, 'Request changes')).disabled).toBe(true);
+					note.value = 'Add the quote.\nInclude the installation date.';
+					note.dispatchEvent(new Event('input', { bubbles: true }));
+					present(dialog.querySelector<HTMLFormElement>('form')).requestSubmit();
+					yield* until(() =>
+						Effect.gen(function* () {
+							return (
+								(yield* t.db.read([
+									{
+										text: 'SELECT state FROM bolt_approvals WHERE id = $1',
+										params: [outcome.requestId]
+									}
+								]))[0]?.rows[0]?.['state'] === 'ChangesRequested'
+							);
+						})
+					);
+					const [result] = yield* t.db.read([
+						{
+							text: "SELECT log->-1->>'reason' reason FROM bolt_approvals WHERE id = $1",
+							params: [outcome.requestId]
+						}
+					]);
+					expect(result?.rows[0]?.['reason']).toBe(
+						'Add the quote.\nInclude the installation date.'
+					);
+					yield* until(() => document.body.querySelector('[role=dialog] textarea') === null);
+				})
+			)
+	);
+
+	it.live(
+		'Settings → Automations renders declared file outputs with native downloads and keeps the result',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const source = Result.getOrThrow(
+						decodeManifest({
+							...manifest,
+							automations: {
+								package: {
+									description: 'Build a delivery package',
+									runAs: ['clerk'],
+									output: {
+										kind: 'object',
+										fields: {
+											delivery: {
+												kind: 'object',
+												fields: {
+													documents: {
+														kind: 'file',
+														accept: ['application/octet-stream'],
+														max: '1MiB',
+														multiple: true
+													}
+												}
+											},
+											count: { kind: 'number' },
+											notes: { kind: 'json' }
+										}
+									}
+								}
+							}
+						})
+					);
+					const documents = [
+						{ id: randomUUID(), name: 'delivery.zip', mime: 'application/octet-stream' },
+						{ id: randomUUID(), name: 'register.bin', mime: 'application/octet-stream' }
+					];
+					const context = yield* workspace({ manifest: source });
+					const t = Context.get(context, TestWorkspace);
+					yield* t.db.write({
+						text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, output)
+							VALUES ('r-files', 'package', '{}', now(), 'manual', 0, 'succeeded', $1)`,
+						params: [
+							JSON.stringify({
+								delivery: { documents },
+								count: 2,
+								notes: { id: randomUUID(), name: 'not-a-file.zip', mime: 'application/zip' }
+							})
+						]
+					});
+					yield* open(context, '/settings/automations?run=r-files', {});
+					yield* until(
+						() =>
+							document.body.querySelectorAll('[data-run-output-files] [data-file-chip]').length ===
+							2
+					);
+					const output = present(document.body.querySelector('[data-run-output-files]'));
+					expect(output.textContent).toContain('delivery.zip');
+					expect(output.textContent).toContain('register.bin');
+					expect(output.textContent).not.toContain('not-a-file.zip');
+					expect(
+						[...document.body.querySelectorAll('[role=dialog] pre')].some((value) =>
+							value.textContent?.includes('"count": 2')
+						)
+					).toBe(true);
+					press(present(output.querySelector<HTMLElement>('[data-file-chip]')));
+					yield* until(() => document.body.querySelector('a[download="delivery.zip"]') !== null);
+					expect(
+						document.body.querySelector('a[download="delivery.zip"]')?.getAttribute('href')
+					).toBe(`/__bolt/files/${documents[0]?.id}`);
+				})
+			)
+	);
+
+	it.live(
 		'Settings → Automations lists runs and a Stop failure survives the next list refresh',
 		() =>
 			Effect.scoped(
@@ -877,16 +1040,12 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				});
 				const t = Context.get(context, TestWorkspace);
 				const { target } = yield* open(context, '/settings/integrations', {});
-				yield* until(() =>
-					[...target.querySelectorAll<HTMLElement>('[data-view=table]')].some((table) =>
-						table.textContent?.includes('Integration instances')
-					)
+				yield* until(() => target.querySelector('[data-integration-connections]') !== null);
+				const connections = present(
+					target.querySelector<HTMLElement>('[data-integration-connections]')
 				);
-				const table = [...target.querySelectorAll<HTMLElement>('[data-view=table]')].find((value) =>
-					value.textContent?.includes('Integration instances')
-				);
-				if (table === undefined) throw new Error('Missing native instance table');
-				const create = button(table, 'New');
+				expect(connections.querySelector('[data-view=table]')).toBeNull();
+				const create = button(connections, 'New connection');
 				if (create === undefined) throw new Error('Missing instance creation action');
 				create.click();
 				yield* until(
@@ -1035,9 +1194,8 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				return { t, context, manager, erp: present(erp.records[0]).id };
 			});
 		const instances = (target: HTMLElement) =>
-			[...target.querySelectorAll<HTMLElement>('[data-view=table]')].find((x) =>
-				x.textContent?.includes('Integration instances')
-			);
+			target.querySelector<HTMLElement>('[data-integration-connections] [data-view=table]') ??
+			undefined;
 		// happy-dom lays out no rows of the virtual wide table, so the row is its card
 		const row = (target: HTMLElement, name: string) =>
 			[...(instances(target)?.querySelectorAll<HTMLElement>('[data-row-card]') ?? [])].find((x) =>
@@ -1060,7 +1218,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				.pipe(Effect.map((results) => present(results[0]).rows[0]));
 
 		it.live(
-			"lists every instance with who uses it, pairs one through its provider's own setup and deploys an envoy on it",
+			'lists each connection once and manages a named agent channel through the same sheet',
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
@@ -1137,7 +1295,32 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 								return (yield* instance(t, 'desk'))?.['envoy'] === 'service';
 							})
 						);
-						yield* until(() => row(target, 'desk')?.textContent?.includes('Service desk') === true);
+						yield* until(() => row(target, 'desk') === undefined);
+						const channels = present(target.querySelector<HTMLElement>('[data-envoys]'));
+						expect(channels.textContent).toContain('Agent channels');
+						expect(channels.textContent).toContain('Service desk');
+						expect(instances(target)?.textContent).toContain('Other connections');
+						expect(channels.querySelectorAll('[data-connector=whatsapp]')).toHaveLength(1);
+						const backup = yield* t.as(t.admin).act('sys_integration.create', {
+							integration: 'whatsapp',
+							name: 'Backup line',
+							envoy: 'service'
+						});
+						if (backup.kind !== 'committed') throw new Error('Backup channel was not created.');
+						yield* until(() => channels.querySelectorAll('[data-envoy-channel]').length === 2);
+						expect(channels.textContent).toContain('Backup line');
+						expect(channels.querySelectorAll('[data-connector=whatsapp]')).toHaveLength(2);
+						expect(row(target, 'Backup line')).toBeUndefined();
+						press(present(present(sheet()).querySelector<HTMLElement>('[data-sheet-close]')));
+						yield* until(() => sheet() === undefined);
+						press(
+							present(
+								button(present(channels.querySelector('[data-envoy-channel=desk]')), 'Manage')
+							)
+						);
+						yield* until(() => tab('Configuration') !== undefined && tab('Messages') !== undefined);
+						expect(present(sheet()).textContent).toContain('desk');
+						expect(button(present(sheet()), 'Delete')).toBeUndefined();
 					})
 				)
 		);

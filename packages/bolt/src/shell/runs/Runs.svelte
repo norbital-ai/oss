@@ -6,7 +6,7 @@
 <script lang="ts">
 	import { fork, live } from '@norbital-ai/ui/effect';
 	import { Array as EffectArray, Effect, Predicate, Schedule, Stream } from 'effect';
-	import { Table } from '@norbital-ai/ui';
+	import { Show, Table } from '@norbital-ai/ui';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
@@ -160,5 +160,18 @@
 			{ label: t('Input'), value: one.input },
 			{ label: t('Result'), value: one.result }
 		]}
-	/>
+	>
+		{#snippet summary()}
+			{#if one?.files?.length}
+				<div class="grid gap-2" data-run-output-files>
+					<p class="text-meta">{t('Files')}</p>
+					<Show
+						kind={{ kind: 'file', accept: ['*/*'], max: '20MiB', multiple: true }}
+						value={one.files}
+						readonly
+					/>
+				</div>
+			{/if}
+		{/snippet}
+	</DetailSheet>
 {/if}

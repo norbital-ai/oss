@@ -271,6 +271,7 @@ type World = {
 	statements: {
 		at: number;
 		text: string;
+		params: readonly Json[];
 	}[];
 	calls: Invocation[];
 	wakes: number[];
@@ -300,16 +301,17 @@ const world = Effect.fn('TestRuns.world')(function* (
 	const statements: {
 		at: number;
 		text: string;
+		params: readonly Json[];
 	}[] = [];
 	const db = TenantDb.typed({
 		read: (batch) =>
 			Effect.suspend(() => {
-				statements.push(...batch.map((x) => ({ at: clock.ms, text: x.text })));
+				statements.push(...batch.map((x) => ({ at: clock.ms, text: x.text, params: x.params })));
 				return inner.read(batch);
 			}),
 		write: (statement, lock) =>
 			Effect.suspend(() => {
-				statements.push({ at: clock.ms, text: statement.text });
+				statements.push({ at: clock.ms, text: statement.text, params: statement.params });
 				return inner.write(statement, lock);
 			}),
 		transaction: inner.transaction
@@ -1014,6 +1016,262 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 						? ['a:start', 'a:end', 'b:start', 'b:end']
 						: ['b:start', 'b:end', 'a:start', 'a:end']
 				);
+			})
+	);
+	it.effect(
+		'only the admitted custom batch starts; queued runs stay stoppable and hand off by due time',
+		() =>
+			Effect.gen(function* () {
+				const entered = yield* Deferred.make<void>(),
+					release = yield* Deferred.make<void>();
+				const order: string[] = [];
+				const w = yield* world(base, {
+					classify: () =>
+						Effect.gen(function* () {
+							order.push('classify');
+							if (order.length === 1) {
+								yield* Deferred.succeed(entered, undefined);
+								yield* Deferred.await(release);
+							}
+						}),
+					flaky: () =>
+						Effect.sync(() => {
+							order.push('export');
+						})
+				});
+				for (const [id, automation, due] of [
+					['first', 'classify', T0 - 4000],
+					['export', 'flaky', T0 - 3000],
+					['second', 'classify', T0 - 2000],
+					['stop', 'flaky', T0 - 1000]
+				] satisfies [string, string, number][])
+					yield* queue(w, id, automation, due);
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				expect(
+					yield* w.sql(
+						`SELECT id, state, attempts, started_at IS NULL AS unstarted, leases FROM sys_run ORDER BY due_at`
+					)
+				).toEqual([
+					{ id: 'first', state: 'running', attempts: 1, unstarted: false, leases: 0 },
+					{ id: 'export', state: 'queued', attempts: 0, unstarted: true, leases: 0 },
+					{ id: 'second', state: 'queued', attempts: 0, unstarted: true, leases: 0 },
+					{ id: 'stop', state: 'queued', attempts: 0, unstarted: true, leases: 0 }
+				]);
+				const admin = yield* w.e.authority({
+					actor: { kind: 'system', run: 'test', by: { automation: 'classify' } },
+					policies: [],
+					admin: true
+				});
+				expect(Option.getOrNull(yield* w.r.stop(admin, 'stop'))).toMatchObject({
+					status: 'stopped'
+				});
+				yield* Deferred.succeed(release, undefined);
+				yield* Fiber.join(ticking);
+				expect(order).toEqual(['classify', 'export', 'classify']);
+				expect(yield* w.sql(`SELECT state, attempts FROM sys_run WHERE id = 'stop'`)).toEqual([
+					{ state: 'stopped', attempts: 0 }
+				]);
+			})
+	);
+	it.effect(
+		'event admission merges one compatible batch up to 10,000 IDs without claiming its backlog',
+		() =>
+			Effect.gen(function* () {
+				const entered = yield* Deferred.make<void>(),
+					release = yield* Deferred.make<void>();
+				const inputs: Json[] = [],
+					order: string[] = [];
+				const w = yield* world(base, {
+					classify: (input) =>
+						Effect.gen(function* () {
+							inputs.push(input);
+							order.push('classify');
+							if (inputs.length === 1) {
+								yield* Deferred.succeed(entered, undefined);
+								yield* Deferred.await(release);
+							}
+						}),
+					flaky: () =>
+						Effect.sync(() => {
+							order.push('export');
+						})
+				});
+				const rows = [
+					{ id: 'a', cause: 'created', collection: 'quotes', size: 6000, due: T0 - 5000 },
+					{ id: 'b', cause: 'created', collection: 'quotes', size: 4000, due: T0 - 4000 },
+					{ id: 'c', cause: 'created', collection: 'quotes', size: 1, due: T0 - 2000 },
+					{ id: 'd', cause: 'created', collection: 'other', size: 1, due: T0 - 1000 },
+					{ id: 'e', cause: 'updated', collection: 'quotes', size: 1, due: T0 }
+				].map((row) => ({
+					...row,
+					due: iso(row.due),
+					input: {
+						collection: row.collection,
+						ids: Array.from({ length: row.size }, (_, i) => `${row.id}${i}`)
+					}
+				}));
+				yield* w.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) SELECT id, 'classify', input, due::timestamptz, cause, 0 FROM jsonb_to_recordset($1::jsonb) x(id text, input jsonb, due text, cause text)`,
+					params: [JSON.stringify(rows)]
+				});
+				yield* queue(w, 'export', 'flaky', T0 - 3000);
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				expect(yield* w.sql(`SELECT id, state, attempts FROM sys_run ORDER BY due_at`)).toEqual([
+					{ id: 'a', state: 'running', attempts: 1 },
+					{ id: 'b', state: 'running', attempts: 1 },
+					{ id: 'export', state: 'queued', attempts: 0 },
+					{ id: 'c', state: 'queued', attempts: 0 },
+					{ id: 'd', state: 'queued', attempts: 0 },
+					{ id: 'e', state: 'queued', attempts: 0 }
+				]);
+				yield* Deferred.succeed(release, undefined);
+				yield* Fiber.join(ticking);
+				const [first, second, third, fourth, fifth] = rows;
+				if (
+					first === undefined ||
+					second === undefined ||
+					third === undefined ||
+					fourth === undefined ||
+					fifth === undefined
+				)
+					throw new Error('Missing event fixture');
+				expect(inputs).toEqual([
+					{ collection: 'quotes', ids: [...first.input.ids, ...second.input.ids] },
+					third.input,
+					fourth.input,
+					fifth.input
+				]);
+				expect(order).toEqual(['classify', 'export', 'classify', 'classify', 'classify']);
+			})
+	);
+	it.effect(
+		'generation interruption recovers the admitted run without spending a queued run lease',
+		() =>
+			Effect.gen(function* () {
+				const entered = yield* Deferred.make<void>(),
+					release = yield* Deferred.make<void>();
+				const w = yield* world(base, {
+					classify: () =>
+						Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+				});
+				yield* queue(w, 'first', 'classify', T0 - 2000);
+				yield* queue(w, 'second', 'classify', T0 - 1000);
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				yield* Fiber.interrupt(ticking);
+				expect(
+					yield* w.sql(
+						`SELECT id, state, attempts, leases, error->>'code' AS code FROM sys_run ORDER BY id`
+					)
+				).toEqual([
+					{ id: 'first', state: 'running', attempts: 1, leases: 0, code: 'interrupted' },
+					{ id: 'second', state: 'queued', attempts: 0, leases: 0, code: null }
+				]);
+				yield* Deferred.succeed(release, undefined);
+				yield* w.r.boot;
+				yield* w.r.tick;
+				expect(yield* w.sql(`SELECT id, state, attempts, leases FROM sys_run ORDER BY id`)).toEqual(
+					[
+						{ id: 'first', state: 'succeeded', attempts: 2, leases: 1 },
+						{ id: 'second', state: 'succeeded', attempts: 1, leases: 0 }
+					]
+				);
+			})
+	);
+	it.effect(
+		'a custom admission evaluates its bounded batch once across queued and finished history',
+		() =>
+			Effect.gen(function* () {
+				const entered = yield* Deferred.make<void>();
+				const w = yield* world(base, {
+					classify: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+				});
+				yield* w.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, finished_at) SELECT 'finished-' || g, 'classify', '{}'::jsonb, $1::timestamptz, 'schedule', 0, 'succeeded', $1::timestamptz FROM generate_series(1, 8000) g`,
+					params: [iso(T0)]
+				});
+				yield* w.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) SELECT 'pending-' || g, CASE WHEN g <= 30 THEN 'classify' ELSE 'flaky' END, CASE WHEN g <= 30 THEN jsonb_build_object('collection', 'quotes', 'ids', jsonb_build_array(g::text)) ELSE '{}'::jsonb END, CASE WHEN g <= 30 THEN $1::timestamptz ELSE $2::timestamptz END, CASE WHEN g <= 30 THEN 'created' ELSE 'schedule' END, 0 FROM generate_series(1, 60) g`,
+					params: [iso(T0 - 2000), iso(T0 - 1000)]
+				});
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				const admission = w.statements.find((statement) => statement.text.includes('head AS ('));
+				if (admission === undefined) throw new Error('Missing custom admission statement');
+				yield* Fiber.interrupt(ticking);
+				yield* w.r.boot;
+				const [row] = yield* w.sql(`EXPLAIN (ANALYZE TRUE, FORMAT JSON) ${admission.text}`, [
+					...admission.params
+				]);
+				const plans = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ Plan: Schema.Json })))(
+					row?.['QUERY PLAN']
+				);
+				const loops: number[] = [];
+				const visit = (node: Json) => {
+					const record = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(
+						node
+					);
+					if (Option.isNone(record)) return;
+					if (record.value['Node Type'] === 'WindowAgg')
+						loops.push(Schema.decodeUnknownSync(Schema.Number)(record.value['Actual Loops']));
+					const children = record.value['Plans'];
+					if (Array.isArray(children)) children.forEach(visit);
+				};
+				for (const plan of plans) visit(plan.Plan);
+				expect(loops).toEqual([1]);
+			})
+	);
+	it.effect(
+		'an immediate custom continuation drains while a platform run still holds the open tick',
+		() =>
+			Effect.gen(function* () {
+				const scheduled = yield* Deferred.make<void>(),
+					finish = yield* Deferred.make<void>(),
+					release = yield* Deferred.make<void>(),
+					continued = yield* Deferred.make<void>();
+				let calls = 0,
+					before = 0;
+				const claims = () =>
+					w.statements.filter((statement) =>
+						statement.text.includes("UPDATE sys_run s SET state = 'running'")
+					).length;
+				const w: World = yield* world(
+					base,
+					{
+						classify: (_, ctx) =>
+							Effect.gen(function* () {
+								if (++calls > 1) {
+									yield* Deferred.succeed(continued, undefined);
+									return;
+								}
+								before = claims();
+								yield* ctx.schedule('classify', {}, { at: iso(T0), key: 'continuation' });
+								yield* Deferred.succeed(scheduled, undefined);
+								yield* Deferred.await(finish);
+							})
+					},
+					{
+						platform: {
+							'agent.triage': () => Deferred.await(release).pipe(Effect.as({ done: true }))
+						}
+					}
+				);
+				yield* queue(w, 'platform', 'agent.triage', T0);
+				yield* queue(w, 'first', 'classify', T0);
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(scheduled);
+				while (claims() <= before) yield* Effect.yieldNow;
+				yield* w.sql('SELECT 1 AS barrier');
+				yield* Deferred.succeed(finish, undefined);
+				yield* Deferred.await(continued);
+				expect(yield* w.sql(`SELECT state FROM sys_run WHERE id = 'platform'`)).toEqual([
+					{ state: 'running' }
+				]);
+				yield* Deferred.succeed(release, undefined);
+				yield* Fiber.join(ticking);
+				expect(calls).toBe(2);
 			})
 	);
 	it.effect('a triage queued while the long automation runs is claimed by the open wake', () =>

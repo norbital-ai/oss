@@ -88,6 +88,7 @@ it.live(
 				const account = bolt.integration('calendar/account');
 				expect(yield* account.status()).toEqual(status);
 				yield* account.pair({ provider: 'google' });
+				yield* account.importStart({ kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' });
 				expect(requests[0]).toEqual({
 					path: '/workspaces/hq/__bolt/integrations/calendar%2Faccount',
 					method: 'GET',
@@ -101,6 +102,12 @@ it.live(
 					credentials: 'same-origin'
 				});
 				expect(globalTransport).not.toHaveBeenCalled();
+				expect(requests[2]).toEqual({
+					path: '/workspaces/hq/__bolt/integrations/calendar%2Faccount/import-start',
+					method: 'POST',
+					body: { kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' },
+					credentials: 'same-origin'
+				});
 			}
 		})
 );

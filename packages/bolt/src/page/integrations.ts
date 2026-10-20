@@ -2,7 +2,11 @@
 import { Cause, Effect, Option, Queue, Schema, Stream } from 'effect';
 import { ActRefused, ProtocolFailed } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
-import { decodeStatus, type InstanceStatus } from '../protocol/instance-status.ts';
+import {
+	decodeStatus,
+	type ImportStartInput,
+	type InstanceStatus
+} from '../protocol/instance-status.ts';
 import { IntegrationOffer, WireError } from '../protocol/schema.ts';
 import { browserTransport } from '../protocol/client.ts';
 
@@ -72,6 +76,8 @@ export function integrationClient(instance: string, options: Options = {}) {
 		instance,
 		status: () => call('GET', '').pipe(Effect.flatMap(status)),
 		pair: (input: Json = {}) => call('POST', 'pair', input).pipe(Effect.flatMap(status)),
+		importStart: (input: ImportStartInput) =>
+			call('POST', 'import-start', input).pipe(Effect.flatMap(status)),
 		unpair: () => call('POST', 'unpair', {}).pipe(Effect.flatMap(status)),
 		test: (input: Json = {}) => call('POST', 'test', input).pipe(Effect.flatMap(status)),
 		discover: () =>
@@ -132,3 +138,70 @@ export function integrationClient(instance: string, options: Options = {}) {
 	};
 }
 export type IntegrationClient = ReturnType<typeof integrationClient>;
+
+/** One shell's instance watchers share a status socket; the last watcher closes it. */
+export function integrationClients(options: Options = {}) {
+	type Subscriber = {
+		readonly instance: string;
+		readonly send: (status: InstanceStatus) => void;
+		readonly fail: (error: ProtocolFailed) => void;
+	};
+	const subscribers = new Set<Subscriber>();
+	let source: EventSource | null = null;
+	const open = () => {
+		const opened = new EventSource(`${options.base ?? BASE}?stream=1`);
+		opened.onmessage = (event) => {
+			const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(event.data);
+			const status = Option.isSome(parsed) ? decodeStatus(parsed.value) : null;
+			if (status === null) {
+				const error = new ProtocolFailed({
+					message: 'The integration status stream returned an invalid frame.'
+				});
+				for (const subscriber of subscribers) subscriber.fail(error);
+			} else
+				for (const subscriber of subscribers)
+					if (subscriber.instance === status.instance) subscriber.send(status);
+		};
+		opened.onerror = () => {
+			const error = new ProtocolFailed({
+				message: 'The integration status stream was interrupted.'
+			});
+			for (const subscriber of subscribers) subscriber.fail(error);
+		};
+		return opened;
+	};
+	return (instance: string): IntegrationClient => ({
+		...integrationClient(instance, options),
+		watch: () =>
+			Stream.callback<InstanceStatus, ProtocolFailed>((queue) =>
+				Effect.acquireRelease(
+					Effect.try({
+						try: () => {
+							source ??= open();
+							const subscriber: Subscriber = {
+								instance,
+								send: (status) => {
+									Queue.offerUnsafe(queue, status);
+								},
+								fail: (error) => {
+									Queue.failCauseUnsafe(queue, Cause.fail(error));
+								}
+							};
+							subscribers.add(subscriber);
+							return subscriber;
+						},
+						catch: () =>
+							new ProtocolFailed({ message: 'The integration status stream could not be opened.' })
+					}),
+					(subscriber) =>
+						Effect.sync(() => {
+							subscribers.delete(subscriber);
+							if (subscribers.size === 0) {
+								source?.close();
+								source = null;
+							}
+						})
+				)
+			)
+	});
+}

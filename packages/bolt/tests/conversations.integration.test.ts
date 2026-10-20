@@ -3,8 +3,8 @@
 // reports and the customer's reply land on the row after it is closed — plus one-statement inbound keyed by instance
 // (dedupe, edits, revokes, files, oversize descriptors, the `messages` feed it queues), personal instances (sync only),
 // serial at-least-once delivery, the epoch, `ctx.send`, outbound attachments and connection notices.
-import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
+import { describe, expect, it, vi } from '@effect/vitest';
+import { Context, Deferred, Effect, Fiber, Layer, Option, Result, Schema } from 'effect';
 import { createHash } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { Drivers, Files } from '../src/engine/ports.ts';
@@ -967,6 +967,337 @@ describe('inbound (§4.3)', () => {
 		attachments: [],
 		...over
 	});
+	it.live('an import cutoff uses only provider source time, including the boundary itself', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				ok(
+					yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+						target: 'desk_wa',
+						set: {
+							import_start: {
+								kind: 'since',
+								at: '2026-09-25T10:00:00.000Z',
+								zone: 'UTC',
+								origin: 'date'
+							}
+						}
+					})
+				);
+				yield* f.conversations.receive('desk_wa', {
+					kind: 'messages',
+					messages: [
+						chat({ id: 'missing-source', sentAt: '2030-01-01T00:00:00.000Z' }),
+						chat({
+							id: 'invalid-source',
+							sentAt: '2030-01-01T00:00:00.000Z',
+							sourceAt: 'not an instant'
+						}),
+						chat({
+							id: 'old-source',
+							sentAt: '2030-01-01T00:00:00.000Z',
+							sourceAt: '2026-09-25T09:59:59.999Z'
+						}),
+						chat({
+							id: 'new-source',
+							sentAt: '1999-01-01T00:00:00.000Z',
+							sourceAt: '2026-09-25T10:00:00.001Z'
+						}),
+						chat({ id: 'equal-source', sourceAt: '2026-09-25T10:00:00.000Z' })
+					]
+				});
+				expect((yield* f.history()).map((row) => row['provider_id'])).toEqual([
+					'new-source',
+					'equal-source'
+				]);
+				expect(
+					yield* f.rows(
+						`SELECT provider_id, (extract(epoch FROM source_at) * 1000)::double precision AS source_ms
+						FROM sys_message WHERE integration = 'desk_wa' ORDER BY seq`
+					)
+				).toEqual([
+					{ provider_id: 'new-source', source_ms: Date.parse('2026-09-25T10:00:00.001Z') },
+					{ provider_id: 'equal-source', source_ms: Date.parse('2026-09-25T10:00:00.000Z') }
+				]);
+			})
+		)
+	);
+
+	it.live('an old source attachment is rejected before its bytes reach file storage', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				ok(
+					yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+						target: 'desk_wa',
+						set: {
+							import_start: {
+								kind: 'since',
+								at: '2026-09-25T10:00:00.000Z',
+								zone: 'UTC',
+								origin: 'date'
+							}
+						}
+					})
+				);
+				const put = vi.spyOn(f.files, 'put'),
+					bytes = new TextEncoder().encode('%PDF-1.7');
+				yield* f.conversations.receive('desk_wa', {
+					kind: 'messages',
+					messages: [
+						chat({
+							sentAt: '2030-01-01T00:00:00.000Z',
+							sourceAt: '2026-09-25T09:59:59.999Z',
+							attachments: [
+								{ name: 'old.pdf', mime: 'application/pdf', bytes: bytes.byteLength, bin: 0 }
+							]
+						})
+					],
+					bins: [bytes]
+				});
+				expect(put).not.toHaveBeenCalled();
+				expect(f.blobs.size).toBe(0);
+				expect(yield* f.history()).toEqual([]);
+				expect(yield* f.rows('SELECT id FROM sys_file')).toEqual([]);
+			})
+		)
+	);
+
+	it.live('a sparse revoke needs an eligible source time on the same instance', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				yield* f.conversations.receive('desk_wa', {
+					kind: 'messages',
+					messages: [
+						chat({ id: 'eligible-revoke', sourceAt: '2026-09-25T10:00:00.000Z' }),
+						chat({ id: 'old-revoke', sourceAt: '2026-09-25T09:59:59.999Z' }),
+						chat({ id: 'uncertified-revoke' })
+					]
+				});
+				yield* f.conversations.receive('slack_a', {
+					kind: 'messages',
+					messages: [chat({ id: 'other-instance-proof', sourceAt: '2026-09-25T11:00:00.000Z' })]
+				});
+				for (const target of ['desk_wa', 'slack_b'])
+					ok(
+						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+							target,
+							set: {
+								import_start: {
+									kind: 'since',
+									at: '2026-09-25T10:00:00.000Z',
+									zone: 'UTC',
+									origin: 'date'
+								}
+							}
+						})
+					);
+				yield* f.conversations.receive('desk_wa', {
+					kind: 'messages',
+					messages: [
+						{ id: 'eligible-revoke', deleted: true },
+						{ id: 'old-revoke', deleted: true },
+						{ id: 'uncertified-revoke', deleted: true },
+						{ id: 'unknown-revoke', deleted: true }
+					]
+				});
+				yield* f.conversations.receive('slack_b', {
+					kind: 'messages',
+					messages: [{ id: 'other-instance-proof', deleted: true }]
+				});
+				expect(yield* f.history()).toMatchObject([
+					{ integration: 'desk_wa', provider_id: 'eligible-revoke', text: '', deleted: true },
+					{ integration: 'desk_wa', provider_id: 'old-revoke', text: 'first', deleted: false },
+					{
+						integration: 'desk_wa',
+						provider_id: 'uncertified-revoke',
+						text: 'first',
+						deleted: false
+					},
+					{
+						integration: 'slack_a',
+						provider_id: 'other-instance-proof',
+						text: 'first',
+						deleted: false
+					}
+				]);
+				expect(yield* f.history()).toHaveLength(4);
+				expect(
+					yield* f.rows(`SELECT source_at = '2026-09-25T10:00:00.000Z'::timestamptz AS preserved
+						FROM sys_message WHERE integration = 'desk_wa' AND provider_id = 'eligible-revoke'`)
+				).toEqual([{ preserved: true }]);
+			})
+		)
+	);
+
+	it.live(
+		'saving a cutoff waits for an attachment ingest already admitted under the old boundary',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						entered = yield* Deferred.make<void>(),
+						release = yield* Deferred.make<void>(),
+						saveStarted = yield* Deferred.make<void>(),
+						bytes = new TextEncoder().encode('%PDF-1.7'),
+						originalPut = f.files.put,
+						boundary = {
+							kind: 'since',
+							at: '2026-09-25T11:00:00.000Z',
+							zone: 'UTC',
+							origin: 'date'
+						} as const;
+					ok(
+						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+							target: 'desk_wa',
+							set: { import_start: { kind: 'all' } }
+						})
+					);
+					const put = vi.spyOn(f.files, 'put').mockImplementation((data, metadata) =>
+						Effect.gen(function* () {
+							yield* Deferred.succeed(entered, undefined);
+							yield* Deferred.await(release);
+							return yield* originalPut(data, metadata);
+						})
+					);
+					const ingest = yield* f.conversations
+						.receive('desk_wa', {
+							kind: 'messages',
+							messages: [
+								chat({
+									id: 'before-cutoff',
+									sourceAt: '2026-09-25T10:00:00.000Z',
+									attachments: [
+										{ name: 'first.pdf', mime: 'application/pdf', bytes: bytes.byteLength, bin: 0 }
+									]
+								})
+							],
+							bins: [bytes]
+						})
+						.pipe(Effect.forkChild);
+					yield* Deferred.await(entered);
+					let saved = false;
+					const save = yield* Effect.gen(function* () {
+						yield* Deferred.succeed(saveStarted, undefined);
+						const result = yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+							target: 'desk_wa',
+							set: { import_start: boundary }
+						});
+						saved = true;
+						return result;
+					}).pipe(Effect.forkChild);
+					yield* Deferred.await(saveStarted);
+					yield* Effect.sleep('20 millis');
+					expect(saved).toBe(false);
+					yield* Deferred.succeed(release, undefined);
+					yield* Fiber.join(ingest);
+					ok(yield* Fiber.join(save));
+					expect(saved).toBe(true);
+					expect(
+						yield* f.rows("SELECT import_start FROM sys_integration WHERE id = 'desk_wa'")
+					).toEqual([{ import_start: boundary }]);
+					const before = yield* f.history();
+					expect(before).toMatchObject([
+						{ provider_id: 'before-cutoff', text: 'first', files: [{ name: 'first.pdf' }] }
+					]);
+					expect(before).toHaveLength(1);
+					yield* f.conversations.receive('desk_wa', {
+						kind: 'messages',
+						messages: [
+							chat({
+								id: 'after-cutoff',
+								sentAt: '2030-01-01T00:00:00.000Z',
+								sourceAt: '2026-09-25T10:00:00.000Z',
+								attachments: [
+									{ name: 'old.pdf', mime: 'application/pdf', bytes: bytes.byteLength, bin: 0 }
+								]
+							})
+						],
+						bins: [bytes]
+					});
+					expect(yield* f.history()).toEqual(before);
+					expect(put).toHaveBeenCalledTimes(1);
+					expect(f.blobs.size).toBe(1);
+				})
+			)
+	);
+
+	it.live(
+		'a same-version replay fills missing source time without rewriting or requeuing the message',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						bytes = new TextEncoder().encode('%PDF-1.7'),
+						version = '2026-09-25T10:03:00.000Z',
+						id = '<source-repair@acme.com>';
+					yield* f.conversations.receive('supplier_inbox', {
+						kind: 'messages',
+						messages: [
+							mail({
+								id,
+								version,
+								attachments: [
+									{ name: 'original.pdf', mime: 'application/pdf', bytes: bytes.byteLength, bin: 0 }
+								]
+							})
+						],
+						bins: [bytes]
+					});
+					ok(
+						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+							target: 'supplier_inbox',
+							set: {
+								import_start: {
+									kind: 'since',
+									at: '2026-09-25T10:00:00.000Z',
+									zone: 'UTC',
+									origin: 'date'
+								}
+							}
+						})
+					);
+					const messageSql = `SELECT id, seq, conversation, text, version, sender, sender_name, sent_at,
+					email, files, edited_at, created_at FROM sys_message WHERE integration = 'supplier_inbox'`,
+						runsSql = `SELECT id, automation, state, input, key FROM sys_run
+						WHERE automation = 'mail_import.supplier_mail' ORDER BY id`,
+						before = yield* f.rows(messageSql),
+						runs = yield* f.rows(runsSql),
+						put = vi.spyOn(f.files, 'put');
+					expect(before).toHaveLength(1);
+					expect(runs).toHaveLength(1);
+					expect(
+						yield* f.rows("SELECT source_at FROM sys_message WHERE integration = 'supplier_inbox'")
+					).toEqual([{ source_at: null }]);
+					const replay = mail({
+						id,
+						version,
+						sentAt: '2030-01-01T00:00:00.000Z',
+						sourceAt: '2026-09-25T10:03:00.000Z',
+						subject: 'This must not replace the original',
+						text: 'This must not replace the original',
+						attachments: [
+							{ name: 'changed.pdf', mime: 'application/pdf', bytes: bytes.byteLength, bin: 0 }
+						]
+					});
+					yield* f.conversations.receive('supplier_inbox', {
+						kind: 'messages',
+						messages: [replay, replay],
+						bins: [bytes]
+					});
+					expect(yield* f.rows(messageSql)).toEqual(before);
+					expect(yield* f.rows(runsSql)).toEqual(runs);
+					expect(
+						yield* f.rows(`SELECT source_at = '2026-09-25T10:03:00.000Z'::timestamptz AS repaired
+						FROM sys_message WHERE integration = 'supplier_inbox'`)
+					).toEqual([{ repaired: true }]);
+					expect(put).not.toHaveBeenCalled();
+					expect(f.blobs.size).toBe(1);
+				})
+			)
+	);
+
 	it.live(
 		'a redelivery is the same row; a newer version converges it, an older one changes nothing; a revoke tombstones it for good',
 		() =>

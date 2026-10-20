@@ -3,10 +3,43 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schedule, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
+import { vi } from 'vitest';
 import { LIMITS, type GuestOutcome, type Invocation } from '../src/engine/contracts.ts';
 import { GuestConfig, IsolatesLive, type GuestProgram } from '../src/engine/guest/runner.ts';
 import { Guest, GuestLimits, Isolates, type Bridge } from '../src/engine/services.ts';
 import { guestLayer } from './support/guest-fixture.ts';
+
+const observed = vi.hoisted(() => ({ scopes: new Set<Scope.Closeable>(), enabled: false, maps: 0 }));
+vi.mock('effect', async (importOriginal) => {
+	const original = await importOriginal<typeof import('effect')>();
+	return {
+		...original,
+		Scope: {
+			...original.Scope,
+			fork: (...args: Parameters<typeof original.Scope.fork>) =>
+				original.Scope.fork(...args).pipe(
+					original.Effect.tap((scope) =>
+						original.Effect.sync(() => {
+							if (observed.enabled) observed.scopes.add(scope);
+						})
+					)
+				)
+		}
+	};
+});
+vi.mock('@jridgewell/trace-mapping', async (importOriginal) => {
+	const original = await importOriginal<typeof import('@jridgewell/trace-mapping')>();
+	return {
+		...original,
+		TraceMap: class extends original.TraceMap {
+			constructor(...args: ConstructorParameters<typeof original.TraceMap>) {
+				super(...args);
+				observed.maps++;
+			}
+		}
+	};
+});
+
 const program = (body: string, prefix = ''): GuestProgram => ({
 	source: `${prefix}\nexport default { automation: { a: { body: ${body} } } };\n`
 });
@@ -86,6 +119,72 @@ const evictAll = (test: Harness) =>
 		expect((yield* test.isolates.counts).warm).toBe(0);
 	});
 describe('prepared isolates', () => {
+	it.live('parses source maps only when an error needs its authored location', () =>
+		Effect.gen(function* () {
+			const test = yield* harness;
+			const runner = yield* test.runner({
+				...program('(fail) => { if (fail) throw new Error("mapped"); return 1; }'),
+				sourceMap: JSON.stringify({
+					version: 3,
+					file: 'guest.mjs',
+					sources: ['src/automation/+a.automation.ts'],
+					names: [],
+					mappings: ';AAAA'
+				})
+			});
+			const before = observed.maps;
+			for (let i = 0; i < 8; i++)
+				expect(ok(yield* runner.invoke(invocation(`success-${i}`), bridge))).toBe(1);
+			expect(observed.maps).toBe(before);
+			const failed = yield* runner.invoke({ ...invocation('mapped error'), input: true }, bridge);
+			expect(failed.kind).toBe('failed');
+			if (failed.kind !== 'failed') return;
+			expect(failed.error.cause).toMatchObject({ at: 'src/automation/+a.automation.ts:1' });
+			expect(observed.maps).toBe(before + 1);
+		})
+	);
+	it.live('keeps pool finalizers bounded while used warm isolates are replaced', () =>
+		Effect.gen(function* () {
+			observed.enabled = true;
+			try {
+				const test = yield* harness;
+				test.warm.depth = 1;
+				const runner = yield* test.runner(program('() => 1', '// finalizer lifetime'));
+				expect(ok(yield* runner.invoke(invocation('prime'), bridge))).toBe(1);
+				yield* settled(test);
+				yield* Effect.yieldNow;
+				expect(observed.scopes.size).toBeGreaterThan(0);
+				const retained = () =>
+					[...observed.scopes].map(({ state }) =>
+						state._tag === 'Open'
+							? Number(state.finalizer !== undefined) + (state.finalizers?.size ?? 0)
+							: 0
+					);
+				const before = retained();
+				for (let i = 0; i < 8; i++) {
+					expect(ok(yield* runner.invoke(invocation(`replacement-${i}`), bridge))).toBe(1);
+					yield* settled(test);
+					yield* Effect.yieldNow;
+					expect(retained()).toEqual(before);
+				}
+				yield* noneRunning(test);
+			} finally {
+				observed.enabled = false;
+				observed.scopes.clear();
+			}
+		})
+	);
+	it.live('drops an isolate when preparation defects before acquisition completes', () =>
+		Effect.gen(function* () {
+			const test = yield* harness.pipe(
+				Effect.provideService(GuestConfig, { compute: Effect.die(new Error('compute defect')) })
+			);
+			test.warm.depth = 0;
+			const runner = yield* test.runner(program('() => 1', '// preparation defect'));
+			expect(Exit.isFailure(yield* Effect.exit(runner.invoke(invocation(), bridge)))).toBe(true);
+			expect((yield* test.isolates.counts).live).toBe(0);
+		})
+	);
 	it.live('refills a borrowed warm slot while its invocation waits for host I/O', () =>
 		Effect.gen(function* () {
 			const entered = yield* Deferred.make<void>(),

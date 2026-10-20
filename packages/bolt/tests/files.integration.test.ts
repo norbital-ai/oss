@@ -11,6 +11,7 @@ import { actReply, json, routeFixture } from './support/route-fixture.ts';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
+import { actorRef } from '../src/engine/write/commit.ts';
 import { filesRoutes } from '../src/protocol/files.ts';
 import { ImagePreviewsLive } from '../src/protocol/image-previews.ts';
 import { RateLimits } from '../src/protocol/http.ts';
@@ -281,6 +282,120 @@ it.live(
 				expect(o.kind).toBe('committed');
 				expect((yield* call('root', 'GET', photo.id)).status).toBe(200); // the record's reader
 				expect((yield* call('bob', 'GET', photo.id)).status).toBe(404); // no grant on photos
+			})
+		)
+);
+
+it.live(
+	'automation files download only when a full readable run returns their declared file reference',
+	() =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const file = { kind: 'file', accept: ['*/*'], max: '20MiB', multiple: true } as const;
+				const handover = {
+					...manifest,
+					policies: {
+						controller: {
+							description: 'Reads handovers',
+							grants: {},
+							automations: ['handover']
+						}
+					},
+					automations: {
+						handover: {
+							description: 'Produces handover files',
+							runAs: 'trigger',
+							output: {
+								kind: 'object',
+								fields: {
+									files: file,
+									opaque: { kind: 'json' },
+									lookalike: {
+										kind: 'object',
+										fields: { id: { kind: 'text' }, name: { kind: 'text' }, mime: { kind: 'text' } }
+									}
+								}
+							}
+						},
+						other_handover: { description: 'Another file owner', runAs: 'trigger', output: file }
+					}
+				} satisfies EngineManifest;
+				const context = yield* Layer.build(TestWorkspace.layer({ manifest: handover }));
+				const t = Context.get(context, TestWorkspace),
+					route = yield* routeFixture(context),
+					files = Context.get(context, Files);
+				const starter = t.member([]),
+					controller = t.member(['controller']),
+					stranger = t.member([]);
+				const who = {
+					starter: t.as(starter).authority,
+					controller: t.as(controller).authority,
+					stranger: t.as(stranger).authority,
+					admin: t.as(t.admin).authority
+				};
+				const put = Effect.fnUntraced(function* (name: string, owner = 'handover') {
+					const bytes = new Uint8Array([1, 2, 3]);
+					const blob = yield* files.put(bytes, { name, mime: 'application/octet-stream' });
+					const ref = { id: randomUUID(), name, mime: 'application/octet-stream' };
+					yield* t.db.write({
+						text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,now())`,
+						params: [ref.id, name, ref.mime, bytes.byteLength, blob.key, blob.sha256, owner]
+					});
+					return ref;
+				});
+				const returned = yield* put('handover.bin'),
+					intermediate = yield* put('intermediate.bin'),
+					opaque = yield* put('opaque.bin'),
+					lookalike = yield* put('lookalike.bin'),
+					wrongOwner = yield* put('other-owner.bin', 'other_handover'),
+					actorOnly = yield* put('actor-only.bin');
+				yield* t.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, output, actor, starter) VALUES ('handover-run','handover','{}',now(),'manual',0,'succeeded',$1::jsonb,$2,$3::jsonb), ('actor-only-run','handover','{}',now(),'manual',0,'succeeded',$4::jsonb,$5,$3::jsonb)`,
+					params: [
+						JSON.stringify({ files: [returned, wrongOwner], opaque, lookalike }),
+						actorRef(starter.actor),
+						JSON.stringify(starter),
+						JSON.stringify({ files: [actorOnly] }),
+						actorRef(stranger.actor)
+					]
+				});
+				// An earlier matching id in opaque JSON must not hide a later declared, readable file.
+				yield* t.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, output, starter) VALUES ('a-opaque-candidate','handover','{}',now(),'manual',0,'succeeded',$1::jsonb,$2::jsonb)`,
+					params: [JSON.stringify({ opaque: returned }), JSON.stringify(starter)]
+				});
+				const download = (as: keyof typeof who, id: string) =>
+					route.handle(who[as], new Request(`http://cell/__bolt/files/${id}`));
+				for (const as of ['starter', 'controller', 'admin'] as const)
+					expect((yield* download(as, returned.id)).status).toBe(200);
+				const response = yield* download('starter', returned.id);
+				expect(response.headers.get('content-disposition')).toContain('handover.bin');
+				expect(
+					new Uint8Array(
+						yield* Effect.tryPromise({
+							try: () => response.arrayBuffer(),
+							catch: (error) => new KitInvalid({ message: String(error) })
+						})
+					)
+				).toEqual(new Uint8Array([1, 2, 3]));
+				expect((yield* download('stranger', returned.id)).status).toBe(404);
+				expect((yield* download('stranger', actorOnly.id)).status).toBe(404);
+				expect((yield* download('controller', actorOnly.id)).status).toBe(200);
+				for (const file of [intermediate, opaque, lookalike, wrongOwner])
+					for (const as of ['starter', 'controller'] as const)
+						expect((yield* download(as, file.id)).status).toBe(404);
+				expect((yield* download('admin', intermediate.id)).status).toBe(200);
+				for (const forged of [
+					{ ...returned, path: '/private/secret' },
+					{ ...returned, mime: 7 }
+				]) {
+					yield* t.db.write({
+						text: `UPDATE sys_run SET output = $1::jsonb WHERE id = 'handover-run'`,
+						params: [JSON.stringify({ files: [forged] })]
+					});
+					expect((yield* download('starter', returned.id)).status).toBe(404);
+					expect((yield* download('controller', returned.id)).status).toBe(404);
+				}
 			})
 		)
 );

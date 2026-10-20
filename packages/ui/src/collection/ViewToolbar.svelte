@@ -86,6 +86,8 @@
 				new?: boolean | (() => void);
 				/** The page's own scope controls (a period picker, an entity picker), placed in the toolbar before search. Never actions. */
 				controls?: Snippet;
+				/** Compact task controls at the right edge, before New. */
+				trailing?: Snippet;
 				/**
 				 * What the view is scoped to (`{ company_id, period }`), handed to the collection's pipeline: the import and
 				 * its template decode it against the pipeline's `context` fields. It narrows and defaults; it never authorizes.
@@ -1037,7 +1039,7 @@
 					>
 				</Popover.Root>
 			{/if}
-			<!-- the owner's toolbar: title, ⓘ and every widget flush left; New alone pushed right (and to the end of a wrapped row) -->
+			<!-- scope controls stay left; compact task controls and New share the right edge -->
 			{#if cfg.controls}<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-controls>
 					{@render cfg.controls()}
 				</div>{/if}
@@ -1398,10 +1400,13 @@
 					</Popover.Content>
 				</Popover.Root>
 			{/if}
+			{#if cfg.trailing}<div class="ml-auto flex shrink-0 items-center gap-1" data-view-trailing>
+					{@render cfg.trailing()}
+				</div>{/if}
 			{#if canNew}
 				<Button
 					size="default"
-					class="ml-auto px-2.5 @xl:px-3"
+					class={cfg.trailing ? 'px-2.5 @xl:px-3' : 'ml-auto px-2.5 @xl:px-3'}
 					aria-label={msg(bolt, 'table.new', 'New')}
 					data-view-new
 					onclick={create}

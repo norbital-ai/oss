@@ -9,6 +9,7 @@ import type { Component } from 'svelte';
 import type { Json } from '../../decl/values.ts';
 import {
 	localText,
+	type ImportStartInput,
 	type InstanceStatus,
 	type LocalText,
 	type ProviderChoice
@@ -21,6 +22,8 @@ export type IntegrationSetupProps = {
 	status: InstanceStatus | null;
 	/** Pairs with whatever the provider's setup collects; the host refuses a malformed body. */
 	pair: (input?: Json) => Effect.Effect<void>;
+	/** Changes the import boundary without replacing the account's credentials. */
+	importStart: (input: ImportStartInput) => Effect.Effect<boolean>;
 	/** Unpairs: the credentials are destroyed and the provider forgets this host. */
 	unpair: () => Effect.Effect<void>;
 	/** Tests the connected instance (`status.test` says whether a message goes out, and where to). */

@@ -20,6 +20,10 @@ it automatically, so tenant apps do not add a second base stylesheet or Tailwind
 
 Do not import from `build/` or `src/` directly.
 
+Tabs keep compact desktop sizing at narrow widths. On touch screens their minimum target is 32px
+(underline tabs remain 36px); other controls retain the standard 44px touch target. Long tab strips
+scroll horizontally and keep the focused tab visible during keyboard navigation.
+
 ## Development
 
 ```sh

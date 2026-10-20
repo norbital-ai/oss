@@ -34,6 +34,53 @@ const manifest = Result.getOrThrow(
 
 describe('the session cookie', () => {
 	it.live(
+		'keeps HTTP sessions across boots and clears the same canonical cookies on sign-out',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const context = yield* Layer.build(
+						TestWorkspace.layer({
+							manifest,
+							host: {
+								publicUrl: 'http://127.0.0.1:4180',
+								workspace: { name: 'Local', handle: 'local' }
+							}
+						})
+					);
+					const t = Context.get(context, TestWorkspace);
+					const id = randomUUID();
+					yield* t.db.write({
+						text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ($1, 'ada@x.test', 'Ada', 'staff', true)`,
+						params: [id]
+					});
+					const session = yield* t.session(id);
+					expect(session).toMatch(/^bolt-session=/);
+					const request = (path: string, cookie: string, method = 'GET') =>
+						t.handle(new Request(`http://127.0.0.1:4180${path}`, { method, headers: { cookie } }));
+					const first = yield* request(SHELL, session);
+					expect(first.status).toBe(200);
+					const renewed = first.headers.get('set-cookie') ?? '';
+					expect(renewed).toMatch(/^bolt-session=/);
+					expect(renewed).toContain('; Path=/; HttpOnly; SameSite=Lax;');
+					expect(renewed).not.toMatch(/(?:^|;)\s*(?:Secure|Partitioned)(?:;|$)/i);
+					expect((yield* request(SHELL, renewed.split(';')[0]!)).status).toBe(200);
+					expect((yield* request(SHELL, `${session}; ${session}`)).status).toBe(400);
+					expect((yield* request(SHELL, `__Secure-${session}`)).status).toBe(401);
+					const signedOut = yield* request('/__bolt/session/signout', session, 'POST');
+					expect(signedOut.status).toBe(204);
+					const cleared = signedOut.headers.getSetCookie();
+					expect(cleared).toHaveLength(2);
+					expect(cleared[0]).toMatch(/^bolt-session=;/);
+					expect(cleared[1]).toMatch(/^bolt-preview=;/);
+					for (const header of cleared) {
+						expect(header).toContain('Max-Age=0');
+						expect(header).not.toMatch(/(?:^|;)\s*(?:Secure|Partitioned)(?:;|$)/i);
+					}
+					expect((yield* request(SHELL, session)).status).toBe(401);
+				})
+			)
+	);
+	it.live(
 		'authorizes direct public file URLs through their declared app or kiosk and rejects ambiguous scope',
 		() =>
 			Effect.scoped(
@@ -173,12 +220,7 @@ describe('the session cookie', () => {
 							true
 						]
 					});
-					const session = yield* mint(Context.get(context, HostIdentity), administrator).pipe(
-						Effect.provide(context)
-					);
-					const memberHeaders = {
-						cookie: `${COOKIES.session}=${encodeURIComponent(session.token)}`
-					};
+					const memberHeaders = { cookie: yield* t.session(administrator) };
 					expect((yield* request(storedFileUrl('', hidden.id), 'GET', memberHeaders)).status).toBe(
 						200
 					);

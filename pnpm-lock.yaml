@@ -34,7 +34,7 @@ overrides:
 packageExtensionsChecksum: sha256-szM874KBbSxTYSFw7iIzEUKof84HNiD4esRjMM2jF0w=
 
 patchedDependencies:
-  '@whiskeysockets/baileys@7.0.0-rc14': e710f22012ba2ac80b1deee1e77cd59a86c9e7e89da235315b7c96b6b84aac54
+  '@whiskeysockets/baileys@7.0.0-rc14': f10df594919dcf51f3df7ff7558c8391acf42f74358444d15a18155e7b402206
   isolated-vm@7.0.1: b1e019643d694a5e527a3041db64bf787b3f7c73f5a7b4f459da04822d65dc83
 
 importers:
@@ -358,7 +358,7 @@ importers:
     optionalDependencies:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc14
-        version: 7.0.0-rc14(patch_hash=e710f22012ba2ac80b1deee1e77cd59a86c9e7e89da235315b7c96b6b84aac54)(sharp@0.35.4(@types/node@26.2.0))(supports-color@7.2.0)
+        version: 7.0.0-rc14(patch_hash=f10df594919dcf51f3df7ff7558c8391acf42f74358444d15a18155e7b402206)(sharp@0.35.4(@types/node@26.2.0))(supports-color@7.2.0)
 
   packages/std:
     dependencies:
@@ -4411,7 +4411,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  '@whiskeysockets/baileys@7.0.0-rc14(patch_hash=e710f22012ba2ac80b1deee1e77cd59a86c9e7e89da235315b7c96b6b84aac54)(sharp@0.35.4(@types/node@26.2.0))(supports-color@7.2.0)':
+  '@whiskeysockets/baileys@7.0.0-rc14(patch_hash=f10df594919dcf51f3df7ff7558c8391acf42f74358444d15a18155e7b402206)(sharp@0.35.4(@types/node@26.2.0))(supports-color@7.2.0)':
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4

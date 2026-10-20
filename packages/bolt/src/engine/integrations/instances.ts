@@ -5,6 +5,7 @@
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
 // definition, a configuration that decodes (defaults filled), and a named instance (`+workspace.ts`'s) never deleted here.
 import { Clock, Effect, Option, Predicate, Schema } from 'effect';
+import { localOf } from '@norbital-ai/std/zone';
 import type { Kind } from '@norbital-ai/std/kind';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Drivers } from '../ports.ts';
@@ -20,6 +21,7 @@ import {
 	type IntegrationSpec
 } from '../../decl/runtime/integration.ts';
 import { SYSTEM } from '../../system/index.ts';
+import { ImportStart } from '../../protocol/schema.ts';
 import {
 	LIMITS,
 	type Bindings,
@@ -116,6 +118,24 @@ export function instanceTransform(
 		const owner = pre === undefined ? (values['owner'] ?? null) : (pre['owner'] ?? null);
 		if (pre === undefined && owner !== null && !('personal' in DRIVERS[def.driver]))
 			return refuse(c.path, 'owner', `A ${def.driver} instance is never personal.`);
+		const start = values['import_start'];
+		if (start !== undefined && start !== null) {
+			const decoded = Schema.decodeUnknownOption(ImportStart)(start);
+			if (Option.isNone(decoded))
+				return refuse(c.path, 'import_start', 'Choose a valid import start.');
+			if (decoded.value.kind === 'since') {
+				try {
+					if (!Number.isFinite(Date.parse(decoded.value.at))) throw new Error('instant');
+					localOf(Date.parse(decoded.value.at), decoded.value.zone);
+				} catch {
+					return refuse(
+						c.path,
+						'import_start',
+						'Choose a valid import instant and IANA time zone.'
+					);
+				}
+			}
+		}
 		const envoy = values['envoy'] ?? null;
 		if (envoy !== null) {
 			if (typeof envoy !== 'string' || !Object.hasOwn(m.envoys, envoy))

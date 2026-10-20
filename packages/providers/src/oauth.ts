@@ -2,9 +2,10 @@
 // PKCE, the callback on the host's one redirect URI (routed back to the link by its `state`), and refresh on use. Nothing
 // here is tied to a member: the `state` is bound to one pairing attempt and lives ten minutes.
 import { createHash, randomBytes } from 'node:crypto';
-import { Clock, Effect, Schema, SynchronizedRef } from 'effect';
+import { Clock, Effect, Fiber, Schema, Scope, Semaphore, SynchronizedRef } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
 import { OAuthRefused, ProviderUnavailable, type ProviderFailure } from './errors.ts';
+import { same } from './util.ts';
 
 /** Where a provider's authorization server is, and what the mailbox needs from it. */
 export type OAuthApp = {
@@ -21,6 +22,60 @@ export const Tokens = Schema.Struct({
 export type Tokens = typeof Tokens.Type;
 
 export const STATE_MS = 10 * 60_000;
+
+/** One accepted callback completes once; popup/navigation retries receive independent copies of its response. */
+export const callbackCompletion = Effect.gen(function* () {
+	const gate = yield* Semaphore.make(1),
+		scope = yield* Scope.Scope;
+	let completed: {
+		state: string;
+		at: number;
+		fiber: Fiber.Fiber<Response, ProviderFailure>;
+	} | null = null;
+	return {
+		reset: <A, E, R>(work: Effect.Effect<A, E, R>) =>
+			gate.withPermit(
+				Effect.gen(function* () {
+					if (completed !== null) yield* Fiber.interrupt(completed.fiber);
+					completed = null;
+					return yield* work;
+				})
+			),
+		run: <P extends { state: string; at: number }>(
+			state: string,
+			pending: () => P | null,
+			expired: () => Response,
+			complete: (pairing: P) => Effect.Effect<Response, ProviderFailure>
+		) =>
+			Effect.gen(function* () {
+				const selected = yield* gate.withPermit(
+					Effect.gen(function* () {
+						const now = yield* Clock.currentTimeMillis;
+						if (completed !== null && now - completed.at > STATE_MS) {
+							yield* Fiber.interrupt(completed.fiber);
+							completed = null;
+						}
+						if (completed !== null && same(state, completed.state)) return completed.fiber;
+						const pairing = pending();
+						if (pairing === null || !same(state, pairing.state) || now - pairing.at > STATE_MS)
+							return expired();
+						// A canceled HTTP waiter must not leave an untracked completion running in the link.
+						return yield* Effect.forkIn(Effect.scoped(complete(pairing)), scope, {
+							uninterruptible: false
+						}).pipe(
+							Effect.tap((fiber) =>
+								Effect.sync(() => {
+									completed = { state: pairing.state, at: pairing.at, fiber };
+								})
+							),
+							Effect.uninterruptible
+						);
+					})
+				);
+				return selected instanceof Response ? selected : (yield* Fiber.join(selected)).clone();
+			})
+	};
+});
 const SKEW_MS = 60_000;
 const Grant = Schema.Struct({
 	access_token: Schema.optionalKey(Schema.String),

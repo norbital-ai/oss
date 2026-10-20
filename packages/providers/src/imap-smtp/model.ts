@@ -28,7 +28,12 @@ export const Mailbox = Schema.Union([
 	Schema.Struct({ ...fields, method: Schema.Literal('google') })
 ]);
 export type Mailbox = typeof Mailbox.Type;
-export const Cursor = Schema.Struct({ validity: Schema.String, uid: Schema.Number });
+export const Cursor = Schema.Struct({
+	validity: Schema.String,
+	uid: Schema.Number,
+	backfill: Schema.optionalKey(Schema.Number),
+	after: Schema.optionalKey(Schema.String)
+});
 export type Cursor = typeof Cursor.Type;
 export const Wire = Schema.Struct({
 	id: Schema.NonEmptyString,

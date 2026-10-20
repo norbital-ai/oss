@@ -9,6 +9,7 @@ export {
 	idsOf,
 	useForm,
 	useRecordController,
-	type RecordControllerScope
+	type RecordControllerScope,
+	type SemanticIssue
 } from './form-state.svelte.js';
 export type { Outcome, Row } from './draft.js';

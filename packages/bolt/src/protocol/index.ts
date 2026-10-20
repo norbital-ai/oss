@@ -5,7 +5,12 @@
 import type { ArtifactJson } from '../engine/artifact/read.ts';
 import type * as S from './schema.ts';
 
-export { TemplateManifest } from './schema.ts';
+export {
+	TemplateManifest,
+	ImportStart,
+	ImportStartInput,
+	ImportStartCapability
+} from './schema.ts';
 export { ActReply, QReply, WireError } from './schema.ts';
 export { MIME, clientPage, type ClientPage } from './static.ts';
 

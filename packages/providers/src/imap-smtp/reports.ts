@@ -106,7 +106,8 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 	source: Uint8Array | string,
 	domain: string,
 	fallbackId: string,
-	deliveryReports: boolean = true
+	deliveryReports: boolean = true,
+	receivedAt?: string
 ): Effect.fn.Return<Read, ProviderUnavailable> {
 	const e = yield* Effect.tryPromise({
 		try: () =>
@@ -174,6 +175,7 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 		};
 	});
 	const date = Date.parse(e.date ?? ''),
+		received = Date.parse(receivedAt ?? ''),
 		now = yield* Clock.currentTimeMillis;
 	return {
 		kind: 'mail',
@@ -182,7 +184,9 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 		message: {
 			id: e.messageId ?? fallbackId,
 			thread: null,
-			sentAt: new Date(Number.isNaN(date) ? now : date).toISOString(),
+			sentAt: new Date(
+				Number.isNaN(date) ? (Number.isNaN(received) ? now : received) : date
+			).toISOString(),
 			from,
 			replyTo: flat(e.replyTo)[0] ?? null,
 			to: flat(e.to),

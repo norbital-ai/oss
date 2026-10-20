@@ -14,6 +14,7 @@ export default model({
 		envoy: { kind: 'text', optional: true },
 		active: { kind: 'bool', default: true },
 		configuration: { kind: 'json', default: {} },
+		import_start: { kind: 'json', optional: true },
 		status: { kind: 'json', optional: true },
 		epoch: { kind: 'text', optional: true },
 		revision: { kind: 'int', default: 1 }

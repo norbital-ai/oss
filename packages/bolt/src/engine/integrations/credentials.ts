@@ -9,7 +9,8 @@ const InstanceRowSchema = Schema.Struct({
 	integration: Schema.String,
 	owner: Schema.NullOr(Schema.String),
 	active: Schema.Boolean,
-	configuration: Schema.Json
+	configuration: Schema.Json,
+	import_start: Schema.NullOr(Schema.Json)
 });
 export type InstanceRow = typeof InstanceRowSchema.Type;
 export type Credentials = {
@@ -40,7 +41,7 @@ const Loaded = Schema.Struct({
 });
 const Fence = Schema.Struct({ held: Schema.Number, known: Schema.Boolean });
 const owner = (instance: string) => `instance:${instance}`;
-const ROW = 'integration, owner, active, configuration';
+const ROW = 'integration, owner, active, configuration, import_start';
 const unknown = (instance: string) =>
 	BoltError.make('notFound', 'facility', `no integration instance '${instance}'`);
 const invalid = (name: string) =>

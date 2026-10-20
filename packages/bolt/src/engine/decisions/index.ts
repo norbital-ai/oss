@@ -33,6 +33,8 @@ import { q } from '../../protocol/catalog.ts';
 import { clip } from '../agent/schema.ts';
 import { provideHttp, type HttpOptions, type OpenAiChat } from '../agent/openai-chat.ts';
 import { Port } from '../port.ts';
+import { RunOutputRow, readsRunResult } from '../runs/index.ts';
+import { outputFiles } from '../runs/output-files.ts';
 import * as ir from '../../protocol/ir.ts';
 
 export type { DecisionQuestion, DecisionState };
@@ -626,6 +628,25 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		return Option.isSome(r) || (yield* filed());
 	}
 	if (o.authority.admin) return true;
+	const automation = o.manifest.automations[owner];
+	if (automation !== undefined) {
+		let after: string | null = null;
+		for (;;) {
+			const row: Option.Option<typeof RunOutputRow.Type> = yield* o.db.one(RunOutputRow, {
+				text: `SELECT id, automation, output, starter FROM sys_run WHERE automation = $1 AND ($3::text IS NULL OR id > $3) AND jsonb_path_exists(output, '$.**.id ? (@ == $id)', jsonb_build_object('id', $2::text)) ORDER BY id LIMIT 1`,
+				params: [owner, id, after]
+			});
+			if (Option.isNone(row)) return false;
+			if (
+				readsRunResult(o.authority, row.value) &&
+				outputFiles(automation.output, row.value.output, o.manifest.customFields).some(
+					(file) => file.id === id
+				)
+			)
+				return true;
+			after = row.value.id;
+		}
+	}
 	const [collection, field] = owner.split('.');
 	// a pipeline's import upload and export file (`<c>.$import`, `<c>.$export`): the member who ran it
 	if (field === '$import' || field === '$export') {

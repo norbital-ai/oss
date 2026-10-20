@@ -38,6 +38,9 @@ and the server's fork test workers supply the flag.
   OAuth sign-in returns to the one `/hooks/oauth/callback`, routed to its instance by `state`: register that URI with
   an OAuth app once. Links reopen at start from the instance rows that are active and store a provider, and again when
   an instance's configuration changes.
+- Gmail and Google Calendar share the host's Google Web application when a workspace declares no app of its own.
+  Set both `BOLT_GOOGLE_OAUTH_CLIENT_ID` and `BOLT_GOOGLE_OAUTH_CLIENT_SECRET`; register
+  `<BOLT_PUBLIC_URL>/hooks/oauth/callback` as an authorized redirect URI. Without the app those sign-ins are unavailable.
 - Host messaging (sign-in codes, invitations; never an integration instance): email and phone are chosen separately.
   - `BOLT_TRANSACTIONAL_EMAIL`:
     - `resend`: `BOLT_RESEND_API_KEY`; optional `BOLT_RESEND_FROM` (default `noreply@<public host>`, a domain the

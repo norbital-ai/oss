@@ -7,6 +7,7 @@
 // a `scope` makes it a set (the rows in scope it leaves out are deleted in the same act); `check` findings and decode
 // problems come back as the run's `{ applied: false, findings }` until no `refuse` is left and every `warn` is accepted.
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
+import { isPlainDate } from '@norbital-ai/std/date';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { localOf } from '@norbital-ai/std/zone';
 import {
@@ -540,6 +541,14 @@ function valueOf(k: Kind, c: Exclude<Cell, null>): Json {
 					: text;
 	if (k.kind === 'date' && typeof c === 'number')
 		return new Date(EXCEL_EPOCH + Math.floor(c) * 86_400_000).toISOString().slice(0, 10);
+	if (
+		k.kind === 'date' &&
+		isPlainDate(text.slice(0, 10)) &&
+		/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?$/i.test(
+			text
+		)
+	)
+		return text.slice(0, 10);
 	if (k.kind === 'time' && typeof c === 'number') {
 		const m = Math.round((c % 1) * 1440);
 		return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;

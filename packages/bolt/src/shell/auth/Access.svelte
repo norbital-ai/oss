@@ -6,7 +6,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { AccessFrame } from '@norbital-ai/ui/brand';
-	import { Stack } from '@norbital-ai/ui/layout';
 	import { LANGUAGE, LOCALES } from '../i18n.ts';
 
 	/** `apex`: the host's workspace picker, linked below the card as "Change workspace". */
@@ -47,10 +46,8 @@
 		secureAccess: t('Secure access')
 	}}
 >
-	<Stack gap="none" class="w-full">
-		<div class="access-panel">
-			{@render children()}
-		</div>
+	{@render children()}
+	{#snippet footer()}
 		<p class="access-switch text-muted-foreground">
 			{#if apex}
 				<a href={apex} class="underline underline-offset-4 hover:text-foreground"
@@ -58,5 +55,5 @@
 				>
 			{/if}
 		</p>
-	</Stack>
+	{/snippet}
 </AccessFrame>

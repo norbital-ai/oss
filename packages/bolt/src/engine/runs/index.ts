@@ -158,6 +158,24 @@ export const RunViewRow = Schema.Struct({
 	starter: Schema.NullOr(HolderSchema)
 });
 export type RunViewRow = typeof RunViewRow.Type;
+/** Actual output and authorization columns for a stored automation-file candidate. */
+export const RunOutputRow = Schema.Struct({
+	id: Schema.String,
+	automation: Schema.String,
+	output: Schema.Json,
+	starter: Schema.NullOr(HolderSchema)
+});
+export function readsRunResult(
+	authority: Authority,
+	row: Pick<typeof RunOutputRow.Type, 'automation' | 'starter'>
+): boolean {
+	const starter = row.starter?.actor;
+	return (
+		authority.admin ||
+		authority.automations.includes(row.automation) ||
+		(starter !== undefined && canonical(starter) === canonical(authority.actor))
+	);
+}
 export type RunView = {
 	id: string;
 	automation: string;
@@ -177,11 +195,6 @@ export type RunView = {
 };
 export const RUN_VIEW_COLUMNS = `id, automation, cause, state, due_at::text AS due_at, started_at::text AS started, progress, output, error, attempts, results, input, actor, starter`;
 export function runView(authority: Authority, row: RunViewRow): RunView | null {
-	const starter = row.starter?.actor;
-	const full =
-		authority.admin ||
-		authority.automations.includes(row.automation) ||
-		(starter !== undefined && canonical(starter) === canonical(authority.actor));
 	const base = {
 		id: row.id,
 		automation: row.automation,
@@ -192,7 +205,7 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 		progress: row.progress,
 		attempt_count: row.attempts
 	};
-	if (full)
+	if (readsRunResult(authority, row))
 		return {
 			...base,
 			error: row.error,
@@ -394,12 +407,29 @@ export const RunsLive = Layer.effect(
 				);
 				yield* deadlines.settle(rows[0]?.next ?? null);
 			});
-		const claim = (now: number, pruned = false) =>
+		const claim = (now: number, pruned = false, custom = false) =>
 			Effect.gen(function* () {
-				const c = new Chain();
+				const c = new Chain(),
+					automations = c.p(Object.keys(m.automations)),
+					due = c.p(iso(now)),
+					eligible = `r.state = 'queued' AND r.due_at <= ${due}::timestamptz AND (NOT ${c.p(pruned)} OR r.automation <> ${c.p(PRUNE)}) AND NOT EXISTS (SELECT 1 FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running')`;
+				if (custom) {
+					c.cte(
+						'head',
+						`SELECT r.* FROM sys_run r WHERE ${eligible} AND r.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) ORDER BY r.due_at, r.id LIMIT 1 FOR UPDATE SKIP LOCKED`
+					);
+					c.cte(
+						'pending',
+						`SELECT r.* FROM sys_run r, head h WHERE ${eligible} AND r.automation = h.automation AND (r.id = h.id OR (h.cause IN ('created', 'updated', 'deleted') AND r.cause = h.cause AND (r.input->>'collection') IS NOT DISTINCT FROM (h.input->>'collection'))) ORDER BY r.due_at, r.id LIMIT 1000`
+					);
+				}
+				// The batch must be computed once, rather than rescanned for every queued candidate.
+				const batch = custom
+					? `WITH batch AS MATERIALIZED (SELECT id, row_number() OVER (ORDER BY due_at, id) AS position, sum(CASE WHEN jsonb_typeof(input->'ids') = 'array' THEN jsonb_array_length(input->'ids') ELSE 0 END) OVER (ORDER BY due_at, id) AS ids FROM pending)`
+					: '';
 				c.cte(
 					'claimed',
-					`UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${c.p(iso(now))}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.cause = 'cron' OR s.automation IN (SELECT jsonb_array_elements_text(${c.p(Object.keys(m.automations))}::jsonb)) THEN NULL ELSE s.key END WHERE s.id IN (SELECT r.id FROM sys_run r WHERE r.state = 'queued' AND r.due_at <= ${c.p(iso(now))}::timestamptz AND (NOT ${c.p(pruned)} OR r.automation <> ${c.p(PRUNE)}) AND NOT EXISTS (SELECT 1 FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running') ORDER BY r.due_at LIMIT 1000 FOR UPDATE SKIP LOCKED) RETURNING s.*`
+					`${batch} UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${due}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.cause = 'cron' OR s.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) THEN NULL ELSE s.key END WHERE s.state = 'queued' AND s.id IN (SELECT r.id FROM sys_run r WHERE ${eligible} AND ${custom ? `r.id IN (SELECT id FROM batch WHERE position = 1 OR ids <= ${c.p(MAX_IDS)})` : `r.automation NOT IN (SELECT jsonb_array_elements_text(${automations}::jsonb))`} ORDER BY r.due_at, r.id LIMIT 1000 FOR UPDATE SKIP LOCKED) RETURNING s.*`
 				);
 				const rows = yield* db.returning(
 					Schema.Struct({ runs: Schema.Array(RowSchema), next: Schema.NullOr(Schema.String) }),
@@ -1387,29 +1417,44 @@ export const RunsLive = Layer.effect(
 								)
 							)
 						).pipe(Effect.asVoid);
+					const run = (group: readonly Row[]) =>
+						execute(group).pipe(
+							Effect.tap((times) =>
+								Effect.sync(() => {
+									dues.push(...times);
+								})
+							),
+							Effect.asVoid
+						);
+					const custom = Effect.gen(function* () {
+						while (true) {
+							const admitted = yield* lanes.withPermitsIfAvailable(1)(
+								Effect.uninterruptibleMask((restore) =>
+									Effect.gen(function* () {
+										const claimed = yield* claim(yield* Clock.currentTimeMillis, pruned, true);
+										if (claimed.runs.length === 0) return false;
+										yield* restore(run(claimed.runs)).pipe(
+											Effect.onInterrupt(() =>
+												interrupted(
+													claimed.runs,
+													'The admitted run was interrupted before its lane drained.'
+												)
+											)
+										);
+										return true;
+									})
+								)
+							);
+							if (Option.isNone(admitted) || !admitted.value) return;
+						}
+					});
 					const start = (claimed: readonly Row[]) => {
 						if (claimed.some((row) => row.automation === PRUNE)) pruned = true;
 						return Effect.forEach(
 							[...Map.groupBy(batches(claimed), (group) => group[0]?.automation ?? '')],
-							([automation, groups]) => {
-								const work = Effect.forEach(
-									groups,
-									(group) =>
-										execute(group).pipe(
-											Effect.tap((times) =>
-												Effect.sync(() => {
-													dues.push(...times);
-												})
-											)
-										),
-									{ discard: true }
-								);
-								return track(
-									m.automations[automation] === undefined ? work : lanes.withPermit(work)
-								);
-							},
+							([, groups]) => track(Effect.forEach(groups, run, { discard: true })),
 							{ discard: true }
-						);
+						).pipe(Effect.andThen(track(custom)));
 					};
 					if (Math.floor(now / DAY) !== prunedDay) {
 						prunedDay = Math.floor(now / DAY);

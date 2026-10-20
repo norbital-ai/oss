@@ -84,6 +84,8 @@ export type WaConfig = {
 	personal: boolean;
 	/** The patch's hook: resolves once the message is stored; a rejection withholds the receipt and ends the socket. */
 	beforeReceipt(message: unknown, type: 'notify' | 'append'): Promise<void>;
+	/** Stores a decoded history chunk before the notification's receipt permits the next chunk. */
+	beforeHistory(messages: readonly unknown[]): Promise<void>;
 	/** A message we sent, for a recipient's retry receipt (kept across reconnects). */
 	getMessage(key: { id?: string | null }): Promise<unknown>;
 	cachedGroupMetadata(jid: string): Promise<GroupMetadata | undefined>;
@@ -120,6 +122,7 @@ export function baileys(o: BaileysOptions = {}): ProviderDef {
 		name: 'WhatsApp',
 		icon: 'simple-icons:whatsapp',
 		description: { en: 'Sync messages from your phone', zh: '同步手机中的消息' },
+		importStart: { kind: 'timestamp', precision: 'second' },
 		label: { en: 'Unofficial (WhatsApp Web)', zh: '非官方（WhatsApp 网页版）' },
 		setup: {
 			kind: 'qr',
@@ -281,6 +284,7 @@ export const InboundMessage = Schema.Struct({
 	id: Schema.String,
 	thread: Schema.String,
 	sentAt: Schema.String,
+	sourceAt: Schema.String,
 	from: Schema.Struct({ handle: Schema.String, name: Schema.NullOr(Schema.String) }),
 	text: Schema.String,
 	group: Schema.Boolean,
@@ -395,7 +399,6 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 		firstSyncs = yield* FirstSyncs,
 		callbackRun = yield* ProviderRuntime;
 	const callbacks = yield* FiberSet.make(),
-		histories = yield* FiberSet.make(),
 		supervisor = yield* FiberHandle.make<void>();
 	// External SDK Promise callbacks run only here and are interrupted with this link's scope.
 	const sdk = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
@@ -494,10 +497,11 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				);
 				// Keep SDK metadata, including its addressing mode and expiration, intact after validation.
 				return value;
-			}),
+			}).pipe(Effect.tapCause(Effect.logWarning)),
 		{
 			capacity: 2000,
-			timeToLive: (exit) => (Exit.isSuccess(exit) && exit.value !== undefined ? Infinity : 0)
+			timeToLive: (exit) =>
+				Exit.isSuccess(exit) && exit.value !== undefined ? Infinity : '30 seconds'
 		}
 	);
 	const historySerial = yield* Semaphore.make(1);
@@ -515,10 +519,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			})
 		);
 	const groupOf = (jid: string) =>
-		Cache.get(groups, jid).pipe(
-			Effect.tapCause(Effect.logWarning),
-			Effect.orElseSucceed(() => undefined)
-		);
+		Cache.get(groups, jid).pipe(Effect.orElseSucceed(() => undefined));
 	const resolvePhone = (socket: WaSocket, jid: string) => {
 		const mapping = socket.signalRepository?.lidMapping;
 		return mapping === undefined
@@ -534,6 +535,13 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				...(lid === undefined ? {} : { lid })
 			});
 			if (found === null) return null;
+			const sentAt = str(found['sentAt']);
+			if (
+				ctx.importStart?.kind === 'since' &&
+				sentAt !== null &&
+				Date.parse(sentAt) < Date.parse(ctx.importStart.at)
+			)
+				return null;
 			const group = found['group'] === true ? yield* groupOf(String(found['thread'])) : undefined;
 			const participants =
 				group?.participants === undefined || !ctx.personal
@@ -557,6 +565,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			if (found['text'] === '' && media === null && found['deleted'] !== true) return null;
 			const message = yield* Schema.decodeUnknownEffect(InboundMessage)({
 				...found,
+				sourceAt: found['sentAt'],
 				...(phone?.endsWith('@s.whatsapp.net') && Predicate.isObject(found['from'])
 					? {
 							from: { ...found['from'], handle: phone },
@@ -587,42 +596,50 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			return { message, ...(media?.data ? { bins: [media.data] } : {}) };
 		});
 	const imported = (got: Opened, raws: readonly unknown[], backfill: boolean) =>
-		FiberSet.run(
-			histories,
-			historySerial
-				.withPermit(
-					Effect.gen(function* () {
-						const messages: Json[] = [];
-						for (const raw of raws) {
-							const found = yield* wire(got, raw, !backfill);
-							if (found === null) continue;
-							if (found.bins === undefined) messages.push(found.message);
-							else
-								yield* emitting({
-									kind: 'messages',
-									messages: [found.message],
-									bins: found.bins,
-									...(backfill ? { history: true } : {})
-								});
-						}
-						if (messages.length > 0)
+		historySerial.withPermit(
+			Effect.gen(function* () {
+				let messages: Json[] = [];
+				for (const raw of raws) {
+					const found = yield* wire(got, raw, !backfill);
+					if (found === null) continue;
+					if (found.bins === undefined) {
+						messages.push(found.message);
+						if (messages.length === 100) {
 							yield* emitting({
 								kind: 'messages',
 								messages,
 								...(backfill ? { history: true } : {})
 							});
-					})
-				)
-				.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
-		).pipe(Effect.asVoid);
-	// WhatsApp has acknowledged history before this event reaches us. Enqueue it synchronously so close drains even
-	// an event the stream consumer has not handled yet; the FiberSet owns every resulting durable import.
+							messages = [];
+						}
+					} else
+						yield* emitting({
+							kind: 'messages',
+							messages: [found.message],
+							bins: found.bins,
+							...(backfill ? { history: true } : {})
+						});
+				}
+				if (messages.length > 0)
+					yield* emitting({
+						kind: 'messages',
+						messages,
+						...(backfill ? { history: true } : {})
+					});
+			})
+		);
+	// shortcut: unpatched SDKs cannot backpressure history; retain every chunk until drained, then upgrade their receipt hook.
 	const acknowledged = yield* Queue.unbounded<
 		{ got: Opened; messages: readonly unknown[]; history: boolean },
 		Cause.Done
 	>();
 	const historyWorker = yield* Stream.fromQueue(acknowledged).pipe(
-		Stream.runForEach((chunk) => imported(chunk.got, chunk.messages, chunk.history)),
+		Stream.runForEach((chunk) =>
+			imported(chunk.got, chunk.messages, chunk.history).pipe(
+				Effect.tapCause(Effect.logWarning),
+				Effect.ignore
+			)
+		),
 		Effect.forkScoped
 	);
 
@@ -665,6 +682,17 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 						update: (creds) => sdk(store.update(creds))
 					},
 					personal: ctx.personal,
+					beforeHistory: (messages) =>
+						sdk(
+							Effect.gen(function* () {
+								const got = current;
+								if (closing || got === undefined || phase._tag === 'Terminal')
+									return yield* Effect.fail(
+										new LinkClosed({ message: 'the WhatsApp link is closing' })
+									);
+								yield* imported(got, messages, true);
+							})
+						),
 					beforeReceipt: (raw) =>
 						sdk(
 							Effect.gen(function* () {
@@ -978,7 +1006,6 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			yield* FiberHandle.clear(supervisor);
 			yield* Queue.end(acknowledged);
 			yield* Fiber.join(historyWorker);
-			yield* FiberSet.awaitEmpty(histories);
 			yield* FiberSet.clear(callbacks);
 			yield* store.flush.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		}),
@@ -1348,6 +1375,7 @@ export const baileysSocket: WaOpen = async (c) => {
 		logger: quiet,
 		markOnlineOnConnect: false,
 		beforeReceipt: c.beforeReceipt,
+		beforeHistory: c.beforeHistory,
 		getMessage: c.getMessage,
 		cachedGroupMetadata: c.cachedGroupMetadata,
 		msgRetryCounterCache: c.msgRetryCounterCache,

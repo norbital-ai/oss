@@ -1,7 +1,7 @@
 <!--
 	`AccessFrame`: the one access look — Bolt's sign-in and invitation, and a host's workspace picker. The
 	Norbius band behind, the Norbital mark and environment badge, the language and theme switches and the "secure access"
-	overline, then the page's own column (its card is the caller's). Every string is the caller's, in its own locale.
+	overline, then one content-sized card. Every string is the caller's, in its own locale.
 -->
 <svelte:options runes />
 
@@ -11,6 +11,7 @@
 	import { Badge } from '../primitives/badge/index.js';
 	import { Bound, Center, Frame, Imposter, Inline, Stack } from '../layout/index.js';
 	import NorbiusField from './norbius-field.svelte';
+	import { accessHeight } from './access-height.js';
 
 	let {
 		environment,
@@ -21,7 +22,8 @@
 		onTheme,
 		labels,
 		wide = false,
-		children
+		children,
+		footer
 	}: {
 		/** The deploy environment: nothing in production, `development` reads `local`, anything else as itself. */
 		environment?: string | null | undefined;
@@ -35,6 +37,8 @@
 		labels: { switchLanguage: string; lightMode: string; darkMode: string; secureAccess: string };
 		wide?: boolean;
 		children: Snippet;
+		/** Navigation below the card, such as changing workspace. */
+		footer?: Snippet;
 	} = $props();
 
 	const badge = $derived.by(() => {
@@ -93,8 +97,13 @@
 				</Inline>
 			</Inline>
 		</Imposter>
-		<Stack as="main" gap="none" fill>
-			{@render children()}
+		<Stack as="main" gap="none" style={`--access-footer-space: ${footer ? '2.5rem' : '0px'}`}>
+			<section class="access-panel">
+				<div class="access-panel-body" {@attach accessHeight}>
+					{@render children()}
+				</div>
+			</section>
+			{@render footer?.()}
 		</Stack>
 	</Center>
 </Bound>

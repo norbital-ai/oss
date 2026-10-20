@@ -9,25 +9,34 @@
 	import { Button, Combobox, Input, Qr } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
-	import type { SetupField } from '../../protocol/instance-status.ts';
+	import type { ImportStartInput, SetupField } from '../../protocol/instance-status.ts';
 	import { watch } from 'runed';
 	import Facts from './Facts.svelte';
+	import ImportStart from './ImportStart.svelte';
+	import { importStartDraft, validImportStart } from './import-start.ts';
 	import { aboutOf, reserveSignIn, sayOf, signInTo, type IntegrationSetupProps } from './setup.ts';
 
 	let {
 		status,
+		error,
 		busy,
 		pair,
 		unpair,
 		cancel,
+		controls = true,
 		t,
 		locale
-	}: Pick<IntegrationSetupProps, 'status' | 'busy' | 'pair' | 'unpair' | 't' | 'locale'> & {
+	}: Pick<
+		IntegrationSetupProps,
+		'status' | 'error' | 'busy' | 'pair' | 'unpair' | 't' | 'locale'
+	> & {
 		/** Reconnecting a connected instance: back to its summary without pairing. */
 		cancel?: (() => void) | undefined;
+		controls?: boolean | undefined;
 	} = $props();
 	const say = $derived(sayOf(t, locale));
 	const c = $derived(status);
+	const retry = $derived(c?.state === 'error' || error !== null);
 	const providers = $derived(c?.providers ?? []);
 	/** The operator's pick; `''` is "choose again". Otherwise the host's active provider, or the only one there is. */
 	let picked = $state<string | null>(null);
@@ -35,6 +44,25 @@
 		providers.find(
 			(p) => p.id === (picked ?? c?.provider ?? (providers.length === 1 ? providers[0]!.id : null))
 		)
+	);
+	let boundary = $state<ImportStartInput | undefined>(undefined);
+	const draft = $derived(
+		choice === undefined ? undefined : (boundary ?? importStartDraft(c?.importStart, choice))
+	);
+	const valid = $derived(
+		choice === undefined || draft === undefined || validImportStart(draft, choice)
+	);
+	watch(
+		() => choice?.id,
+		() => {
+			boundary = undefined;
+		}
+	);
+	watch(
+		() => JSON.stringify(c?.importStart ?? null),
+		(current, previous) => {
+			if (previous !== undefined && current !== previous) boundary = undefined;
+		}
 	);
 	const webhookUrl = $derived.by(() => {
 		const u = aboutOf(c)['webhookUrl'];
@@ -47,12 +75,17 @@
 	};
 	const pairing = $derived(c?.pairing ?? null);
 	const shown = $derived(
-		pairing !== null && (pairing.kind === 'qr' || pairing.kind === 'code') && pairing.value !== null
+		c?.state !== 'error' &&
+			pairing !== null &&
+			(pairing.kind === 'qr' || pairing.kind === 'code') &&
+			pairing.value !== null
 			? pairing
 			: null
 	);
 	const signIn = $derived(
-		pairing?.kind === 'oauth' && pairing.value !== null ? pairing.value : null
+		c?.state !== 'error' && pairing?.kind === 'oauth' && pairing.value !== null
+			? pairing.value
+			: null
 	);
 	/** The provider's sign-in in a popup (a click, so no blocker stops it); this page follows the instance's stream. */
 	function popup(url: string): void {
@@ -68,9 +101,16 @@
 	);
 	/** Starts a pairing that takes nothing (a sign-in, a QR): the provider then publishes what to show. */
 	function start(): void {
-		if (choice === undefined) return;
+		if (choice === undefined || !valid) return;
 		if (choice.setup.kind === 'oauth') reserveSignIn();
-		fork(pair(providers.length > 1 ? { provider: choice.id } : {}));
+		fork(
+			pair({
+				...(providers.length > 1 ? { provider: choice.id } : {}),
+				...(choice.importStart !== undefined && boundary !== undefined
+					? { importStart: boundary }
+					: {})
+			})
+		);
 	}
 	const waiting = $derived(c?.state === 'pairing' || c?.state === 'connecting');
 	// a provider asking mid-pairing (`form`, or a single `credential`) outranks the description's own fields
@@ -85,8 +125,9 @@
 
 	function submit(e: SubmitEvent): void {
 		e.preventDefault();
-		if (choice === undefined) return;
+		if (choice === undefined || !valid) return;
 		const input: { [k: string]: Json } = providers.length > 1 ? { provider: choice.id } : {};
+		if (choice.importStart !== undefined && boundary !== undefined) input.importStart = boundary;
 		for (const f of fields) {
 			const v = (values[f.name] ?? '').trim();
 			if (v !== '') input[f.name] = v;
@@ -129,8 +170,12 @@
 			</label>
 		{/each}
 		<Cluster gap="sm">
-			<Button size="sm" type="submit" disabled={busy}
-				>{busy ? t('Connecting…') : t('Connect')}</Button
+			<Button
+				size="sm"
+				type="submit"
+				disabled={busy || !valid}
+				data-connect={retry ? '' : undefined}
+				>{busy ? t('Connecting…') : retry ? t('Try again') : t('Connect')}</Button
 			>
 			{#if cancel !== undefined}<Button size="sm" variant="ghost" disabled={busy} onclick={cancel}
 					>{t('Cancel')}</Button
@@ -140,9 +185,9 @@
 {/snippet}
 
 <div class="flex min-w-0 flex-col gap-4" data-setup-view="pair">
-	{#if providers.length === 0}
+	{#if c !== null && providers.length === 0}
 		<p class="text-meta">{t('This host offers no provider for this integration’s driver.')}</p>
-	{:else if choice === undefined}
+	{:else if c !== null && choice === undefined && c.state !== 'connecting'}
 		<Stack gap="sm" data-provider-choice>
 			<p class="text-sm font-medium">{t('Choose how this integration connects')}</p>
 			<Stack gap="xs">
@@ -161,7 +206,17 @@
 				{/each}
 			</Stack>
 		</Stack>
-	{:else}
+	{:else if choice !== undefined && c?.state !== 'connecting'}
+		{#if choice.importStart !== undefined && draft !== undefined && !waiting && shown === null && signIn === null}
+			<ImportStart
+				provider={choice}
+				value={draft}
+				onChange={(value) => (boundary = value)}
+				{busy}
+				{t}
+				{locale}
+			/>
+		{/if}
 		{#if providers.length > 1}
 			<Cluster gap="sm" justify="between" align="center">
 				<p class="text-sm font-medium">{say(choice.label)}</p>
@@ -234,7 +289,17 @@
 			{/if}
 		{:else if signIn !== null}
 			<Stack gap="xs" align="start" data-pairing="oauth">
-				<Button size="sm" onclick={() => popup(signIn)}>{t(pairing?.label ?? 'Sign in')}</Button>
+				<Button
+					size="sm"
+					href={signIn}
+					target="_blank"
+					rel="noopener noreferrer"
+					onclick={(event) => {
+						if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+						event.preventDefault();
+						popup(signIn);
+					}}>{t(pairing?.label ?? 'Sign in')}</Button
+				>
 				<p class="text-meta" aria-live="polite">
 					{t('Sign in in the window that opens; this page updates when you are done.')}
 				</p>
@@ -247,7 +312,13 @@
 			</p>
 		{:else if choice.setup.kind === 'oauth'}
 			<Cluster gap="sm">
-				<Button size="sm" disabled={busy} onclick={start} data-sign-in>{say(choice.label)}</Button>
+				<Button
+					size="sm"
+					disabled={busy || !valid}
+					onclick={start}
+					data-sign-in
+					data-connect={retry ? '' : undefined}>{retry ? t('Try again') : say(choice.label)}</Button
+				>
 				{#if cancel !== undefined}<Button size="sm" variant="ghost" disabled={busy} onclick={cancel}
 						>{t('Cancel')}</Button
 					>{/if}
@@ -256,7 +327,7 @@
 			{@render form()}
 		{/if}
 	{/if}
-	{#if c?.stored === true && cancel === undefined}
+	{#if controls && c?.stored === true && cancel === undefined}
 		<Cluster gap="sm">
 			<Button
 				size="sm"

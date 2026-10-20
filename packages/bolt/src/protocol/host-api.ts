@@ -162,12 +162,24 @@ export type HostTenantDb = {
 export type HostCredentials = {
 	readonly open: (instance: string) => Promise<{
 		epoch: string;
-		row: { integration: string; owner: string | null; active: boolean; configuration: Json };
+		row: {
+			integration: string;
+			owner: string | null;
+			active: boolean;
+			configuration: Json;
+			import_start?: Json;
+		};
 		values: ReadonlyMap<string, Json>;
 	}>;
 	readonly read: (instance: string) => Promise<{
 		epoch: string | null;
-		row: { integration: string; owner: string | null; active: boolean; configuration: Json };
+		row: {
+			integration: string;
+			owner: string | null;
+			active: boolean;
+			configuration: Json;
+			import_start?: Json;
+		};
 		values: ReadonlyMap<string, Json>;
 	}>;
 	readonly write: (
@@ -754,8 +766,20 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 				wrapped === undefined
 					? sealed
 					: {
-							open: (instance: string) => hosted(() => wrapped.open(instance)),
-							read: (instance: string) => hosted(() => wrapped.read(instance)),
+							open: (instance: string) =>
+								hosted(() => wrapped.open(instance)).pipe(
+									Effect.map((value) => ({
+										...value,
+										row: { ...value.row, import_start: value.row.import_start ?? null }
+									}))
+								),
+							read: (instance: string) =>
+								hosted(() => wrapped.read(instance)).pipe(
+									Effect.map((value) => ({
+										...value,
+										row: { ...value.row, import_start: value.row.import_start ?? null }
+									}))
+								),
 							write: (
 								instance: string,
 								epoch: string | null,

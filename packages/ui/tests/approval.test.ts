@@ -155,6 +155,11 @@ it.live('the timeline shows every transition and comment, with reasons and rollb
 			/The linked record was deleted/
 		);
 		assert.equal(target.querySelector('[data-view=approval-controls]'), null);
+		assert.match(
+			textOf(element<HTMLElement>(target, '[data-view=approval-summary]')),
+			/Rejected.*Too costly/s
+		);
+		assert.equal(element<HTMLDetailsElement>(target, '[data-view=approval-history]').open, false);
 	})
 );
 
@@ -180,7 +185,11 @@ it.live('the buttons are exactly the host moves; a required reason gates its mov
 			buttons(target).find((b) => b.dataset['move'] === 'REQUEST_FOR_CHANGE')
 		);
 		assert.equal(change.disabled, true);
-		const input = element<HTMLInputElement>(target, '[data-view=approval-controls] input');
+		const input = element<HTMLTextAreaElement>(target, '[data-view=approval-controls] textarea');
+		assert.equal(
+			element<HTMLLabelElement>(target, '[data-view=approval-controls] label').htmlFor,
+			input.id
+		);
 		input.value = 'Add the quote';
 		input.dispatchEvent(new Event('input', { bubbles: true }));
 		yield* browser(() => settle());
@@ -200,16 +209,56 @@ it.live('the buttons are exactly the host moves; a required reason gates its mov
 			status: 'CHANGES_REQUESTED',
 			mine: true,
 			moves: [
+				{ status: 'REJECTED', reason: 'optional' },
 				{ status: 'RESUBMITTED', reason: 'optional' },
 				{ status: 'WITHDRAWN', reason: 'optional' }
 			]
 		});
 		assert.deepEqual(
 			buttons(mine.target).map((b) => textOf(b)),
-			['Resubmit', 'Withdraw']
+			['Resubmit', 'Reject', 'Withdraw']
 		);
 		assert.match(textOf(element<HTMLElement>(mine.target, '[data-view=approval-waiting]')), /Ada/);
 	})
+);
+
+it.live(
+	'an RFC surfaces its decision reason ahead of controls and keeps later comments in history',
+	() =>
+		Effect.gen(function* () {
+			const { target } = yield* panel({
+				...request,
+				status: 'CHANGES_REQUESTED',
+				mine: true,
+				log: [
+					...request.log.slice(0, 3),
+					{
+						move: 'comment',
+						by: by('Ada'),
+						at: '2026-10-13T03:00:00Z',
+						from: 'CHANGES_REQUESTED',
+						to: 'CHANGES_REQUESTED',
+						step: 0,
+						reason: 'I will add it tomorrow.'
+					}
+				],
+				moves: [{ status: 'RESUBMITTED', reason: 'optional' }]
+			});
+			const summary = element<HTMLElement>(target, '[data-view=approval-summary]');
+			assert.match(
+				textOf(summary),
+				/Changes requested.*Awaiting changes from.*Ada.*Add the quote/s
+			);
+			assert.doesNotMatch(textOf(summary), /I will add it tomorrow/);
+			assert.ok(
+				summary.compareDocumentPosition(element(target, '[data-view=approval-controls]')) &
+					Node.DOCUMENT_POSITION_FOLLOWING
+			);
+			assert.match(
+				textOf(element(target, '[data-view=approval-timeline]')),
+				/I will add it tomorrow/
+			);
+		})
 );
 
 const held = {

@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Schema } from 'effect';
+import { Context, Effect, Option, Schema, Stream } from 'effect';
 import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
 import { BoltError } from './errors.ts';
@@ -7,6 +7,7 @@ import { Runs } from '../engine/services.ts';
 import { requestBody, requestUrl, responseError, SessionAuthority } from './http.ts';
 import { sseResponse } from './sse.ts';
 import { INTEGRATIONS } from './wire.ts';
+import { ImportStartInput } from './schema.ts';
 
 /** No manager is needed by hosts that offer no integration providers (the test kit). */
 export const IntegrationManager = Context.Reference<Option.Option<LinkManager>>(
@@ -15,7 +16,8 @@ export const IntegrationManager = Context.Reference<Option.Option<LinkManager>>(
 );
 export const integrationRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 	Effect.gen(function* () {
-		const path = requestUrl(request).pathname;
+		const url = requestUrl(request),
+			path = url.pathname;
 		if (!path.startsWith(INTEGRATIONS)) return Option.none<HttpServerResponse.HttpServerResponse>();
 		const manager = yield* IntegrationManager;
 		if (Option.isNone(manager)) return Option.none<HttpServerResponse.HttpServerResponse>();
@@ -34,6 +36,20 @@ export const integrationRoutes = (request: HttpServerRequest.HttpServerRequest) 
 					'forbidden',
 					'admission',
 					'Sign in as an internal workspace member to manage integrations.'
+				)
+			);
+		if (request.method === 'GET' && path === INTEGRATIONS && url.searchParams.get('stream') === '1')
+			return Option.some(
+				sseResponse(
+					manager.value
+						.watch()
+						.pipe(
+							Stream.filterEffect((status) =>
+								manager.value
+									.may(authority, status.instance)
+									.pipe(Effect.map((allowed) => allowed === true))
+							)
+						)
 				)
 			);
 		if (request.method === 'GET' && path === INTEGRATIONS)
@@ -64,12 +80,15 @@ export const integrationRoutes = (request: HttpServerRequest.HttpServerRequest) 
 			return Option.some(
 				HttpServerResponse.jsonUnsafe({ value: yield* manager.value.discover(instance) })
 			);
-		if (request.method === 'POST' && ['pair', 'unpair', 'test'].includes(verb)) {
+		if (request.method === 'POST' && verb === 'import-start') {
+			const body = yield* requestBody(request, ImportStartInput);
+			yield* manager.value.importStart(instance, body, authority);
+		} else if (request.method === 'POST' && ['pair', 'unpair', 'test'].includes(verb)) {
 			const body = yield* requestBody(request, Schema.Json).pipe(
 				Effect.catch(() => Effect.succeed({}))
 			);
 			yield* verb === 'pair'
-				? manager.value.pair(instance, body)
+				? manager.value.pair(instance, body, authority)
 				: verb === 'unpair'
 					? manager.value.unpair(instance)
 					: manager.value.test(instance, body);

@@ -5,14 +5,24 @@
 import { describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import type { Socket as NetSocket } from 'node:net';
-import { Clock, Effect, Fiber, Option, Schedule, Schema } from 'effect';
+import { Clock, Effect, Exit, Fiber, Option, Schedule, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { ProviderUnavailable } from '../src/errors.ts';
 import type { LinkDef } from '../src/abi.ts';
 import { Cursor } from '../src/imap-smtp/model.ts';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { readMail } from '../src/imap-smtp/reports.ts';
-import { fakeFetch, HOOK, host, json, messagesOf, REDIRECT, until, type Host } from './kit.ts';
+import {
+	fakeFetch,
+	HOOK,
+	host,
+	json,
+	messagesOf,
+	REDIRECT,
+	until,
+	type Host,
+	type HostOptions
+} from './kit.ts';
 import { fakeImap, fakeSmtp } from './mail-servers.ts';
 
 // These protocol fixtures own real loopback servers. Production destination policy is tested separately.
@@ -354,13 +364,22 @@ describe('the mailbox link (password)', () => {
 					definition: { description: 'Mail', driver: 'email' }
 				}).setup.fields?.map((f) => f.name)
 			).not.toEqual(expect.arrayContaining(['smtpHost', 'smtpPort', 'tracking', 'quietHours']));
-			yield* until(() => personal.events.length === 61);
-			yield* until(() => cursorOf(personal)?.uid === 61);
-			expect(imap.fetches).toEqual([25, 25, 11]);
+			yield* until(
+				() => cursorOf(personal)?.uid === 61 && cursorOf(personal)?.backfill === undefined
+			);
+			expect(
+				new Set(
+					messagesOf(personal.events).map(
+						(message) => Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(message).id
+					)
+				).size
+			).toBe(61);
+			expect(imap.fetches).toEqual([25, 25, 25, 11]);
 			expect(
 				personal.writes.some(
 					(w) =>
-						Option.getOrUndefined(Schema.decodeUnknownOption(Cursor)(w.get('state')))?.uid === 25
+						Option.getOrUndefined(Schema.decodeUnknownOption(Cursor)(w.get('state')))?.backfill ===
+						25
 				)
 			).toBe(true);
 		})
@@ -611,8 +630,10 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 				});
 				expect(h.values.get('token')).toMatchObject({ access: 'at-1', refresh: 'rt-1' });
 				yield* TestClock.withLive(until(() => h.status?.state === 'connected'));
-				// used once: the same state again is refused
-				expect((yield* callback(h.link, `state=${state}&code=c1`)).status).toBe(400);
+				// Used codes are never exchanged again, but revisiting their callback still shows success.
+				const again = yield* callback(h.link, `state=${state}&code=c1`);
+				expect(again.status).toBe(200);
+				expect(yield* fixture(() => again.text())).toContain('Connected as desk@acme.example');
 				// an attempt left for longer than ten minutes is refused
 				yield* h.link.pair!(input);
 				const late = authorize(h).searchParams.get('state')!;
@@ -666,7 +687,12 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 });
 
 describe('Gmail: one click, signed in with the host’s Google client', () => {
-	const setup = Effect.fn('MailboxTest.gmail')(function* (google = true) {
+	const setup = Effect.fn('MailboxTest.gmail')(function* (
+		google = true,
+		token: () => Response | Promise<Response> = () =>
+			json({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 }),
+		write?: HostOptions['write']
+	) {
 		const imap = yield* Effect.acquireRelease(
 			fixture(() =>
 				fakeImap({ accept: (u, s) => u === 'desk@acme.example' && s.token === 'at-1' })
@@ -678,7 +704,7 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			(c) => {
 				if (c.url !== 'https://oauth2.googleapis.com/token') return undefined;
 				exchanged = new URLSearchParams(c.body);
-				return json({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
+				return token();
 			},
 			(c) =>
 				c.url === 'https://openidconnect.googleapis.com/v1/userinfo' &&
@@ -699,11 +725,12 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			{},
 			{
 				personal: true,
+				...(write === undefined ? {} : { write }),
 				...(google ? { google: { id: 'host-client', secret: 'host-secret' } } : {})
 			}
 		);
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
-		return { h, provider, exchanged: () => exchanged };
+		return { h, provider, fetch: f, exchanged: () => exchanged };
 	});
 
 	it.effect(
@@ -719,6 +746,47 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 				expect(url.searchParams.get('client_id')).toBe('host-client');
 				expect(url.searchParams.get('scope')).toBe('https://mail.google.com/ openid email');
 				expect(url.searchParams.has('login_hint')).toBe(false);
+			})
+	);
+	it.effect(
+		'completes concurrent and consumed Gmail callbacks once, then forgets a replaced attempt',
+		() =>
+			Effect.gen(function* () {
+				const entered = Promise.withResolvers<void>(),
+					allow = Promise.withResolvers<void>();
+				yield* Effect.addFinalizer(() => Effect.sync(() => allow.resolve()));
+				const { h, fetch } = yield* setup(true, () => {
+					entered.resolve();
+					return allow.promise.then(() => json({ access_token: 'at-1', refresh_token: 'rt-1' }));
+				});
+				yield* h.link.pair!({});
+				const state = new URL(h.pairing!.value!).searchParams.get('state')!;
+				const callback = (nonce = state) =>
+					h.link.webhook!(new Request(`${REDIRECT}?state=${nonce}&code=c1`));
+				const running = yield* Effect.forkChild(
+					Effect.all([callback(), callback()], { concurrency: 2 })
+				);
+				yield* Effect.promise(() => entered.promise);
+				expect(fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
+				allow.resolve();
+				const responses = yield* Fiber.join(running);
+				const bodies = yield* fixture(() => Promise.all(responses.map((r) => r.text())));
+				expect(responses.map((r) => r.status)).toEqual([200, 200]);
+				expect(bodies[0]).toContain('Connected as desk@acme.example');
+				expect(bodies[1]).toBe(bodies[0]);
+				const repeated = yield* callback();
+				expect(yield* fixture(() => repeated.text())).toBe(bodies[0]);
+				expect(h.writes.filter((write) => write.has('token'))).toHaveLength(1);
+				yield* TestClock.withLive(until(() => h.status?.state === 'connected'));
+				expect((yield* callback('forged')).status).toBe(400);
+				const sealed = h.values.get('token');
+				yield* h.link.pair!({});
+				const next = new URL(h.pairing!.value!).searchParams.get('state')!;
+				expect((yield* callback()).status).toBe(400);
+				expect(h.values.get('token')).toEqual(sealed);
+				yield* h.link.unpair!();
+				expect((yield* callback(next)).status).toBe(400);
+				expect(fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
 			})
 	);
 
@@ -737,6 +805,52 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			expect(credential).toMatchObject({ method: 'google', address: 'desk@acme.example' });
 			expect(credential).not.toHaveProperty('oauth');
 		})
+	);
+
+	it.effect(
+		'disconnect waits for an irreversible Gmail credential write before wiping its keys',
+		() =>
+			Effect.gen(function* () {
+				const entered = Promise.withResolvers<void>(),
+					allow = Promise.withResolvers<void>();
+				yield* Effect.addFinalizer(() => Effect.sync(() => allow.resolve()));
+				const { h } = yield* setup(true, undefined, async (changes) => {
+					if (!changes.has('credential')) return;
+					entered.resolve();
+					await allow.promise;
+				});
+				yield* h.link.pair!({});
+				const state = new URL(h.pairing!.value!).searchParams.get('state')!;
+				const callback = () => h.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				const signingIn = yield* Effect.forkChild(callback());
+				yield* Effect.promise(() => entered.promise);
+				let disconnected = false;
+				const wiped: string[] = [];
+				const disconnecting = yield* Effect.forkChild(
+					h.link.unpair!().pipe(
+						Effect.tap(() =>
+							Effect.sync(() => {
+								// The host wipes the keys known after the provider's unpair completes.
+								wiped.push(...h.values.keys());
+								h.values.clear();
+								disconnected = true;
+							})
+						)
+					),
+					{ startImmediately: true }
+				);
+				yield* Effect.yieldNow;
+				expect(disconnected).toBe(false);
+				allow.resolve();
+				yield* Fiber.join(disconnecting);
+				expect(Exit.isFailure(yield* Fiber.await(signingIn))).toBe(true);
+				yield* until(() => h.writes.some((changes) => changes.has('credential')));
+				expect(wiped).toEqual(expect.arrayContaining(['credential', 'token']));
+				expect([...h.values]).toEqual([]);
+				const statuses = h.statuses.length;
+				expect((yield* callback()).status).toBe(400);
+				expect(h.statuses).toHaveLength(statuses);
+			})
 	);
 
 	it.effect('refuses to pair where the host has no Google client', () =>

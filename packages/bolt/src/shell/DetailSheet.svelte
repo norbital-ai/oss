@@ -12,12 +12,14 @@
 		title,
 		fields = [],
 		acts = [],
+		summary,
 		children,
 		onClose
 	}: {
 		title: string;
 		fields?: readonly { label: string; value: Json | undefined }[];
 		acts?: readonly Act[];
+		summary?: Snippet;
 		children?: Snippet;
 		onClose: () => void;
 	} = $props();
@@ -32,6 +34,7 @@
 >
 	<div class="flex min-w-0 flex-col gap-4">
 		<Acts {acts} all />
+		{#if summary}{@render summary()}{/if}
 		<dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 			{#each fields.filter((f) => f.value !== undefined) as f (f.label)}
 				<div

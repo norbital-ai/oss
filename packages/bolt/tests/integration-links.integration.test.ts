@@ -857,6 +857,76 @@ describe('the instance verbs', () => {
 	);
 
 	it.live(
+		'the shared status stream authorizes every snapshot and update without exposing another account',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, context, host, act } = yield* open();
+					const opened: DriverOpen[] = [];
+					const links = yield* host([fake('p', opened)]);
+					const alice = t.member(['self'], { email: 'alice@ws.example' });
+					const bob = t.member(['self'], { email: 'bob@ws.example' });
+					const phones: string[] = [];
+					for (const owner of [alice.id, bob.id])
+						phones.push(
+							present(
+								ok(
+									yield* act(t.as(t.admin).authority, 'sys_integration.create', {
+										integration: 'whatsapp',
+										name: owner,
+										owner
+									})
+								).records[0]
+							).id
+						);
+					const [alicePhone, bobPhone] = phones;
+					if (alicePhone === undefined || bobPhone === undefined)
+						throw new Error('Missing personal accounts');
+					yield* links.pair(alicePhone, { key: 'alice-visible-account' });
+					yield* links.pair(bobPhone, { key: 'bob-private-account' });
+					const response = present(
+						yield* verbs(
+							context,
+							links,
+							t.as(alice).authority
+						)(new Request('https://apex.example/__bolt/integrations/?stream=1'))
+					);
+					expect(response.status).toBe(200);
+					const reader = present(response.body).getReader();
+					const read = () =>
+						Effect.tryPromise({ try: () => reader.read(), catch: Port.failure('link.stream') });
+					yield* Effect.addFinalizer(() =>
+						Effect.tryPromise({
+							try: () => reader.cancel(),
+							catch: Port.failure('link.stream')
+						}).pipe(Effect.ignore)
+					);
+					let text = new TextDecoder().decode((yield* read()).value);
+					expect(text).toContain('alice-visible-account');
+					const aliceContext = opened.find((ctx) => ctx.instance === alicePhone);
+					const bobContext = opened.find((ctx) => ctx.instance === bobPhone);
+					if (aliceContext === undefined || bobContext === undefined)
+						throw new Error('Missing provider contexts');
+					yield* driverCall(() =>
+						bobContext.status({
+							state: 'pairing',
+							account: 'bob-private-update',
+							about: { address: 'bob-private@example.test' }
+						})
+					);
+					yield* driverCall(() =>
+						aliceContext.status({ state: 'pairing', account: 'alice-visible-update' })
+					);
+					text += new TextDecoder().decode((yield* read()).value);
+					expect(text).toContain('alice-visible-update');
+					expect(text).not.toContain('bob-private');
+					expect(text).not.toContain(bobPhone);
+					yield* links.close;
+				})
+			)
+	);
+
+	it.live(
 		'a test is offered once connected: to the typed handle, or to the connected account itself; the provider’s own round trip when it has one',
 		() =>
 			Effect.scoped(
@@ -1391,4 +1461,190 @@ it('the OAuth client a link grants with: the definition’s own when both secret
 	});
 	expect(oauthClientOf(declared, { ID: 'own' }, host, 'google')).toEqual(host.google);
 	expect(oauthClientOf(declared, { ID: 'own', SECRET: '' }, undefined, 'google')).toBeUndefined();
+});
+
+describe('source import boundaries', () => {
+	it.live(
+		'freezes a selected start before pairing and applies a new boundary without losing credentials',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, host, sealed } = yield* open();
+					const opened: DriverOpen[] = [];
+					const links = yield* host([
+						fake('p', opened, 'whatsapp', {
+							importStart: { kind: 'timestamp', precision: 'second' }
+						})
+					]);
+					const admin = t.as(t.admin).authority;
+					yield* links.pair(
+						'a',
+						{ key: 'k', importStart: { kind: 'since', date: '2026-10-21', zone: 'Asia/Seoul' } },
+						admin
+					);
+					const first = present(opened[0]);
+					expect(first.importStart).toEqual({
+						kind: 'since',
+						at: '2026-10-20T15:00:00.000Z',
+						zone: 'Asia/Seoul',
+						origin: 'date'
+					});
+					yield* driverCall(() => first.credentials.write(new Map([['state', { uid: 42 }]])));
+					const stored = yield* sealed('a');
+					const before = Date.now();
+					yield* links.importStart('a', { kind: 'now', zone: 'Asia/Seoul' }, admin);
+					const after = Date.now();
+					expect(opened).toHaveLength(2);
+					const applied = present(opened[1]).importStart;
+					if (applied?.kind !== 'since') throw new Error('Expected frozen timestamp start');
+					expect(Date.parse(applied.at)).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+					expect(Date.parse(applied.at)).toBeLessThanOrEqual(Math.floor(after / 1000) * 1000);
+					expect(applied.at.endsWith('.000Z')).toBe(true);
+					expect(applied.origin).toBe('now');
+					expect(first.signal.aborted).toBe(true);
+					expect(yield* sealed('a')).toEqual(stored);
+					expect(
+						yield* driverCall(() =>
+							first.emit({ kind: 'messages', messages: [chat('stale-opening')] })
+						).pipe(Effect.flip)
+					).toMatchObject({ code: 'sourceChanged' });
+					expect(yield* links.state('a')).toMatchObject({
+						state: 'connected',
+						account: 'k',
+						importStart: applied
+					});
+					yield* links.close;
+					const resumed: DriverOpen[] = [];
+					const next = yield* host([
+						fake('p', resumed, 'whatsapp', {
+							importStart: { kind: 'timestamp', precision: 'second' }
+						})
+					]);
+					yield* next.resume;
+					expect(present(resumed[0]).importStart).toEqual(applied);
+					expect(yield* sealed('a')).toEqual(stored);
+					yield* next.close;
+				})
+			)
+	);
+
+	it.live('native positions require the selected provider declaration and validator', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { t, host, sealed } = yield* open();
+				const opened: DriverOpen[] = [];
+				const links = yield* host([
+					fake('native', opened, 'whatsapp', {
+						importStart: { kind: 'native', fields: [{ name: 'cursor', label: 'Cursor' }] },
+						validateImportStart: async (values) => ({ cursor: values['cursor']?.trim() ?? '' })
+					})
+				]);
+				yield* links.pair('a', { key: 'k' });
+				const admin = t.as(t.admin).authority,
+					original = yield* sealed('a');
+				expect(
+					yield* links
+						.importStart('a', { kind: 'native', provider: 'other', values: { cursor: '1' } }, admin)
+						.pipe(Effect.flip)
+				).toMatchObject({ code: 'unavailable' });
+				expect(
+					yield* links
+						.importStart(
+							'a',
+							{ kind: 'native', provider: 'native', values: { password: 'not-a-position' } },
+							admin
+						)
+						.pipe(Effect.flip)
+				).toMatchObject({ code: 'invalidInput' });
+				yield* links.importStart(
+					'a',
+					{ kind: 'native', provider: 'native', values: { cursor: ' opaque:42 ' } },
+					admin
+				);
+				expect(present(opened[1]).importStart).toMatchObject({
+					kind: 'native',
+					provider: 'native',
+					values: { cursor: 'opaque:42' },
+					selectedAt: expect.any(String)
+				});
+				expect(yield* sealed('a')).toEqual(original);
+				yield* links.close;
+				const unsupported = yield* host([
+					fake('unsupported', [], 'whatsapp', {
+						importStart: { kind: 'native', fields: [{ name: 'cursor', label: 'Cursor' }] }
+					})
+				]);
+				yield* unsupported.pair('b', { key: 'k' });
+				expect(
+					yield* unsupported.importStart('b', { kind: 'now', zone: 'UTC' }, admin).pipe(Effect.flip)
+				).toMatchObject({ code: 'unavailable' });
+				expect(
+					yield* unsupported
+						.importStart(
+							'b',
+							{ kind: 'native', provider: 'unsupported', values: { cursor: '1' } },
+							admin
+						)
+						.pipe(Effect.flip)
+				).toMatchObject({ code: 'unavailable' });
+				yield* unsupported.close;
+			})
+		)
+	);
+
+	it.live(
+		'a name-only grant cannot change source boundaries and raw updates reject malformed instants',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, host, act } = yield* open({
+						...manifest,
+						policies: {
+							...manifest.policies,
+							names: {
+								description: 'Names only',
+								grants: {
+									sys_integration: {
+										read: true,
+										update: { where: { owner: { eq: { actor: 'id' } } }, fields: ['name'] }
+									}
+								}
+							}
+						}
+					});
+					const alice = t.member(['names'], { email: 'names@ws.example' }),
+						admin = t.as(t.admin).authority;
+					const instance = present(
+						ok(
+							yield* act(admin, 'sys_integration.create', {
+								integration: 'whatsapp',
+								name: 'Owned phone',
+								owner: alice.id
+							})
+						).records[0]
+					).id;
+					const links = yield* host([
+						fake('p', [], 'whatsapp', { importStart: { kind: 'timestamp' } })
+					]);
+					expect(yield* links.may(t.as(alice).authority, instance)).toBe(true);
+					expect(
+						yield* links
+							.importStart(instance, { kind: 'all' }, t.as(alice).authority)
+							.pipe(Effect.flip)
+					).toMatchObject({ code: 'forbidden' });
+					for (const start of [
+						{ kind: 'since', at: '2026-10-21', zone: 'UTC', origin: 'date' },
+						{ kind: 'native', provider: 'p', values: { cursor: '1' }, selectedAt: '2026-10-21' }
+					])
+						expect(
+							yield* act(admin, 'sys_integration.update', {
+								target: instance,
+								set: { import_start: start }
+							})
+						).toMatchObject({ kind: 'refused', field: 'import_start' });
+					expect(yield* links.state(instance)).toMatchObject({ importStart: null });
+					yield* links.close;
+				})
+			)
+	);
 });

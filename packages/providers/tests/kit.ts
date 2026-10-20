@@ -61,6 +61,7 @@ export type HostOptions = {
 	webhookUrl?: string;
 	redirectUrl?: string;
 	personal?: boolean;
+	importStart?: DriverOpen['importStart'];
 	definition?: DriverOpen['definition'];
 	configuration?: Json;
 	secrets?: { readonly [name: string]: string };
@@ -106,6 +107,7 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 			instance: 'desk',
 			definition,
 			personal: o.personal === true,
+			...(o.importStart === undefined ? {} : { importStart: o.importStart }),
 			configuration: o.configuration ?? {},
 			webhookUrl: o.webhookUrl ?? HOOK,
 			redirectUrl: o.redirectUrl ?? REDIRECT,

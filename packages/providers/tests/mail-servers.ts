@@ -17,11 +17,12 @@ export async function fakeImap(o: {
 	accept: (user: string, secret: { pass?: string; token?: string }) => boolean;
 	validity?: number;
 }) {
-	const messages: { uid: number; raw: string }[] = [];
+	const messages: { uid: number; raw: string; receivedAt: Date | null }[] = [];
 	const idlers = new Set<(n: number) => void>();
 	const sockets = new Set<Socket>();
 	const logins: string[] = [];
 	const fetches: number[] = [];
+	const searches: string[] = [];
 	let next = 1;
 	const server = createServer((socket) => {
 		sockets.add(socket);
@@ -118,11 +119,17 @@ export async function fakeImap(o: {
 						for (const uid of found) {
 							const m = messages.find((x) => x.uid === uid)!,
 								seq = messages.indexOf(m) + 1;
-							say(`* ${seq} FETCH (UID ${uid} BODY[] {${Buffer.byteLength(m.raw)}}\r\n${m.raw})`);
+							const received = m.receivedAt
+								?.toUTCString()
+								.replace(/^\w+, (\d+) (\w+) (\d+) ([\d:]+) GMT$/, '$1-$2-$3 $4 +0000');
+							say(
+								`* ${seq} FETCH (UID ${uid}${received === undefined ? '' : ` INTERNALDATE "${received}"`} BODY[] {${Buffer.byteLength(m.raw)}}\r\n${m.raw})`
+							);
 						}
 						return say(`${tag} OK fetched`);
 					}
 					if (sub.toUpperCase() === 'SEARCH') {
+						searches.push(args);
 						const id = /HEADER Message-ID "?([^"\s]+)"?/i.exec(args)?.[1];
 						const range = /UID ([\d:*]+)/i.exec(more.join(' '))?.[1];
 						const hits =
@@ -168,9 +175,10 @@ export async function fakeImap(o: {
 		port,
 		logins,
 		fetches,
+		searches,
 		/** A message lands in the folder; IDLE clients hear EXISTS. */
-		deliver(raw: string) {
-			messages.push({ uid: next++, raw: raw.replace(/\r?\n/g, '\r\n') });
+		deliver(raw: string, receivedAt: Date | null = new Date()) {
+			messages.push({ uid: next++, raw: raw.replace(/\r?\n/g, '\r\n'), receivedAt });
 			for (const n of idlers) n(messages.length);
 		},
 		close: closer(server, sockets)

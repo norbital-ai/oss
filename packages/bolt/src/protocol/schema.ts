@@ -3,6 +3,7 @@
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
+import { Instant, Zone } from '@norbital-ai/std/date';
 
 /** An optional key whose value is dropped, not fatal, when it does not decode: one stray member never hides the rest. */
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
@@ -591,11 +592,69 @@ export const SetupDescription = Schema.Struct({
 	webhook: tolerant(Schema.Boolean)
 });
 export type SetupDescription = typeof SetupDescription.Type;
+const ImportInstant = Schema.String.pipe(
+	Schema.refine((value): value is string => {
+		try {
+			Instant(value);
+			return true;
+		} catch {
+			return false;
+		}
+	})
+);
+const ImportZone = Schema.String.pipe(
+	Schema.refine((value): value is string => {
+		try {
+			Zone(value);
+			return value !== '';
+		} catch {
+			return false;
+		}
+	})
+);
+/** A persisted source boundary. A missing boundary retains the instance's previous all-history behavior. */
+export const ImportStart = Schema.Union([
+	Schema.Struct({ kind: Schema.Literal('all') }),
+	Schema.Struct({
+		kind: Schema.Literal('since'),
+		at: ImportInstant,
+		zone: ImportZone,
+		origin: Schema.Literals(['now', 'date'])
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('native'),
+		selectedAt: ImportInstant,
+		provider: Schema.String,
+		values: Schema.Record(Schema.String, Schema.String)
+	})
+]);
+export type ImportStart = typeof ImportStart.Type;
+/** The host freezes From now and resolves a selected civil day's midnight in its chosen IANA zone. */
+export const ImportStartInput = Schema.Union([
+	Schema.Struct({ kind: Schema.Literal('all') }),
+	Schema.Struct({ kind: Schema.Literal('now'), zone: Schema.String }),
+	Schema.Struct({ kind: Schema.Literal('since'), date: Schema.String, zone: Schema.String }),
+	Schema.Struct({
+		kind: Schema.Literal('native'),
+		provider: Schema.String,
+		values: Schema.Record(Schema.String, Schema.String)
+	})
+]);
+export type ImportStartInput = typeof ImportStartInput.Type;
+export const ImportStartCapability = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('timestamp'),
+		precision: Schema.optionalKey(Schema.Literal('second'))
+	}),
+	Schema.Struct({ kind: Schema.Literal('native'), fields: Schema.Array(SetupField) })
+]);
+export type ImportStartCapability = typeof ImportStartCapability.Type;
 /** A provider as the shell offers it: a driver with several (WhatsApp) asks which, by `label`, first. */
 export const ProviderChoice = Schema.Struct({
 	id: Schema.String,
 	label: LocalText,
 	setup: SetupDescription,
+	importStart: Schema.optionalKey(ImportStartCapability),
 	/** Short catalogue name; the full registration label remains in `label`. */
 	name: tolerant(LocalText),
 	/** Concise catalogue description, localized by the authored surface. */
@@ -688,6 +747,7 @@ export const InstanceStatus = Schema.Struct({
 	provider: tolerant(Schema.String),
 	/** What the driver can be set up with on this host; the shell asks which when there are several. */
 	providers: Schema.optionalKey(listOf(ProviderChoice)),
+	importStart: Schema.optionalKey(Schema.NullOr(ImportStart)),
 	/** Present when the connected provider can send a test message: the shell offers Test, asking for `to` when it names one. */
 	test: tolerant(TestSend)
 });

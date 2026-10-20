@@ -33,6 +33,8 @@ export default model({
 		sender: { kind: 'text', optional: true },
 		sender_name: { kind: 'text', optional: true },
 		sent_at: { kind: 'instant', optional: true },
+		/** Provider-authoritative receive/source instant, independent of a message's authored date. */
+		source_at: { kind: 'instant', optional: true },
 		invocation: { kind: 'text', optional: true },
 		addressed: { kind: 'bool', optional: true },
 		refused: { kind: 'text', optional: true },

@@ -80,6 +80,14 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 				: readonly,
 		disabled: form?.pending === true ? true : disabled
 	}));
+	// a broken invariant shows like a field error; a check or refusal error on the same key wins
+	const errors = $derived.by(() => {
+		if (form === undefined || form.semanticErrors.length === 0) return form?.errors;
+		const all = new Map(form.errors);
+		for (const issue of form.semanticErrors)
+			if (!all.has(issue.field)) all.set(issue.field, issue.message);
+		return all;
+	});
 </script>
 
 {#if form === undefined}
@@ -127,7 +135,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	</div>
 {:else}
 	{@const disabled = controls.disabled}
-	{@const rawError = form.errors.get(name)}
+	{@const rawError = errors?.get(name)}
 	{@const error = rawError === undefined ? undefined : bolt.t(rawError)}
 	<div class={cn('grid content-start gap-2', className)} data-field={name}>
 		<label id={`${id}-${name}-label`} for={`${id}-${name}`} class={labelClass}>
@@ -158,7 +166,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 				id={`${id}-${name}`}
 				labelledby={`${id}-${name}-label`}
 				{disabled}
-				errors={form.errors}
+				{errors}
 				row={form.row}
 				relation={field.relation}
 				{address}

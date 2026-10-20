@@ -20,12 +20,16 @@ const unxml = (s: string) =>
 			: (ENTITY[e] ?? all)
 	);
 const texts = (xml: string) =>
-	unxml([...xml.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((t) => t[1]).join(''));
+	unxml(
+		[...xml.matchAll(/<(?:[\w.-]+:)?t(?:\s[^>]*)?>([^<]*)<\/(?:[\w.-]+:)?t>/g)]
+			.map((t) => t[1])
+			.join('')
+	);
 
 /**
  * An xlsx worksheet as std/sheet's `Cell[][]` (row 1 first; gaps are `null`). A zip read with `node:zlib`:
  * stored and deflated entries, shared and inline strings, booleans and numbers.
- * ponytail: a date cell arrives as its serial number (styles are not read); read `xl/styles.xml` when an agent needs dates.
+ * ponytail: styled dates arrive as serials (styles are not read); ISO date cells retain their text and zone.
  */
 function xlsxEntries(zip: Uint8Array): Map<string, () => string> {
 	const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
@@ -56,11 +60,13 @@ function worksheetRefs(read: (name: string) => string): { name: string; path: st
 	const attr = (xml: string, name: string) =>
 		new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(xml)?.[1];
 	const rels = [
-		...read('xl/_rels/workbook.xml.rels').matchAll(/<Relationship\b([^>]*?)\/?\s*>/g)
+		...read('xl/_rels/workbook.xml.rels').matchAll(
+			/<(?:[\w.-]+:)?Relationship\b([^>]*?)\/?\s*>/g
+		)
 	].map((m) => ({ id: attr(m[1]!, 'Id'), target: attr(m[1]!, 'Target') }));
-	return [...read('xl/workbook.xml').matchAll(/<sheet\b([^>]*?)\/?\s*>/g)].map((m, i) => {
+	return [...read('xl/workbook.xml').matchAll(/<(?:[\w.-]+:)?sheet\b([^>]*?)\/?\s*>/g)].map((m, i) => {
 		const name = attr(m[1]!, 'name') ?? `Sheet ${i + 1}`;
-		const target = rels.find((r) => r.id === attr(m[1]!, 'r:id'))?.target;
+		const target = rels.find((r) => r.id === attr(m[1]!, '[\\w.-]+:id'))?.target;
 		return {
 			name: unxml(name),
 			path: target?.replace(/^\/?(xl\/)?/, 'xl/') ?? `xl/worksheets/sheet${i + 1}.xml`
@@ -80,15 +86,19 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 	if (!Number.isInteger(sheet) || sheet < 0 || sheet >= refs.length)
 		throw new Error(`worksheet ${sheet} does not exist`);
 	const path = refs[sheet]!.path;
-	const shared = [...read('xl/sharedStrings.xml').matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) =>
-		texts(m[1]!)
-	);
+	const shared = [
+		...read('xl/sharedStrings.xml').matchAll(
+			/<(?:[\w.-]+:)?si\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?si>/g
+		)
+	].map((m) => texts(m[1]!));
 	const out: Cell[][] = [];
 	for (const row of read(path).matchAll(
-		/<row\b[^>]*?\br="(\d+)"[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g
+		/<(?:[\w.-]+:)?row\b[^>]*?\br="(\d+)"[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?row>)/g
 	)) {
 		const cells: Cell[] = [];
-		for (const c of (row[2] ?? '').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+		for (const c of (row[2] ?? '').matchAll(
+			/<(?:[\w.-]+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?c>)/g
+		)) {
 			const attrs = c[1]!,
 				body = c[2] ?? '',
 				ref = /\br="([A-Z]+)\d+"/.exec(attrs)?.[1] ?? '';
@@ -97,7 +107,7 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 					? cells.length
 					: [...ref].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
 			const t = /\bt="(\w+)"/.exec(attrs)?.[1],
-				raw = /<v>([^<]*)<\/v>/.exec(body)?.[1];
+				raw = /<(?:[\w.-]+:)?v(?:\s[^>]*)?>([^<]*)<\/(?:[\w.-]+:)?v>/.exec(body)?.[1];
 			const value: Cell =
 				t === 'inlineStr'
 					? texts(body)
@@ -107,7 +117,7 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 							? (shared[Number(raw)] ?? null)
 							: t === 'b'
 								? raw === '1'
-								: t === 'str' || t === 'e'
+								: t === 'str' || t === 'e' || t === 'd'
 									? unxml(raw)
 									: Number(raw);
 			while (cells.length < col) cells.push(null);

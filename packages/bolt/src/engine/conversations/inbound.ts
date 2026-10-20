@@ -2,6 +2,7 @@
 import { Effect, Option, Predicate, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Obj } from './value.ts';
+import { Instant } from '@norbital-ai/std/date';
 
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
 	Schema.optionalKey(Schema.catchDecoding<S>(() => Effect.succeedNone)(schema));
@@ -22,6 +23,7 @@ const From = Schema.Struct({
 export const InboundMessage = Schema.Struct({
 	id: Schema.NonEmptyString,
 	sentAt: tolerant(Schema.NonEmptyString),
+	sourceAt: tolerant(Schema.NonEmptyString),
 	thread: tolerant(Schema.NonEmptyString),
 	from: tolerant(From),
 	text: tolerant(Schema.String),
@@ -40,6 +42,7 @@ const Normalized = Schema.Struct({
 	id: Schema.String,
 	thread: Schema.String,
 	sentAt: Schema.String,
+	sourceAt: Schema.NullOr(Schema.String),
 	sender: Schema.String,
 	senderName: Schema.NullOr(Schema.String),
 	text: Schema.String,
@@ -61,6 +64,14 @@ const Normalized = Schema.Struct({
 export type Inbound = typeof Normalized.Type;
 const iso = (value: string | undefined): string | null =>
 	value === undefined || Number.isNaN(Date.parse(value)) ? null : new Date(value).toISOString();
+const sourceInstant = (value: string | undefined): string | null => {
+	if (value === undefined) return null;
+	try {
+		return Instant(value);
+	} catch {
+		return null;
+	}
+};
 const attachment = Schema.decodeUnknownOption(Attachment),
 	participant = Schema.decodeUnknownOption(Participant);
 
@@ -79,6 +90,7 @@ export function normalizeInbound(
 			id: raw.id,
 			thread: '',
 			sentAt: sentAt ?? now,
+			sourceAt: sourceInstant(raw.sourceAt),
 			sender: '',
 			senderName: null,
 			text: '',
@@ -105,6 +117,7 @@ export function normalizeInbound(
 	const facts = {
 		...(participants === undefined ? {} : { participants }),
 		sentAt,
+		sourceAt: sourceInstant(raw.sourceAt),
 		version: iso(raw.version) ?? sentAt,
 		deleted: raw.deleted === true,
 		history,

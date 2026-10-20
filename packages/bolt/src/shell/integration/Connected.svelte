@@ -10,8 +10,11 @@
 	import { Button, Input } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
+	import type { ImportStartInput } from '../../protocol/instance-status.ts';
 	import { DRIVERS } from '../../decl/runtime/integration.ts';
 	import Facts from './Facts.svelte';
+	import ImportStart from './ImportStart.svelte';
+	import { importStartDraft, importStartLabel, validImportStart } from './import-start.ts';
 	import { aboutOf, providerOf, sayOf, type IntegrationSetupProps } from './setup.ts';
 
 	let {
@@ -20,14 +23,17 @@
 		error,
 		unpair,
 		test,
+		importStart,
 		reconnect,
+		controls = true,
 		t,
 		locale
 	}: Pick<
 		IntegrationSetupProps,
-		'status' | 'busy' | 'error' | 'unpair' | 'test' | 't' | 'locale'
+		'status' | 'busy' | 'error' | 'unpair' | 'test' | 'importStart' | 't' | 'locale'
 	> & {
 		reconnect: () => void;
+		controls?: boolean | undefined;
 	} = $props();
 	const say = $derived(sayOf(t, locale));
 	const c = $derived(status);
@@ -43,6 +49,25 @@
 	);
 	// a provider with nothing to pair (setup `none`) has nothing to reconnect or disconnect
 	const paired = $derived(active?.setup.kind !== 'none');
+	let boundary = $state<ImportStartInput | undefined>(undefined);
+	let applied = $state(false);
+	const draft = $derived(
+		active === undefined ? undefined : (boundary ?? importStartDraft(c?.importStart, active))
+	);
+	function apply(event: SubmitEvent): void {
+		event.preventDefault();
+		if (draft === undefined || active === undefined || !validImportStart(draft, active)) return;
+		applied = false;
+		fork(
+			importStart(draft).pipe(
+				Effect.tap((success) =>
+					Effect.sync(() => {
+						applied = success;
+					})
+				)
+			)
+		);
+	}
 	let to = $state('');
 	let tested = $state(false);
 	function send(event: SubmitEvent): void {
@@ -62,6 +87,47 @@
 
 <Stack gap="md" data-setup-view="connected">
 	<Facts {facts} {t} />
+	{#if active?.importStart !== undefined && draft !== undefined}
+		{#if controls}<p class="text-meta" data-import-start-active>
+				{t('Import start')}: {importStartLabel(c?.importStart, t, locale)}
+			</p>{/if}
+		{#if controls && c?.importStart?.kind === 'since' && c.importStart.origin === 'now' && active.importStart.kind === 'timestamp' && active.importStart.precision === 'second'}
+			<p class="text-meta" data-import-start-precision>
+				{t('This source timestamps messages to the second; the whole starting second is included.')}
+			</p>
+		{/if}
+		<form class="flex flex-col gap-3" onsubmit={apply} data-import-start-form>
+			<ImportStart
+				provider={active}
+				value={draft}
+				onChange={(value) => {
+					boundary = value;
+					applied = false;
+				}}
+				{busy}
+				{t}
+				{locale}
+			/>
+			<p class="text-meta">
+				{t('Changes affect future imports. Previously imported messages stay in the workspace.')}
+			</p>
+			<Cluster gap="sm">
+				<Button
+					size="sm"
+					variant="outline"
+					type="submit"
+					disabled={busy ||
+						boundary === undefined ||
+						(applied && error === null) ||
+						!validImportStart(draft, active)}
+					>{busy ? t('Applying…') : t('Apply import start')}</Button
+				>
+				{#if applied && !busy && error === null}<span class="text-meta" role="status"
+						>{t('Import start updated')}</span
+					>{/if}
+			</Cluster>
+		</form>
+	{/if}
 	<form class="flex flex-col gap-2" onsubmit={send} data-setup-test>
 		{#if c?.test?.to !== undefined}
 			<label class="flex flex-col gap-1 text-sm">
@@ -74,7 +140,7 @@
 			{#if testable}<Button size="sm" variant="outline" type="submit" disabled={busy}
 					>{t('Test connection')}</Button
 				>{/if}
-			{#if paired}
+			{#if paired && controls}
 				<Button size="sm" variant="ghost" disabled={busy} onclick={reconnect}
 					>{t('Reconnect')}</Button
 				>

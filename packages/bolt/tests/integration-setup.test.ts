@@ -28,7 +28,10 @@ const settle = async () => {
 	await tick();
 	flushSync();
 };
-type Client = Pick<IntegrationClient, 'instance' | 'status' | 'pair' | 'unpair' | 'test' | 'watch'>;
+type Client = Pick<
+	IntegrationClient,
+	'instance' | 'status' | 'pair' | 'importStart' | 'unpair' | 'test' | 'watch'
+>;
 const fixture = (over: Partial<Client> = {}) => {
 	let status: InstanceStatus = {
 		instance: 'erp',
@@ -71,6 +74,7 @@ const fixture = (over: Partial<Client> = {}) => {
 		instance: 'erp',
 		status: () => Effect.sync(() => status),
 		pair,
+		importStart: () => Effect.sync(() => status),
 		unpair,
 		test: () => Effect.sync(() => status),
 		watch: () =>
@@ -177,6 +181,50 @@ it('shows a refused read as such, and the host’s refusal of a pairing verbatim
 			'The API key is not valid (401).'
 		)
 	);
+});
+
+it('retains a refused import edit and never reports it as saved after another request succeeds', async () => {
+	const status: InstanceStatus = {
+		instance: 'erp',
+		integration: 'erp',
+		driver: 'http',
+		state: 'connected',
+		stored: true,
+		providers: [
+			{
+				id: 'http',
+				label: 'HTTP',
+				setup: { kind: 'form', steps: [] },
+				importStart: { kind: 'timestamp' }
+			}
+		]
+	};
+	const f = fixture({
+		status: () => Effect.succeed(status),
+		importStart: () =>
+			Effect.fail(new ActRefused({ code: 'refused', message: 'Import start could not be saved.' })),
+		test: () => Effect.succeed(status)
+	});
+	const target = await show(f.client, f.ready);
+	target.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Import start"]')!.click();
+	await settle();
+	document.querySelector<HTMLButtonElement>('[role=option][data-value=since] button')!.click();
+	await settle();
+	const date = target.querySelector<HTMLInputElement>('input[name=import-start-date]')!;
+	date.value = '2026-10-21';
+	date.dispatchEvent(new Event('input', { bubbles: true }));
+	await settle();
+	target.querySelector<HTMLFormElement>('[data-import-start-form]')!.requestSubmit();
+	await vi.waitFor(() =>
+		expect(target.querySelector('[data-connection-error]')?.textContent).toContain(
+			'could not be saved'
+		)
+	);
+	expect(date.value).toBe('2026-10-21');
+	button(target, 'Test connection').click();
+	await vi.waitFor(() => expect(target.querySelector('[data-connection-error]')).toBeNull());
+	expect(target.textContent).not.toContain('Import start updated');
+	expect(button(target, 'Apply import start').disabled).toBe(false);
 });
 
 it('unsubscribes its stream on unmount and draws nothing a late read answers', async () => {

@@ -74,6 +74,7 @@
 	import { getContext, onDestroy, setContext, untrack } from 'svelte';
 	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import { Badge } from '../primitives/badge/index.js';
+	import { Tooltip } from '../primitives/tooltip/index.js';
 	import { Button } from '../primitives/button/index.js';
 	import { TAB_LEVEL, Tabs, type TabItem } from '../primitives/tabs/index.js';
 	import Form from '../form/form.svelte';
@@ -90,7 +91,7 @@
 	import Value from '../cell/Value.svelte';
 	import { actOutcome } from '../actions/outcome.js';
 	import ApprovalPanel from '../approval/ApprovalPanel.svelte';
-	import { approvalOf, lockText } from '../approval/row.js';
+	import { approvalOf, approvalStatus, lockText } from '../approval/row.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { notify } from '../actions/notify.js';
@@ -581,7 +582,7 @@
 					>{singular(bolt, of)}</span
 				>{/if}
 			<div class="flex items-center gap-2">
-				<h2 class="truncate text-sm leading-5 font-semibold">
+				<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
 					{heading ||
 						(mode === 'create'
 							? msg(bolt, 'record.new', 'New {what}', { what: lowerLead(singular(bolt, of)) })
@@ -590,11 +591,26 @@
 				{#if badge || icon}<Badge variant="outline" title={hint}
 						>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
 					>{/if}
-				{#if pendingApproval}<Badge variant="warning" data-view="approval-badge"
-						>{openRequest?.status === 'CHANGES_REQUESTED'
-							? msg(bolt, 'approval.status.CHANGES_REQUESTED', 'Changes requested')
-							: msg(bolt, 'record.pending', 'Under approval')}</Badge
-					>{/if}
+				{#if pendingApproval || underApproval}
+					{@const rfc = openRequest?.status === 'CHANGES_REQUESTED'}
+					{@const full = rfc
+						? msg(bolt, 'approval.requestForChange', 'Request for change')
+						: lockReason}
+					<Tooltip text={full}>
+						{#snippet trigger({ props })}
+							<Badge
+								{...props}
+								variant="outline"
+								class="shrink-0 whitespace-nowrap border-warning/25 bg-warning/10 text-warning-foreground hover:bg-warning/15 dark:text-warning"
+								tabindex={0}
+								role="status"
+								aria-label={full}
+								data-view="approval-badge"
+								>{rfc ? 'RFC' : msg(bolt, 'record.pending', 'Under approval')}</Badge
+							>
+						{/snippet}
+					</Tooltip>
+				{/if}
 				{#if trailing}{@render trailing()}{/if}
 			</div>
 			{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
@@ -604,7 +620,6 @@
 				>{msg(bolt, 'record.edit', 'Edit')}</Button
 			>
 		{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && underApproval}
-			<span class="text-meta" data-view="approval-lock">{lockReason}</span>
 			<Button size="sm" variant="outline" disabled title={lockReason}
 				>{msg(bolt, 'record.edit', 'Edit')}</Button
 			>
@@ -628,7 +643,7 @@
 				<Button
 					size="sm"
 					class="px-2.5 text-xs"
-					disabled={controller.pending || !controller.dirty || !controller.canSubmit}
+					disabled={!controller.canSave || !controller.dirty}
 					onclick={() => (controller === null ? undefined : fork(controller.submit()))}
 					>{controller.pending
 						? formText('saving')
@@ -681,21 +696,7 @@
 	{#if requests.error}<Alert variant="destructive" role="alert"
 			>{msg(bolt, 'approval.loadFailed', 'Approval requests could not be loaded.')}</Alert
 		>{/if}
-	<!-- the record's approval history, oldest first: finished requests collapsed, the current (newest) one open -->
-	{#each [...(requests.current ?? [])]
-		.reverse()
-		.filter((r) => r.id !== approvalId) as past (past.id)}
-		<details class="rounded-md border p-2" data-request={past.id} data-status={past.status}>
-			<summary class="cursor-pointer text-sm"
-				>{msg(bolt, `approval.status.${past.status}`, past.status)} · {format(
-					{ kind: 'instant' },
-					past.at,
-					{ locale: bolt.locale, zone: kinds.zone }
-				)}</summary
-			>
-			<div class="mt-2"><ApprovalPanel requestId={past.id} /></div>
-		</details>
-	{/each}
+
 	{#if approvalId !== null}<ApprovalPanel
 			requestId={approvalId}
 			revision={latest || undefined}
@@ -713,6 +714,28 @@
 				'When a change to this record needs approval, the request, its approvers and their decisions show here.'
 			)}
 		/>{/if}
+	{#if (requests.current?.length ?? 0) > 1}
+		<details class="mt-4 border-t pt-3" data-view="approval-past">
+			<summary class="cursor-pointer text-meta"
+				>{msg(bolt, 'approval.previousRequests', 'Previous requests')} ({(requests.current
+					?.length ?? 0) - 1})</summary
+			>
+
+			{#each [...(requests.current ?? [])]
+				.reverse()
+				.filter((r) => r.id !== approvalId) as past (past.id)}
+				<details class="py-2" data-request={past.id} data-status={past.status}>
+					<summary class="cursor-pointer text-sm"
+						>{approvalStatus(bolt, past.status)} · {format({ kind: 'instant' }, past.at, {
+							locale: bolt.locale,
+							zone: kinds.zone
+						})}</summary
+					>
+					<div class="mt-2"><ApprovalPanel requestId={past.id} /></div>
+				</details>
+			{/each}
+		</details>
+	{/if}
 {/snippet}
 
 {#snippet tools()}

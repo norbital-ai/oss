@@ -8,6 +8,7 @@ import type { DriverName, IntegrationSpec } from '../../decl/runtime/integration
 import type { Json } from '../../decl/values.ts';
 import type { DriverEvent, DriverPage, OutboundAttachment } from '../contracts.ts';
 import type {
+	ImportStart,
 	LinkStatus,
 	Pairing,
 	ProviderChoice,
@@ -41,6 +42,8 @@ export type DriverOpen = {
 	/** A personal instance (an owner's own account): sync only, it never sends. */
 	personal: boolean;
 	configuration: Json;
+	/** Frozen source import boundary; absent or null retains all history. */
+	importStart?: ImportStart | null;
 	/** This instance's own inbound URL, shown to the operator and registered with the provider where it can. */
 	webhookUrl: string;
 	/**
@@ -109,6 +112,10 @@ export type Link = { close(): Promise<void> } & Partial<{
 /** A provider (`@norbital-ai/providers`, or a host's own), registered by the host for one driver kind. Bolt never names one. */
 export type Provider = ProviderChoice & {
 	driver: DriverName;
+	/** Required for a native boundary: validates and normalizes only this provider's declared fields. */
+	validateImportStart?(
+		values: Readonly<Record<string, string>>
+	): Promise<Readonly<Record<string, string>>>;
 	/** It imports a personal account (history and own sent messages) without sending. */
 	personal?: boolean;
 	/** It signs in with this vendor's OAuth client (`DriverOpen.oauthClient`); offered only where one is configured. */

@@ -1,7 +1,7 @@
 <!--
-	Settings → Integrations: each envoy's channel as one-click connectors (`Envoys`), then the instances (§3): every
-	`sys_integration` row — a connection of `+workspace.ts` or one made here — with its account and state as the host last recorded them, and who uses it (an envoy, or the member whose own
-	account it is). New makes one of any definition (a member's own account where the driver syncs one). A row opens its
+	Settings → Integrations: each envoy's channel as one-click connectors (`Envoys`), then the other `sys_integration`
+	rows with their account, state and owner. Each connection appears once; Manage on an agent channel opens the same
+	sheet as a table row. New makes one of any definition (a member's own account where the driver syncs one). A row opens its
 	sheet: the generic setup over the host's verbs (provider choice, pairing, test, reconnect, disconnect), then the
 	instance's own fields (name, active, the envoy answering a workspace conversation instance, the configuration its
 	definition declares) and, for a conversation, its raw messages. Every write is the collection's native form or act.
@@ -81,14 +81,19 @@
 		return s === 'connected' || s === 'error' ? s : 'unpaired';
 	};
 	const rows = $derived(
-		settings.instances.map((i) => ({
-			id: i.id,
-			name: i.name,
-			integration: i.integration,
-			account: str(obj(i.status)['account']),
-			state: i.active ? statusLabel({ state: stored(i), stored: false }, t) : t('Paused'),
-			used: i.envoy !== null ? envoyName(i.envoy) : i.owner !== null ? memberName(i.owner) : ''
-		}))
+		settings.instances
+			.filter((i) => !settings.envoys.some((e) => e.id === i.envoy))
+			.map((i) => ({
+				id: i.id,
+				name: i.name,
+				integration: i.integration,
+				account: str(obj(i.status)['account']),
+				state: i.active ? statusLabel({ state: stored(i), stored: false }, t) : t('Paused'),
+				used: i.envoy !== null ? envoyName(i.envoy) : i.owner !== null ? memberName(i.owner) : ''
+			}))
+	);
+	const connectionsTitle = $derived(
+		t(settings.envoys.length > 0 ? 'Other connections' : 'Connections')
 	);
 
 	// ── the open instance: its sheet, and its client (one per instance, so its stream is held while the sheet is open) ──
@@ -194,33 +199,50 @@
 	</div>
 {/snippet}
 
-{#if settings.envoys.length > 0}<Envoys {api} {bolt} {settings} {t} {locale} />{/if}
+{#if settings.envoys.length > 0}<Envoys
+		{api}
+		{bolt}
+		{settings}
+		{t}
+		{locale}
+		onManage={(instance) => (open = instance)}
+	/>{/if}
 
-<Table
-	of={rows}
-	key="integration-instances"
-	onOpen={(row) => {
-		open = row.id;
-	}}
-	toolbar={{
-		title: t('Integration instances'),
-		description: t(
-			'Each instance is one external account: a number, a mailbox, a bot, a database or a calendar account.'
-		),
-		new: () => (creating = true)
-	}}
-	columns={[
-		{ field: 'name', label: t('Name') },
-		{ field: 'integration', label: t('Integration') },
-		{ field: 'account', label: t('Account') },
-		{ field: 'state', label: t('State') },
-		{ field: 'used', label: t('Used by') }
-	]}
->
-	{#snippet empty()}<p class="text-sm text-muted-foreground">
-			{t('No integration instances yet.')}
-		</p>{/snippet}
-</Table>
+<section class="flex flex-col gap-2" data-integration-connections>
+	{#if rows.length > 0}
+		<Table
+			of={rows}
+			key="integration-instances"
+			onOpen={(row) => {
+				open = row.id;
+			}}
+			toolbar={{
+				title: connectionsTitle,
+				description: t('External accounts used by this workspace or its members.'),
+				new: () => (creating = true)
+			}}
+			columns={[
+				{ field: 'name', label: t('Name') },
+				{ field: 'integration', label: t('Integration') },
+				{ field: 'account', label: t('Account') },
+				{ field: 'state', label: t('State') },
+				{ field: 'used', label: t('Used by') }
+			]}
+		>
+			{#snippet empty()}<p class="text-sm text-muted-foreground">
+					{t('No connections match your search.')}
+				</p>{/snippet}
+		</Table>
+	{:else}
+		<header class="flex items-center justify-between gap-3">
+			<h2 class="text-sm font-medium">{connectionsTitle}</h2>
+			<Button size="sm" onclick={() => (creating = true)}>{t('New connection')}</Button>
+		</header>
+		<p class="text-meta">
+			{t(settings.envoys.length > 0 ? 'No other connections yet.' : 'No connections yet.')}
+		</p>
+	{/if}
+</section>
 
 {#if current !== undefined}
 	{@const i = current}

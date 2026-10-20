@@ -336,3 +336,5 @@ export type {
 	Transcript,
 	TranscriptSegment
 } from '../decl/runtime/facilities.ts';
+
+export { ImportStart, ImportStartInput, ImportStartCapability } from '../protocol/schema.ts';

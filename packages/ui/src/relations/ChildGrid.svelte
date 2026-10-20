@@ -601,7 +601,7 @@ A related-record grid with explicit child operations, original revisions and par
 			{#if editing}
 				{#if save === 'independent' && (entry.created || entry.form.dirty)}<Button
 						size="sm"
-						disabled={entry.form.pending || !entry.form.canSubmit}
+						disabled={!entry.form.canSave}
 						onclick={() => fork(entry.form.submit())}
 						>{entry.form.requestingApproval
 							? msg(bolt, 'record.requestApproval', 'Request approval')

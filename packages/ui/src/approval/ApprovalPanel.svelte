@@ -8,7 +8,7 @@ provisional change holds, and the moves the host's state machine allows this vie
 	import { run, fork } from '../effect/index.js';
 	import { actOutcome, outcomeText } from '../actions/outcome.js';
 	import { Button } from '../primitives/button/index.js';
-	import { Input } from '../primitives/input/index.js';
+	import { Textarea } from '../primitives/textarea/index.js';
 	import { useKinds } from '../kinds/context.js';
 	import { format } from '../kinds/kind.js';
 	import type { ActFailure, ActSuccess, ApprovalView, Outcome } from '../client/contract.js';
@@ -16,6 +16,7 @@ provisional change holds, and the moves the host's state machine allows this vie
 	import { failed } from '../read/state.js';
 	import { label, msg } from '../text/messages.js';
 	import { skipText } from '../record/history.js';
+	import { approvalStatus } from './row.js';
 
 	/** A new source revision refreshes the request under current permissions. */
 	let {
@@ -27,6 +28,7 @@ provisional change holds, and the moves the host's state machine allows this vie
 	const kinds = useKinds();
 	const at = (value: string) =>
 		format({ kind: 'instant' }, value, { locale: kinds.locale ?? bolt.locale, zone: kinds.zone });
+	const noteId = $props.id();
 	let reason = $state('');
 	let notice = $state<string | null>(null);
 	let busy = $state(false);
@@ -70,14 +72,6 @@ provisional change holds, and the moves the host's state machine allows this vie
 	const who = (p: { ref: string; name: string | null }) => p.name ?? p.ref.replace(/^[a-z]+:/i, '');
 	const teams = (v: ApprovalView, ts: readonly string[]) =>
 		ts.map((handle) => v.teamNames[handle] ?? handle).join(` ${msg(bolt, 'approval.or', 'or')} `);
-	const STATUS_TEXT: { readonly [s: string]: string } = {
-		ONGOING: 'Pending',
-		CHANGES_REQUESTED: 'Changes requested',
-		APPROVED: 'Approved',
-		REJECTED: 'Rejected',
-		WITHDRAWN: 'Withdrawn',
-		SUPERSEDED: 'Superseded'
-	};
 	const MOVE_TEXT: { readonly [m: string]: string } = {
 		request: 'Requested',
 		approve: 'Approved',
@@ -102,7 +96,7 @@ provisional change holds, and the moves the host's state machine allows this vie
 	const VARIANT: { readonly [s: string]: 'default' | 'outline' | 'destructive' | 'ghost' } = {
 		APPROVED: 'default',
 		RESUBMITTED: 'default',
-		REJECTED: 'destructive',
+		REJECTED: 'outline',
 		WITHDRAWN: 'ghost',
 		COMMENT: 'ghost'
 	};
@@ -125,8 +119,41 @@ provisional change holds, and the moves the host's state machine allows this vie
 		removed: 'removed',
 		recreated: 'recreated'
 	};
-	const needsReason = (v: ApprovalView) => v.moves.some((m) => m.reason === 'required');
+	const requiredActions = (v: ApprovalView) =>
+		v.moves
+			.filter((m) => m.reason === 'required')
+			.map((m) => msg(bolt, `approval.button.${m.status}`, BUTTON_TEXT[m.status] ?? m.status))
+			.join(', ');
+	const orderedMoves = (v: ApprovalView) =>
+		[...v.moves].sort(
+			(a, b) => Number(VARIANT[b.status] === 'default') - Number(VARIANT[a.status] === 'default')
+		);
 </script>
+
+{#snippet effects(e: ApprovalView['log'][number])}
+	{#if e.rolledBack !== undefined && e.rolledBack.length > 0}
+		<p class="text-caption" data-rolled-back>
+			{msg(bolt, 'approval.rolledBack', 'Rolled back')}: {e.rolledBack
+				.map(
+					(r) =>
+						`${label(bolt, r.collection)} ${msg(bolt, `approval.action.${r.action}`, ACTION_TEXT[r.action] ?? r.action)}`
+				)
+				.join(', ')}
+		</p>
+	{/if}
+	{#if e.skipped !== undefined && e.skipped.length > 0}
+		<details class="text-caption text-warning-foreground dark:text-warning" data-skipped>
+			<summary class="cursor-pointer"
+				>{msg(bolt, 'approval.skipped', 'Not restored')} ({e.skipped.length})</summary
+			>
+			<ul class="mt-1 list-disc pl-4">
+				{#each e.skipped as s, i (i)}<li>
+						{label(bolt, s.collection, s.field)} ({skipText(bolt, s.reason)})
+					</li>{/each}
+			</ul>
+		</details>
+	{/if}
+{/snippet}
 
 {#await run(view)}
 	<p class="text-muted-foreground text-sm">…</p>
@@ -136,40 +163,48 @@ provisional change holds, and the moves the host's state machine allows this vie
 			{msg(bolt, 'approval.notFound', 'Not found or no access')}
 		</p>
 	{:else}
+		{@const decision =
+			v.status === 'CHANGES_REQUESTED' || v.status === 'REJECTED' || v.status === 'WITHDRAWN'
+				? [...v.log].reverse().find((e) => e.to === v.status && e.from !== e.to)
+				: undefined}
 		<div class="flex flex-col gap-4 text-sm" data-view="approval" data-status={v.status}>
-			<div class="flex flex-wrap gap-x-4 gap-y-1">
-				<span
-					><span class="text-muted-foreground">{msg(bolt, 'approval.status', 'Status')}:</span>
-					{msg(bolt, `approval.status.${v.status}`, STATUS_TEXT[v.status] ?? v.status)}</span
-				>
-				<span
-					><span class="text-muted-foreground">{msg(bolt, 'approval.step', 'Step')}:</span>
-					{Math.min(v.step + 1, v.steps.length)} / {v.steps.length}</span
-				>
+			<header class="flex flex-col gap-2" data-view="approval-summary">
+				<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+					<h3 class="font-medium">{approvalStatus(bolt, v.status)}</h3>
+					{#if v.status === 'ONGOING' && v.steps.length > 0}<span class="text-meta"
+							>{msg(bolt, 'approval.stepOf', 'Step {step} of {total}', {
+								step: Math.min(v.step + 1, v.steps.length),
+								total: v.steps.length
+							})}</span
+						>{/if}
+				</div>
 				{#if v.status === 'ONGOING'}
-					<span data-view="approval-waiting"
-						><span class="text-muted-foreground"
-							>{msg(bolt, 'approval.awaiting', 'Awaiting a decision from')}:</span
-						>
-						{teams(v, v.steps[v.step] ?? [])}</span
-					>
+					<p class="text-meta" data-view="approval-waiting">
+						{msg(bolt, 'approval.awaiting', 'Awaiting a decision from')}:
+						<span class="text-foreground">{teams(v, v.steps[v.step] ?? [])}</span>
+					</p>
 				{:else if v.status === 'CHANGES_REQUESTED'}
-					<span data-view="approval-waiting"
-						><span class="text-muted-foreground"
-							>{msg(bolt, 'approval.awaitingRequester', 'Awaiting changes from')}:</span
-						>
-						{who(v.requestor)}</span
-					>
+					<p class="text-meta" data-view="approval-waiting">
+						{msg(bolt, 'approval.awaitingRequester', 'Awaiting changes from')}:
+						<span class="text-foreground">{who(v.requestor)}</span>
+					</p>
 				{/if}
-				{#if v.superseded_by.length > 0}
-					<span
-						><span class="text-muted-foreground"
-							>{msg(bolt, 'approval.supersededBy', 'May supersede')}:</span
-						>
-						{teams(v, v.superseded_by)}</span
+				{#if decision?.reason}
+					<blockquote
+						class="whitespace-pre-wrap wrap-anywhere"
+						data-view="approval-decision-reason"
 					>
+						{decision.reason}
+					</blockquote>
+					<p class="text-meta">
+						{who(decision.by)} · <time datetime={decision.at}>{at(decision.at)}</time>
+					</p>
 				{/if}
-			</div>
+				{#if decision !== undefined}{@render effects(decision)}{/if}
+				{#if v.status === 'ONGOING' && v.superseded_by.length > 0}<p class="text-meta">
+						{msg(bolt, 'approval.supersededBy', 'May supersede')}: {teams(v, v.superseded_by)}
+					</p>{/if}
+			</header>
 
 			<ul class="text-meta flex flex-wrap gap-x-3" data-view="approval-records">
 				{#each v.records as r (`${r.collection}:${r.id}`)}
@@ -183,72 +218,72 @@ provisional change holds, and the moves the host's state machine allows this vie
 				{/each}
 			</ul>
 
-			<ol class="flex flex-col gap-0" data-view="approval-timeline">
-				{#each v.log as e, i (i)}
-					<li class="flex gap-3" data-move={e.move} data-to={e.to}>
-						<span class="mt-1.5 size-2 shrink-0 rounded-full {DOT[e.move] ?? 'bg-border'}"></span>
-						<div class="pb-3">
-							<div class="font-medium">
-								{msg(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move] ?? e.move)}
-								{#if e.move !== 'comment' && e.move !== 'request'}
-									· {msg(bolt, 'approval.stepN', `Step ${e.step + 1}`)}{/if}
-								{#if e.from !== null && e.from !== e.to}
-									· {msg(bolt, `approval.status.${e.to}`, STATUS_TEXT[e.to] ?? e.to)}{/if}
-							</div>
-							<div class="text-meta">{who(e.by)} · {at(e.at)}</div>
-							{#if e.reason}<div class="text-caption" data-reason>“{e.reason}”</div>{/if}
-							{#if e.rolledBack !== undefined && e.rolledBack.length > 0}
-								<div class="text-caption" data-rolled-back>
-									{msg(bolt, 'approval.rolledBack', 'Rolled back')}:
-									{e.rolledBack
-										.map((r) => `${label(bolt, r.collection)} ${ACTION_TEXT[r.action] ?? r.action}`)
-										.join(', ')}
-								</div>
-							{/if}
-							{#if e.skipped !== undefined && e.skipped.length > 0}
-								<div class="text-caption text-warning" data-skipped>
-									{msg(bolt, 'approval.skipped', 'Not restored')}:
-									{e.skipped
-										.map(
-											(s) => `${label(bolt, s.collection, s.field)} (${skipText(bolt, s.reason)})`
-										)
-										.join(', ')}
-								</div>
-							{/if}
-						</div>
-					</li>
-				{/each}
-			</ol>
-
 			{#if v.moves.length > 0}
-				<div class="flex flex-wrap items-center gap-2" data-view="approval-controls">
-					<Input
-						class="h-8 min-w-48 flex-1"
-						placeholder={needsReason(v)
-							? msg(
-									bolt,
-									'approval.reason',
-									'Reason or comment (required to request changes, supersede or comment)'
-								)
-							: msg(bolt, 'approval.note', 'Note (optional)')}
+				{@const required = requiredActions(v)}
+				<div class="flex flex-col gap-2" data-view="approval-controls">
+					<label for={noteId} class="text-label"
+						>{msg(bolt, 'approval.reasonLabel', 'Reason or comment')}</label
+					>
+					<Textarea
+						id={noteId}
+						rows={2}
+						disabled={busy}
+						aria-describedby={`${noteId}-help`}
 						bind:value={reason}
 					/>
-					{#each v.moves as move (move.status)}
-						<Button
-							size="sm"
-							variant={VARIANT[move.status] ?? 'outline'}
-							disabled={busy || (move.reason === 'required' && reason.trim() === '')}
-							data-move={move.status}
-							onclick={() => act(move)}
-							>{msg(
-								bolt,
-								`approval.button.${move.status}`,
-								BUTTON_TEXT[move.status] ?? move.status
-							)}</Button
-						>
-					{/each}
+					<p id={`${noteId}-help`} class="text-meta">
+						{required
+							? msg(bolt, 'approval.reasonFor', 'Required for {actions}.', { actions: required })
+							: msg(bolt, 'approval.optional', 'Optional.')}
+					</p>
+					<div class="flex flex-wrap gap-2">
+						{#each orderedMoves(v) as move (move.status)}
+							<Button
+								size="sm"
+								variant={VARIANT[move.status] ?? 'outline'}
+								class={move.status === 'REJECTED' ? 'text-destructive' : undefined}
+								disabled={busy || (move.reason === 'required' && reason.trim() === '')}
+								data-move={move.status}
+								onclick={() => act(move)}
+								>{msg(
+									bolt,
+									`approval.button.${move.status}`,
+									BUTTON_TEXT[move.status] ?? move.status
+								)}</Button
+							>
+						{/each}
+					</div>
 				</div>
 			{/if}
+
+			<details data-view="approval-history">
+				<summary class="cursor-pointer text-meta"
+					>{msg(bolt, 'approval.decisionHistory', 'Decision history')} ({v.log.length})</summary
+				>
+				<ol class="mt-3 flex flex-col gap-0" data-view="approval-timeline">
+					{#each v.log as e, i (i)}
+						<li class="flex gap-3" data-move={e.move} data-to={e.to}>
+							<span class="mt-1.5 size-2 shrink-0 rounded-full {DOT[e.move] ?? 'bg-border'}"></span>
+							<div class="min-w-0 pb-3">
+								<div class="font-medium">
+									{msg(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move] ?? e.move)}
+									{#if v.steps.length > 1 && e.move !== 'comment' && e.move !== 'request'}
+										· {msg(bolt, 'approval.stepN', `Step ${e.step + 1}`)}{/if}
+								</div>
+								<div class="text-meta">{who(e.by)} · <time datetime={e.at}>{at(e.at)}</time></div>
+								{#if e.reason}<div
+										class="text-caption whitespace-pre-wrap wrap-anywhere"
+										data-reason
+									>
+										“{e.reason}”
+									</div>{/if}
+								{#if e !== decision}{@render effects(e)}{/if}
+							</div>
+						</li>
+					{/each}
+				</ol>
+			</details>
+
 			{#if notice}<p role="status" class="text-muted-foreground">{notice}</p>{/if}
 		</div>
 	{/if}

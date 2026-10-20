@@ -431,7 +431,7 @@ type CompileModule = (
 	cpu: () => number
 ) => Effect.Effect<ivm.Module, BoltError>;
 type Pool = {
-	readonly take: Effect.Effect<Prepared, BoltError, Scope.Scope>;
+	readonly take: Effect.Effect<Prepared, BoltError>;
 	readonly refill: Effect.Effect<void>;
 };
 export class PreparedIsolates extends Context.Service<
@@ -464,7 +464,7 @@ export const IsolatesLive = Layer.effectContext(
 		const prepare = (
 			program: GuestProgram,
 			compileModule: CompileModule
-		): Effect.Effect<Prepared, BoltError, Scope.Scope> =>
+		): Effect.Effect<Prepared, BoltError> =>
 			Effect.gen(function* () {
 				// Native snapshots contain machine code; tenant programs are evaluated only as source.
 				const isolate = yield* Effect.try({
@@ -490,7 +490,6 @@ export const IsolatesLive = Layer.effectContext(
 					}
 				};
 				active.add(drop);
-				yield* Effect.addFinalizer(() => Effect.sync(drop));
 				const source: CpuSource = { cpu, drop, budget: limits.cpuMs };
 				const nativeCall = <A>(work: () => PromiseLike<A>) => computeNative(work, source, options);
 				const early: [string, string][] = [],
@@ -544,10 +543,7 @@ export const IsolatesLive = Layer.effectContext(
 						early,
 						drop
 					};
-				}).pipe(
-					Effect.onInterrupt(() => Effect.sync(drop)),
-					Effect.tapError(() => Effect.sync(drop))
-				);
+				}).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Effect.sync(drop) : Effect.void)));
 			});
 		const map = yield* RcMap.make({
 			idleTimeToLive: limits.warm.idleMs,
@@ -697,38 +693,37 @@ export const IsolatesLive = Layer.effectContext(
 							counts.preparing++;
 							const job = Effect.scoped(
 								Effect.gen(function* () {
+									let transferred = false;
 									yield* options.warmPreparation ?? Effect.void;
-									const item = yield* prepare(program, compileModule).pipe(Scope.provide(jobScope));
+									const item = yield* Effect.acquireRelease(
+										prepare(program, compileModule),
+										(item) =>
+											Effect.sync(() => {
+												if (!transferred) item.drop();
+											}),
+										{ interruptible: true }
+									);
 									// Only retained isolates need a heap measurement for the warm-pool memory cap.
 									const heap = yield* computeNative(
 										() => item.isolate.getHeapStatistics(),
 										{ cpu: item.cpu, drop: item.drop, budget: limits.cpuMs },
 										options
-									).pipe(
-										Effect.onInterrupt(() => Effect.sync(item.drop)),
-										Effect.tapError(() => Effect.sync(item.drop))
 									);
-									return {
+									if (!open || ready.length >= limits.warm.depth) return;
+									const warm: Warm = {
 										...item,
 										bytes: heap.total_heap_size + heap.externally_allocated_size
 									};
+									ready.push(warm);
+									transferred = true;
+									counts.warm++;
+									counts.warmBytes += warm.bytes;
+									pools.delete(pool);
+									pools.add(pool);
+									underLimit();
 								})
 							).pipe(
 								withRequestCpu,
-								Effect.tap((item) =>
-									Effect.sync(() => {
-										if (!open || ready.length >= limits.warm.depth) {
-											item.drop();
-											return;
-										}
-										ready.push(item);
-										counts.warm++;
-										counts.warmBytes += item.bytes;
-										pools.delete(pool);
-										pools.add(pool);
-										underLimit();
-									})
-								),
 								Effect.tapError(() =>
 									Effect.sync(() => {
 										broken = true;
@@ -788,12 +783,13 @@ export const IsolatesLive = Layer.effectContext(
 /** Stored console output per invocation (lines, characters) and per line (characters). */
 const CONSOLE = { lines: 200, bytes: 64 * 1024, lineChars: 2048 } as const;
 const stackLocation = (program: GuestProgram) => {
-	const map = program.sourceMap === undefined ? undefined : new TraceMap(program.sourceMap);
+	let map: TraceMap | undefined;
 	return (frame: string): string => {
 		const match = /([^\s()]+):(\d+):(\d+)\)?$/.exec(frame);
 		if (match === null) return frame;
 		const [, file = '', line = '0', column = '1'] = match;
-		if (map !== undefined && file === 'guest.mjs') {
+		if (program.sourceMap !== undefined && file === 'guest.mjs') {
+			map ??= new TraceMap(program.sourceMap);
 			const at = originalPositionFor(map, { line: Number(line), column: Number(column) - 1 });
 			if (at.source !== null) return `${at.source}:${at.line}`;
 		}
@@ -820,8 +816,11 @@ const run = (
 	tally: Tally
 ) =>
 	Effect.gen(function* () {
-		const warm = yield* pool.take.pipe(Effect.tapError(() => pool.refill));
-		yield* Effect.addFinalizer(() => Effect.sync(warm.drop));
+		const warm = yield* Effect.acquireRelease(
+			pool.take.pipe(Effect.tapError(() => pool.refill)),
+			(item) => Effect.sync(item.drop),
+			{ interruptible: true }
+		);
 		// Refill the borrowed slot while its invocation runs, rather than waiting for another request.
 		yield* pool.refill;
 		const where = stackLocation(program),

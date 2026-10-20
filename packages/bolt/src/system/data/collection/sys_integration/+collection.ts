@@ -14,11 +14,12 @@ export default collection('sys_integration', {
 			'envoy',
 			'active',
 			'configuration',
+			'import_start',
 			'status',
 			'revision'
 		]
 	},
 	create: { input: { columns: ['integration', 'name', 'owner', 'envoy', 'configuration'] } },
-	update: { input: { columns: ['name', 'envoy', 'active', 'configuration'] } },
+	update: { input: { columns: ['name', 'envoy', 'active', 'configuration', 'import_start'] } },
 	delete: {}
 });

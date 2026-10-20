@@ -25,8 +25,8 @@ import { field, hostCall, same, str, withFetch } from '../util.ts';
 import {
 	attempt,
 	authorizeUrl,
+	callbackCompletion,
 	grant,
-	STATE_MS,
 	tokenHolder,
 	Tokens,
 	type OAuthApp
@@ -394,6 +394,7 @@ const provider = (method: Method, options: MailboxOptions): ProviderDef => {
 		_tag: 'ProviderDef',
 		driver: 'email',
 		personal: true,
+		importStart: { kind: 'timestamp', precision: 'second' },
 		id: metadata.id,
 		name: metadata.name,
 		icon: metadata.icon,
@@ -429,6 +430,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 		live: InstanceState = 'connecting',
 		detail: string | null = null;
 	const supervisor = yield* FiberHandle.make<void>();
+	const completion = yield* callbackCompletion;
 	/** The OAuth client a mailbox signs in with: Microsoft's is the operator's app, Google's the host's (or the definition's). */
 	const clientOf = (mailbox: Mailbox) =>
 		Effect.suspend(() => {
@@ -548,9 +550,27 @@ const open = Effect.fn('Mailbox.open')(function* (
 				})
 			)
 		);
-	const deliver = (mailbox: Mailbox, source: Uint8Array, local: string) =>
+	const after = ctx.importStart?.kind === 'since' ? ctx.importStart.at : undefined;
+	const deliver = (
+		mailbox: Mailbox,
+		source: Uint8Array,
+		local: string,
+		receivedAt: string | undefined
+	) =>
 		Effect.gen(function* () {
-			const read = yield* readMail(source, domainOf(mailbox), midOf(mailbox, local), !personal);
+			// INTERNALDATE is the source checkpoint; Date headers and ingestion time cannot admit old history.
+			if (
+				after !== undefined &&
+				(receivedAt === undefined || Date.parse(receivedAt) < Date.parse(after))
+			)
+				return;
+			const read = yield* readMail(
+				source,
+				domainOf(mailbox),
+				midOf(mailbox, local),
+				!personal,
+				receivedAt
+			);
 			if (read.kind === 'report') {
 				const at = new Date(yield* Clock.currentTimeMillis).toISOString();
 				for (const providerId of read.ids)
@@ -561,8 +581,12 @@ const open = Effect.fn('Mailbox.open')(function* (
 			}
 			if (read.from === mailbox.address && !personal) return;
 			const message = personal
-				? { ...read.message, direction: read.from === mailbox.address ? 'outbound' : 'inbound' }
-				: read.message;
+				? {
+						...read.message,
+						...(receivedAt === undefined ? {} : { sourceAt: receivedAt }),
+						direction: read.from === mailbox.address ? 'outbound' : 'inbound'
+					}
+				: { ...read.message, ...(receivedAt === undefined ? {} : { sourceAt: receivedAt }) };
 			yield* hostCall('store mailbox message', () =>
 				ctx.emit({
 					kind: 'messages',
@@ -581,10 +605,11 @@ const open = Effect.fn('Mailbox.open')(function* (
 					box: mailbox,
 					plain,
 					personal,
+					after,
 					login: () => login(mailbox),
 					cursor: () => cursor,
 					advance,
-					deliver: (source, fallback) => deliver(mailbox, source, fallback),
+					deliver: (source, fallback, receivedAt) => deliver(mailbox, source, fallback, receivedAt),
 					connected: Effect.suspend(() => {
 						live = 'connected';
 						detail = null;
@@ -625,22 +650,25 @@ const open = Effect.fn('Mailbox.open')(function* (
 	const adopt = (mailbox: Mailbox, token: Tokens | null) =>
 		Effect.gen(function* () {
 			yield* FiberHandle.clear(supervisor);
-			yield* hostCall('store mailbox pairing', () =>
-				ctx.credentials.write(
-					new Map<string, Json | null>([
-						['credential', mailbox],
-						['token', token],
-						['state', null]
-					])
-				)
-			);
-			box = mailbox;
-			tokens = token;
-			cursor = null;
-			problem = null;
-			live = 'connecting';
-			holder = mailbox.method === 'password' ? null : yield* makeHolder(mailbox, token, true);
-			yield* report();
+			// Host persistence cannot be canceled; finish adoption before disconnect can wipe its keys.
+			yield* Effect.gen(function* () {
+				yield* hostCall('store mailbox pairing', () =>
+					ctx.credentials.write(
+						new Map<string, Json | null>([
+							['credential', mailbox],
+							['token', token],
+							['state', null]
+						])
+					)
+				);
+				box = mailbox;
+				tokens = token;
+				cursor = null;
+				problem = null;
+				live = 'connecting';
+				holder = mailbox.method === 'password' ? null : yield* makeHolder(mailbox, token, true);
+				yield* report();
+			}).pipe(Effect.uninterruptible);
 			yield* start();
 		});
 	const page = (status: number, text: string, close = false) =>
@@ -652,98 +680,101 @@ const open = Effect.fn('Mailbox.open')(function* (
 			}
 		);
 	const callback = (query: URLSearchParams) =>
-		Effect.gen(function* () {
-			const pairing = pending;
-			if (
-				pairing === null ||
-				!same(query.get('state') ?? '', pairing.state) ||
-				(yield* Clock.currentTimeMillis) - pairing.at > STATE_MS
-			)
-				return page(
+		completion.run(
+			query.get('state') ?? '',
+			() => pending,
+			() =>
+				page(
 					400,
 					"This sign-in is unknown or has expired. Start again from the integration's setup."
-				);
-			pending = null;
-			return yield* Effect.gen(function* () {
-				const error = query.get('error');
-				if (error !== null)
-					return yield* Effect.fail(
-						new OAuthRefused({
-							message: `the sign-in was refused (${error})${query.get('error_description') === null ? '' : `: ${(query.get('error_description') ?? '').split('\n')[0]}`}`,
-							revoked: false
-						})
+				),
+			(pairing) =>
+				Effect.gen(function* () {
+					pending = null;
+					return yield* Effect.gen(function* () {
+						const error = query.get('error');
+						if (error !== null)
+							return yield* Effect.fail(
+								new OAuthRefused({
+									message: `the sign-in was refused (${error})${query.get('error_description') === null ? '' : `: ${(query.get('error_description') ?? '').split('\n')[0]}`}`,
+									revoked: false
+								})
+							);
+						const token = yield* withFetch(
+							ctx,
+							grant(appOf(pairing.draft, personal), yield* clientOf(pairing.draft), {
+								grant_type: 'authorization_code',
+								code: query.get('code') ?? '',
+								redirect_uri: ctx.redirectUrl,
+								code_verifier: pairing.verifier
+							})
+						);
+						const draft =
+							pairing.draft.method === 'google'
+								? yield* withFetch(ctx, signedIn(token.access)).pipe(
+										Effect.map((address) => ({ ...pairing.draft, address, user: address }))
+									)
+								: pairing.draft;
+						yield* verify(draft, token);
+						yield* adopt(draft, token);
+						return page(200, `Connected as ${draft.address}. You can close this window.`, true);
+					}).pipe(
+						Effect.catch((error) =>
+							Effect.gen(function* () {
+								problem = `${error.message}. Check the app registration and connect again.`;
+								yield* report();
+								return page(400, `Not connected: ${problem}`);
+							}).pipe(Effect.uninterruptible)
+						)
 					);
-				const token = yield* withFetch(
-					ctx,
-					grant(appOf(pairing.draft, personal), yield* clientOf(pairing.draft), {
-						grant_type: 'authorization_code',
-						code: query.get('code') ?? '',
-						redirect_uri: ctx.redirectUrl,
-						code_verifier: pairing.verifier
-					})
-				);
-				const draft =
-					pairing.draft.method === 'google'
-						? yield* withFetch(ctx, signedIn(token.access)).pipe(
-								Effect.map((address) => ({ ...pairing.draft, address, user: address }))
-							)
-						: pairing.draft;
-				yield* verify(draft, token);
-				yield* adopt(draft, token);
-				return page(200, `Connected as ${draft.address}. You can close this window.`, true);
-			}).pipe(
-				Effect.catch((error) =>
-					Effect.gen(function* () {
-						problem = `${error.message}. Check the app registration and connect again.`;
-						yield* report();
-						return page(400, `Not connected: ${problem}`);
-					})
-				)
-			);
-		});
-	if (box !== null) {
-		yield* report();
-		yield* start();
-	}
+				})
+		);
+	yield* report();
+	if (box !== null) yield* start();
 	return {
 		pair: (input: Json) =>
-			Effect.gen(function* () {
-				const draft = yield* mailboxOf(method, input, known, personal, ctx.state());
-				if (draft.method === 'password') {
-					yield* verify(draft, null);
-					yield* adopt(draft, null);
-					return;
-				}
-				const pairing = attempt(ctx.state()),
-					client = yield* clientOf(draft);
-				pending = {
-					state: pairing.state,
-					verifier: pairing.verifier,
-					at: yield* Clock.currentTimeMillis,
-					draft,
-					url: authorizeUrl(
-						appOf(draft, personal),
-						client.id,
-						ctx.redirectUrl,
-						pairing.state,
-						pairing.challenge,
-						draft.address === '' ? undefined : draft.address
-					)
-				};
-				problem = null;
-				yield* report();
-			}),
+			completion.reset(
+				Effect.gen(function* () {
+					pending = null;
+					const draft = yield* mailboxOf(method, input, known, personal, ctx.state());
+					if (draft.method === 'password') {
+						yield* verify(draft, null);
+						yield* adopt(draft, null);
+						return;
+					}
+					const pairing = attempt(ctx.state()),
+						client = yield* clientOf(draft);
+					pending = {
+						state: pairing.state,
+						verifier: pairing.verifier,
+						at: yield* Clock.currentTimeMillis,
+						draft,
+						url: authorizeUrl(
+							appOf(draft, personal),
+							client.id,
+							ctx.redirectUrl,
+							pairing.state,
+							pairing.challenge,
+							draft.address === '' ? undefined : draft.address
+						)
+					};
+					problem = null;
+					yield* report();
+				})
+			),
 		unpair: () =>
-			FiberHandle.clear(supervisor).pipe(
-				Effect.tap(() =>
-					Effect.sync(() => {
-						pending = null;
-						problem = null;
-						box = null;
-						tokens = null;
-						cursor = null;
-						holder = null;
-					})
+			completion.reset(
+				FiberHandle.clear(supervisor).pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							pending = null;
+							problem = null;
+							box = null;
+							tokens = null;
+							cursor = null;
+							holder = null;
+						})
+					)
 				)
 			),
 		close: FiberHandle.clear(supervisor),

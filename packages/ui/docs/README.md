@@ -105,6 +105,27 @@ readonly fields. Check each field to include it, enter its value, then apply onc
 Unchecked fields stay untouched; explicit false, zero and null values are retained. The native update
 enforces every record's grants and state restrictions and reports refusals or pending approval in the menu.
 
+`toolbar.controls` holds scope controls beside the label. `toolbar.trailing` accepts a compact
+snippet at the right edge, before New, for task controls such as a tooltip icon button. Keep page
+operations in the actions menu unless the task needs a direct control.
+
+`Matrix` accepts the same optional `toolbar`. Omitting it preserves a matrix without toolbar
+chrome. Custom cells can queue owned-child changes in their enclosing `FormState` with
+`queueChildren`; omit `edit` and `move` when those changes must be saved together.
+Its `columnHeader({ col, label })` snippet can place a shared input in a column heading, such as
+the repayment date above an amount cell. Omitting it renders the column label.
+
+## Form invariants
+
+`form.addValidation(rule)` registers a synchronous rule returning `SemanticIssue[]`
+(`{ field, message }`) and returns its unregister. Rules may read `$state` and the draft; their issues
+are `form.semanticErrors`, re-evaluated as values change, so fixing a value clears its issue at once.
+`field` is any key the rule chooses (`repayments.3.amount`): a generated `Field` of that name shows it
+like a field error, and a custom cell reads `form.semanticError(key)` to highlight itself.
+`form.canSave` is `canSubmit` plus no pending save, no `errors` and no issues; every native Save uses
+it, and `submit()`, `prepare()` and `validate()` refuse while an issue remains. `canSubmit` stays
+permission-only, so an invalid field is never locked.
+
 ## Text formats
 
 A text field's `format` picks its editor and viewer: `email`, `phone` and `url` are links, `zone` is a time-zone picker
