@@ -26,7 +26,7 @@ export const capture = Effect.fn('Publication.capture')(
 				);
 				if (code !== 0)
 					return yield* new PublicationFailed({
-						message: `${command} ${args.join(' ')} failed: ${(stderr || `exit ${code}`).trim()}`
+						message: `${command} ${args.join(' ')} failed: ${(stderr || stdout.slice(-4000) || `exit ${code}`).trim()}`
 					});
 				return stdout;
 			})
