@@ -332,9 +332,10 @@ export default app('public', { title: 'Public', description: 'Public pages', ico
 				const html = readFileSync(join(out, 'index.html'), 'utf8');
 				expect(html).toContain('id="bolt-loading" role="status"');
 				expect(html).toContain('Opening workspace…');
-				expect(html).toContain('class="access-panel"');
+				expect(html).toContain('class="access-loading-cluster"');
 				expect(html).toContain('class="access-loading-name">Good</h1>');
-				expect(html).toContain('min-block-size: 32rem');
+				expect(html).toContain('min-block-size: 26rem');
+				expect(html).toContain('min-block-size: 24rem');
 				expect(html).toContain('id="bolt-initial-modules"');
 				const initialized = yield* Schema.decodeUnknownEffect(
 					Schema.fromJsonString(

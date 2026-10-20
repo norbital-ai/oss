@@ -69,8 +69,8 @@
 	display: flex;
 	flex-direction: column;
 	width: 100%;
-	/* Email, code and phone/WhatsApp share one card without moving its edges. */
-	min-block-size: 32rem;
+	/* Room for either sign-in step, including the phone delivery choices. */
+	min-block-size: 26rem;
 	padding: 1.25rem;
 	border: 1px solid color-mix(in srgb, var(--border, #deddd6) 80%, transparent);
 	border-radius: var(--radius, 0.5rem);
@@ -85,7 +85,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: 0.25rem;
-	min-block-size: 3.25rem;
+	min-block-size: 3rem;
 }
 .access-switch {
 	box-sizing: border-box;
@@ -96,31 +96,44 @@
 	font-size: 0.875rem;
 	line-height: 1.25rem;
 }
-.access-loading-body {
-	display: flex;
-	flex: 1;
-	flex-direction: column;
-	justify-content: center;
-	gap: 1rem;
+.access-loading-content {
+	box-sizing: border-box;
+	display: grid;
+	place-items: center;
+	min-block-size: 100svh;
+	min-block-size: 100dvh;
+	padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+		max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
 }
-.access-loading-body p {
-	margin: 0;
-	font-size: 0.875rem;
-	line-height: 1.5rem;
-	color: var(--muted-foreground, #6b695e);
+.access-loading-cluster {
+	display: grid;
+	justify-items: center;
+	gap: 0.5rem;
+	width: min(100%, 24rem);
+	text-align: center;
+}
+.access-loading-mark {
+	display: block;
+	width: 1.75rem;
+	height: 1.75rem;
+	margin-block-end: 0.25rem;
+	border-radius: 0.125rem;
 }
 .access-loading-name {
 	margin: 0;
-	font-size: var(--text-subhead, 1.25rem);
-	line-height: var(--text-subhead--line-height, 1.3);
+	font-size: 0.875rem;
+	line-height: 1.25rem;
 	font-weight: 600;
-	letter-spacing: var(--text-subhead--letter-spacing, -0.02em);
 	overflow-wrap: anywhere;
 }
-.access-loading-eyebrow {
-	block-size: calc(var(--text-micro, 0.6875rem) * 1.4);
+.access-loading-status {
+	margin: 0;
+	font-size: 0.75rem;
+	line-height: 1.25rem;
+	color: var(--muted-foreground, #6b695e);
 }
 .access-loading-track {
+	width: 100%;
 	height: 2px;
 	overflow: hidden;
 	background: var(--muted, #ebeae5);
@@ -133,6 +146,14 @@
 	background: var(--brand-500, #e87432);
 	animation: access-opening 1.3s ease-in-out infinite alternate;
 }
+.access-loading-cluster .access-loading-track {
+	width: 6.25rem;
+	margin-block-start: 0.5rem;
+}
+.access-loading-cluster .access-loading-track::after {
+	width: 2rem;
+	animation: access-opening-compact 1.4s ease-in-out infinite;
+}
 @keyframes access-opening {
 	from {
 		transform: translateX(-100%);
@@ -141,10 +162,22 @@
 		transform: translateX(250%);
 	}
 }
+@keyframes access-opening-compact {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(6.25rem);
+	}
+}
 @media (prefers-reduced-motion: reduce) {
 	.access-loading-track::after {
 		animation: none;
 		transform: translateX(75%);
+	}
+	.access-loading-cluster .access-loading-track::after {
+		animation: none;
+		transform: translateX(2.125rem);
 	}
 }
 @media (min-width: 640px) {
@@ -153,7 +186,7 @@
 		padding-inline: 2rem;
 	}
 	.access-panel {
-		padding: 1.75rem;
+		padding: 1.5rem;
 	}
 }
 @media (max-width: 639px), (max-height: 500px) and (pointer: coarse) {
@@ -174,6 +207,7 @@
 		padding-top: max(1rem, env(safe-area-inset-top));
 	}
 	.access-frame .access-panel {
+		min-block-size: 24rem;
 		border: 0;
 		border-radius: 0;
 		background: transparent;

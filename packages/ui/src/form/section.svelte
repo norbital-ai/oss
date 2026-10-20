@@ -72,7 +72,7 @@ collection and section; a section holding a field with an error opens itself.
 	import Icon from '@iconify/svelte';
 	import { setContext } from 'svelte';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
-	import { cn } from '../primitives/utils.js';
+	import { cn, useControls } from '../primitives/utils.js';
 	import { useCollectionKey } from '../collection/context.js';
 	import { useForm } from './form-state.svelte.js';
 
@@ -91,6 +91,10 @@ collection and section; a section holding a field with an error opens itself.
 	}: SectionProps = $props();
 	const id = $props.id();
 	const form = useForm();
+	const controls = useControls();
+	const editing = $derived(
+		form !== undefined && !controls.readonly && (form.mode === 'edit' || form.mode === 'create')
+	);
 	const fields = setContext(SECTION, new Set<string>());
 	const canCollapse = $derived(title !== undefined && collapsible);
 	// svelte-ignore state_referenced_locally -- the key is fixed for the section's life
@@ -128,7 +132,12 @@ collection and section; a section holding a field with an error opens itself.
 </script>
 
 <section
-	class={cn('grid min-w-0 gap-3', !first && 'border-t pt-6', className)}
+	class={cn(
+		'grid min-w-0',
+		editing ? 'gap-4' : 'gap-3',
+		!first && (editing ? 'border-t pt-4' : 'border-t pt-6'),
+		className
+	)}
 	data-section={name ?? title}
 	data-open={shown}
 >
@@ -189,6 +198,8 @@ collection and section; a section holding a field with an error opens itself.
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
 	<div id={`${id}-body`} hidden={!shown} use:contentMotion>
-		<div class="grid min-w-0 gap-3">{@render children()}</div>
+		<div class={cn('grid min-w-0', editing ? 'gap-4' : 'gap-3')}>
+			{@render children()}
+		</div>
 	</div>
 </section>

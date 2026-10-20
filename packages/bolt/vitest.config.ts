@@ -1,4 +1,5 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import tailwindcss from '@tailwindcss/vite';
 import { playwright } from '@vitest/browser-playwright';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +104,7 @@ export default defineConfig({
 						}
 					},
 					{
-						plugins: [liveFixture(), svelte()],
+						plugins: [liveFixture(), svelte(), tailwindcss()],
 						optimizeDeps: { include: ['@norbital-ai/ui > leaflet'] },
 						test: {
 							name: 'browser',

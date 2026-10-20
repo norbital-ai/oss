@@ -6,7 +6,7 @@
 <script lang="ts">
 	import { query, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Grid, Stack } from '@norbital-ai/ui/layout';
 	import { Button, Input, Label, PinInput, Spinner } from '@norbital-ai/ui';
 	import PhoneField from './PhoneField.svelte';
 	import { based } from '../nav.ts';
@@ -76,30 +76,31 @@
 	}
 </script>
 
-<Stack gap="sm" grow class="access-sign-in" aria-busy={methods.loading || busy}>
+<Stack gap="sm" class="access-sign-in" aria-busy={methods.loading || busy}>
 	{#if handle || workspace}
 		<Stack as="header" gap="xs" class="access-identity min-w-0">
 			<p class="text-overline">{t('Signing in to')}</p>
 			<p class="text-subhead break-words text-foreground">{workspace || handle}</p>
 		</Stack>
 	{/if}
-	<Stack as="section" gap="lg" grow class="access-sign-in-content">
-		<Stack as="header" gap="sm">
-			<h1 class="text-title text-balance">
+	<Stack as="section" gap="md" class="access-sign-in-content">
+		<Stack as="header" gap="xs">
+			<h1 class="text-section text-balance">
 				{sent ? t('Enter your code') : joins ? t('Sign in or sign up') : t('Sign in')}
 			</h1>
-			<p
-				class="access-sign-in-description max-w-[52ch] text-sm leading-relaxed text-muted-foreground"
-				aria-hidden={!sent}
-			>
-				{sent ? t('Sent to {email}').replace('{email}', address) : ''}
-			</p>
+			{#if sent}
+				<p
+					class="access-sign-in-description max-w-[52ch] text-sm leading-relaxed text-muted-foreground"
+				>
+					{t('Sent to {email}').replace('{email}', address)}
+				</p>
+			{/if}
 		</Stack>
 		<form onsubmit={submit} bind:this={form}>
 			<fieldset disabled={methods.loading || busy}>
-				<Stack gap="md">
+				<Stack gap="sm">
 					{#if sent}
-						<Stack gap="sm">
+						<Stack gap="xs" class="access-sign-in-field">
 							<Label for="bolt-code" class="text-foreground">{t('Six-digit code')}</Label>
 							<!-- the sixth digit submits, on completion -->
 							<PinInput
@@ -110,7 +111,7 @@
 							/>
 						</Stack>
 					{:else if current === 'phone'}
-						<Stack gap="sm">
+						<Stack gap="xs" class="access-sign-in-field">
 							<Label for="bolt-phone" class="text-foreground">{t('Mobile number')}</Label>
 							{#key methods.current?.locale ?? navigator.language}
 								<PhoneField
@@ -125,7 +126,7 @@
 							{/key}
 						</Stack>
 					{:else}
-						<Stack gap="sm">
+						<Stack gap="xs" class="access-sign-in-field">
 							<Label for="bolt-email" class="text-foreground">{t('Email address')}</Label>
 							<Input
 								id="bolt-email"
@@ -141,41 +142,48 @@
 					{/if}
 					<p class="access-sign-in-error text-sm text-destructive" role="alert">{error ?? ''}</p>
 					<Stack gap="sm" class="access-sign-in-actions">
-						<Button
-							type="submit"
-							class="access-sign-in-action w-full"
-							disabled={methods.loading ||
-								busy ||
-								(sent ? code.length !== 6 : current === 'phone' ? phone === null : email === '')}
-							onclick={() => (via = 'sms')}
+						<Grid
+							tracks={!sent && current === 'phone' && methods.current?.whatsapp
+								? 'repeat(2, minmax(0, 1fr))'
+								: 'minmax(0, 1fr)'}
+							gap="sm"
 						>
-							<span class="access-sign-in-progress" aria-hidden="true">
-								{#if methods.loading || (busy && (sent || current !== 'phone' || via === 'sms'))}
-									<Spinner class="h-4 w-4" />
-								{/if}
-							</span>
-							<span>
-								{sent
-									? t('Verify and continue')
-									: current === 'phone'
-										? t('Text me')
-										: t('Send sign-in code')}
-							</span>
-						</Button>
-						{#if !sent && current === 'phone' && methods.current?.whatsapp}
 							<Button
 								type="submit"
-								variant="outline"
 								class="access-sign-in-action w-full"
-								disabled={methods.loading || busy || phone === null}
-								onclick={() => (via = 'whatsapp')}
+								disabled={methods.loading ||
+									busy ||
+									(sent ? code.length !== 6 : current === 'phone' ? phone === null : email === '')}
+								onclick={() => (via = 'sms')}
 							>
 								<span class="access-sign-in-progress" aria-hidden="true">
-									{#if busy && via === 'whatsapp'}<Spinner class="h-4 w-4" />{/if}
+									{#if methods.loading || (busy && (sent || current !== 'phone' || via === 'sms'))}
+										<Spinner class="h-4 w-4" />
+									{/if}
 								</span>
-								<span>{t('WhatsApp me')}</span>
+								<span>
+									{sent
+										? t('Verify and continue')
+										: current === 'phone'
+											? t('Text me')
+											: t('Send sign-in code')}
+								</span>
 							</Button>
-						{/if}
+							{#if !sent && current === 'phone' && methods.current?.whatsapp}
+								<Button
+									type="submit"
+									variant="outline"
+									class="access-sign-in-action w-full"
+									disabled={methods.loading || busy || phone === null}
+									onclick={() => (via = 'whatsapp')}
+								>
+									<span class="access-sign-in-progress" aria-hidden="true">
+										{#if busy && via === 'whatsapp'}<Spinner class="h-4 w-4" />{/if}
+									</span>
+									<span>{t('WhatsApp me')}</span>
+								</Button>
+							{/if}
+						</Grid>
 						{#if !sent && byEmail && byPhone}
 							<button
 								type="button"
@@ -192,7 +200,7 @@
 				</Stack>
 			</fieldset>
 		</form>
-		<p class="access-sign-in-footer border-t border-border pt-6 text-sm text-muted-foreground">
+		<p class="access-sign-in-footer border-t border-border pt-4 text-sm text-muted-foreground">
 			{#if sent}
 				{t('The code expires in ten minutes.')}
 				<button
@@ -234,6 +242,11 @@
 		min-block-size: 1.5em;
 		overflow-wrap: anywhere;
 	}
+	:global(.access-sign-in-field input),
+	:global(.access-sign-in-field button),
+	:global(.access-sign-in-action) {
+		min-block-size: 2.75rem;
+	}
 	:global(.access-sign-in-action) {
 		position: relative;
 	}
@@ -244,8 +257,7 @@
 		transform: translateY(-50%);
 	}
 	:global(.access-sign-in-footer) {
-		min-block-size: 4.5em;
-		margin-block-start: auto;
+		min-block-size: 3em;
 	}
 	@media (orientation: landscape) and (max-height: 500px) and (min-width: 640px) and (pointer: coarse) {
 		:global(.access-sign-in-content) {

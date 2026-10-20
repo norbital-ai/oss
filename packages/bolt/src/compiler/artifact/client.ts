@@ -99,7 +99,7 @@ ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 <script type="application/json" id="bolt-initial-modules">${key({ modules, css }).replaceAll('<', '\\u003c')}</script>
 <script type="module" src="/${entry}"></script>
 </head>
-<body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite" class="access-frame"><div class="access-content"><header class="access-header"><div class="access-header-content"><div class="access-brand"><span class="access-mark"><img src="/assets/bolt-apple-icon.png" alt=""></span><span>Norbital</span></div></div></header><main><section class="access-panel"><header class="access-identity"><div class="access-loading-eyebrow" aria-hidden="true"></div><h1 class="access-loading-name">${escape(title)}</h1></header><div class="access-loading-body"><p>Opening workspace…</p><div class="access-loading-track" aria-hidden="true"></div></div></section><div class="access-switch" aria-hidden="true"></div></main></div></div></body>
+<body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite" aria-busy="true" class="access-frame"><main class="access-loading-content"><div class="access-loading-cluster"><img class="access-loading-mark" src="/assets/bolt-apple-icon.png" alt=""><h1 class="access-loading-name">${escape(title)}</h1><p class="access-loading-status">Opening workspace…</p><div class="access-loading-track" aria-hidden="true"></div></div></main></div></body>
 </html>
 `;
 

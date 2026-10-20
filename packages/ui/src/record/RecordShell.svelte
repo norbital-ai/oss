@@ -610,26 +610,33 @@
 			>
 		{/if}
 		{#if controller?.mode === 'edit' && shownPast === null}
-			<span class="text-meta">{msg(bolt, 'record.editing', 'Editing')}</span>
-			<Button
-				size="sm"
-				variant="ghost"
-				disabled={controller.pending}
-				onclick={() => {
-					if (controller?.dirty && !confirm(formText('discardDraft'))) return;
-					controller?.view();
-				}}>{msg(bolt, 'record.cancel', 'Cancel')}</Button
+			<div
+				class="inline-flex shrink-0 items-center gap-1"
+				role="group"
+				aria-label={msg(bolt, 'record.editing', 'Editing')}
 			>
-			<Button
-				size="sm"
-				disabled={controller.pending || !controller.dirty || !controller.canSubmit}
-				onclick={() => (controller === null ? undefined : fork(controller.submit()))}
-				>{controller.pending
-					? formText('saving')
-					: controller.requestingApproval
-						? msg(bolt, 'record.requestApproval', 'Request approval')
-						: formText('save')}</Button
-			>
+				<Button
+					size="sm"
+					variant="ghost"
+					class="px-2.5 text-xs"
+					disabled={controller.pending}
+					onclick={() => {
+						if (controller?.dirty && !confirm(formText('discardDraft'))) return;
+						controller?.view();
+					}}>{msg(bolt, 'record.cancel', 'Cancel')}</Button
+				>
+				<Button
+					size="sm"
+					class="px-2.5 text-xs"
+					disabled={controller.pending || !controller.dirty || !controller.canSubmit}
+					onclick={() => (controller === null ? undefined : fork(controller.submit()))}
+					>{controller.pending
+						? formText('saving')
+						: controller.requestingApproval
+							? msg(bolt, 'record.requestApproval', 'Request approval')
+							: formText('save')}</Button
+				>
+			</div>
 		{/if}
 		{#if actions}{@render actions()}{/if}
 	</div>

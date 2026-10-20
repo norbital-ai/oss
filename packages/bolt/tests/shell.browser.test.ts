@@ -8,7 +8,7 @@ import { shellApi } from '../src/shell/runtime.ts';
 import { ShellError, type Invitation } from '../src/shell/api-types.ts';
 import type { SignInMethods } from '../src/shell/host.ts';
 import AccessCard from './support/access-card.svelte';
-import '@norbital-ai/ui/brand/access.css';
+import './support/shell.css';
 
 const api = shellApi(async (url) =>
 	Response.json({
@@ -68,7 +68,7 @@ it('Sign-in card locators fill an email and send the code in Chromium (L-BOLT-10
 });
 
 it.each(['ready', 'failed'] as const)(
-	'sign-in retains its form, status slots and access card while methods are %s',
+	'sign-in retains its form, error slot and access card while methods are %s',
 	async (result) => {
 		const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
 		const methods = Deferred.makeUnsafe<SignInMethods, ShellError>();
@@ -95,10 +95,9 @@ it.each(['ready', 'failed'] as const)(
 			const error = target.querySelector('.access-sign-in-error');
 			const action = target.querySelector('button[type="submit"]');
 			expect(panel).not.toBeNull();
-			expect(description).not.toBeNull();
+			expect(description).toBeNull();
 			expect(error).not.toBeNull();
 			const pendingBounds = accessBounds(target);
-			expect(bounds(target, '.access-panel').height).toBeGreaterThanOrEqual(512);
 			await Effect.runPromise(
 				result === 'ready'
 					? Deferred.succeed(methods, {

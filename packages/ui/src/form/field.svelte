@@ -66,6 +66,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	const t = uiText();
 	const bolt = useBolt();
 	const fieldLabel = useFieldLabel();
+	const labelClass = $derived(dense ? 'sr-only' : 'text-xs font-medium text-muted-foreground');
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
 	const id = $props.id();
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
@@ -95,9 +96,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 		role="group"
 		aria-labelledby={`${id}-${name}-label`}
 	>
-		<span
-			id={`${id}-${name}-label`}
-			class={dense ? 'sr-only' : 'text-xs font-medium text-muted-foreground'}
+		<span id={`${id}-${name}-label`} class={labelClass}
 			>{label ??
 				fieldLabel(
 					name,
@@ -130,12 +129,8 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	{@const disabled = controls.disabled}
 	{@const rawError = form.errors.get(name)}
 	{@const error = rawError === undefined ? undefined : bolt.t(rawError)}
-	<div class={cn('grid content-start gap-1.5', className)} data-field={name}>
-		<label
-			id={`${id}-${name}-label`}
-			for={`${id}-${name}`}
-			class={dense ? 'sr-only' : 'text-sm font-medium'}
-		>
+	<div class={cn('grid content-start gap-2', className)} data-field={name}>
+		<label id={`${id}-${name}-label`} for={`${id}-${name}`} class={labelClass}>
 			{label ?? fieldLabel(name, field.kind.label)}
 			{#if !field.kind.optional && field.kind.default === undefined && field.kind.kind !== 'bool'}<span
 					class="text-destructive"
