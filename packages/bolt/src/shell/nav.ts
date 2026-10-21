@@ -130,6 +130,8 @@ export type ShellBoot = {
 		readonly icon?: string;
 		readonly href: string;
 	}[];
+	/** The automations this member may start by hand from Settings → Automations (`startableAutomations`). */
+	startable?: readonly { readonly name: string; readonly description: string }[];
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
 	/** The VAPID public key to subscribe this device to notices with (§5.7), or `null` when the host sends no push. */
@@ -251,6 +253,22 @@ export function kioskNav(
 		});
 }
 
+/** The automations `authority` may start from Settings → Automations with no input: every input field optional. */
+export function startableAutomations(
+	m: EngineManifest,
+	authority: Authority
+): { name: string; description: string }[] {
+	return (authority.admin ? Object.keys(m.automations) : authority.automations)
+		.toSorted()
+		.flatMap((name) => {
+			const spec = m.automations[name];
+			return spec === undefined ||
+				Object.values(spec.input ?? {}).some((field) => field.optional !== true)
+				? []
+				: [{ name, description: spec.description }];
+		});
+}
+
 /** The nav tree `auth` sees: top-level apps and groups in `workspace.apps` order, then by name; empty groups dropped. */
 export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 	const groups = m.groups ?? {};
@@ -312,7 +330,8 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 /**
  * The shell's own surfaces an actor gets (§3.9, P1): externals never see settings, automation runs, the staff inbox or Studio.
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
- * non-administrator may do) on a host that serves it (`studio`).
+ * non-administrator may do) on a host that serves it (`studio`). A preview environment (`preview`) drops the meta
+ * tools, Norbius and Studio; everything else stays (Settings loses its People and Integrations tabs, `previewRoute`).
  */
 type Surfaces = {
 	inbox: boolean;
@@ -325,7 +344,8 @@ export function surfaces(
 	m: Pick<EngineManifest, 'agent'>,
 	actor: EngineActor,
 	admin: boolean,
-	studio = false
+	studio = false,
+	preview = false
 ): Surfaces {
 	if (actor.kind !== 'member')
 		return { inbox: false, runs: false, settings: false, agent: false, studio: false };
@@ -334,8 +354,8 @@ export function surfaces(
 		inbox: staff,
 		runs: staff,
 		settings: staff && admin,
-		agent: (staff ? m.agent.internal : m.agent.external) !== undefined,
-		studio: staff && studio
+		agent: !preview && (staff ? m.agent.internal : m.agent.external) !== undefined,
+		studio: staff && studio && !preview
 	};
 }
 
@@ -365,6 +385,19 @@ const STUDIO_TABS = ['workbench', 'changes', 'live', 'mrs', 'runtime', 'operatio
 export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);
+
+/**
+ * A preview environment drops the meta tools: Studio and who-has-access management (Settings → People) open the apps
+ * launcher, and so do Connections and Settings → Integrations, whose integration endpoints only the live workspace serves.
+ */
+export function previewRoute(r: Route, preview: boolean): Route {
+	return preview &&
+		(r.kind === 'studio' ||
+			r.kind === 'connections' ||
+			(r.kind === 'settings' && (r.tab === 'people' || r.tab === 'integrations')))
+		? { kind: 'home' }
+		: r;
+}
 
 /** The route a URL names. An app name is a folder path, so the longest declared app prefix wins. */
 export function route(m: ShellManifest, url: URL): Route {

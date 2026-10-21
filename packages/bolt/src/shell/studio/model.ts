@@ -15,7 +15,8 @@ export type StudioDiagnostic = CheckDiagnostic & { severity?: 'error' | 'warn' }
  * A deployment: a recorded commit live ran, oldest last; `rollback` deploys one again as a new deployment, keeping the
  * data. `checkpoint`: when its restore point was taken (`null`: none to roll back to). `rollback`: the commit this
  * deployment rolled back to. `discards`: its schema differs from live's, so rolling back to it discards the data written
- * after this instant (a database restore to its restore point).
+ * after this instant (a database restore to its restore point). `replaced`: its restore point belonged to a database a
+ * reset has since replaced, so it can no longer be rolled back to (`checkpoint` is then `null`).
  */
 export type StudioRelease = {
 	commit: string;
@@ -25,6 +26,7 @@ export type StudioRelease = {
 	checkpoint?: string | null;
 	rollback?: string;
 	discards?: string;
+	replaced?: true;
 };
 /** A build of a commit, newest first: `deployed` once a deployment ran it, `live` while live serves it. */
 export type StudioBuild = {
@@ -90,6 +92,12 @@ export type StudioMergeRequest = {
  */
 export type StudioState = {
 	commit: string;
+	/** The head commit's description (its message's first line). */
+	message?: string;
+	/** The live workspace's IANA timezone. */
+	zone?: string;
+	/** Studio opened inside a preview environment: it never previews, publishes or rolls back from there. */
+	nested?: true;
 	files: { readonly [path: string]: string };
 	changes: readonly StudioChange[];
 	manifest: EngineManifest | null;
@@ -145,6 +153,8 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('save'),
 		expected: Schema.String,
+		/** What the change does, in the author's words: the commit message (absent: the host names the changed paths). */
+		message: Schema.optionalKey(truncated(200)),
 		files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)).check(
 			Schema.makeFilter((files) => Object.keys(files).every(Schema.is(safePath)))
 		)
@@ -173,8 +183,8 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({ op: Schema.Literal('mr.comment'), id: nonempty, text: truncated(4000) })
 ]);
 export type StudioOp = typeof StudioOp.Type;
-/** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → preview → merge. */
-export const PHASES = ['diagnose', 'preview', 'merge'] as const;
+/** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
+export const PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
 export type StudioPhase = (typeof PHASES)[number];
 export type PhaseState = 'running' | 'done' | 'failed';
 /**
@@ -281,6 +291,44 @@ export function foldPhase(
 				)
 			: { ...phases };
 	return { ...kept, [phase]: state };
+}
+
+/**
+ * The furthest phase a run has reached (-1: none yet). A frame of an earlier phase never moves it back, so the progress
+ * strip only advances until the run ends.
+ */
+export function reach(step: number, phase: StudioPhase): number {
+	return Math.max(step, PHASES.indexOf(phase));
+}
+/** The progress strip's words for `reach`'s step. */
+export const STEPS = [
+	'Getting ready…',
+	'Building…',
+	'Copying data…',
+	'Starting the preview…',
+	'Switching over…'
+] as const;
+export const stepLabel = (step: number): (typeof STEPS)[number] => STEPS[step + 1] ?? STEPS[0];
+
+/** A plain suggestion for a save's description from the drafts (`null`: deleted) over the saved files. */
+export function suggestMessage(
+	drafts: { readonly [path: string]: string | null },
+	files: { readonly [path: string]: string }
+): string {
+	const words = Object.entries(drafts).map(([path, text]) => {
+		const segments = path.split('/'),
+			file = segments.at(-1) ?? path,
+			folder = segments.at(-2);
+		const parts = file.replace(/^\+/, '').split('.');
+		const name =
+			parts.length > 2
+				? `${parts[0]} ${parts[1]}`
+				: file.startsWith('+') && folder !== undefined
+					? `${folder} ${parts[0]}`
+					: (parts[0] ?? path);
+		return `${text === null ? 'Remove' : path in files ? 'Update' : 'Add'} ${name}`;
+	});
+	return words.length <= 2 ? words.join(', ') : `${words[0]} and ${words.length - 1} more files`;
 }
 
 /** The environment the Operations pane summarizes: `live` when routed, else the first routed one; none routed → undefined. */

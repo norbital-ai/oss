@@ -12,7 +12,7 @@ import type { Expr, ModelSpec } from '../../decl/model.ts';
 import type { FieldKind } from '../../decl/fields.ts';
 import type { RelationshipSpec } from '../../decl/names.ts';
 import type { Json } from '../../decl/values.ts';
-import { EngineManifestSchema, teamEntries, type EngineManifest } from '../manifest.ts';
+import { EngineManifestSchema, type EngineManifest } from '../manifest.ts';
 import type { Catalog } from '../../protocol/catalog.ts';
 import { catalogOf } from '../../protocol/catalog.ts';
 import { where } from '../../protocol/ir.ts';
@@ -21,7 +21,6 @@ import { canonical, Chain, ownPredSql } from '../write/sql.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { engineObjects } from './engine.ts';
 import { SEARCH_FUNCTIONS } from './search.ts';
-import type { TeamEntries } from '../../decl/access/team.ts';
 
 /** What the database depends on: the fingerprint is over exactly this (rule 69). */
 export type SchemaSlice = {
@@ -29,8 +28,6 @@ export type SchemaSlice = {
 	relationships: { readonly [key: string]: RelationshipSpec };
 	currency: string | null;
 	tz: string;
-	/** Source catalogue projected into sys_team for foreign keys; it is never tenant-authored data. */
-	teams?: TeamEntries;
 	/** `+workspace.ts` connections, projected into their named sys_integration rows with their definitions' default configuration. */
 	connections?: {
 		readonly [slot: string]: EngineManifest['connections'][string] & { configuration: Json };
@@ -42,7 +39,6 @@ export const SchemaSliceSchema = Schema.Struct({
 	relationships: EngineManifestSchema.fields.relationships,
 	currency: Schema.NullOr(Schema.String),
 	tz: Schema.String,
-	teams: Schema.optionalKey(EngineManifestSchema.fields.teams),
 	connections: Schema.optionalKey(
 		Schema.Record(
 			Schema.String,
@@ -940,26 +936,6 @@ export function schemaObjects(declared: SchemaSlice): SchemaObject[] {
 			});
 		}
 	}
-	// the engine's private objects (X-18) come last: a private table may reference a system table
-	if (s.models['sys_team'] !== undefined) {
-		const teams = Object.entries(teamEntries(s.teams ?? {})).map(([id, entry]) => ({
-			id,
-			name: entry.name,
-			parent: entry.parent
-		}));
-		push({
-			id: 'source:teams',
-			rank: 'backfill',
-			table: 'sys_team',
-			deps: ['id', 'name', 'parent'],
-			drop: null,
-			create: [
-				`insert into sys_team (id, name) select id, name from jsonb_to_recordset(${lit(JSON.stringify(teams))}::jsonb) as s(id text, name text, parent text) on conflict (id) do update set name = excluded.name`,
-				`update sys_team t set parent = s.parent from jsonb_to_recordset(${lit(JSON.stringify(teams))}::jsonb) as s(id text, name text, parent text) where t.id = s.id`,
-				`delete from sys_team where id not in (select id from jsonb_to_recordset(${lit(JSON.stringify(teams))}::jsonb) as s(id text, name text, parent text))`
-			]
-		});
-	}
 	// a connection is its named instance: inserted once with its default envoy and configuration (runtime edits stay), as
 	// an instance made at run time starts; deleted with its slot or when its slot names another definition (a new instance);
 	// an instance created at run time (not named) is never touched
@@ -987,6 +963,7 @@ export function schemaObjects(declared: SchemaSlice): SchemaObject[] {
 			]
 		});
 	}
+	// the engine's private objects (X-18) come last: a private table may reference a system table
 	for (const o of engineObjects()) push(o);
 	return out;
 }

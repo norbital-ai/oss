@@ -451,11 +451,9 @@ layer(IdentityFixtureLive)((it) => {
 							`SELECT op FROM bolt_history WHERE collection = 'sys_invitation' AND changes->>'email' = 'rep@acme.example'`
 						)
 					).toEqual([{ op: 'create' }]);
-					expect(
-						yield* one(
-							"SELECT count(*)::int AS n FROM bolt_history WHERE collection IN ('sys_team', 'sys_assignment')"
-						)
-					).toEqual([{ n: 0 }]);
+					expect(yield* one(`SELECT to_regclass('sys_team') IS NULL AS absent`)).toEqual([
+						{ absent: true }
+					]);
 				})
 		);
 

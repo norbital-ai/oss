@@ -6,6 +6,7 @@
 <script lang="ts">
 	import { Option, Schema } from 'effect';
 	import { query } from '@norbital-ai/ui/effect';
+	import { useKinds } from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import type { ShellApi } from '../api-types.ts';
 
@@ -24,6 +25,10 @@
 		)
 	);
 	const studio = query(() => api.studio());
+	// the checkpoint's time from Studio's own record, in the workspace's zone: never the agent's wording of it
+	const zone = useKinds().zone;
+	const when = (at: string) =>
+		new Date(at).toLocaleString(undefined, zone === undefined ? {} : { timeZone: zone });
 	const draft = $derived(
 		name === 'workspace_publish' && asked !== null
 			? studio.current?.builds?.find((b) => b.commit.startsWith(asked.commit))?.message
@@ -46,14 +51,14 @@
 	<p class="mt-1 text-xs text-muted-foreground">
 		{t('Checkpoint')}:
 		<time datetime={checkpoint.checkpoint ?? checkpoint.at}
-			>{new Date(checkpoint.checkpoint ?? checkpoint.at).toLocaleString()}</time
+			>{when(checkpoint.checkpoint ?? checkpoint.at)}</time
 		>
 		— {checkpoint.message}
 	</p>
 	{#if checkpoint.discards !== undefined}
 		<p class="mt-1 text-sm text-destructive" role="alert">
 			{t('Data written after')}
-			{new Date(checkpoint.discards).toLocaleString()}
+			{when(checkpoint.discards)}
 			{t('will be discarded. Everyone stays signed in.')}
 		</p>
 	{:else}

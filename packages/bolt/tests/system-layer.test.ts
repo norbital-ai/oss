@@ -123,14 +123,8 @@ function rendered(): { [table: string]: Shape } {
 	);
 }
 
-// Native schema expectations include relationship indexes and the source access catalogue projection.
+// Native schema expectations include relationship indexes; teams are source, so `team` is plain text with no key.
 const EXPECTED: { [table: string]: Shape } = {
-	sys_team: {
-		key: 'id text primary key',
-		columns: { name: 'text not null', revision: 'int not null default 1', parent: 'text' },
-		indexes: ['(parent)'],
-		fks: ['(parent) references sys_team (id)']
-	},
 	sys_user: {
 		key: 'id text primary key',
 		columns: {
@@ -150,8 +144,6 @@ const EXPECTED: { [table: string]: Shape } = {
 			team: 'text'
 		},
 		unique: ['(lower(email))', '(phone_key)'],
-		indexes: ['(team)'],
-		fks: ['(team) references sys_team (id)'],
 		checks: [
 			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
 			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",
@@ -191,8 +183,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			team: 'text'
 		},
 		unique: ['(prefix)'],
-		indexes: ['(created_by)', '(team)'],
-		fks: ['(created_by) references sys_user (id)', '(team) references sys_team (id)']
+		indexes: ['(created_by)'],
+		fks: ['(created_by) references sys_user (id)']
 	},
 	sys_invitation: {
 		key: 'id text primary key',
@@ -208,8 +200,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			revoked_at: 'timestamptz',
 			revision: 'int not null default 1'
 		},
-		indexes: ['(invited_by)', '(lower(email))', '(phone)', '(team)'],
-		fks: ['(invited_by) references sys_user (id)', '(team) references sys_team (id)'],
+		indexes: ['(invited_by)', '(lower(email))', '(phone)'],
+		fks: ['(invited_by) references sys_user (id)'],
 		checks: ['((email is not null or phone is not null))']
 	},
 	sys_session: {
@@ -542,7 +534,8 @@ describe('the catalogue reads the system collections from their declarations', (
 		expect(user.fields.get('email')).toMatchObject({ email: true, pg: 'text' });
 		expect(user.fields.get('id')).toMatchObject({ pg: 'text' });
 		expect(user.fields.has('approval_id')).toBe(false);
-		expect(user.one.get('team')).toEqual({ name: 'team', targets: ['sys_team'] });
+		expect(user.one.has('team')).toBe(false);
+		expect(user.fields.get('team')).toMatchObject({ kind: 'text', team: true, pg: 'text' });
 		expect(cat.models.get('approval_request')!.fields.get('id')).toMatchObject({ pg: 'uuid' });
 		expect(cat.collections.get('sys_api_key')!.fields).toEqual(
 			new Set([

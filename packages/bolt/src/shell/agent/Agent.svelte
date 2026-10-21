@@ -61,8 +61,11 @@
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';
+	import StudioResult from './StudioResult.svelte';
+	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import {
 		background,
+		captionOf,
 		checkpointSections,
 		contextView,
 		doingOf,
@@ -70,6 +73,7 @@
 		ORB,
 		orbState,
 		outcomeOf,
+		previewsOf,
 		callableWords,
 		revisable,
 		runState,
@@ -1113,6 +1117,30 @@
 		URL.revokeObjectURL(a.href);
 	}
 	const kinds = useKinds();
+	/** A stored file's link (a made file's card, a workspace screenshot). */
+	const fileHref = (id: string) => bolt.fileUrl({ id } as FileRef);
+	// the Preview tab: the latest preview this conversation built or the agent chose, unless the reader picked an earlier
+	// one since (a newer preview replaces their pick); its frame mounts only while the tab is open
+	let tab = $state<'chat' | 'preview'>('chat'),
+		pickedPreview = $state<{ url: string; over: string | null } | null>(null);
+	const previews = $derived(previewsOf(rows));
+	const newest = $derived(previews.at(-1) ?? null);
+	const shownPreview = $derived.by(() => {
+		const p = pickedPreview;
+		return (
+			(p !== null && p.over === (newest?.url ?? null)
+				? previews.findLast((x) => x.url === p.url)
+				: undefined) ?? newest
+		);
+	});
+	const TABS: readonly (readonly ['chat' | 'preview', string])[] = [
+		['chat', 'Chat'],
+		['preview', 'Preview']
+	];
+	function openPreview(url: string): void {
+		pickedPreview = { url, over: newest?.url ?? null };
+		tab = 'preview';
+	}
 	function mentions(q: string): Effect.Effect<CommandItem[], Error> {
 		return Effect.suspend(() => {
 			const slash = q.indexOf('/');
@@ -1229,7 +1257,7 @@
 	</div>
 {/snippet}
 {#snippet attachments(row: AgentRow)}{#each row.files ?? [] as f, i (i)}{@const href =
-			f.id === undefined ? null : bolt.fileUrl({ id: f.id } as FileRef)}<span
+			f.id === undefined ? null : fileHref(f.id)}<span
 			class="mt-1 block text-xs text-muted-foreground"
 			data-attachment
 		>
@@ -1545,6 +1573,7 @@
 <div
 	{@attach lifetime}
 	class="-m-4 flex h-[calc(100%+2rem)] min-h-0 flex-col bg-card"
+	style:background-color="var(--card)"
 	data-agent-panel
 >
 	{#if toSheet === undefined}<div class="shrink-0 border-b px-4 py-2">{@render head()}</div>{/if}
@@ -1683,24 +1712,30 @@
 											>
 												<Icon name="lucide:circle-check" class="size-4 shrink-0 text-success" />
 												<span class="min-w-0 whitespace-normal">{t(outcome.text)}</span>
-												{#if outcome.href !== undefined}<Button
+												{#if outcome.preview !== undefined}{@const url = outcome.preview}<Button
 														size="sm"
 														variant="outline"
 														class="shrink-0"
-														href={outcome.href}
-														target="_blank"
-														rel="noreferrer">{t(outcome.action ?? '')}</Button
+														onclick={() => openPreview(url)}
+														data-open-preview>{t(outcome.action ?? '')}</Button
 													>{/if}
 											</Inline>
+										{/each}
+										{#each item.steps as st (st.id)}
+											<StudioResult
+												step={st}
+												{t}
+												zone={kinds.zone}
+												{fileHref}
+												onPreview={openPreview}
+											/>
 										{/each}
 										{#if item.steps.some((st) => (st.files?.length ?? 0) > 0)}
 											<!-- what the work made (a document, a sandbox output): offered outside the fold, one card per file -->
 											<div class="mt-2 flex flex-wrap gap-2" data-made-files>
 												{#each item.steps.flatMap((st) => st.files ?? []) as f, i (i)}
 													<a
-														href={f.id === undefined
-															? undefined
-															: bolt.fileUrl({ id: f.id } as FileRef)}
+														href={f.id === undefined ? undefined : fileHref(f.id)}
 														target="_blank"
 														rel="noreferrer"
 														download={f.name}
@@ -2019,7 +2054,41 @@
 					</div>
 				{/snippet}
 
-				{@render transcriptTab()}
+				{#if previews.length > 0 && !thread}
+					<!-- Chat and the Preview tab: the agent's previews in the shared web view, never Studio or a new page -->
+					<div class="flex shrink-0 gap-1 border-b border-border px-3 pt-1.5" role="tablist">
+						{#each TABS as [key, label] (key)}
+							<button
+								type="button"
+								role="tab"
+								aria-selected={tab === key}
+								class="-mb-px border-b-2 px-2 pb-1.5 text-xs font-medium {tab === key
+									? 'border-foreground text-foreground'
+									: 'border-transparent text-muted-foreground hover:text-foreground'}"
+								onclick={() => (tab = key)}
+								data-agent-tab={key}>{t(label)}</button
+							>
+						{/each}
+					</div>
+				{/if}
+				{#if tab === 'preview' && shownPreview !== null && !thread}
+					<div class="flex min-h-0 flex-1 flex-col" data-agent-preview={shownPreview.url}>
+						{#if shownPreview.about !== undefined}<p
+								class="shrink-0 truncate px-3 py-1 text-xs text-muted-foreground"
+								data-preview-caption
+							>
+								{captionOf(shownPreview.about, kinds.zone)}
+							</p>{/if}
+						{#key shownPreview.url}<PreviewFrame
+								src={shownPreview.url}
+								title={t('Preview')}
+								{t}
+								onClose={() => (tab = 'chat')}
+							/>{/key}
+					</div>
+				{:else}
+					{@render transcriptTab()}
+				{/if}
 			</div>
 			{#if thread}
 				<p

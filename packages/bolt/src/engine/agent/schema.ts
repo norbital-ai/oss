@@ -260,10 +260,39 @@ export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	peer: r['peer'] ?? null
 });
 /** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_output`). */
-export const clip = (v: Json | undefined): string => {
+export const clip = (v: Json | undefined, max = 600): string => {
 	const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);
-	return s.length <= 600 ? s : `${s.slice(0, 599)}…`;
+	return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 };
+/** A result the panel lists in full (a runtime log's records): clipped far later than the 600 characters of any other. */
+const LISTED: ReadonlySet<string> = new Set(['workspace_logs']);
+/** What a Studio result says it shows, for the panel's caption: these facts, at its top level or under `metadata`. */
+const ABOUT = [
+	'environment',
+	'bundle',
+	'release',
+	'commit',
+	'message',
+	'branch',
+	'url',
+	'viewport',
+	'capturedAt'
+] as const;
+function aboutOf(result: { readonly [k: string]: unknown }): Record<string, string> | undefined {
+	const from = Predicate.isObject(result['metadata']) ? result['metadata'] : result,
+		out: Record<string, string> = {};
+	for (const k of ABOUT) {
+		const v = from[k];
+		if (typeof v === 'string' || typeof v === 'number') out[k] = String(v);
+		else if (
+			Predicate.isObject(v) &&
+			typeof v['width'] === 'number' &&
+			typeof v['height'] === 'number'
+		)
+			out[k] = `${v['width']}×${v['height']}`;
+	}
+	return Object.keys(out).length === 0 ? undefined : out;
+}
 
 /** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
 export const isStaff = (a: Authority) =>
@@ -310,6 +339,10 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 					)
 				]
 			: [];
+	const about =
+		String(step.name).startsWith('workspace_') || step.name === 'preview_show'
+			? aboutOf(result)
+			: undefined;
 	if ((!thread && ambient(r) && r.as === null) || r.state === 'cancelled') return null;
 	return {
 		id: r.id,
@@ -340,7 +373,8 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		...(r.state === 'approved' && typeof step.progress === 'string'
 			? { progress: step.progress }
 			: {}),
-		...(r.role === 'tool' && meta?.tag !== 'confirm'
+		// a confirmation card once settled (state cleared) is a step like any other: its outcome shows outside the fold
+		...(r.role === 'tool' && (meta?.tag !== 'confirm' || r.state === null)
 			? {
 					tool: {
 						name: String(step.name ?? 'tool'),
@@ -353,7 +387,11 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 						...(runs.length === 0 ? {} : { runs }),
 						...(r.state === 'running' ? { running: true } : {}),
 						...(typeof step.args === 'string' ? { args: step.args } : {}),
-						...(step.result === undefined ? {} : { result: clip(step.result) }),
+						...(step.result === undefined
+							? {}
+							: { result: clip(step.result, LISTED.has(String(step.name)) ? 20000 : 600) }),
+						...(typeof result['preview'] === 'string' ? { preview: result['preview'] } : {}),
+						...(about === undefined ? {} : { about }),
 						...(typeof step.ms === 'number' ? { ms: step.ms } : {})
 					}
 				}

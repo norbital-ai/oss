@@ -74,7 +74,9 @@ import {
 	envoyName,
 	messages,
 	outline,
+	outputText,
 	projection,
+	scratchPath,
 	state,
 	system
 } from './context.ts';
@@ -1115,6 +1117,20 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							]))[0]!.rows[0]?.['full'] ?? undefined
 						);
 					}),
+					outputs: Effect.fn('Agents.outputs')(function* () {
+						const [r] = yield* db.read([
+							q(
+								`SELECT content->>'id' AS call, content->>'name' AS tool, meta->'full' AS full FROM sys_message
+						WHERE conversation = $1 AND role = 'tool' AND meta->>'tag' = 'output' ORDER BY seq`,
+								id
+							)
+						]);
+						return (r?.rows ?? []).map((row) => ({
+							call: String(row['call']),
+							tool: String(row['tool']),
+							full: row['full'] ?? null
+						}));
+					}),
 					history: Effect.fn('Agents.work23')(function* (text, scope, limit) {
 						const a = authority.actor,
 							member =
@@ -1553,8 +1569,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_output`
 						const shown = answer.bounded === true ? result : bounded(result).value,
 							clipped = JSON.stringify(shown) !== JSON.stringify(result);
-						// the model does not see its own call ids, so the note names the one read_output takes
-						const more = `clipped: read_output { call: '${call.id}' } reads the whole result`;
+						// the model does not see its own call ids, so the note names the one read_output takes; the whole text is
+						// also a file in the worktree a workspace sandbox run sees, for code to grep or parse
+						const path = scratchPath(id, call.id, call.name);
+						const more =
+							`clipped: the whole result (${new TextEncoder().encode(outputText(result)).length} bytes) is ${path}. read_output { call: '${call.id}', offset } reads it on` +
+							(config.sandbox === undefined
+								? ''
+								: `; sandbox_run { workspace: true, … } sees it at /workspace/${path}`);
 						yield* wrote(
 							yield* rewrite(
 								step,
@@ -1686,6 +1708,30 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			yield* drain(id);
 		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/**
+	 * An approved call the workspace restarted under (a publish or rollback's switch-over) settles its card as the old
+	 * generation closes, too late to run the turn on: a later generation resumes each such conversation once (the card is
+	 * marked `resumed` in the same statement), so the agent reports the outcome and finishes its checklist.
+	 */
+	// opened, not polled: an idle workspace issues no statements, and the person sees the reply when they come back
+	const resumeSettled = (conversation: string) =>
+		Effect.gen(function* () {
+			const rows = yield* changed(
+				q(
+					`UPDATE sys_message m SET content = content || '{"resumed":true}'::jsonb
+				WHERE m.conversation = $2 AND m.role = 'tool' AND m.state IS NULL AND m.meta->>'tag' = 'confirm' AND NOT m.content ? 'resumed'
+				AND (m.content->'result' ? 'restarted' OR m.content->'result'->>'error' = $1)
+				AND NOT EXISTS (SELECT 1 FROM sys_message a WHERE a.conversation = m.conversation AND a.seq > m.seq AND a.role = 'assistant')`,
+					FIXED.unreported,
+					conversation
+				)
+			);
+			for (const id of new Set(rows.map((r) => r.conversation)))
+				yield* FiberSet.run(
+					detached,
+					drain(id, { force: true }).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+				);
+		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+	/**
 	 * A sub-agent's turn ended (its answer, a question for its parent, a failure or a stop): its report lands in the parent
 	 * conversation as a queued input from the same sender, which a running parent turn claims at its next step and an idle
 	 * parent runs a turn on. The sub-agent runs detached, so the parent can answer the person and finish meanwhile.
@@ -1740,6 +1786,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		drain,
 		conversation,
 		transcript,
+		resumeSettled,
 		attachments,
 		stop: Effect.fn('Agents.stop')(function* (id: string) {
 			yield* setConv(id, `status = 'stopped', lease_until = NULL`);

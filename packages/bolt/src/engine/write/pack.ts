@@ -58,13 +58,11 @@ const SEEDED: {
  * The seeded instances come back as they are stored: their configuration decoded, its defaults filled.
  */
 export function decodeIdentity(m: EngineManifest, rows: Pack['rows']): Pack['rows'] {
-	for (const reserved of ['sys_team', 'sys_assignment'])
-		if (rows[reserved] !== undefined)
-			throw BoltError.make(
-				'seedDecode',
-				'decode',
-				`seed ${reserved}: access definitions belong in source`
-			);
+	const unknown = Object.keys(rows).find(
+		(c) => m.models[c] === undefined && !(IDENTITY as readonly string[]).includes(c)
+	);
+	if (unknown !== undefined)
+		throw BoltError.make('seedDecode', 'decode', `seed: unknown collection '${unknown}'`);
 	for (const [i, row] of (rows['sys_user'] ?? []).entries()) {
 		const team = row['team'];
 		if (

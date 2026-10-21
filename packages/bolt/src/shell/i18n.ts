@@ -327,13 +327,18 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Open tracking': '打开跟踪',
 	'Sign in in the window that opens; this page updates when you are done.':
 		'请在打开的窗口中登录；完成后此页面会自动更新。',
-	'Building the preview…': '正在生成预览…',
 	'Editing the source…': '正在编辑源代码…',
 	'Reviewing the changes…': '正在审查更改…',
 	'The preview is ready.': '预览已就绪。',
 	'Open preview': '打开预览',
 	'Applied — the workspace is now on the new version. Refresh to see it.':
 		'已应用 — 工作区现已使用新版本。刷新即可查看。',
+	// Norbius panel: the Preview tab and Studio results
+	Chat: '聊天',
+	'Open in Preview tab': '在预览标签中打开',
+	'Workspace screenshot': '工作区截图',
+	'log line': '条日志',
+	'log lines': '条日志',
 	Cancel: '取消',
 	Cause: '起因',
 	Change: '变更',
@@ -512,8 +517,10 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Plan first; you approve before it acts': '先制定计划；执行前需您批准',
 	Policy: '策略',
 	Preview: '预览',
-	"Preview — changes here are not live yet. Ask Norbius to apply them when you're happy.":
-		'预览 — 此处的更改尚未上线。满意后请让 Norbius 应用这些更改。',
+	'This is a preview — open it from Studio or Norbius.':
+		'这是预览 — 请从 Studio 或 Norbius 中打开。',
+	'You’re inside a preview — open Studio from the live workspace.':
+		'您正在预览中 — 请从正式工作区打开 Studio。',
 	'Preview as': '预览身份',
 	Output: '输出',
 	'Previewing as a team. Its grants apply; you are recorded as the previewer.':
@@ -598,7 +605,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	artifact: '构件',
 	'Workbench preview': '工作台预览',
 	'Publish your draft to live?': '将草稿发布到线上？',
-	'Unsaved draft': '未保存的草稿',
 	'Everyone using the workspace gets this version once it is built.':
 		'构建完成后，工作区的所有用户都将使用此版本。',
 	'into live?': '到线上？',
@@ -810,8 +816,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Connection: '连接',
 	Created: '创建时间',
 	Detail: '详情',
-	'Every automation run, newest first. Stop a queued or running run; retry a failed one.':
-		'所有自动化运行记录，最新在前。可停止排队中或运行中的运行；可重试失败的运行。',
+	'Every automation run, newest first. Run one now, stop a queued or running run, or retry a failed one.':
+		'所有自动化运行记录，最新在前。可立即运行、停止排队中或运行中的运行，或重试失败的运行。',
 	Expires: '到期时间',
 	Grants: '权限',
 	'Identity changes, newest first.': '身份变更，最新在前。',
@@ -827,6 +833,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Read: '已读',
 	'Requested by': '申请人',
 	Retry: '重试',
+	'Run now': '立即运行',
+	'Choose an automation': '选择自动化',
 	'Revoke the key {name}? Programs using it stop at once.':
 		'撤销密钥 {name}？使用它的程序将立即停止。',
 	Scope: '范围',
@@ -848,6 +856,20 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Open the navigator': '打开导航器',
 	Browse: '浏览',
 	'changed files': '个文件已变更',
+	'changed file': '个文件已变更',
+	'Save your changes': '保存更改',
+	'Describe the change in a few words. Reviewers and the publish step show it.':
+		'用几个字描述这次更改。审核和发布时都会显示。',
+	'What does this change do?': '这次更改做了什么？',
+	'Starting the preview…': '正在启动预览…',
+	'Building the preview…': '正在生成预览…',
+	'Before the last reset — can’t roll back to this': '在上次重置之前 — 无法回滚到此版本',
+	'This version has no checkpoint to roll back to': '此版本没有可回滚的检查点',
+	Phone: '手机',
+	Tablet: '平板',
+	Desktop: '桌面',
+	'Fills the pane': '填满窗格',
+	'Close preview': '关闭预览',
 	'Serving now': '正在提供服务',
 	'Edit safely, preview the exact result, then ask for review.':
 		'安全编辑、预览准确结果，然后请求审核。',
@@ -989,6 +1011,10 @@ const VIEW_ZH = {
 	'ui.run.attempt': '第 {n} 次尝试',
 	'ui.run.download': '下载 {name}',
 	'ui.run.none': '暂无运行记录',
+	'ui.view.group.actions': '操作',
+	'ui.view.deleteBody': '此操作无法撤销。',
+	'ui.view.deleted': '已删除 {n} 条',
+	'ui.view.deleteKept': '已删除 {deleted} 条，保留 {kept} 条：{reason}',
 	'ui.view.removeNew': '移除',
 	'ui.view.addEach': '为每条所选记录新增一条',
 	'ui.view.relationOne': '选择一条记录以链接、取消链接或删除现有记录。',
@@ -1040,7 +1066,7 @@ const VIEW_ZH = {
 	'ui.table.export': '导出 CSV',
 	'ui.view.exportHint': '按当前视图导出记录',
 	'ui.table.delete': '删除选中记录',
-	'ui.view.editSelected': '编辑选中记录',
+	'ui.view.editSelected': '更新选中记录',
 	'ui.view.editSelectedHint': '选择要对所有选中记录修改的字段',
 	'ui.view.editButton': '编辑',
 	'ui.view.editOnlyChosen': '仅修改勾选的字段。',

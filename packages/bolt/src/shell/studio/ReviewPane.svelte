@@ -362,7 +362,9 @@
 				<Stack gap="xs" grow class="min-w-0">
 					<Cluster gap="xs">
 						<h2 class="text-sm font-semibold text-foreground">{t('My draft')}</h2>
-						{@render pill(`${view.changes.length} ${t('changed files')}`)}
+						{@render pill(
+							`${view.changes.length} ${t(view.changes.length === 1 ? 'changed file' : 'changed files')}`
+						)}
 						{#if (view.behind ?? 0) > 0}{@render pill(`${view.behind} ${t('behind live')}`)}{/if}
 					</Cluster>
 					<p class="font-mono text-micro text-muted-foreground">

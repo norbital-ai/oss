@@ -263,7 +263,10 @@ it.live(
 			yield* browser(() => answer(true));
 			yield* browser(() => openMenu(target));
 			assert.equal(menuRow('delete').dataset.status, 'failed');
-			assert.equal(textOf(element(menuRow('delete'), '[data-menu-error]')), 'Deletion is locked');
+			assert.equal(
+				textOf(element(menuRow('delete'), '[data-menu-error]')),
+				'0 deleted, 1 kept: Deletion is locked'
+			);
 			assert.equal(select(target, 'c').getAttribute('aria-checked'), 'true');
 			refuse = false;
 			yield* browser(() => press('delete'));
@@ -272,7 +275,11 @@ it.live(
 				{ callable: 'jobs.delete', input: { target: ['c'] } },
 				{ callable: 'jobs.delete', input: { target: ['c'] } }
 			]);
-			assert.deepEqual(confirmations, ['Delete 1 rows?', 'Delete 1 rows?', 'Delete 1 rows?']);
+			assert.deepEqual(confirmations, [
+				'Delete 1 records?',
+				'Delete 1 records?',
+				'Delete 1 records?'
+			]);
 			assert.equal(target.querySelector('[data-selected-count]'), null);
 			assert.equal(select(target, 'c').getAttribute('aria-checked'), 'false');
 		})

@@ -82,6 +82,16 @@ modules initialize and stylesheets load. Public and external apps, and kiosks wh
 needs a `+<page>.page.server.ts` read-only loader and shared `<page>.page.data.ts` codec. See
 [Client bundles and public rendering](./client-bundling.md) for authoring, artifact and host boundaries.
 
+## Teams
+
+Teams exist only in source: `src/access_control/team/+team.ts` maps each handle to a policy list
+or `{ name?, parent?, policies }`. No table holds them. A member's, invitation's or API key's
+`team` is a text field with `format: 'team'` holding one declared handle; every write refuses an
+undeclared handle, and a handle removed from source confers nothing. Authority, the `parent` graph
+(`actor.teamTree`), approval routes (`superseded_by` and step teams are exact handles), team
+previews and the People team picker all read the manifest. `{ actor: 'teams' | 'teamTree' }` is an
+`in`/`nin` operand on `format: 'team'` fields.
+
 ## Record history and restore
 
 Every committed write appends to `bolt_history`: one revision per record, with who, when, its

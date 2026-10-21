@@ -484,7 +484,7 @@ export interface TenancyPort {
 	resolve(host: string): Promise<string | null>;
 }
 export interface MembershipPort {
-	/** `team` is the `sys_team` id. */
+	/** `team` is a source team handle (`+team.ts`). */
 	project(
 		member: {
 			user: string;

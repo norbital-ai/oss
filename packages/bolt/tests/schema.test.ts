@@ -275,7 +275,6 @@ describe('next schema: fingerprint and plan', () => {
 		const objects = schemaObjects(s);
 		for (const t of [
 			'sys_user',
-			'sys_team',
 			'sys_run',
 			'sys_notification',
 			'sys_file',
@@ -288,6 +287,9 @@ describe('next schema: fingerprint and plan', () => {
 			expect(objects.find((o) => o.id === `table:${t}`)?.drop).toBe(
 				`drop table if exists "${t}" cascade`
 			);
+		// teams are source declarations: no table, no projection, no foreign key to one
+		expect(objects.filter((o) => o.table === 'sys_team' || o.id === 'source:teams')).toEqual([]);
+		expect(objects.flatMap((o) => o.create).join('\n')).not.toContain('sys_team');
 		const engine = objects.filter((o) => o.id.startsWith('engine:'));
 		const creates = engine.flatMap((o) => o.create).join('\n');
 		for (const t of [

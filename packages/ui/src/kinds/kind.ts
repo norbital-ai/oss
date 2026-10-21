@@ -377,19 +377,19 @@ export function moneyProblem(
 }
 
 // ── advisory validation, same wording as decode ──
+/** Whether a field must be given a value: not optional, no default fills it, and neither derived nor a state's. */
+export const required = (kind: Kind): boolean =>
+	kind.optional !== true &&
+	kind.default === undefined &&
+	!KINDS[kind.kind].derived &&
+	kind.kind !== 'state';
 export function problem(kind: Kind, value: Value | undefined): string | null {
 	const v = value ?? null;
 	if (
 		v === null ||
 		(Arr.isArray<Value>(v) && v.length === 0 && (kind.kind === 'file' || kind.kind === 'list'))
 	) {
-		if (
-			kind.optional === true ||
-			kind.default !== undefined ||
-			KINDS[kind.kind].derived ||
-			kind.kind === 'state'
-		)
-			return null;
+		if (!required(kind)) return null;
 		return kind.kind === 'list' && (kind.min ?? 0) === 0 && v !== null ? null : 'is required';
 	}
 	const range = (n: number, k: { min?: number; max?: number }) =>

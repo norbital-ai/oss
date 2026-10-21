@@ -11,15 +11,21 @@ const is = <T extends true>(): T => true as T;
 
 is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external'>>();
 is<Eq<ColumnValue<'sys_user', 'email'>, string | null>>();
-is<Eq<ColumnValue<'sys_user', 'team'>, Id<'sys_team'> | null>>();
+is<Eq<ColumnValue<'sys_user', 'team'>, string | null>>();
 is<Eq<ColumnValue<'approval_request', 'id'>, Id<'approval_request'>>>();
 is<Eq<'sys_run' extends SystemName ? true : false, true>>();
 is<Eq<'sys_session' extends CollectionName ? true : false, false>>();
 const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
 // @ts-expect-error S1 a member's kind is staff or external (the old hand type said 'member')
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
+// a member's team is a source handle: `actor.teams` / `actor.teamTree` compare it in a list
+const inTree: Where<'sys_user'> = { team: { in: { actor: 'teamTree' } } };
+// @ts-expect-error S1 a team operand only on a team field
+const notTeam: Where<'sys_user'> = { email: { in: { actor: 'teams' } } };
 void staff;
 void member;
+void inTree;
+void notTeam;
 
 // an instance is created naming its definition (and its member, when personal, or the envoy it carries); the host's
 // fence is no column of it

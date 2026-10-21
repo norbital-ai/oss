@@ -192,6 +192,7 @@ const docsTool = (external = false) =>
 			},
 			bindings: { now: '2026-10-13T00:00:00.000Z', today: '2026-10-13', tz: 'UTC', params: {} },
 			turn: 't',
+			outputs: () => Effect.succeed([]),
 			mode: 'agent',
 			inApp: true,
 			delegation: false,

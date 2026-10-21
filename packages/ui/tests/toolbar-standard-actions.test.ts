@@ -1,0 +1,233 @@
+import './dom.ts';
+import assert from 'node:assert/strict';
+import { afterEach, it } from '@effect/vitest';
+import { Effect } from 'effect';
+import { vi } from 'vitest';
+import type { KindsHost } from '../src/kinds/context.ts';
+import type { ToolbarItem } from '../src/collection/ViewToolbar.svelte';
+import { browser, required, textOf, viewFixture, type ViewScript } from './view-fixture.ts';
+import { element } from './elements.ts';
+
+// The ⚡ menu's standard rows come from the collection's exposure alone; a page's own rows come from `toolbar.actions`.
+// The in-app confirmation is a queue the test answers (see board-selection.test.ts).
+const dialog = vi.hoisted(() => ({
+	pending: [] as { title: string; body: string | undefined; answer: (ok: boolean) => void }[]
+}));
+vi.mock('../src/primitives/dialog/confirm.ts', async () => {
+	const { Effect } = await import('effect');
+	return {
+		confirmAction: (options: { title: string; body?: string }) =>
+			Effect.callback<boolean>((resume) => {
+				dialog.pending.push({
+					title: options.title,
+					body: options.body,
+					answer: (ok) => resume(Effect.succeed(ok))
+				});
+			})
+	};
+});
+
+const { flushSync, mount, tick, unmount } = await import('svelte');
+const { default: Harness } = await import('./view-harness.svelte');
+const { toasts } = await import('../src/toast/toast.svelte.ts');
+const mounted: (() => Promise<void>)[] = [];
+const settle = async () => {
+	for (let i = 0; i < 3; i++) {
+		flushSync();
+		await tick();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	flushSync();
+};
+afterEach(async () => {
+	for (const close of mounted.splice(0).reverse()) await close();
+	document.body.replaceChildren();
+	localStorage.clear();
+	toasts.splice(0);
+	dialog.pending.splice(0);
+});
+
+const declared: NonNullable<KindsHost['catalog']> = {
+	jobs: {
+		label: ['name'],
+		fields: { name: { kind: 'text' } },
+		update: { columns: ['name'] },
+		delete: true,
+		pipeline: { import: 'Jobs from a sheet', export: 'Every job as a sheet' }
+	}
+};
+const bare: NonNullable<KindsHost['catalog']> = {
+	jobs: { label: ['name'], fields: { name: { kind: 'text' } } }
+};
+
+async function show({
+	catalog,
+	act = () => ({ kind: 'committed', output: null, records: [] }),
+	actions
+}: {
+	catalog: NonNullable<KindsHost['catalog']>;
+	act?: ViewScript['act'];
+	actions?: readonly ToolbarItem[];
+}) {
+	const acts: { callable: string; input: Parameters<ViewScript['act']>[1] }[] = [];
+	const { bolt } = await viewFixture({
+		read: () => ({
+			rows: [
+				{ id: 'job-a', name: 'A' },
+				{ id: 'job-b', name: 'B' }
+			],
+			next: null
+		}),
+		aggregate: () => [{ count: 2 }],
+		act: (callable, input, options) => {
+			acts.push({ callable, input });
+			return act(callable, input, options);
+		}
+	});
+	const target = document.body.appendChild(document.createElement('div'));
+	const app = mount(Harness, {
+		target,
+		props: {
+			bolt,
+			catalog,
+			upload: (file: File) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type }),
+			part: 'table',
+			props: {
+				of: 'jobs',
+				columns: ['name'],
+				toolbar: {
+					title: false,
+					search: false,
+					filter: false,
+					export: false,
+					new: false,
+					...(actions === undefined ? {} : { actions })
+				}
+			}
+		}
+	});
+	mounted.push(async () => {
+		await unmount(app);
+		target.remove();
+	});
+	await settle();
+	return { target, acts };
+}
+const open = async (target: ParentNode) => {
+	if (document.querySelector('[data-view-menu]') !== null) return;
+	element<HTMLButtonElement>(target, '[data-view-actions]').click();
+	await settle();
+};
+const keys = () =>
+	[...document.querySelectorAll<HTMLElement>('[data-view-menu] [data-menu-item]')].map(
+		(row) => row.dataset['menuItem']
+	);
+const row = (key: string) =>
+	element<HTMLElement>(document, `[data-view-menu] [data-menu-item="${key}"]`);
+const button = (key: string) => element<HTMLButtonElement>(row(key), 'button');
+const selectAll = async (target: ParentNode) => {
+	element<HTMLInputElement>(target, 'thead input[type=checkbox]').click();
+	await settle();
+};
+
+it.live(
+	'declared update, delete and pipelines appear; update and delete wait for a selection, import does not',
+	() =>
+		Effect.gen(function* () {
+			const { target } = yield* browser(() => show({ catalog: declared }));
+			yield* browser(() => open(target));
+			assert.deepEqual(keys(), ['update', 'delete', 'import', 'template', 'export-pipeline']);
+			assert.ok(textOf(row('update')).includes('Update selected records'));
+			assert.ok(textOf(row('delete')).includes('Delete selected records'));
+			for (const key of ['update', 'delete']) {
+				assert.equal(button(key).disabled, true);
+				assert.ok(textOf(row(key)).includes('Select records first'));
+			}
+			for (const key of ['import', 'template', 'export-pipeline'])
+				assert.equal(button(key).disabled, false);
+			element<HTMLButtonElement>(target, '[data-view-actions]').click();
+			yield* browser(() => selectAll(target));
+			yield* browser(() => open(target));
+			assert.equal(button('update').disabled, false);
+			assert.equal(button('delete').disabled, false);
+		})
+);
+
+it.live(
+	'undeclared or unpermitted rows are absent; a page action keeps its own group and selection rule',
+	() =>
+		Effect.gen(function* () {
+			const ran: (readonly string[])[] = [];
+			const { target } = yield* browser(() =>
+				show({
+					catalog: bare,
+					actions: [
+						{
+							icon: 'lucide:play',
+							name: 'Recalculate',
+							run: (ids) => {
+								ran.push(ids);
+							}
+						},
+						{
+							icon: 'lucide:check',
+							name: 'Approve',
+							requiresSelection: true,
+							run: (ids) => {
+								ran.push(ids);
+							}
+						}
+					]
+				})
+			);
+			yield* browser(() => open(target));
+			assert.deepEqual(keys(), ['item:Recalculate', 'item:Approve']);
+			assert.deepEqual(
+				[...document.querySelectorAll<HTMLElement>('[data-view-menu] [data-menu-group]')].map(
+					(group) => [group.dataset['menuGroup'], textOf(group).trim()]
+				),
+				[['actions', 'Actions']]
+			);
+			assert.equal(button('item:Approve').disabled, true);
+			assert.ok(textOf(row('item:Approve')).includes('Select records first'));
+			button('item:Recalculate').click();
+			yield* browser(settle);
+			assert.deepEqual(ran, [[]]);
+			yield* browser(() => selectAll(target));
+			yield* browser(() => open(target));
+			button('item:Approve').click();
+			yield* browser(settle);
+			assert.deepEqual(ran, [[], ['job-a', 'job-b']]);
+		})
+);
+
+it.live('bulk delete confirms, deletes each record, and reports a partial refusal', () =>
+	Effect.gen(function* () {
+		const { target, acts } = yield* browser(() =>
+			show({
+				catalog: declared,
+				act: (_callable, input) =>
+					JSON.stringify(input) === JSON.stringify({ target: ['job-b'] })
+						? { kind: 'refused', code: 'forbidden', message: 'Job B is invoiced' }
+						: { kind: 'committed', output: null, records: [] }
+			})
+		);
+		yield* browser(() => selectAll(target));
+		yield* browser(() => open(target));
+		button('delete').click();
+		yield* browser(settle);
+		const asked = required(dialog.pending.shift());
+		assert.equal(asked.title, 'Delete 2 records?');
+		assert.equal(asked.body, 'This cannot be undone.');
+		asked.answer(true);
+		yield* browser(settle);
+		assert.deepEqual(acts, [
+			{ callable: 'jobs.delete', input: { target: ['job-a'] } },
+			{ callable: 'jobs.delete', input: { target: ['job-b'] } }
+		]);
+		assert.deepEqual(
+			toasts.map((t) => [t.tone, t.text]),
+			[['error', '1 deleted, 1 kept: Job B is invoiced']]
+		);
+	})
+);

@@ -143,7 +143,7 @@ export type IdentityGrant<C extends CollectionName> = {
 	read: true | Scope<C>;
 	fields?: readonly ReadField<C>[];
 };
-type Identity = 'sys_user' | 'sys_team' | 'sys_invitation';
+type Identity = 'sys_user' | 'sys_invitation';
 // Ledgers and API keys take no grant. Invitations are readable for provisioning automations.
 type Grantable = Exclude<ReadableName, 'sys_api_key'>;
 

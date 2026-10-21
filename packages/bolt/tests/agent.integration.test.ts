@@ -41,6 +41,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import { Ai, type AiEvent } from '../src/engine/ports.ts';
 import { Agents, Live } from '../src/engine/services.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { AgentConversation, AgentRow, type Frame } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace, respondSystem1, type Kit } from '../src/test/effect.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
@@ -693,6 +694,97 @@ describe('in-app turns', () => {
 						).toBe(ANSWERED);
 						expect(calls).toBe(1);
 					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+
+	it.live(
+		'a confirm settled by the switch-over restart is resumed once when its conversation is opened, which reports the outcome',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const publish: HostTool = {
+						name: 'go_live',
+						description: 'Go live',
+						input: { type: 'object' },
+						confirm: true,
+						// its cutover retires the generation running it: it never answers there
+						call: (_input, context, signal) => {
+							context.progress?.('Switching the workspace over…');
+							return new Promise((_resolve, reject) =>
+								signal.addEventListener('abort', () => reject(signal.reason))
+							);
+						}
+					};
+					const fixture = yield* setup(
+						[use('go_live', { commit: 'c1' }, 'g1'), say('Applied: the workspace is on c1.')],
+						{ hostTools: async () => [publish] }
+					);
+					const { agent, user, authority, ai, t } = fixture;
+					const { c, held } = yield* Effect.gen(function* () {
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'publish' });
+						yield* agent.drain(c);
+						const held = (yield* agent.transcript(c)).find((r) => r.state === 'confirm')!;
+						const pressed = yield* Effect.forkChild(
+							agent.confirm(held.id, true, yield* authority(root))
+						);
+						yield* agent.transcript(c).pipe(
+							Effect.repeat({
+								until: (rows) =>
+									rows.some(
+										(r) =>
+											r.id === held.id &&
+											Predicate.isObject(r.content) &&
+											r.content['progress'] === 'Switching the workspace over…'
+									),
+								schedule: Schedule.spaced('10 millis'),
+								times: 500
+							})
+						);
+						yield* Fiber.interrupt(pressed);
+						return { c, held };
+					}).pipe(Effect.provide(fixture.context));
+					// the old generation settled the card but never ran the turn on
+					expect(ai.requests).toHaveLength(1);
+					const generation = Effect.gen(function* () {
+						return Context.get(
+							yield* Layer.build(
+								TestWorkspace.layer({
+									manifest,
+									guest: yield* guest,
+									ports: ai.layer,
+									db: Layer.succeed(TenantDb, t.db),
+									host: { agent: { mcp: { secret: () => Effect.succeed(undefined) } } }
+								})
+							),
+							Agents
+						);
+					});
+					const next = yield* generation;
+					// a new generation alone issues nothing: opening the conversation resumes it
+					yield* Effect.sleep('100 millis');
+					expect(ai.requests).toHaveLength(1);
+					yield* next.resumeSettled(c);
+					const rows = yield* next.transcript(c).pipe(
+						Effect.repeat({
+							until: (rows) => rows.some((r) => r.role === 'assistant' && r.meta?.tag === 'reply'),
+							schedule: Schedule.spaced('10 millis'),
+							times: 500
+						})
+					);
+					expect(rows.find((r) => r.role === 'assistant' && r.meta?.tag === 'reply')?.text).toBe(
+						'Applied: the workspace is on c1.'
+					);
+					expect(toolResults(ai.requests[1]!).at(-1)).toMatchObject({
+						restarted: FIXED.restartedDuring('Switching the workspace over…')
+					});
+					expect(rows.find((r) => r.id === held.id)?.content).toMatchObject({ resumed: true });
+					// one resume per settled card: opening it again in a later generation finds nothing to resume
+					yield* (yield* generation).resumeSettled(c);
+					yield* Effect.sleep('100 millis');
+					expect(ai.requests).toHaveLength(2);
 				})
 			)
 	);
@@ -1517,12 +1609,13 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						expect(JSON.stringify(toolResults(ai.requests[3]!)[1])).toContain(
 							'clipped, 40002 bytes'
 						);
+						const whole = JSON.stringify(big, null, 2);
 						expect(toolResults(ai.requests[3]!)[1]).toMatchObject({
-							readOutput: "clipped: read_output { call: 'b1' } reads the whole result"
+							readOutput: `clipped: the whole result (${whole.length} bytes) is .scratch/tool-output/${c2}/b1-big.txt. read_output { call: 'b1', offset } reads it on`
 						});
 						expect(toolResults(ai.requests[4]!)[2]).toMatchObject({
 							offset: 100,
-							total: JSON.stringify(big).length,
+							total: whole.length,
 							next: 13_100,
 							parts: expect.arrayContaining(['y'.repeat(1000)])
 						});
@@ -1566,9 +1659,15 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						const c = yield* agent.start({ owner: root });
 						yield* post(agent, c, root, 'read the desk');
 						yield* agent.drain(c);
-						const whole = JSON.stringify({ files: { 'src/app/crm/+desk.page.svelte': page } });
+						const whole = JSON.stringify(
+							{ files: { 'src/app/crm/+desk.page.svelte': page } },
+							null,
+							2
+						);
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
-							readOutput: "clipped: read_output { call: 'r1' } reads the whole result"
+							readOutput: expect.stringContaining(
+								`.scratch/tool-output/${c}/r1-draft_read.txt. read_output { call: 'r1', offset } reads it on`
+							)
 						});
 						const Out = Schema.Struct({
 							offset: Schema.Number,

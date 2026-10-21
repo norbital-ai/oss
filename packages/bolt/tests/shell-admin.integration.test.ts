@@ -303,7 +303,7 @@ layer(workspace)('shell administration', (it) => {
 					['renameTeam', { id: teamId, name: 'Other' }],
 					['moveTeam', { id: teamId, parent: 'Other' }],
 					['deleteTeam', { id: teamId }],
-					['assign', { type: 'sys_team', principal: teamId, policy: 'rep' }],
+					['assign', { type: 'team', principal: teamId, policy: 'rep' }],
 					['unassign', { id: 'forged' }]
 				] as const) {
 					expect(yield* op(admin, name, input)).toMatchObject({

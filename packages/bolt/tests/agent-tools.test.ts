@@ -138,6 +138,7 @@ const ctx = (
 			messages: () => Effect.succeed([]),
 			row: () => Effect.succeed(undefined),
 			output: () => Effect.succeed(undefined),
+			outputs: () => Effect.succeed([]),
 			history: () => Effect.succeed([]),
 			subagent: {
 				spawn: () => Effect.succeed(null),
@@ -821,6 +822,43 @@ describe('sandbox_run', () => {
 				expect(yield* result(x, 'sandbox_run', { command: 'node', files: [{ seq: 9 }] })).toEqual({
 					result: { error: 'Message 9 has no stored file 0.' }
 				});
+			})
+	);
+	it.effect(
+		'workspace: true runs on a copy of the draft with every clipped result of the conversation as a scratch file',
+		() =>
+			Effect.gen(function* () {
+				const { x, jobsRun } = yield* setup(member({ tools: ['sandbox_run'] }));
+				const files: Record<string, string> = { 'package.json': '{}', 'src/a.ts': 'export {}' };
+				yield* result(
+					{
+						...x,
+						draft: {
+							files: async () => Object.keys(files),
+							read: async (path) => files[path] ?? null,
+							types: async () => null
+						},
+						outputs: () =>
+							Effect.succeed([{ call: 'c1', tool: 'read', full: { rows: [{ n: 1 }] } }])
+					},
+					'sandbox_run',
+					{
+						command: '/bin/sh',
+						args: ['-c', 'grep -c n .scratch/tool-output/*/*'],
+						workspace: true
+					}
+				);
+				const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+				expect(jobsRun[0]?.workspace?.map((file) => [file.path, text(file.bytes)])).toEqual([
+					['package.json', '{}'],
+					['src/a.ts', 'export {}'],
+					[
+						`.scratch/tool-output/${x.conv.id}/c1-read.txt`,
+						JSON.stringify({ rows: [{ n: 1 }] }, null, 2)
+					]
+				]);
+				yield* result(x, 'sandbox_run', { command: 'node' });
+				expect(jobsRun[1]).not.toHaveProperty('workspace');
 			})
 	);
 	it.effect(

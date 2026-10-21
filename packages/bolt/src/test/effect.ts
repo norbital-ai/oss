@@ -748,7 +748,7 @@ const images = Effect.suspend(() =>
 );
 const schemaDatabase = (manifest: EngineManifest) =>
 	Effect.gen(function* () {
-		const key = JSON.stringify({ ...schemaSlice(manifest), teams: {}, connections: {} });
+		const key = JSON.stringify({ ...schemaSlice(manifest), connections: {} });
 		return PgliteDb.layer(yield* Cache.get(yield* images, key));
 	});
 const namedPack = (root: string, manifest: EngineManifest, name: 'base' | 'sample') =>

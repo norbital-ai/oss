@@ -300,7 +300,7 @@ export const AgentRow = Schema.Struct({
 			)
 		)
 	),
-	/** A tool step: which tool, whether its result was an error; `child` a spawned sub-agent's conversation; `runs` the automation runs an `act` started or queued; `args` and `result` at most 600 characters each; `ms` how long it ran. */
+	/** A tool step: which tool, whether its result was an error; `child` a spawned sub-agent's conversation; `runs` the automation runs an `act` started or queued; `args` and `result` at most 600 characters each (a `workspace_logs` result 20,000); `preview` a preview URL it names; `ms` how long it ran. */
 	tool: Schema.optionalKey(
 		Schema.Struct({
 			name: Schema.String,
@@ -310,6 +310,10 @@ export const AgentRow = Schema.Struct({
 			running: Schema.optionalKey(Schema.Literal(true)),
 			args: Schema.optionalKey(Schema.String),
 			result: Schema.optionalKey(Schema.String),
+			/** The preview URL the result names in full (`workspace_validate`, `preview_show`), never clipped. */
+			preview: Schema.optionalKey(Schema.String),
+			/** What a Studio result says it shows (environment, bundle, commit, message, branch, url, viewport, capturedAt), for its caption. */
+			about: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 			ms: Schema.optionalKey(Schema.Number)
 		})
 	),

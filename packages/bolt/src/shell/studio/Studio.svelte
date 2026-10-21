@@ -16,10 +16,13 @@
 <script lang="ts">
 	import { attach, fork } from '@norbital-ai/ui/effect';
 	import { Cause, Effect, Queue, Schema, Stream } from 'effect';
+	import { watch } from 'runed';
 	import {
 		Button,
 		confirmAction,
+		Dialog,
 		Icon,
+		Input,
 		Sheet,
 		Spinner,
 		Tabs,
@@ -34,14 +37,19 @@
 	import SourceEditor from './SourceEditor.svelte';
 	import SourceTree from './SourceTree.svelte';
 	import WorkbenchToolbar from './WorkbenchToolbar.svelte';
+	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import {
 		foldLog,
 		foldPhase,
+		PHASES,
 		type PhaseState,
+		reach,
 		reviewAge,
 		reviewFreshness,
 		reviewNextOwner,
 		settleDrafts,
+		stepLabel,
+		suggestMessage,
 		type StudioBuildRecord,
 		type StudioFrame,
 		type StudioMergeRequest,
@@ -87,6 +95,10 @@
 				: 'workbench'
 	);
 	let phases = $state<{ [p in StudioPhase]?: PhaseState }>({});
+	// the furthest phase the current run reached (`reach`: never back), when it started, and whether it builds a preview
+	let step = $state(-1);
+	let since = $state(0);
+	let building = $state(false);
 	let diff = $state(false);
 	let selected = $state<string | null>(null);
 	let releaseAt = $state<string | null>(null);
@@ -121,7 +133,7 @@
 		Schema.Struct({ kind: Schema.Literal('mr'), id: Schema.String }),
 		Schema.Struct({
 			kind: Schema.Literal('phase'),
-			phase: Schema.Literals(['diagnose', 'preview', 'merge']),
+			phase: Schema.Literals(PHASES),
 			state: Schema.Literals(['running', 'done', 'failed'])
 		})
 	]);
@@ -167,8 +179,10 @@
 								return Effect.sync(() => {
 									if (frame.kind === 'log' && view !== null)
 										view = { ...view, log: foldLog(view.log, frame.line) };
-									else if (frame.kind === 'phase')
+									else if (frame.kind === 'phase') {
 										phases = { ...foldPhase(phases, frame.phase, frame.state) };
+										step = reach(step, frame.phase);
+									}
 								});
 							})
 						)
@@ -198,10 +212,28 @@
 				)
 			)
 	);
+	/** The save dialog: asks what the change does, prefilled with a suggestion; `null` when cancelled. */
+	let describing = $state<{ text: string; answer: (message: string | null) => void } | null>(null);
+	const describe = (suggestion: string) =>
+		Effect.callback<string | null>((resume) => {
+			describing = {
+				text: suggestion,
+				answer: (message) => {
+					describing = null;
+					resume(Effect.succeed(message));
+				}
+			};
+			return Effect.sync(() => {
+				describing = null;
+			});
+		});
 	const save = Effect.fn('Studio.save')(function* () {
 		if (view === null || Object.keys(drafts).length === 0) return true;
-		const saved = $state.snapshot(drafts);
-		const ok = yield* run({ op: 'save', expected: view.commit, files: saved });
+		const saved = $state.snapshot(drafts),
+			expected = view.commit;
+		const message = yield* describe(suggestMessage(saved, view.files));
+		if (message === null) return false;
+		const ok = yield* run({ op: 'save', expected, files: saved, message });
 		// an edit made while the save was in flight is newer than what was saved: it stays a draft
 		if (ok) drafts = settleDrafts(drafts, saved);
 		return ok;
@@ -221,23 +253,24 @@
 		if (!(yield* confirmAction(ask))) return ((cutover = null), false);
 		cutover = { outcome: 'running' };
 		phases = {};
+		step = -1;
+		since = Date.now();
 		const ok = yield* work;
 		cutover = { outcome: ok ? 'done' : 'failed' };
 		return ok;
 	});
+	const changedFiles = (n: number) => `${n} ${t(n === 1 ? 'changed file' : 'changed files')}`;
+	// unsaved drafts are saved (with their description) first, so the confirmation names what goes live
 	const publish = Effect.fn('Studio.publish')(function* () {
-		const message = view?.builds?.find((b) => b.commit === view?.commit)?.message;
-		const changed = (view?.changes.length ?? 0) + draftCount;
+		if (locked || !(yield* save()) || view === null) return;
 		yield* approved(
 			{
 				title: t('Publish your draft to live?'),
-				body: `${message ?? t('Unsaved draft')} · ${changed} ${t('changed files')}. ${t('Everyone using the workspace gets this version once it is built.')}`,
+				body: `${view.message ?? short(view.commit)} · ${changedFiles(view.changes.length)}. ${t('Everyone using the workspace gets this version once it is built.')}`,
 				confirmLabel: t('Publish'),
 				cancelLabel: t('Cancel')
 			},
-			Effect.gen(function* () {
-				return (yield* save()) && (yield* run({ op: 'publish' }));
-			})
+			run({ op: 'publish' })
 		);
 	});
 	const merge = (m: StudioMergeRequest) =>
@@ -253,13 +286,14 @@
 	/** A source rollback: the deployment's build runs again as a new deployment; a schema change loses later data. */
 	const rollback = Effect.fn('Studio.rollback')(function* (commit: string) {
 		const target = releases.find((r) => r.commit === commit);
-		const lost = target?.discards;
-		const when =
-			target === undefined ? '' : new Date(target.checkpoint ?? target.at).toLocaleString();
+		// a deployment without a restorable checkpoint is never offered: the host would refuse it
+		if (target === undefined || target.checkpoint === null) return;
+		const lost = target.discards;
+		const when = new Date(target.checkpoint ?? target.at).toLocaleString();
 		yield* approved(
 			{
 				title: t('Roll back live to this checkpoint?'),
-				body: `${when} — ${target?.message ?? commit.slice(0, 8)}. ${
+				body: `${when} — ${target.message || commit.slice(0, 8)}. ${
 					lost === undefined
 						? t('Its build runs again as a new deployment and live keeps all its data.')
 						: `${t('Its schema differs from live’s, so the data written after')} ${new Date(lost).toLocaleString()} ${t('will be lost.')}`
@@ -275,6 +309,22 @@
 			})
 		);
 	});
+	// a running step's elapsed time, ticking while a change or a preview build runs
+	let now = $state(Date.now());
+	watch(
+		() => building || cutover?.outcome === 'running',
+		(running) => {
+			if (!running) return;
+			now = Date.now();
+			const timer = setInterval(() => (now = Date.now()), 1_000);
+			return () => clearInterval(timer);
+		}
+	);
+	const elapsed = $derived.by(() => {
+		const seconds = Math.max(0, Math.round((now - since) / 1000));
+		return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+	});
+	const running = $derived(`${t(stepLabel(step))} · ${elapsed}`);
 	const progress = $derived(
 		cutover === null || cutover.outcome === 'asking'
 			? null
@@ -282,12 +332,22 @@
 				? t('Done — live runs the new version.')
 				: cutover.outcome === 'failed'
 					? `${t('Failed')}: ${error ?? t('the change was not applied')}`
-					: phases.merge === 'running'
-						? t('Switching over…')
-						: phases.diagnose === 'running' || phases.preview === 'running'
-							? t('Building…')
-							: t('Getting ready…')
+					: running
 	);
+	/** A preview build: its progress (the furthest step and the time it took so far) shows in the preview pane. */
+	const buildPreview = (live: boolean) =>
+		Effect.suspend(() => {
+			step = -1;
+			since = Date.now();
+			building = true;
+			return run(live ? { op: 'preview', live: true } : { op: 'preview' });
+		}).pipe(
+			Effect.ensuring(
+				Effect.sync(() => {
+					building = false;
+				})
+			)
+		);
 	let build = $state<{ commit: string; record: StudioBuildRecord | null } | null>(null);
 	let showBuild = $state(false);
 	const openBuild = Effect.fn('Studio.openBuild')(function* (commit: string) {
@@ -334,7 +394,7 @@
 	}
 	function togglePreview(): void {
 		showPreview = !showPreview;
-		if (showPreview && view?.preview === null) fork(run({ op: 'preview' }));
+		if (showPreview && view?.preview === null) fork(buildPreview(false));
 	}
 	const files = $derived(
 		view === null ? [] : [...new Set([...Object.keys(view.files), ...Object.keys(drafts)])].sort()
@@ -411,8 +471,7 @@
 				{/if}{short(view?.commit ?? '')}</span
 			>
 			<span class="mt-1 block truncate text-micro text-muted-foreground"
-				>{view?.changes.length ?? 0}
-				{t('changed files')}{#if (view?.behind ?? 0) > 0}
+				>{changedFiles(view?.changes.length ?? 0)}{#if (view?.behind ?? 0) > 0}
 					· {view?.behind} {t('behind live')}{/if}</span
 			>
 		</button>
@@ -476,6 +535,8 @@
 				{#if r.checkpoint}<span class="block text-micro text-muted-foreground"
 						>{t('checkpoint')}
 						<time datetime={r.checkpoint}>{new Date(r.checkpoint).toLocaleString()}</time></span
+					>{:else if r.replaced}<span class="block text-micro text-muted-foreground"
+						>{t('Before the last reset — can’t roll back to this')}</span
 					>{/if}
 			</button>
 		{:else}
@@ -575,7 +636,7 @@
 							variant="outline"
 							class="px-2 text-micro"
 							disabled={locked}
-							onclick={() => fork(run({ op: 'preview' }))}
+							onclick={() => fork(buildPreview(false))}
 						>
 							<Icon name="lucide:refresh-cw" class="size-3.5" />{t(
 								view.preview === null ? 'Preview on sample data' : 'Rebuild preview'
@@ -586,8 +647,7 @@
 								variant="ghost"
 								class="px-2 text-micro"
 								disabled={locked}
-								onclick={() => fork(run({ op: 'preview', live: true }))}
-								>{t('Preview on live data')}</Button
+								onclick={() => fork(buildPreview(true))}>{t('Preview on live data')}</Button
 							>{/if}
 						{#if view.preview !== null}<Button
 								size="sm"
@@ -609,21 +669,29 @@
 							{new Date(p.expiresAt).toLocaleString()}</span
 						>
 					{/if}
+					{#if building && view.preview !== null}
+						<span role="status" class="inline-flex items-center gap-1 text-foreground"
+							><Spinner class="size-3" />{running}</span
+						>
+					{/if}
 				</Inline>
 				{#if view.preview === null}
 					<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
 						<Icon
-							name={busy ? 'lucide:loader-2' : 'lucide:scan-eye'}
-							class="size-8 opacity-30 {busy ? 'animate-spin' : ''}"
+							name={building ? 'lucide:loader-2' : 'lucide:scan-eye'}
+							class="size-8 opacity-30 {building ? 'animate-spin' : ''}"
 						/>
-						<p class="text-xs">{busy ? t('Building the preview…') : t('No preview yet.')}</p>
+						<p class="text-xs" role={building ? 'status' : undefined}>
+							{building ? running : t('No preview yet.')}
+						</p>
 					</Stack>
 				{:else}
-					<iframe
-						title={t('Workbench preview')}
+					<PreviewFrame
 						src={view.preview}
-						class="min-h-0 w-full flex-1 border-0 bg-background"
-					></iframe>
+						title={t('Workbench preview')}
+						label={`${target === 'workbench' ? t('My draft') : `!${target}`}${p === undefined ? '' : ` · ${short(p.commit)}`}`}
+						{t}
+					/>
 				{/if}
 			</Stack>
 		{:else}
@@ -648,7 +716,7 @@
 					stale={draftCount > 0}
 					busy={locked}
 					onopen={openFile}
-					onrerun={() => fork(run({ op: 'preview' }))}
+					onrerun={() => fork(buildPreview(false))}
 					{t}
 				/>
 			</Stack>
@@ -748,6 +816,11 @@
 				{/if}
 			</Inline>
 		{/if}
+		{#if view.nested}
+			<p role="note" class="mx-4 mt-3 shrink-0 rounded-md bg-info/10 px-3 py-2 text-xs sm:mx-6">
+				{t('You’re inside a preview — open Studio from the live workspace.')}
+			</p>
+		{/if}
 		{#if error !== null && root !== 'workbench' && cutover?.outcome !== 'failed'}
 			<p
 				role="alert"
@@ -808,3 +881,45 @@
 		</Stack>
 	</Sheet>
 {/if}
+
+<Dialog.Root
+	open={describing !== null}
+	onOpenChange={(open) => {
+		if (!open) describing?.answer(null);
+	}}
+>
+	<Dialog.Content class="max-w-md">
+		{#if describing !== null}
+			{@const asking = describing}
+			<Dialog.Header>
+				<Dialog.Title>{t('Save your changes')}</Dialog.Title>
+				<Dialog.Description
+					>{t(
+						'Describe the change in a few words. Reviewers and the publish step show it.'
+					)}</Dialog.Description
+				>
+			</Dialog.Header>
+			<form
+				class="flex flex-col gap-3"
+				onsubmit={(event) => {
+					event.preventDefault();
+					const message = asking.text.trim();
+					if (message !== '') asking.answer(message);
+				}}
+			>
+				<div class="flex flex-col gap-1.5">
+					<label for="studio-save-message" class="text-label"
+						>{t('What does this change do?')}</label
+					>
+					<Input id="studio-save-message" required maxlength={200} bind:value={asking.text} />
+				</div>
+				<Dialog.Footer>
+					<Button type="button" variant="ghost" onclick={() => asking.answer(null)}
+						>{t('Cancel')}</Button
+					>
+					<Button type="submit" disabled={asking.text.trim() === ''}>{t('Save')}</Button>
+				</Dialog.Footer>
+			</form>
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>

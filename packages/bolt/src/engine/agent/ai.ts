@@ -788,12 +788,14 @@ export function inferFacility(
 							content: { id: c.id, name: c.name, result: bound(result) }
 						});
 					}
-					// a turn of only draft tools that leaves the draft as it was is no progress: 3 running end the call
+					// a turn of only draft tools that leaves the draft as it was is no progress: 3 running end the call. Under a
+					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
 					if (
 						structured &&
 						r.toolCalls.every(
 							(c) => c.name === PATCH || c.name === SUBMIT || c.name === draftRead
 						) &&
+						(a.steps === undefined || r.toolCalls.some((c) => c.name !== draftRead)) &&
 						JSON.stringify(draft) === before
 					) {
 						// a model that re-patches instead of submitting: a draft that already holds is the answer

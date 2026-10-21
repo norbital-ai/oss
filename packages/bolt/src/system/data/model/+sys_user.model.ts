@@ -14,6 +14,8 @@ export default model({
 		admin: { kind: 'bool', default: false },
 		/** Grant origin: self-signup policies are resolved from the current source declaration. */
 		signup: { kind: 'bool', default: false },
+		/** A team handle declared in source (`+team.ts`); writes refuse an undeclared handle. */
+		team: { kind: 'text', format: 'team', optional: true },
 		party: { kind: 'json', optional: true },
 		/** A mobile number in international form (`+6581234567`). */
 		phone: { kind: 'text', optional: true },

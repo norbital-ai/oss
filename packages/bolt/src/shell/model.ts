@@ -158,7 +158,10 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 			'Settings',
 			s.settings
 				? [
-						leaf('people', 'People', 'lucide:users', '/settings/people'),
+						// a preview manages no people: who has access is the live workspace's (`previewRoute`)
+						...(boot.workspace.live === undefined
+							? [leaf('people', 'People', 'lucide:users', '/settings/people')]
+							: []),
 						leaf('organization', 'Organization', 'lucide:building-2', '/settings/organization'),
 						leaf('audit', 'Audit', 'lucide:history', '/settings/audit'),
 						leaf('automations', 'Automations', 'lucide:refresh-cw', '/settings/automations')
@@ -168,7 +171,9 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 		...group('system', 'System', [
 			...(s.settings
 				? [
-						leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations'),
+						...(boot.workspace.live === undefined
+							? [leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations')]
+							: []),
 						leaf('secrets', 'Secrets', 'lucide:key-round', '/settings/secrets')
 					]
 				: []),

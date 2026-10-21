@@ -560,6 +560,67 @@ describe('the deadlines port and the idle workspace (rule 52a)', () => {
 			})
 	);
 });
+describe('a preview environment, where the host binds no links', () => {
+	it.effect(
+		'runs its internal automations on schedule and on writes; an external integration feed never wakes',
+		() =>
+			Effect.gen(function* () {
+				const preview = {
+					...base,
+					models: {
+						...base.models,
+						products: {
+							description: 'An ERP product',
+							label: 'name',
+							key: ['source', 'code'],
+							fields: { code: { kind: 'text' }, name: { kind: 'text' } }
+						}
+					},
+					relationships: {
+						'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
+					},
+					collections: { ...base.collections, products: { read: { fields: 'all' } } },
+					integrations: {
+						erp: {
+							description: 'An ERP database',
+							driver: 'sqlserver',
+							credential: { connection: { kind: 'text' } },
+							feeds: { products: { into: 'products', key: ['code'], cron: '*/15 * * * *' } }
+						}
+					},
+					automations: {
+						sent: {
+							description: 'A quote was sent',
+							on: { updated: 'quotes', fields: ['status'], where: { status: { eq: 'sent' } } },
+							runAs: ['ops']
+						},
+						tidy: { description: 'Internal upkeep', on: { cron: '*/15 * * * *' }, runAs: ['ops'] }
+					}
+				} satisfies EngineManifest;
+				// `world` binds `Drivers.unavailable`: a preview's activation carries no links port
+				const w = yield* world(preview, {
+					tidy: () => Effect.gen(function* () {}),
+					sent: () => Effect.gen(function* () {})
+				});
+				const quote = yield* w.act('quotes', 'create', { title: 'q' });
+				if (quote.kind !== 'committed' || quote.records[0] === undefined)
+					throw new Error('Missing quote');
+				expect(
+					yield* w.act('quotes', 'update', {
+						target: quote.records[0].id,
+						set: { status: 'sent' }
+					})
+				).toMatchObject({ kind: 'committed' });
+				yield* w.until(T0 + 15 * 60000);
+				expect(w.calls.map((call) => call.target).sort()).toEqual(['sent', 'tidy']);
+				expect(yield* w.sql(`SELECT DISTINCT automation FROM sys_run ORDER BY 1`)).toEqual([
+					{ automation: 'sent' },
+					{ automation: 'tidy' }
+				]);
+			})
+	);
+});
+
 describe('event triggers (rules 49, 50)', () => {
 	it.effect(
 		'a created + 3d delay over many rows is written by each causing statement and wakes once per bucket',

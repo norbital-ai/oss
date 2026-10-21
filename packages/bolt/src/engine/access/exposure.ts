@@ -126,7 +126,7 @@ const fieldsOf = (entries: readonly (readonly [string, unknown])[]): Fields =>
 	Object.fromEntries(entries) as Fields;
 const kindOf = (k: unknown): Kind => k as Kind;
 /** The system collections the browser resolves as targets: the directory (pickers, `actor` operands) and stored files. */
-const TARGETS = ['sys_user', 'sys_team', 'sys_file', 'sys_invitation'] as const;
+const TARGETS = ['sys_user', 'sys_file', 'sys_invitation'] as const;
 function pipelineOf(
 	m: EngineManifest,
 	a: Authority,

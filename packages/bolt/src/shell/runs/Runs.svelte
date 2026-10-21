@@ -1,12 +1,12 @@
 <!--
 	Settings → Automations (rule 48): every run, newest first, in ui's `Table` (search, filter and sort, CSV), re-read
 	every few seconds while shown. A queued or running run has Stop (rule 56); a failed or stopped one has Retry, a new run
-	of its automation with the same input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`).
+	of its automation with the same input. Run now starts any automation the member may start that needs no input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`).
 -->
 <script lang="ts">
 	import { fork, live } from '@norbital-ai/ui/effect';
 	import { Array as EffectArray, Effect, Predicate, Schedule, Stream } from 'effect';
-	import { Show, Table } from '@norbital-ai/ui';
+	import { Button, Combobox, Show, Table } from '@norbital-ai/ui';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
@@ -19,12 +19,14 @@
 		api,
 		bolt,
 		t,
+		startable = [],
 		run = null,
 		onRun
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
+		startable?: readonly { readonly name: string; readonly description: string }[];
 		run?: string | null;
 		onRun: (id: string | null) => void;
 	} = $props();
@@ -64,6 +66,12 @@
 		const r = yield* Effect.result(api.run(id));
 		if (r._tag === 'Failure') return void (mutationError = r.failure.message);
 		const o = yield* bolt.start(r.success.automation, r.success.input ?? {});
+		if (o.kind === 'refused') mutationError = o.message;
+	});
+	let chosen = $state<string | null>(null);
+	const runNow = Effect.fn('Runs.runNow')(function* (automation: string) {
+		mutationError = null;
+		const o = yield* bolt.start(automation, {});
 		if (o.kind === 'refused') mutationError = o.message;
 	});
 	const acts = (r: Pick<RunView, 'id' | 'status'>): Act[] => [
@@ -109,10 +117,26 @@
 	name="settings-automations"
 	title={t('Automations')}
 	description={t(
-		'Every automation run, newest first. Stop a queued or running run; retry a failed one.'
+		'Every automation run, newest first. Run one now, stop a queued or running run, or retry a failed one.'
 	)}
 	{error}
 >
+	{#if startable.length > 0}
+		<div class="mb-3 flex flex-wrap items-center gap-2" data-run-now>
+			<Combobox
+				class="w-72"
+				options={startable.map((a) => ({ value: a.name, label: a.name, description: a.description }))}
+				value={chosen}
+				placeholder={t('Choose an automation')}
+				onChange={(next) => (chosen = next)}
+			/>
+			<Button
+				size="sm"
+				disabled={chosen === null}
+				onclick={() => chosen !== null && fork(runNow(chosen))}>{t('Run now')}</Button
+			>
+		</div>
+	{/if}
 	{#if rows === null}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:else}

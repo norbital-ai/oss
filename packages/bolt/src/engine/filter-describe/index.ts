@@ -603,7 +603,7 @@ export const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 	ref: []
 };
 function options(
-	f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf'>,
+	f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf' | 'team'>,
 	s: Spec | undefined,
 	lit: ReturnType<typeof literals>,
 	ws: readonly string[],
@@ -657,6 +657,7 @@ function options(
 		add('no', { lit: false });
 	} else if (k === 'text') {
 		for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
+		if (f.team) add('my team', { actor: 'teams' });
 	} else if (NUMERIC.has(k)) {
 		for (const x of lit.numbers) add(String(x), echoed(x));
 	} else if (k === 'date' || k === 'instant' || k === 'time') {
@@ -932,7 +933,6 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						],
 						values: [
 							...(at === 'sys_user' ? [{ label: 'me', arg: { actor: 'id' } }] : []),
-							...(at === 'sys_team' ? [{ label: 'my team', arg: { actor: 'teams' } }] : []),
 							...(a.actor.kind === 'member' && a.actor.party?.collection === at
 								? [{ label: 'my party', arg: { actor: 'party' } }]
 								: [])

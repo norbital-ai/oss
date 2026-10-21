@@ -457,7 +457,7 @@ layer(workspace)('shell routes', (it) => {
 					repId = b.actor.id;
 					expect(b).toMatchObject({ admin: false, surfaces: { settings: false, inbox: true } });
 					expect(b.nav.map((n) => n.name)).toEqual(['sales']);
-					expect(Object.keys(b.catalog).sort()).toEqual(['openings', 'sys_team', 'sys_user']); // the kernel directory: pickers at members and teams
+					expect(Object.keys(b.catalog).sort()).toEqual(['openings', 'sys_user']); // the kernel directory: member pickers; teams are source
 					expect((yield* call(rep, 'GET', '/__bolt/shell/settings')).status).toBe(403);
 					expect(
 						(yield* call(rep, 'POST', '/__bolt/shell/settings', {
@@ -1031,7 +1031,6 @@ layer(workspace)('shell routes', (it) => {
 					expect(Object.keys((yield* bootValue(rep, undefined, 'desk')).catalog).sort()).toEqual([
 						'applications',
 						'openings',
-						'sys_team',
 						'sys_user'
 					]);
 				})

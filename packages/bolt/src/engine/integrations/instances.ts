@@ -265,7 +265,7 @@ export const RequestOutput: Schema.Codec<Kind> = Schema.suspend(() =>
 			...KindCommon,
 			kind: Schema.Literal('text'),
 			format: Schema.optionalKey(
-				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel'])
+				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
 			),
 			max: Schema.optionalKey(Schema.Number),
 			many: Schema.optionalKey(Schema.Literal(true))

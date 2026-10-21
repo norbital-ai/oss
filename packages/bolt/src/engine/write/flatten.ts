@@ -105,7 +105,10 @@ export class Flattener {
 				continue;
 			}
 			const shape = this.shapeOf(model, k);
-			const problem = decodeValue(f, v, this.m.models[model]?.fields[k], shape);
+			const problem =
+				f.team && typeof v === 'string' && !Object.hasOwn(this.m.teams, v)
+					? `'${v}' is not a team declared in source`
+					: decodeValue(f, v, this.m.models[model]?.fields[k], shape);
 			if (problem !== null) {
 				this.bad(at, problem);
 				continue;

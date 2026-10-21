@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { Effect, FileSystem, Path, Result, Schema, Stream } from 'effect';
 import { ChildProcess } from 'effect/unstable/process';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,8 +9,10 @@ import { doctor } from '@norbital-ai/doctor';
 import {
 	buildPacks,
 	readArtifact,
+	readPack,
 	templateMeta,
-	writeArtifact
+	writeArtifact,
+	type PackJson
 } from '../compiler/artifact/index.ts';
 import { check, seedPack, type CheckDiagnostic } from '../compiler/check/index.ts';
 import { discover } from '../compiler/discover.ts';
@@ -169,21 +172,42 @@ export const types = Effect.fn('bolt.types')(function* (root: string) {
 	errors.push(...(yield* doctorFindings(root)));
 	return errors;
 });
+/** Everything the base pack is built from: the seed tree, the schema it is written against and the locked toolchain. */
+const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema: string) {
+	const fs = yield* FileSystem.FileSystem,
+		path = yield* Path.Path,
+		hash = createHash('sha256').update(schema),
+		seed = path.join(root, 'seed'),
+		lock = path.join(root, 'pnpm-lock.yaml');
+	if (yield* fs.exists(lock)) hash.update(yield* fs.readFile(lock));
+	if (yield* fs.exists(seed))
+		for (const file of (yield* fs.readDirectory(seed, { recursive: true })).toSorted()) {
+			const at = path.join(seed, file);
+			if ((yield* fs.stat(at)).type !== 'File') continue;
+			hash.update(`\0${file}\0`).update(yield* fs.readFile(at));
+		}
+	return hash.digest('hex');
+});
+/**
+ * `preview` is the fast build a Studio preview serves: no tsc, svelte-check, doctor or type index, and an unchanged
+ * base pack is reused. A published release is always a full build.
+ */
 export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 	dir: string,
-	options: { bank?: string; types?: boolean; log?: Log } = {}
+	options: { bank?: string; types?: boolean; preview?: boolean; log?: Log } = {}
 ) {
 	const fs = yield* FileSystem.FileSystem,
 		path = yield* Path.Path,
-		root = yield* fs.realPath(dir);
+		root = yield* fs.realPath(dir),
+		typed = options.types !== false && options.preview !== true;
 	const checked = yield* check(root),
 		errors = [...checked.errors];
-	if (options.types !== false) errors.push(...(yield* types(root)));
+	if (typed) errors.push(...(yield* types(root)));
 	if (errors.length > 0 || checked.manifest === undefined || checked.guest === undefined)
 		return yield* Effect.fail(new AuthorErrors({ errors, message: `${errors.length} errors` }));
 	const { files } = yield* discover(root),
 		out = path.join(root, '.norbital', 'artifact');
-	const index = options.types === false ? undefined : yield* typeIndex(root, checked.manifest);
+	const index = typed ? yield* typeIndex(root, checked.manifest) : undefined;
 	for (const warning of index?.errors ?? []) options.log?.(`warning: types.json: ${warning}`);
 	const artifact = yield* writeArtifact(
 		root,
@@ -192,25 +216,40 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 		out,
 		index
 	);
-	const packErrors: CheckDiagnostic[] = [],
-		meta = yield* templateMeta(root),
-		seed = yield* seedPack(root, []);
-	const packs = yield* buildPacks(
-		root,
-		checked.manifest,
-		seed,
-		path.join(root, '.norbital', 'seed'),
-		{
-			...(options.bank === undefined ? {} : { bank: path.resolve(options.bank) }),
-			...(meta.bank === undefined ? {} : { tree: meta.bank }),
-			cache: path.join(root, '.norbital', 'cache')
-		},
-		packErrors
-	);
-	if (packErrors.length > 0)
-		return yield* Effect.fail(
-			new AuthorErrors({ errors: packErrors, message: `${packErrors.length} seed errors` })
+	const seedOut = path.join(root, '.norbital', 'seed'),
+		stampFile = path.join(seedOut, 'inputs.sha256'),
+		stamp = yield* seedInputs(root, artifact.schema);
+	const reused =
+		options.preview === true &&
+		options.bank === undefined &&
+		(yield* fs.exists(path.join(seedOut, 'base', 'pack.json'))) &&
+		(yield* fs.readFileString(stampFile).pipe(Effect.catch(() => Effect.succeed('')))) === stamp;
+	let packs: { [pack: string]: PackJson };
+	if (reused) packs = { base: (yield* readPack(path.join(seedOut, 'base'))).meta };
+	else {
+		yield* fs.remove(stampFile, { force: true });
+		const packErrors: CheckDiagnostic[] = [],
+			meta = yield* templateMeta(root),
+			seed = yield* seedPack(root, []);
+		packs = yield* buildPacks(
+			root,
+			checked.manifest,
+			seed,
+			seedOut,
+			{
+				...(options.bank === undefined ? {} : { bank: path.resolve(options.bank) }),
+				...(meta.bank === undefined ? {} : { tree: meta.bank }),
+				cache: path.join(root, '.norbital', 'cache')
+			},
+			packErrors
 		);
+		if (packErrors.length > 0)
+			return yield* Effect.fail(
+				new AuthorErrors({ errors: packErrors, message: `${packErrors.length} seed errors` })
+			);
+		yield* fs.makeDirectory(seedOut, { recursive: true });
+		yield* fs.writeFileString(stampFile, stamp);
+	}
 	options.log?.(
 		`built ${artifact.handle} ${artifact.hash.slice(0, 12)} (schema ${artifact.schema.slice(0, 12)}) → ${out}`
 	);

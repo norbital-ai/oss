@@ -1,9 +1,10 @@
-import { Context, Effect, Fiber, FiberSet, Layer, Option, Ref } from 'effect';
+import { Context, Effect, Fiber, FiberSet, Layer, Option, Record, Ref } from 'effect';
 import type * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
 import { Outbound, Runs } from '../engine/services.ts';
 import { withRequestCpu } from '../engine/guest/request-cpu.ts';
-import { ShellHandler } from '../shell/host.ts';
+import { NOT_IN_PREVIEW, ShellConfig, ShellHandler } from '../shell/host.ts';
+import { BoltError } from './errors.ts';
 import { AgentCallTable, AgentTurns, boltRoutes, RateLimits } from './http.ts';
 import { filesRoutes } from './files.ts';
 import { ImagePreviewsLive } from './image-previews.ts';
@@ -25,6 +26,17 @@ export class BoltHost extends Context.Service<
 		readonly settled: Effect.Effect<void>;
 	}
 >()('bolt/BoltHost') {}
+
+/** Norbius belongs to the live workspace: in a preview environment (`ShellConfig.live`) every agent callable refuses. */
+const AgentCalls = Layer.effect(
+	AgentCallTable,
+	Effect.gen(function* () {
+		const table = yield* AgentCallTable;
+		if ((yield* ShellConfig).live === undefined) return table;
+		const refusal = Effect.fail(BoltError.make('forbidden', 'admission', NOT_IN_PREVIEW));
+		return Record.map(table, (call) => ({ input: call.input, run: () => refusal }));
+	})
+).pipe(Layer.provide(AgentCallTable.layer));
 
 /** All route state and started turns belong to the activation's scope. */
 export const BoltHostLive = Layer.effect(
@@ -72,7 +84,7 @@ export const BoltHostLive = Layer.effect(
 ).pipe(
 	Layer.provideMerge(
 		Layer.mergeAll(
-			AgentCallTable.layer.pipe(Layer.provideMerge(AgentTurns.layer)),
+			AgentCalls.pipe(Layer.provideMerge(AgentTurns.layer)),
 			RateLimits.layer,
 			ImagePreviewsLive
 		)

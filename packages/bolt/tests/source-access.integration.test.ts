@@ -8,7 +8,7 @@ import { decodeIdentity, loadPack, type Pack } from '../src/engine/write/pack.ts
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
+import { plan, readApplied } from '../src/engine/schema/plan.ts';
 
 const source = {
 	...manifest,
@@ -19,22 +19,24 @@ const source = {
 	}
 };
 it.effect(
-	'fresh schema projects source handles and hierarchy without a runtime policy-assignment table',
+	'fresh schema keeps teams in source: no team table, no policy-assignment table, no team foreign key',
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest: source }));
 				const t = Context.get(context, TestWorkspace);
-				const [teams, assignments] = yield* t.db.read([
-					{ text: 'SELECT id, name, parent FROM sys_team ORDER BY id', params: [] },
-					{ text: "SELECT to_regclass('sys_assignment') IS NULL AS absent", params: [] }
+				const [tables, fks] = yield* t.db.read([
+					{
+						text: "SELECT to_regclass('sys_team') IS NULL AND to_regclass('sys_assignment') IS NULL AS absent",
+						params: []
+					},
+					{
+						text: "SELECT count(*)::int AS n FROM pg_constraint WHERE contype = 'f' AND conrelid = 'sys_user'::regclass AND pg_get_constraintdef(oid) LIKE '%(team)%'",
+						params: []
+					}
 				]);
-				expect(teams?.rows).toEqual([
-					{ id: 'branch-id', name: 'Sales', parent: 'sales-id' },
-					{ id: 'sales-id', name: 'Sales', parent: null },
-					{ id: 'viewer-id', name: 'viewer-id', parent: null }
-				]);
-				expect(assignments?.rows).toEqual([{ absent: true }]);
+				expect(tables?.rows).toEqual([{ absent: true }]);
+				expect(fks?.rows).toEqual([{ n: 0 }]);
 			})
 		)
 );
@@ -61,13 +63,6 @@ it.effect(
 				expect(branchAuthority?.actor).toMatchObject({
 					teams: ['branch-id'],
 					teamPath: ['Sales', 'Sales']
-				});
-				yield* t.db.write({
-					text: "UPDATE sys_team SET name = 'Changed outside source' WHERE id = 'sales-id'",
-					params: []
-				});
-				expect((yield* authorities.member(t.db, sales.id))?.actor).toMatchObject({
-					teamPath: ['Sales']
 				});
 				expect(
 					(yield* new Authorities(
@@ -99,7 +94,7 @@ it.effect(
 		)
 );
 
-it.effect('a database team with a copied source label confers no membership or policies', () =>
+it.effect('a stored handle no longer declared in source confers no membership or policies', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const context = yield* Layer.build(TestWorkspace.layer({ manifest: source }));
@@ -107,20 +102,12 @@ it.effect('a database team with a copied source label confers no membership or p
 				authorities = new Authorities(t.manifest, 'source-one');
 			const impostor = t.member([]);
 			yield* t.db.write({
-				text: "INSERT INTO sys_team (id,name) VALUES ('copied-label','Sales')",
-				params: []
-			});
-			yield* t.db.write({
 				text: "UPDATE sys_user SET team = 'copied-label' WHERE id = $1",
 				params: [impostor.id]
 			});
 			const authority = yield* authorities.member(t.db, impostor.id);
 			expect(authority?.policies).toEqual([]);
 			expect(authority?.actor).toMatchObject({ teams: [], teamPath: [] });
-			yield* t.db.write({
-				text: "INSERT INTO sys_team (id,name) VALUES ('toString','Sales')",
-				params: []
-			});
 			yield* t.db.write({
 				text: "UPDATE sys_user SET team = 'toString', revision = revision + 1 WHERE id = $1",
 				params: [impostor.id]
@@ -170,6 +157,27 @@ it.effect(
 				).toEqual([]);
 			})
 		)
+);
+
+it.effect('an undeclared team handle on sys_user is refused and leaves the member unchanged', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const context = yield* Layer.build(TestWorkspace.layer({ manifest: source }));
+			const t = Context.get(context, TestWorkspace),
+				h = Context.get(context, HostIdentity);
+			const member = t.member([]),
+				admin = t.as(t.admin).authority;
+			expect(yield* assignTeam(h, t.manifest, admin, member.id, 'sales-id')).toBeNull();
+			for (const handle of ['Sales', 'nope', 'toString'])
+				expect(
+					yield* Effect.flip(assignTeam(h, t.manifest, admin, member.id, handle))
+				).toMatchObject({ code: 'notFound' });
+			const [row] = yield* t.db.read([
+				{ text: 'SELECT team FROM sys_user WHERE id = $1', params: [member.id] }
+			]);
+			expect(row?.rows).toEqual([{ team: 'sales-id' }]);
+		})
+	)
 );
 
 it.effect(
@@ -287,7 +295,8 @@ it.effect(
 				for (const rows of [
 					{ sys_team: [] },
 					{ sys_assignment: [] },
-					{ sys_user: [{ id: 'bad', team: 'Sales' }] }
+					{ sys_user: [{ id: 'bad', team: 'Sales' }] },
+					{ sys_user: [{ id: 'bad', team: 'toString' }] }
 				])
 					expect(() => decodeIdentity(source, rows)).toThrow();
 				const seeded = Context.get(
@@ -315,37 +324,35 @@ it.effect(
 		)
 );
 
-it.effect('a release cannot remove a referenced source team by deleting its members', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const context = yield* Layer.build(TestWorkspace.layer({ manifest: source }));
-			const h = Context.get(context, HostIdentity);
-			const isolated = Context.get(
-				yield* Layer.build(TestWorkspace.layer({ manifest: source })),
-				TestWorkspace
-			);
-			const member = isolated.member([]),
-				admin = isolated.as(isolated.admin).authority;
-			yield* assignTeam(
-				{ ...h, db: isolated.db },
-				isolated.manifest,
-				admin,
-				member.id,
-				'viewer-id'
-			);
-			expect(
-				yield* Effect.flip(
-					applyPlan(
-						isolated.db,
-						plan(yield* readApplied(isolated.db), { ...isolated.manifest, teams: {} }),
-						{ accept: true }
-					)
-				)
-			).toMatchObject({ sqlstate: '23503' });
-			expect(
-				(yield* new Authorities(isolated.manifest, 'source').member(isolated.db, member.id))
-					?.policies
-			).toEqual(['viewer']);
-		})
-	)
+it.effect(
+	'a release removing a source team plans no schema change and its members hold nothing',
+	() =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* Layer.build(TestWorkspace.layer({ manifest: source }));
+				const h = Context.get(context, HostIdentity);
+				const isolated = Context.get(
+					yield* Layer.build(TestWorkspace.layer({ manifest: source })),
+					TestWorkspace
+				);
+				const member = isolated.member([]),
+					admin = isolated.as(isolated.admin).authority;
+				yield* assignTeam(
+					{ ...h, db: isolated.db },
+					isolated.manifest,
+					admin,
+					member.id,
+					'viewer-id'
+				);
+				const removed = { ...isolated.manifest, teams: {} };
+				expect(plan(yield* readApplied(isolated.db), removed).steps).toEqual([]);
+				expect(
+					(yield* new Authorities(isolated.manifest, 'source').member(isolated.db, member.id))
+						?.policies
+				).toEqual(['viewer']);
+				expect(
+					(yield* new Authorities(removed, 'removed').member(isolated.db, member.id))?.actor
+				).toMatchObject({ teams: [], teamPath: [] });
+			})
+		)
 );

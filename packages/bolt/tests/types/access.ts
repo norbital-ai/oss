@@ -77,8 +77,7 @@ export const salesRep = policy({
 				fields: ['name', 'open']
 			}
 		},
-		sys_user: { read: true, fields: ['name', 'email'] },
-		sys_team: { read: { name: { like: 'Sales%' } } }
+		sys_user: { read: { team: { in: { actor: 'teamTree' } } }, fields: ['name', 'email'] }
 	},
 	automations: ['nightly', 'support_mail.notices'],
 	capabilities: { apps: ['sales'], tools: ['browser'], mcp: ['erp'], skills: ['quoting'] },
@@ -126,6 +125,9 @@ void salesRep.grants.orders.approval.update[0].steps;
 // @ts-expect-error A1 an unknown collection
 // prettier-ignore
 policy({ description: 'x', grants: { oders: { read: true } } });
+// @ts-expect-error A1 teams are source declarations, never a grantable collection
+// prettier-ignore
+policy({ description: 'x', grants: { sys_team: { read: true } } });
 // @ts-expect-error A2 a read field the collection does not expose (sites reads four fields)
 // prettier-ignore
 policy({ description: 'x', grants: { sites: { read: { fields: ['zone'] } } } });

@@ -25,7 +25,7 @@ const kind: Schema.Codec<Kind, Json> = Schema.suspend(() =>
 			...common,
 			kind: Schema.Literal('text'),
 			format: Schema.optionalKey(
-				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel'])
+				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
 			),
 			max: Schema.optionalKey(Schema.Number),
 			many: trueKey

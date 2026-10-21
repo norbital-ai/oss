@@ -5,7 +5,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { Value, Kind } from '../kinds/kind.js';
+	import { required, type Value, type Kind } from '../kinds/kind.js';
 
 	/** What a `Field editor` snippet receives: the field's value and kind, typed by context in the generated alias. */
 	export type FieldEditor = {
@@ -68,6 +68,11 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	const fieldLabel = useFieldLabel();
 	const labelClass = $derived(dense ? 'sr-only' : 'text-xs font-medium text-muted-foreground');
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
+	// derived from the field's kind as this write mode exposes it (a relation's `optional`, a host-filled create column):
+	// a box always holds a value
+	const mandatory = $derived(
+		field !== undefined && required(field.kind) && field.kind.kind !== 'bool'
+	);
 	const id = $props.id();
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
@@ -137,13 +142,19 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	{@const disabled = controls.disabled}
 	{@const rawError = errors?.get(name)}
 	{@const error = rawError === undefined ? undefined : bolt.t(rawError)}
-	<div class={cn('grid content-start gap-2', className)} data-field={name}>
+	<!-- the control the label names says it is required, whether the kind's editor or an `editor` snippet renders it -->
+	<div
+		class={cn('grid content-start gap-2', className)}
+		data-field={name}
+		{@attach (node) => {
+			const control = node.querySelector(`#${CSS.escape(`${id}-${name}`)}`);
+			if (mandatory) control?.setAttribute('aria-required', 'true');
+			else control?.removeAttribute('aria-required');
+		}}
+	>
 		<label id={`${id}-${name}-label`} for={`${id}-${name}`} class={labelClass}>
 			{label ?? fieldLabel(name, field.kind.label)}
-			{#if !field.kind.optional && field.kind.default === undefined && field.kind.kind !== 'bool'}<span
-					class="text-destructive"
-					aria-label={t('required')}>*</span
-				>{/if}
+			{#if mandatory}<span class="text-destructive" aria-label={t('required')}>*</span>{/if}
 			{#if helpPosition === 'label' && (help ?? field.kind.help)}
 				<span class="text-meta font-normal">{help ?? field.kind.help}</span>{/if}
 		</label>

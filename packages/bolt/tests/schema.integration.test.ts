@@ -68,11 +68,11 @@ describe('next schema on PGlite', () => {
 				yield* setup();
 				const [t] = yield* db.read([
 					{
-						text: `select count(*)::int as n from pg_tables where tablename in ('sys_user', 'sys_team', 'sys_run', 'sys_message', 'approval_request', 'bolt_idem')`,
+						text: `select count(*)::int as n from pg_tables where tablename in ('sys_user', 'sys_run', 'sys_message', 'approval_request', 'bolt_idem')`,
 						params: []
 					}
 				]);
-				expect(t?.rows[0]?.n).toBe(6);
+				expect(t?.rows[0]?.n).toBe(5);
 				yield* exec(`insert into sys_user (id, name) values ('u1', 'Ada')`);
 				const again = yield* migrate(slice());
 				expect(again.steps).toEqual([]);

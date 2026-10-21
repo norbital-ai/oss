@@ -162,7 +162,7 @@ layer(AdministrationFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'uses source hierarchy for scope without inheriting parent grants or mutable catalogue history',
+			'resolves the declared team and its source hierarchy without a team table or inherited parent grants',
 			() =>
 				Effect.gen(function* () {
 					const { h, founder, as, one } = yield* AdministrationFixture;
@@ -173,11 +173,9 @@ layer(AdministrationFixtureLive)((it) => {
 					expect(member.actor.teamPath).toEqual(['Region', 'Ops']);
 					expect(member.policies).toEqual(['sales']);
 					expect(member.teamTree).toEqual(expect.arrayContaining(['Region', 'Depot']));
-					expect(
-						yield* one(
-							"SELECT count(*)::int AS n FROM bolt_history WHERE collection IN ('sys_team', 'sys_assignment')"
-						)
-					).toEqual([{ n: 0 }]);
+					expect(yield* one(`SELECT to_regclass('sys_team') IS NULL AS absent`)).toEqual([
+						{ absent: true }
+					]);
 					yield* assignTeam(h, m, boss, founder, null);
 				})
 		);

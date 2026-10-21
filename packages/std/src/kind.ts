@@ -29,7 +29,7 @@ export type Kind = Common &
 	(
 		| {
 				readonly kind: 'text';
-				readonly format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel';
+				readonly format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team';
 				readonly max?: number;
 				readonly many?: true;
 		  }

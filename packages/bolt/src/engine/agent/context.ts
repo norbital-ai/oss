@@ -14,6 +14,12 @@ export const BOUNDS = { resultBytes: 16 * 1024, cellBytes: 1_200 } as const;
 
 export const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v) ?? '').length;
 
+/** A clipped result's whole text, as `read_output` pages it and its scratch file holds it: a string as is, else indented JSON. */
+export const outputText = (v: Json) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
+/** Where a clipped result's whole text is, in the worktree `sandbox_run { workspace: true }` runs in. */
+export const scratchPath = (conversation: string, call: string, tool: string) =>
+	`.scratch/tool-output/${conversation}/${call}-${tool.replace(/[^\w.-]+/g, '_')}.txt`;
+
 /**
  * A text file read in pages (rule 62): numbered lines from `from` (1-based) through `to`, as many as fit `bytes`, with the
  * file's total line count; `next` is the line to read on from. A large file is read page by page, never clipped.
@@ -116,7 +122,7 @@ How to work:
 6. ${has('read_attachment') ? 'An attached file is read with read_attachment before you describe or file it; a' : 'A'} file field takes the file reference a message lists ({ id, name, mime }).${has('read_file') ? ' A file already on a record (a scan, a photo) is read with read_file by its id before you state what it shows.' : ''}
 7. Reuse a read from this turn; re-read before a write only if a later action or elapsed time could have changed the relevant row.
 8. Count, total or compare periods with one aggregate read (count or sum, by a field or by { month: dateField }), never by reading rows and tallying them.
-9. Use an exact filter for a known key, a declared query for its specialized search, and small selections and limits. Batch independent reads in one read call. For an optional reference absent after one exact and one focused fallback lookup, use the supplied text without a link if the write permits it; do not scan the whole collection. A committed write already returns its stored rows; read again only for details absent from that result or when the person asks for verification.${has('web_search') ? '\n10. Prefer web_search to find information on the web; open and read pages with the browser tools.' : ''}`;
+9. Use an exact filter for a known key, a declared query for its specialized search, and small selections and limits. Batch independent reads in one read call. For an optional reference absent after one exact and one focused fallback lookup, use the supplied text without a link if the write permits it; do not scan the whole collection. A committed write already returns its stored rows; read again only for details absent from that result or when the person asks for verification.${has('web_search') ? '\n10. Prefer web_search to find information on the web; open and read pages with the browser tools.' : ''}${has('workspace_validate') ? `\n11. A workspace_validate result with a preview URL is the check that the preview built: do not open or fetch the preview yourself (it needs the person signed in)${has('workspace_view') ? '; to see what it renders, use workspace_view (a screenshot you can look at)' : ''}${has('workspace_logs') ? ', and workspace_logs for its runtime errors' : ''}. Choose what the Preview tab beside the chat shows with preview_show. Never paste a preview URL: tell the person to open it in the Preview tab. Quote a checkpoint by its label exactly as a tool gave it; never convert its time. A confirmed publish or rollback whose result says the workspace restarted was applied: say so and finish your checklist.` : ''}`;
 
 /** Envoy turns: a chat is read by people, not engineers. */
 /**

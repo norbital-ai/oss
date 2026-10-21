@@ -90,7 +90,7 @@ type DynList<K, S> = S extends true
 	? never
 	: | { param: string }
 		| (K extends { kind: 'id' } ? { actor: { scopes: PolicyName } } : never)
-		| (K extends { kind: 'id'; of: 'sys_team' } ? { actor: 'teams' | 'teamTree' } : never);
+		| (K extends { kind: 'text'; format: 'team' } ? { actor: 'teams' | 'teamTree' } : never);
 interface ValOf<M, K, S> {
 	readonly value:
 		Literal<K> | Dyn<K, S> | ([M] extends [never] ? never : { field: SameFamily<M, K> });

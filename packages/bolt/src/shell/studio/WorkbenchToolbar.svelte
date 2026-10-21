@@ -69,7 +69,15 @@
 		...targets.map((m) => ({ value: m.id, label: `!${m.id} ${m.title} · ${t(STAGE[m.state])}` }))
 	]);
 	const phaseTitle = (p: StudioPhase) =>
-		t(p === 'diagnose' ? 'Diagnose' : p === 'preview' ? 'Preview' : 'Merge');
+		t(
+			p === 'diagnose'
+				? 'Diagnose'
+				: p === 'copy'
+					? 'Copying data'
+					: p === 'preview'
+						? 'Preview'
+						: 'Merge'
+		);
 	/** The workbench status badge: working, a failure, conflicts to resolve; nothing when idle. */
 	const status = $derived.by(
 		(): {
@@ -187,7 +195,13 @@
 	<Inline gap="xs" shrink={false}>
 		{@render action('lucide:file-plus', t('New file'), onnew, busy)}
 		{@render action('lucide:save', t('Save'), onsave, busy || drafts === 0)}
-		{@render action('lucide:scan-eye', t('Preview'), onpreview, busy, previewing)}
+		{#if view.nested !== true}{@render action(
+				'lucide:scan-eye',
+				t('Preview'),
+				onpreview,
+				busy,
+				previewing
+			)}{/if}
 		{#if target === 'workbench'}
 			{#if view.mergeRequests !== undefined}{@render action(
 					'lucide:git-pull-request',
@@ -202,7 +216,7 @@
 			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onrebase}>
 				<Icon name="lucide:arrow-up-from-line" class="size-3.5" />{t('Update from Live')}
 			</Button>
-		{:else if admin && target === 'workbench'}
+		{:else if admin && target === 'workbench' && view.nested !== true}
 			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onpublish}>
 				<Icon name="lucide:upload" class="size-3.5" />{t('Publish')}
 			</Button>

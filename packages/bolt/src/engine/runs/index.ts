@@ -15,6 +15,7 @@ import {
 	PubSub,
 	Random,
 	Redacted,
+	Result,
 	Schema,
 	Semaphore
 } from 'effect';
@@ -767,19 +768,42 @@ export const RunsLive = Layer.effect(
 										const callId = yield* crypto.randomUUIDv4.pipe(
 											Effect.mapError(Port.failure(`tool ${tool.name}`))
 										);
-										return yield* Port.attempt(`tool ${tool.name}`, (signal) =>
-											tool.call(
-												input,
-												{
-													actor: authority.actor,
-													conversation: run.id,
-													turn: run.id,
-													callId,
-													attach: () => {}
-												},
-												signal
+										const result = yield* Effect.result(
+											Port.attempt(`tool ${tool.name}`, (signal) =>
+												tool.call(
+													input,
+													{
+														actor: authority.actor,
+														conversation: run.id,
+														turn: run.id,
+														callId,
+														attach: () => {}
+													},
+													signal
+												)
 											)
 										);
+										// each host tool step is one `infer.tool` event on the run (what it searched or opened), as
+										// `decision.made` traces a sys_1 call: the run's own proof of the research it did
+										yield* db
+											.write({
+												text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
+												params: [
+													new Date(yield* Clock.currentTimeMillis).toISOString(),
+													Result.isSuccess(result) ? 'info' : 'warn',
+													`${run.id}:${run.attempts}`,
+													run.id,
+													{
+														automation: run.automation,
+														tool: tool.name,
+														input: JSON.stringify(input).slice(0, 500),
+														...(Result.isSuccess(result) ? {} : { error: result.failure.message })
+													}
+												]
+											})
+											.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+										if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
+										return result.success;
 									})
 							}));
 						return yield* inferFacility(ai, { load: facilities.fileLoader })(call, [

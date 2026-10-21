@@ -10,7 +10,10 @@ import {
 	modelDividers,
 	ORB,
 	orbState,
+	captionOf,
+	logsOf,
 	outcomeOf,
+	previewsOf,
 	resultLine,
 	revisable,
 	runState,
@@ -235,18 +238,59 @@ describe('Studio outcomes outside the folded steps', () => {
 		);
 		expect(doingOf([step(1, 'read', true)])).toBe('Working…');
 	});
-	it("offers a built preview's link, even from a clipped result", () => {
+	it('offers a built preview as Open preview for the Preview tab, from the whole result however it was clipped', () => {
 		expect(
-			outcomeOf(tool('workspace_validate', '{"preview":"https://h/acme--u-a","commit":"ab…'))
+			outcomeOf(
+				tool('workspace_validate', '{"commit":"ab","log":["…', { preview: 'https://h/acme--u-a' })
+			)
 		).toEqual({
 			text: 'The preview is ready.',
-			href: 'https://h/acme--u-a',
+			preview: 'https://h/acme--u-a',
 			action: 'Open preview'
 		});
 		expect(outcomeOf(tool('workspace_validate', '{"error":"build failed"}'))).toBeNull();
 		expect(
-			outcomeOf(tool('workspace_validate', '{"preview":"https://h/x"}', { running: true }))
+			outcomeOf(tool('workspace_validate', '{}', { preview: 'https://h/x', running: true }))
 		).toBeNull();
+	});
+	it('the Preview tab shows built previews and the ones the agent chose among them, never another page', () => {
+		const step = (seq: number, name: string, o: Partial<NonNullable<AgentRow['tool']>>) =>
+			row(seq, { role: 'tool', tool: tool(name, '{}', o) });
+		const about = { environment: 'Preview', commit: 'abc1234def', message: 'Rename title' };
+		expect(
+			previewsOf([
+				step(1, 'preview_show', { preview: 'https://a.test/early' }),
+				step(2, 'workspace_validate', { preview: 'https://a.test/', about }),
+				step(3, 'workspace_validate', { preview: 'https://b.test/', failed: true }),
+				step(4, 'preview_show', { preview: 'https://evil.test/' }),
+				step(5, 'preview_show', { preview: 'https://a.test/page' }),
+				step(6, 'workspace_view', { about: { ...about, url: 'https://c.test/' } })
+			]).map((p) => p.url)
+		).toEqual(['https://a.test/', 'https://a.test/page', 'https://c.test/']);
+		expect(
+			captionOf(
+				{
+					...about,
+					branch: 'draft u/dion',
+					viewport: '390×844',
+					capturedAt: '2026-10-21T15:05:00Z'
+				},
+				'Asia/Singapore'
+			)
+		).toBe("Preview · draft u/dion · commit abc1234 'Rename title' · 390×844 · 23:05");
+	});
+	it('lists a runtime log result by level, and nothing for any other tool', () => {
+		const result = JSON.stringify({
+			records: [
+				{ at: '2026-10-21T15:05:01Z', level: 'error', message: 'boom' },
+				{ level: 'info', message: 'ok' }
+			]
+		});
+		expect(logsOf(tool('workspace_logs', result))).toEqual([
+			{ at: '2026-10-21T15:05:01Z', level: 'error', message: 'boom' },
+			{ level: 'info', message: 'ok' }
+		]);
+		expect(logsOf(tool('read', result))).toBeNull();
 	});
 	it('reports a publish or rollback that switched over, never a declined or refused one', () => {
 		const applied = {

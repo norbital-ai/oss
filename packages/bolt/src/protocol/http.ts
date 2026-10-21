@@ -929,6 +929,8 @@ export const BoltRoutes = {
 			const p = requestUrl(request).searchParams,
 				id = p.get('conversation') ?? '',
 				conversation = yield* conversationFor(authority, id);
+			// a publish or rollback that restarted the workspace under this conversation gets its closing reply on open
+			if (!p.has('before')) yield* (yield* Agents).resumeSettled(id);
 			const before = Number(p.get('before')),
 				limit = Math.min(200, Math.max(1, Number(p.get('limit')) || 50));
 			const raw = yield* (yield* Agents).transcript(

@@ -215,7 +215,7 @@ const database: ReturnType<typeof sqlServerDatabase> = {
 const root = join(tmpdir(), 'norbital-scratch', `bolt-server-integrations-${randomUUID()}`),
 	artifact = join(root, 'artifact');
 const guest = `export default {
-	collection: { probe: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.read('sys_team', { limit: 1 }); } } } } },
+	collection: { probe: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.read('sys_user', { limit: 1 }); } } } } },
 	integration_definition: { erp: { bodies: { test: function* (ctx) { yield* ctx.request({ method: 'GET', path: '/health' }); } } } },
 };`,
 	compiledGuest = program(guest),
@@ -392,7 +392,7 @@ layer(
 			expect(authorize.origin).toBe('https://accounts.google.com');
 			expect(Object.fromEntries(authorize.searchParams)).toMatchObject({
 				client_id: 'host-google-client',
-				scope: 'https://www.googleapis.com/auth/calendar.readonly',
+				scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
 				redirect_uri: 'http://localhost:3100/hooks/oauth/callback'
 			});
 			expect(JSON.stringify(paired)).not.toContain('host-google-secret');

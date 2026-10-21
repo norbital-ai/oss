@@ -18,7 +18,6 @@ import m_sys_message from './data/model/+sys_message.model.ts';
 import m_sys_notification from './data/model/+sys_notification.model.ts';
 import m_sys_run from './data/model/+sys_run.model.ts';
 import m_sys_session from './data/model/+sys_session.model.ts';
-import m_sys_team from './data/model/+sys_team.model.ts';
 import m_sys_user from './data/model/+sys_user.model.ts';
 import relationships from './data/+relationship.ts';
 import c_approval_request from './data/collection/approval_request/+collection.ts';
@@ -32,7 +31,6 @@ import c_sys_invitation from './data/collection/sys_invitation/+collection.ts';
 import c_sys_message from './data/collection/sys_message/+collection.ts';
 import c_sys_notification from './data/collection/sys_notification/+collection.ts';
 import c_sys_run from './data/collection/sys_run/+collection.ts';
-import c_sys_team from './data/collection/sys_team/+collection.ts';
 import c_sys_user from './data/collection/sys_user/+collection.ts';
 import i_discord from './integration/discord/+integration.ts';
 import i_email from './integration/email/+integration.ts';
@@ -58,7 +56,6 @@ export type SystemNames = {
 		sys_notification: typeof m_sys_notification;
 		sys_run: typeof m_sys_run;
 		sys_session: typeof m_sys_session;
-		sys_team: typeof m_sys_team;
 		sys_user: typeof m_sys_user;
 	};
 	relationships: typeof relationships;
@@ -74,7 +71,6 @@ export type SystemNames = {
 		sys_message: typeof c_sys_message;
 		sys_notification: typeof c_sys_notification;
 		sys_run: typeof c_sys_run;
-		sys_team: typeof c_sys_team;
 		sys_user: typeof c_sys_user;
 	};
 	integrations: {
@@ -108,7 +104,6 @@ export const SYSTEM: {
 		sys_notification: m_sys_notification,
 		sys_run: m_sys_run,
 		sys_session: m_sys_session,
-		sys_team: m_sys_team,
 		sys_user: m_sys_user
 	},
 	relationships: relationships,
@@ -124,7 +119,6 @@ export const SYSTEM: {
 		sys_message: c_sys_message.spec,
 		sys_notification: c_sys_notification.spec,
 		sys_run: c_sys_run.spec,
-		sys_team: c_sys_team.spec,
 		sys_user: c_sys_user.spec
 	},
 	integrations: {

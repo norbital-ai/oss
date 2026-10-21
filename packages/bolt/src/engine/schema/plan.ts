@@ -55,7 +55,6 @@ export function schemaSlice(m: EngineManifest): SchemaSlice {
 		relationships: { ...SYSTEM.relationships, ...m.relationships },
 		currency: m.workspace.currency ?? null,
 		tz: m.workspace.tz,
-		teams: m.teams,
 		connections
 	};
 }

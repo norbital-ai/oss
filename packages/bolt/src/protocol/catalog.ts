@@ -19,6 +19,8 @@ export type FieldInfo = {
 	many?: true;
 	email?: true;
 	phone?: true;
+	/** A source team handle (`format: 'team'`): `actor.teams` / `actor.teamTree` compare it. */
+	team?: true;
 	periodOf?: 'date' | 'instant';
 	metric?: 'l2' | 'cosine' | 'ip';
 	dim?: number;
@@ -167,6 +169,7 @@ function field(name: string, k: KindSpec, extra: Partial<FieldInfo> = {}): Field
 		...(k.many ? { many: true } : {}),
 		...(k.format === 'email' ? { email: true } : {}),
 		...(k.format === 'phone' ? { phone: true } : {}),
+		...(k.format === 'team' ? { team: true } : {}),
 		...(kind === 'period' ? { periodOf: k.of === 'date' ? 'date' : 'instant' } : {}),
 		...(kind === 'vector'
 			? { metric: k.metric ?? 'l2', ...(k.dim === undefined ? {} : { dim: k.dim }) }

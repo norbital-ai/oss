@@ -161,10 +161,16 @@ const checkCommand = Command.make('check', { dir }, ({ dir }) =>
 );
 const buildCommand = Command.make(
 	'build',
-	{ dir, bank, json: Flag.boolean('json').pipe(Flag.withDefault(false)) },
-	({ dir, bank, json }) =>
+	{
+		dir,
+		bank,
+		json: Flag.boolean('json').pipe(Flag.withDefault(false)),
+		preview: Flag.boolean('preview').pipe(Flag.withDefault(false))
+	},
+	({ dir, bank, json, preview }) =>
 		buildWorkspace(resolve(dir), {
 			...(Option.isNone(bank) ? {} : { bank: bank.value }),
+			preview,
 			log
 		}).pipe(
 			Effect.catchTag('AuthorErrors', (error) =>

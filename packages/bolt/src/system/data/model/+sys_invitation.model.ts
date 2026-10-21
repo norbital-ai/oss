@@ -10,6 +10,8 @@ export default model({
 		/** A mobile number in international form. */
 		phone: { kind: 'text', optional: true },
 		external: { kind: 'bool', default: false },
+		/** The team handle the member receives, declared in source (`+team.ts`); writes refuse an undeclared handle. */
+		team: { kind: 'text', format: 'team', optional: true },
 		party: { kind: 'json', optional: true },
 		expires_at: { kind: 'instant' },
 		accepted_at: { kind: 'instant', optional: true },

@@ -79,6 +79,7 @@ import {
 	challengeOf,
 	holdsPublic,
 	kioskNav,
+	startableAutomations,
 	cookieNames,
 	cookieSite,
 	environmentLabel,
@@ -256,6 +257,10 @@ const TEAM = 'team:';
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
 	HttpServerResponse.jsonUnsafe(body, { status, headers });
+/** A preview environment drops the meta tools (Norbius, Studio, who-has-access management); they refuse there. */
+export const NOT_IN_PREVIEW = 'Not available in a preview.';
+/** The Settings operations a preview keeps: everything else manages people, keys or Norbius. */
+const PREVIEW_SETTINGS = new Set<SettingsOp['op']>(['setSecret', 'clearSecret']);
 const refused = (code: string, message: string, status: number, retryAfter?: number) =>
 	json(
 		{ error: { code, message } },
@@ -313,7 +318,14 @@ const bootFor = (
 	preview: null,
 	nav: nav(manifest, authority),
 	kiosks: kioskNav(manifest, authority),
-	surfaces: surfaces(manifest, authority.actor, authority.admin, studio),
+	startable: startableAutomations(manifest, authority),
+	surfaces: surfaces(
+		manifest,
+		authority.actor,
+		authority.admin,
+		studio,
+		workspace.live !== undefined
+	),
 	inbox: 0,
 	push: null,
 	visitor: null,
@@ -669,7 +681,7 @@ const makeShell = Effect.gen(function* () {
 			text: 'SELECT name FROM sys_user WHERE id = $1',
 			params: [auth.actor.id]
 		});
-		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined);
+		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined, c.live !== undefined);
 		const box = s.inbox ? yield* inbox(h.db, auth) : null;
 		const noticePort = c.notice;
 		const notice = noticePort === undefined ? null : yield* hostCall(() => noticePort(auth));
@@ -896,7 +908,7 @@ const makeShell = Effect.gen(function* () {
 		if (auth === null || auth.actor.kind !== 'member')
 			return refused('unauthenticated', 'Sign in first.', 401);
 		const url = requestUrl(request);
-		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined);
+		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined, c.live !== undefined);
 		switch (`${request.method} ${path.slice(SHELL.length)}`) {
 			case 'GET /inbox':
 				return s.inbox
@@ -968,9 +980,10 @@ const makeShell = Effect.gen(function* () {
 					return yield* Effect.fail(
 						BoltError.make('forbidden', 'admission', 'Only administrators manage settings.')
 					);
-				return json({
-					value: yield* applySettings(h, m, auth, yield* requestBody(request, SettingsOp), secrets)
-				});
+				const op = yield* requestBody(request, SettingsOp);
+				if (c.live !== undefined && !PREVIEW_SETTINGS.has(op.op))
+					return refused('forbidden', NOT_IN_PREVIEW, 403);
+				return json({ value: yield* applySettings(h, m, auth, op, secrets) });
 			case 'POST /organization': {
 				// L-COL-199: the workspace's name and logo, an administrator's (never a previewed member's)
 				if (c.organization === undefined)
@@ -1059,7 +1072,9 @@ const makeShell = Effect.gen(function* () {
 				);
 			}
 			case 'POST /preview': {
-				// rule 39: only the real administrator may start or end a preview, of a member or a team
+				// rule 39: only the real administrator may start or end a preview, of a member or a team; a preview
+				// environment has no preview-as (impersonation is access management, the live workspace's)
+				if (c.live !== undefined) return refused('forbidden', NOT_IN_PREVIEW, 403);
 				const b = yield* requestBody(request, Body),
 					user = b['user'],
 					team = b['team'];
@@ -1172,6 +1187,9 @@ const makeShell = Effect.gen(function* () {
 				: yield* authority(request);
 			if (Option.isSome(selected) && selected.value.actor.kind === 'visitor')
 				return Option.fromNullishOr(yield* visitorGate(request, selected.value, path));
+			// Norbius belongs to the live workspace: a preview reads no transcript or models (its callables refuse in `BoltHostLive`)
+			if (c.live !== undefined && (path === PATHS.agent || path.startsWith(`${PATHS.agent}/`)))
+				return Option.some(refused('forbidden', NOT_IN_PREVIEW, 403));
 			if (path === SHELL || path.startsWith(`${SHELL}/`))
 				return Option.fromNullishOr(yield* shell(request, path, yield* x));
 			return Option.none();

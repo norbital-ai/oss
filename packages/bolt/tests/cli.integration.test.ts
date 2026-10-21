@@ -297,6 +297,36 @@ describe('bolt build', () => {
 	);
 
 	it.live(
+		'--preview skips the type index and reuses an unchanged base pack',
+		() =>
+			Effect.gen(function* () {
+				const pack = join(root, '.norbital/seed/base/pack.json'),
+					customers = join(root, 'seed/master/customers.json'),
+					original = readFileSync(customers, 'utf8');
+				yield* fixtureBuild(root, {});
+				const written = statSync(pack).mtimeMs;
+				const preview = yield* fixtureBuild(root, { preview: true });
+				expect(statSync(pack).mtimeMs).toBe(written);
+				expect(preview.packs['base']!.rows).toEqual({ customers: 1 });
+				const ws = yield* workspaceFiles(join(root, '.norbital/artifact'));
+				if (ws === undefined) throw new Error('Built workspace source is missing.');
+				expect(yield* Effect.promise(() => ws.types())).toBeNull();
+				writeFileSync(
+					customers,
+					JSON.stringify([
+						{ id: '0199a000-0000-4000-8000-000000000001', name: 'Acme' },
+						{ id: '0199a000-0000-4000-8000-000000000002', name: 'Beta' }
+					])
+				);
+				const changed = yield* fixtureBuild(root, { preview: true }).pipe(
+					Effect.ensuring(Effect.sync(() => writeFileSync(customers, original)))
+				);
+				expect(changed.packs['base']!.rows).toEqual({ customers: 2 });
+			}).pipe(Effect.provide(NodeServices.layer)),
+		90_000
+	);
+
+	it.live(
 		'reads the bank through seed/seed.ts, and a start entry that is no automation is a build error',
 		() =>
 			Effect.gen(function* () {
@@ -430,19 +460,15 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 	);
 
 	it.effect(
-		'projects source teams for bank affiliations and queues the first-admission start run (rule 70)',
+		'keeps teams in source (no sys_team table) and queues the first-admission start run (rule 70)',
 		() =>
 			Effect.gen(function* () {
 				const db = yield* TenantDb;
 				const [teams, runs] = yield* db.read([
-					{ text: 'SELECT id, parent FROM sys_team ORDER BY id', params: [] },
+					{ text: `SELECT to_regclass('sys_team') IS NULL AS absent`, params: [] },
 					{ text: `SELECT automation, cause FROM sys_run WHERE cause = 'start'`, params: [] }
 				]);
-				expect(teams?.rows).toEqual([
-					{ id: 'Sales', parent: null },
-					{ id: 't1', parent: null },
-					{ id: 't2', parent: 't1' }
-				]);
+				expect(teams?.rows).toEqual([{ absent: true }]);
 				expect(runs?.rows).toEqual([{ automation: 'nightly', cause: 'start' }]);
 			})
 	);

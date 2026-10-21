@@ -41,6 +41,14 @@
 					.filter((at) => Date.parse(at) > Date.parse(release.at))
 					.sort((x, y) => Date.parse(x) - Date.parse(y))[0]
 	);
+	// why Roll back is off for a version that is not live: none recorded, or its database was replaced by a reset
+	const unreachable = $derived(
+		release === undefined || release.current || release.checkpoint !== null
+			? null
+			: release.replaced
+				? 'Before the last reset — can’t roll back to this'
+				: 'This version has no checkpoint to roll back to'
+	);
 	const PANE = 'min-h-0 flex-1 gap-0 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6';
 </script>
 
@@ -126,16 +134,19 @@
 							>{new Date(release.checkpoint).toLocaleString()}</time
 						>{/if}
 				</p>
+				{#if admin && unreachable !== null}
+					<p class="text-micro text-muted-foreground">{t(unreachable)}</p>
+				{/if}
 			</Stack>
-			{#if admin}
+			{#if admin && view.nested !== true}
 				<Button
 					size="sm"
 					variant="outline"
-					disabled={busy || release.current || release.checkpoint === null}
+					disabled={busy || release.current || unreachable !== null}
 					disabledMessage={t(
 						release.current
 							? 'This commit is already live.'
-							: 'This deployment cannot be rolled back to.'
+							: (unreachable ?? 'This deployment cannot be rolled back to.')
 					)}
 					onclick={() => onrestore(release.commit)}
 				>

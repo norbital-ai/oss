@@ -337,22 +337,20 @@ describe('the shell renders a page (§5.10)', () => {
 			)
 	);
 
-	it.live('a preview environment carries a persistent banner linking back to live', () =>
+	it.live('a preview opened outside its frame says so; a live workspace does not', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const context = yield* workspace({ manifest, host: { live: 'https://h.test/acme' } });
 				const { target } = yield* open(context, '/app/desk/hero', { 'desk/hero': page(Hero) });
-				yield* until(() => target.textContent?.includes('changes here are not live yet') === true);
-				const live = present(
-					[...target.querySelectorAll('a')].find((a) =>
-						a.textContent?.includes('Open live workspace')
-					)
+				yield* until(
+					() =>
+						target.textContent?.includes('This is a preview — open it from Studio or Norbius.') ===
+						true
 				);
-				expect(live.getAttribute('href')).toBe('https://h.test/acme');
 				const plain = yield* workspace({ manifest });
 				const { target: other } = yield* open(plain, '/app/desk/hero', { 'desk/hero': page(Hero) });
 				yield* until(() => other.querySelector('[data-body]') !== null);
-				expect(other.textContent).not.toContain('changes here are not live yet');
+				expect(other.textContent).not.toContain('This is a preview');
 			})
 		)
 	);

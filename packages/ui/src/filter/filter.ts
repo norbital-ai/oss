@@ -310,9 +310,11 @@ export function operandsFor(
 ): ('lit' | 'today' | 'now' | 'startOf' | 'me' | 'party' | 'team')[] {
 	if (r.leaf === 'rel') {
 		const t = r.targets[0];
-		if (op === 'in' || op === 'nin') return ['lit', ...(t === 'sys_team' ? ['team' as const] : [])];
+		if (op === 'in' || op === 'nin') return ['lit'];
 		return ['lit', ...(t === 'sys_user' ? ['me' as const] : []), 'party'];
 	}
+	if ((op === 'in' || op === 'nin') && r.kind.kind === 'text' && r.kind.format === 'team')
+		return ['lit', 'team'];
 	if (
 		op !== 'eq' &&
 		op !== 'ne' &&

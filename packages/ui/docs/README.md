@@ -76,11 +76,13 @@ The controller retains its field permissions, state locks, drafts and native chi
 
 ## Toolbar actions
 
-The view toolbar's ⚡ menu wires the collection's callables, integration sync, `+pipeline.ts` feeds (Import…
-for JSON or xlsx, Download template, Export), Export CSV, Edit selected and Delete selected by itself. It watches an import run to its
+The view toolbar's ⚡ menu derives its standard rows from the collection's exposure to the viewer, with no page
+configuration: callables, integration sync, `+pipeline.ts` feeds (Import… for JSON or xlsx, Download template, Export),
+Export CSV, "Update selected records" (declared and permitted update fields) and "Delete selected records" (declared and
+permitted delete). An undeclared or unpermitted row is absent. It watches an import run to its
 end: a spinner, then the counts as a toast, or its findings in the menu with "Accept and import" when they are only
-warnings (Bolt's `docs/pipelines.md`). A page adds rows with `toolbar.actions`, each
-pure configuration:
+warnings (Bolt's `docs/pipelines.md`). A page adds ad-hoc rows (running an automation by hand) with
+`toolbar.actions`, listed under Actions, each pure configuration:
 
 ```ts
 toolbar={{
@@ -97,10 +99,14 @@ pending (spinner, disabled) then Done, or its typed failure is shown in the row 
 An act's committed or pending-approval answer is toasted; a start Effect's `id` and `automation`
 let the toolbar show its live run. Return the Effect directly; the toolbar owns its execution
 and teardown.
-`requiresSelection` lists the row under Bulk and turns selection on; `disabled(selected)` returns why
-it cannot run now.
+`requiresSelection` turns selection on and disables the row until records are selected; without it the row runs
+with whatever is selected (possibly none). `disabled(selected)` returns why it cannot run now.
 
-Edit selected offers the collection's permitted update fields, excluding masked, hidden, derived and
+Update and delete are disabled with "Select records first" until records are selected. Delete confirms in-app,
+naming the count and that it cannot be undone, then deletes each record on its own and reports the result:
+"3 deleted" or "3 deleted, 1 kept: <refusal>".
+
+Update selected records offers the collection's permitted update fields, excluding masked, hidden, derived and
 readonly fields. Check each field to include it, enter its value, then apply once to the selected IDs.
 Unchecked fields stay untouched; explicit false, zero and null values are retained. The native update
 enforces every record's grants and state restrictions and reports refusals or pending approval in the menu.

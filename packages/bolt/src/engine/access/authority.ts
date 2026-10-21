@@ -36,7 +36,7 @@ type Obj = { readonly [k: string]: unknown };
 const OPS = ['create', 'update', 'delete'] as const;
 type Op = (typeof OPS)[number];
 /** Identity collections: read by grant or the kernel directory, written only by their admin verbs (rule 38c). */
-const IDENTITY = ['sys_user', 'sys_team', 'sys_invitation', 'sys_api_key'] as const;
+const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
 const KERNEL = '$directory';
 
 const emptyCollection = (): Mutable => ({
@@ -132,7 +132,7 @@ function masks(m: EngineManifest, c: string, read: readonly Arm[]): { [field: st
 	return out;
 }
 
-/** The kernel directory grants (rule 35a): staff read staff, externals read themselves and their party. */
+/** The kernel directory grant (rule 35a): staff read staff, externals read themselves and their party. Teams are source. */
 function directory(actor: EngineActor): { [c: string]: Arm } {
 	if (actor.kind !== 'member') return {};
 	const fields = ['id', 'name'];
@@ -140,10 +140,7 @@ function directory(actor: EngineActor): { [c: string]: Arm } {
 	const user: Pred = actor.external
 		? or([self, { t: 'cmp', field: 'party_id', op: 'eq', arg: { _tag: 'Actor', of: 'party' } }])
 		: { t: 'cmp', field: 'kind', op: 'eq', arg: { _tag: 'Lit', value: 'staff' } };
-	return {
-		sys_user: { policy: KERNEL, where: user, fields },
-		...(actor.external ? {} : { sys_team: { policy: KERNEL, where: TRUE, fields } })
-	};
+	return { sys_user: { policy: KERNEL, where: user, fields } };
 }
 
 // ── limits (rule 38, rule 72 defaults) ──

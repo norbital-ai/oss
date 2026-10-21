@@ -170,12 +170,13 @@ function operand(
 		return taggedOperand(o);
 	}
 	if (list) {
-		if (!('actor' in o) || f.kind !== 'id') bad();
+		if (!('actor' in o)) bad();
 		const a = (o as { actor: unknown }).actor;
 		if (
 			a === 'teams' || a === 'teamTree'
-				? f.of !== 'sys_team'
-				: !(Predicate.isObject(a) && typeof a.scopes === 'string' && Object.keys(a).length === 1)
+				? f.team !== true
+				: f.kind !== 'id' ||
+					!(Predicate.isObject(a) && typeof a.scopes === 'string' && Object.keys(a).length === 1)
 		)
 			bad();
 		return taggedOperand(o);

@@ -1064,6 +1064,31 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
+		'sys_2.infer steps: read-only draft turns are exploration under the budget, not a stall',
+		() =>
+			Effect.gen(function* () {
+				// a researcher told to read the indexed draft first read it four turns running, then browsed
+				const { seen, browse } = browsing();
+				const read = () => tool('read', { path: '' }, 'r');
+				const { p } = port([
+					read(),
+					read(),
+					read(),
+					read(),
+					tool('browse', { url: 'https://a' }, 'b1'),
+					patchAndSubmit
+				]);
+				expect(
+					yield* inferFacility(p)(
+						at({ prompt: 'q', output, initial: {}, tools: ['browse'], steps: 8 }),
+						[browse]
+					)
+				).toEqual({ ok: true, value: { n: 3 } });
+				expect(seen).toHaveLength(1);
+			})
+	);
+
+	it.effect(
 		'sys_2.infer steps: a final turn without a valid answer is a step-budget failure, unless the draft already holds one',
 		() =>
 			Effect.gen(function* () {

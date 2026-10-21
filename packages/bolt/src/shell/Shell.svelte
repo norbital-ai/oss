@@ -43,6 +43,7 @@
 		based,
 		isOpenRoute,
 		logical,
+		previewRoute,
 		recordsOf,
 		route,
 		withRecords,
@@ -195,7 +196,9 @@
 	// ui's views on a page (`Table`, `Board`, …) read `$bolt` from context; pages render only after the boot sets it
 	provideBolt(moduleBolt);
 
-	const current = $derived(route(config.manifest, url));
+	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Connections and preview-as
+	const previewEnv = $derived(boot?.workspace.live !== undefined);
+	const current = $derived(previewRoute(route(config.manifest, url), previewEnv));
 	// the record-sheet stack (rule 10): every `?record=`, the last on top
 	const records = $derived(recordsOf(url));
 	// a `portal: true` page or any kiosk page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
@@ -564,6 +567,7 @@
 	const connectable = $derived(
 		boot?.actor?.kind === 'member' &&
 			!boot.actor.external &&
+			!previewEnv &&
 			boot.catalog['sys_integration']?.create !== undefined
 	);
 	// the 48rem breakpoint base.css restates: below it the sidebar is a drawer
@@ -661,6 +665,7 @@
 			{t}
 			tab={current.tab}
 			workspace={boot.workspace}
+			startable={boot.startable ?? []}
 			run={url.searchParams.get('run')}
 			onRun={openRun}
 			integrationSetups={config.integrationSetups}
@@ -780,7 +785,7 @@
 				{sync}
 				previewing={boot?.preview !== null}
 				onEndPreview={() => fork(endPreview())}
-				{...boot?.admin && boot.surfaces.settings && boot.preview === null
+				{...boot?.admin && boot.surfaces.settings && boot.preview === null && !previewEnv
 					? {
 							loadTeams: () => run(teams()),
 							onPreviewTeam: (team: string) => fork(previewTeam(team))
@@ -898,12 +903,11 @@
 							>
 						</Inline>
 					{/if}
-					{#if boot.workspace.live !== undefined}
+					<!-- a preview lives in Studio's or Norbius's frame, which labels it; opened directly, it says what it is -->
+					{#if boot.workspace.live !== undefined && window.self === window.top}
 						<Inline role="status" justify="between" gap="sm" class="bg-info/15 px-4 py-2 text-xs">
 							<span class="min-w-0 whitespace-normal"
-								>{t(
-									"Preview — changes here are not live yet. Ask Norbius to apply them when you're happy."
-								)}</span
+								>{t('This is a preview — open it from Studio or Norbius.')}</span
 							>
 							<Button size="sm" variant="outline" class="shrink-0" href={boot.workspace.live}
 								>{t('Open live workspace')}</Button

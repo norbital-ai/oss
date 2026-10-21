@@ -241,7 +241,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 			'k'
 		);
 		expect(ext.collections.sys_user!.read[0]!.where).toMatchObject({ t: 'or' });
-		expect(ext.collections.sys_team).toBeUndefined();
+		expect(Object.keys(ext.collections)).toEqual(['sys_user']);
 		const visitor = compileAuthority(
 			m,
 			{ actor: { kind: 'visitor', app: 'careers', visitor: 'v' }, admin: false, policies: [] },

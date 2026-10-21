@@ -1,6 +1,6 @@
 // The agent panel's pure projections of its transcript rows: the orb's mark (L-BOLT-436), the context view (L-BOLT-546)
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
-import { Predicate } from 'effect';
+import { Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
@@ -370,22 +370,96 @@ export const doingOf = (steps: readonly AgentRow[]): string =>
 	DOING[steps.findLast((s) => s.tool?.running === true)?.tool?.name ?? ''] ?? 'Working…';
 
 /**
- * A Studio call's outcome, shown outside its folded steps: a built preview's link, or a publish or rollback that switched
- * the workspace over (its answer, or the restart its switch-over caused). The panel's result is clipped at 600 characters,
- * so it is matched, not decoded: the host writes `preview` and `restarted`/`live` first.
+ * A Studio call's outcome, shown outside its folded steps: a built preview (opened in the panel's Preview tab, never as a
+ * page of its own), or a publish or rollback that switched the workspace over (its answer, or the restart its
+ * switch-over caused, settled on its card). The preview is the engine's `tool.preview`, read from the whole result.
  */
 export function outcomeOf(
 	tool: AgentRow['tool']
-): { text: string; href?: string; action?: string } | null {
+): { text: string; preview?: string; action?: string } | null {
 	if (tool === undefined || tool.running === true || tool.failed) return null;
-	const result = tool.result ?? '';
-	const preview = /^\{"preview":"([^"\\]+)"/.exec(result)?.[1];
-	if (tool.name === 'workspace_validate' && preview !== undefined)
-		return { text: 'The preview is ready.', href: preview, action: 'Open preview' };
+	if (tool.name === 'workspace_validate' && tool.preview !== undefined)
+		return { text: 'The preview is ready.', preview: tool.preview, action: 'Open preview' };
 	if (
 		(tool.name === 'workspace_publish' || tool.name === 'workspace_rollback') &&
-		/^\{"(?:restarted":"|live":\{)/.test(result)
+		/^\{"(?:restarted":"|live":\{)/.test(tool.result ?? '')
 	)
 		return { text: 'Applied — the workspace is now on the new version. Refresh to see it.' };
 	return null;
+}
+
+/** What a Studio result shows in one line: "Preview · draft u/… · commit abc1234 'Rename title' · 390×844 · 23:05". */
+export function captionOf(
+	about: { readonly [k: string]: string } | undefined,
+	zone?: string
+): string {
+	if (about === undefined) return '';
+	const commit = about['commit'],
+		at = about['capturedAt'];
+	const time =
+		at === undefined || Number.isNaN(Date.parse(at))
+			? undefined
+			: new Date(at).toLocaleTimeString(undefined, {
+					hour: '2-digit',
+					minute: '2-digit',
+					hourCycle: 'h23',
+					...(zone === undefined ? {} : { timeZone: zone })
+				});
+	return [
+		about['environment'],
+		about['branch'],
+		about['bundle'] ?? about['release'],
+		commit === undefined
+			? undefined
+			: `commit ${commit.slice(0, 7)}${about['message'] === undefined ? '' : ` '${about['message']}'`}`,
+		about['viewport'],
+		time
+	]
+		.filter((x) => x !== undefined && x !== '')
+		.join(' · ');
+}
+
+/**
+ * What the Preview tab may show, oldest first: each preview a host built or captured (`workspace_validate`,
+ * `workspace_view`), and each one the agent chose with `preview_show` on one of those previews' origins — the agent picks
+ * among built previews, never an arbitrary page.
+ */
+export function previewsOf(
+	rows: readonly AgentRow[]
+): { url: string; about?: { readonly [k: string]: string } }[] {
+	const built = new Set<string>();
+	return rows.flatMap((r) => {
+		const tool = r.tool,
+			url = tool?.preview ?? (tool?.name === 'workspace_view' ? tool.about?.['url'] : undefined);
+		if (tool === undefined || tool.failed || url === undefined || !URL.canParse(url)) return [];
+		const origin = new URL(url).origin,
+			shown = { url, ...(tool.about === undefined ? {} : { about: tool.about }) };
+		if (tool.name === 'workspace_validate' || tool.name === 'workspace_view') {
+			built.add(origin);
+			return [shown];
+		}
+		return tool.name === 'preview_show' && built.has(origin) ? [shown] : [];
+	});
+}
+
+/** A `workspace_logs` result's records (its `records`, `logs` or `lines`), each a level, a message and when; `null` otherwise. */
+export function logsOf(
+	tool: AgentRow['tool']
+): { level: string; message: string; at?: string }[] | null {
+	if (tool?.name !== 'workspace_logs' || tool.failed || tool.result === undefined) return null;
+	const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(tool.result);
+	if (Option.isNone(parsed) || !Predicate.isObject(parsed.value)) return null;
+	const v = parsed.value,
+		list =
+			[v['records'], v['logs'], v['lines']].find((x): x is readonly unknown[] =>
+				Array.isArray(x)
+			) ?? [];
+	return list.filter(Predicate.isObject).map((x) => {
+		const at = x['at'] ?? x['time'];
+		return {
+			level: typeof x['level'] === 'string' ? x['level'] : 'info',
+			message: typeof x['message'] === 'string' ? x['message'] : JSON.stringify(x),
+			...(typeof at === 'string' ? { at } : {})
+		};
+	});
 }

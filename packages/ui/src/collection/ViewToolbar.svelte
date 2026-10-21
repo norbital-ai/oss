@@ -54,7 +54,7 @@
 		/** One line under the name. */
 		description?: string;
 		run: (selected: IdIn<R>[]) => Effect.Effect<unknown, Error> | void;
-		/** Turns row selection on and lists the item under Bulk; it is disabled until rows are selected. */
+		/** Turns row selection on; the item is disabled until records are selected. */
 		requiresSelection?: true;
 		/** Why the item cannot run now (over this selection), or null when it can; shown instead of `description`. */
 		disabled?: (selected: IdIn<R>[]) => string | null;
@@ -74,11 +74,11 @@
 				search?: boolean;
 				/** The filter-and-sort popover (rule 16b). Default on. */
 				filter?: boolean;
-				/** Author items in the actions menu, after the collection's callables; `false` hides the menu. */
+				/** Author items in the actions menu, in a group of their own; `false` hides the menu. */
 				actions?: readonly ToolbarItem<R>[] | false;
 				/** "Export CSV" of the rows in view. Default on; replaced by "Export" when the collection declares an export pipeline. */
 				export?: boolean;
-				/** "Delete selected" when the viewer may delete (turns selection on). Default: the viewer may delete. */
+				/** "Delete selected records" when the collection declares delete and the viewer may delete (turns selection on). Default on. */
 				delete?: boolean;
 				/** Record checkboxes (`Table` and `Board`). Default: on for permitted bulk edits, deletes or selection actions. */
 				select?: boolean;
@@ -142,7 +142,7 @@
 	import { filesOf } from '../cell/value.js';
 	import { humanize, label, msg } from '../text/messages.js';
 	import { isRow, objectsOf, rowsOf } from '../read/results.js';
-	import { outcomeText } from '../actions/outcome.js';
+	import { actOutcome, outcomeText } from '../actions/outcome.js';
 	import { searchIndexes, SEMANTIC_SEARCH, SLASH, type SearchIndex } from '../table/model.js';
 	import { unref } from '../relations/select.js';
 	import type { ViewState } from '../filter/view-state.svelte.js';
@@ -399,7 +399,7 @@
 			? { ...editLinks, [name]: NO_LINKS }
 			: Object.fromEntries(Object.entries(editLinks).filter(([rel]) => rel !== name));
 	}
-	type Group = 'bulk' | 'import' | 'general';
+	type Group = 'bulk' | 'actions' | 'import' | 'general';
 	// every row of the menu, each in its group: an icon, its words, and the button that runs `act` (a callable's opens its form inline)
 	type Entry = {
 		key: string;
@@ -418,7 +418,7 @@
 	const entries = $derived.by((): Entry[] => {
 		const ids = [...picked];
 		const integration = sync;
-		const selectFirst = msg(bolt, 'view.selectRows', 'Select rows first');
+		const selectFirst = msg(bolt, 'view.selectRows', 'Select records first');
 		const run = msg(bolt, 'view.run', 'Run');
 		return [
 			...callables.map((c): Entry => {
@@ -442,7 +442,7 @@
 			}),
 			...items.map((item): Entry => ({
 				key: `item:${item.name}`,
-				group: item.requiresSelection ? 'bulk' : 'general',
+				group: 'actions',
 				glyph: 'play',
 				icon: item.icon,
 				text: item.name,
@@ -530,7 +530,7 @@
 							key: 'update',
 							group: 'bulk',
 							glyph: 'play',
-							text: msg(bolt, 'view.editSelected', 'Edit selected'),
+							text: msg(bolt, 'view.editSelected', 'Update selected records'),
 							hint: msg(
 								bolt,
 								'view.editSelectedHint',
@@ -556,11 +556,10 @@
 							key: 'delete',
 							group: 'bulk',
 							glyph: 'trash',
-							text: msg(bolt, 'table.delete', 'Delete selected'),
+							text: msg(bolt, 'table.delete', 'Delete selected records'),
 							why: picked.length === 0 ? selectFirst : null,
 							button: msg(bolt, 'view.deleteButton', 'Delete'),
 							act: remove,
-							saved: msg(bolt, 'outcome.deleted', 'Deleted'),
 							danger: true
 						} satisfies Entry
 					]
@@ -571,6 +570,7 @@
 		(
 			[
 				['bulk', msg(bolt, 'view.group.bulk', 'Bulk')],
+				['actions', msg(bolt, 'view.group.actions', 'Actions')],
 				['import', msg(bolt, 'view.group.import', 'Import & export')],
 				['general', msg(bolt, 'view.group.general', 'General')]
 			] as const
@@ -839,12 +839,16 @@
 	}
 
 	const accept = (file: string) => perform('import', () => startImport(file, true));
-	/** Asks in-app first; the delete itself runs as its own action once confirmed. */
+	/**
+	 * Asks in-app first, then deletes each record on its own so one refusal keeps only that record: the outcome says how
+	 * many were deleted and why the first kept one was refused ("3 deleted, 1 kept: …").
+	 */
 	function remove(): void {
 		const target = [...picked];
 		fork(
 			confirmAction({
-				title: msg(bolt, 'table.confirmDelete', 'Delete {n} rows?', { n: target.length }),
+				title: msg(bolt, 'table.confirmDelete', 'Delete {n} records?', { n: target.length }),
+				body: msg(bolt, 'view.deleteBody', 'This cannot be undone.'),
 				confirmLabel: msg(bolt, 'view.deleteButton', 'Delete'),
 				cancelLabel: msg(bolt, 'record.cancel', 'Cancel'),
 				destructive: true
@@ -854,14 +858,48 @@
 						if (confirmed)
 							perform(
 								'delete',
-								() => bolt.act(`${collection}.delete`, { target }),
-								msg(bolt, 'outcome.deleted', 'Deleted')
+								() =>
+									// ponytail: one act per record, in order; batch when bulk deletes outgrow it
+									Effect.forEach(target, (id) =>
+										actOutcome(bolt.act(`${collection}.delete`, { target: [id] }))
+									).pipe(
+										Effect.map((outcomes): Outcome => {
+											const kept = outcomes.filter((o) => !ok(o));
+											const first = kept[0];
+											if (first === undefined)
+												return (
+													outcomes.find((o) => o.kind === 'pendingApproval') ?? {
+														kind: 'committed',
+														output: null,
+														records: []
+													}
+												);
+											// some went: the view refreshes (and drops the selection) though the outcome is a refusal
+											if (kept.length < outcomes.length) onSettled?.();
+											return {
+												kind: 'refused',
+												code: 'kept',
+												message: msg(
+													bolt,
+													'view.deleteKept',
+													'{deleted} deleted, {kept} kept: {reason}',
+													{
+														deleted: outcomes.length - kept.length,
+														kept: kept.length,
+														reason: outcomeText(bolt, first)
+													}
+												)
+											};
+										})
+									),
+								msg(bolt, 'view.deleted', '{n} deleted', { n: target.length })
 							);
 					})
 				)
 			)
 		);
 	}
+
 	function updateSelected() {
 		if (!editReady) return;
 		const target = [...picked],

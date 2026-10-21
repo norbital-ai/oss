@@ -39,6 +39,7 @@
 		t,
 		tab,
 		workspace,
+		startable,
 		integrationSetups,
 		run = null,
 		onRun
@@ -48,6 +49,7 @@
 		t: (key: string) => string;
 		tab: SettingsTab;
 		workspace: ShellBoot['workspace'];
+		startable: NonNullable<ShellBoot['startable']>;
 		/** The definitions' own setup components (`integration/<name>/+integration.svelte`); the generic setup otherwise. */
 		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
 		run?: string | null;
@@ -547,7 +549,7 @@
 {/snippet}
 
 {#if tab === 'automations'}
-	<Runs {api} {bolt} {t} {run} {onRun} />
+	<Runs {api} {bolt} {t} {startable} {run} {onRun} />
 {:else}
 	<SystemPage name={`settings-${tab}`} title={t(TITLES[tab])} {error}>
 		{#if s === null}

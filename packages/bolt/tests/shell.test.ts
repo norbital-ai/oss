@@ -20,6 +20,8 @@ import {
 	kioskHref,
 	kioskNav,
 	nav,
+	previewRoute,
+	startableAutomations,
 	route,
 	surfaces
 } from '../src/shell/nav.ts';
@@ -32,13 +34,16 @@ import {
 	foldLog,
 	foldPhase,
 	languageOf,
+	reach,
 	reviewAge,
 	reviewFreshness,
 	reviewNextOwner,
 	routedEnvironment,
 	settleDrafts,
+	stepLabel,
 	StudioOp,
 	studioView,
+	suggestMessage,
 	type StudioState
 } from '../src/shell/studio/model.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
@@ -629,6 +634,57 @@ describe('nav tree', () => {
 	});
 });
 
+describe('preview environments drop the meta tools', () => {
+	const at = (path: string) => previewRoute(route(m, new URL(path, 'https://w.example')), true);
+	it('an administrator on a Studio host keeps the inbox, runs and Settings but not Norbius or Studio', () => {
+		expect(surfaces(m, member([], {}, true).actor, true, true, true)).toEqual({
+			inbox: true,
+			runs: true,
+			settings: true,
+			agent: false,
+			studio: false
+		});
+	});
+	it('Studio, People and Connections open the apps launcher; apps, approvals and other Settings stay', () => {
+		expect(
+			['/studio', '/studio/mrs', '/settings', '/settings/people', '/connections'].map(at)
+		).toEqual(Array.from({ length: 5 }, () => ({ kind: 'home' })));
+		expect(at('/app/sales/quotes')).toEqual({ kind: 'page', app: 'sales', page: 'quotes' });
+		expect([at('/inbox'), at('/settings/automations'), at('/settings/secrets')]).toEqual([
+			{ kind: 'inbox' },
+			{ kind: 'settings', tab: 'automations' },
+			{ kind: 'settings', tab: 'secrets' }
+		]);
+		expect(previewRoute({ kind: 'studio' }, false)).toEqual({ kind: 'studio' });
+	});
+	it('the sidebar drops Norbius, People and Studio and keeps Approvals and the rest of Settings', () => {
+		const auth = member(['sales'], {}, true);
+		const model = navigationModel(
+			{
+				workspace: { name: 'Acme', locale: 'en', tz: 'UTC', live: 'https://acme.example' },
+				actor: auth.actor,
+				name: 'Ada',
+				admin: true,
+				preview: null,
+				nav: nav(m, auth),
+				kiosks: [],
+				surfaces: surfaces(m, auth.actor, true, true, true),
+				inbox: 2,
+				push: null,
+				visitor: null,
+				catalog: {}
+			},
+			'/',
+			(k) => k
+		);
+		const keys = [...model.sections, ...model.utilities].flatMap((x) =>
+			'items' in x ? x.items.map((i) => i.key) : [x.key, ...(x.children ?? []).map((c) => c.key)]
+		);
+		expect(keys).toEqual(expect.arrayContaining(['approvals', 'automations', 'secrets']));
+		expect(keys.filter((k) => ['norbius', 'people', 'studio'].includes(k))).toEqual([]);
+	});
+});
+
 describe('routes and hrefs', () => {
 	const at = (path: string) => route(m, new URL(path, 'https://w.example'));
 	it('resolves the longest app prefix, the default page and a record', () => {
@@ -782,6 +838,31 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 		expect(
 			BoltRoutes['POST /__bolt/live'].admits(member([]), { m: 'query', a: ['openings', 'q', {}] })
 		).toBe(true);
+	});
+});
+
+describe('startable automations', () => {
+	it('Settings → Automations offers only automations the member may start and that need no input', () => {
+		const spec = (input?: EngineManifest['automations'][string]['input']) => ({
+			description: 'd',
+			runAs: ['p'] as const,
+			...(input === undefined ? {} : { input })
+		});
+		const withRuns: EngineManifest = {
+			...m,
+			automations: {
+				drift: spec({ code: { kind: 'text', optional: true } }),
+				lineage: spec({ code: { kind: 'text' } }),
+				tick: spec()
+			}
+		};
+		expect(
+			startableAutomations(withRuns, { ...member([]), automations: ['drift', 'lineage'] })
+		).toEqual([{ name: 'drift', description: 'd' }]);
+		expect(startableAutomations(withRuns, member([], {}, true)).map((a) => a.name)).toEqual([
+			'drift',
+			'tick'
+		]);
 	});
 });
 
@@ -1119,6 +1200,31 @@ describe('Studio port boundary', () => {
 			diagnose: 'running'
 		});
 		expect(foldPhase(p, 'preview', 'running')).toEqual({ diagnose: 'done', preview: 'running' });
+	});
+	it('moves the progress strip only forward within a run: an earlier phase never takes it back', () => {
+		const steps = (['diagnose', 'merge', 'diagnose', 'preview'] as const).reduce<number[]>(
+			(seen, phase) => [...seen, reach(seen.at(-1) ?? -1, phase)],
+			[]
+		);
+		expect(steps.map(stepLabel)).toEqual([
+			'Building…',
+			'Switching over…',
+			'Switching over…',
+			'Switching over…'
+		]);
+		expect(stepLabel(-1)).toBe('Getting ready…');
+	});
+	it('suggests a save description from the drafts; a save carries it as its message', () => {
+		const files = { 'src/i18n/+messages.ts': '', 'src/data/+payroll.model.ts': '' };
+		expect(suggestMessage({ 'src/i18n/+messages.ts': 'x' }, files)).toBe('Update i18n messages');
+		expect(suggestMessage({ 'src/data/+payroll.model.ts': null, 'notes.txt': 'n' }, files)).toBe(
+			'Remove payroll model, Add notes'
+		);
+		expect(suggestMessage({ a: '1', b: '2', c: '3' }, {})).toBe('Add a and 2 more files');
+		expect(
+			decodeOp({ op: 'save', expected: 'c', files: {}, message: 'Fix the label' })
+		).toMatchObject({ message: 'Fix the label' });
+		expect(decodeOp({ op: 'save', expected: 'c', files: {}, message: '' })).toBeNull();
 	});
 	it('summarizes the routed environment: live preferred, any routed one otherwise, none when unrouted (L-BOLT-534)', () => {
 		const env = (name: string, release: string) => ({ name, release, url: null });

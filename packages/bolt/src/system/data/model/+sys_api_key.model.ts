@@ -8,6 +8,8 @@ export default model({
 		name: { kind: 'text' },
 		prefix: { kind: 'text', unique: true },
 		hash: { kind: 'text' },
+		/** The team handle the key acts as, declared in source (`+team.ts`); writes refuse an undeclared handle. */
+		team: { kind: 'text', format: 'team', optional: true },
 		revoked_at: { kind: 'instant', optional: true },
 		last_used_at: { kind: 'instant', optional: true },
 		revision: { kind: 'int', default: 1 },

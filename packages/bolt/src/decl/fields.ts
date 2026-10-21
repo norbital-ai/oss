@@ -32,8 +32,11 @@ type FileSize =
 	| `${bigint}KiB`
 	| `${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20}MiB`;
 /** `markdown`: the text is Markdown, rendered as prose; the others are checked on write (rule 68). */
-/** How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor. */
-type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel';
+/**
+ * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle
+ * declared in source (`+team.ts`), refused on write when undeclared.
+ */
+type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team';
 /** The unit a time field is picked in and snapped to (its start; weeks from Monday); the ui's pickers render it. */
 export type {
 	DatePrecision,
