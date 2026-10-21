@@ -98,7 +98,7 @@ export type ShellBoot = {
 	 * `logo`: the host's first brand icon, the page's organization mark (`bolt.org`). `environment`: the non-production
 	 * badge's label (`environmentLabel`), absent in production. `handle`: the tenant handle the sign-in card names; `apex`:
 	 * where "Change workspace" leads (the host's workspace picker). `organization`: the host lets an administrator edit the
-	 * name and logo (`ShellHostConfig.organization`).
+	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address.
 	 */
 	workspace: {
 		name: string;
@@ -108,6 +108,7 @@ export type ShellBoot = {
 		environment?: string;
 		handle?: string;
 		apex?: string;
+		live?: string;
 		organization?: true;
 	};
 	actor: EngineActor | null;

@@ -337,6 +337,26 @@ describe('the shell renders a page (§5.10)', () => {
 			)
 	);
 
+	it.live('a preview environment carries a persistent banner linking back to live', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* workspace({ manifest, host: { live: 'https://h.test/acme' } });
+				const { target } = yield* open(context, '/app/desk/hero', { 'desk/hero': page(Hero) });
+				yield* until(() => target.textContent?.includes('changes here are not live yet') === true);
+				const live = present(
+					[...target.querySelectorAll('a')].find((a) =>
+						a.textContent?.includes('Open live workspace')
+					)
+				);
+				expect(live.getAttribute('href')).toBe('https://h.test/acme');
+				const plain = yield* workspace({ manifest });
+				const { target: other } = yield* open(plain, '/app/desk/hero', { 'desk/hero': page(Hero) });
+				yield* until(() => other.querySelector('[data-body]') !== null);
+				expect(other.textContent).not.toContain('changes here are not live yet');
+			})
+		)
+	);
+
 	it.live('shows the AppShell identity and its actions in the hero above the page', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

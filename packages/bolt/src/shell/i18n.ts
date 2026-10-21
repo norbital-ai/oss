@@ -328,6 +328,12 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Sign in in the window that opens; this page updates when you are done.':
 		'请在打开的窗口中登录；完成后此页面会自动更新。',
 	'Building the preview…': '正在生成预览…',
+	'Editing the source…': '正在编辑源代码…',
+	'Reviewing the changes…': '正在审查更改…',
+	'The preview is ready.': '预览已就绪。',
+	'Open preview': '打开预览',
+	'Applied — the workspace is now on the new version. Refresh to see it.':
+		'已应用 — 工作区现已使用新版本。刷新即可查看。',
 	Cancel: '取消',
 	Cause: '起因',
 	Change: '变更',
@@ -496,6 +502,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Open: '打开',
 	'Open a file to edit it.': '打开文件以编辑。',
 	'Open navigation': '打开导航',
+	'Open live workspace': '打开线上工作区',
 	Operations: '运营',
 	Organization: '组织',
 	Pause: '暂停',
@@ -505,6 +512,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Plan first; you approve before it acts': '先制定计划；执行前需您批准',
 	Policy: '策略',
 	Preview: '预览',
+	"Preview — changes here are not live yet. Ask Norbius to apply them when you're happy.":
+		'预览 — 此处的更改尚未上线。满意后请让 Norbius 应用这些更改。',
 	'Preview as': '预览身份',
 	Output: '输出',
 	'Previewing as a team. Its grants apply; you are recorded as the previewer.':

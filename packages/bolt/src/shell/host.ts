@@ -183,6 +183,8 @@ export type ShellHostConfig = {
 		write(auth: Authority, branding: { name: string; logo: string | null }): Promise<void>;
 	};
 	readonly apex?: string;
+	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
+	readonly live?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
 };
 export class ShellConfig extends Context.Service<ShellConfig, ShellHostConfig>()(
@@ -589,6 +591,7 @@ const makeShell = Effect.gen(function* () {
 			...(logo === undefined ? {} : { logo }),
 			...(env === null ? {} : { environment: env }),
 			...(c.apex === undefined ? {} : { apex: c.apex }),
+			...(c.live === undefined ? {} : { live: c.live }),
 			...(c.organization === undefined ? {} : { organization: true as const })
 		};
 		// a kiosk boot names its kiosk: signed-out callers boot only `auth: 'none'` kiosks (no sign-in, the

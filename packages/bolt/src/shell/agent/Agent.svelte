@@ -64,9 +64,11 @@
 		background,
 		checkpointSections,
 		contextView,
+		doingOf,
 		modelDividers,
 		ORB,
 		orbState,
+		outcomeOf,
 		callableWords,
 		revisable,
 		runState,
@@ -1652,8 +1654,8 @@
 												class="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md py-0.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
 												data-working={working || undefined}
 											>
-												{#if working}<span class="agent-shimmer">{t('Working…')}</span>{:else}<span
-														>{t('Worked for')} {secs === null ? '' : `${secs}s`}</span
+												{#if working}<span class="agent-shimmer">{t(doingOf(item.steps))}</span
+													>{:else}<span>{t('Worked for')} {secs === null ? '' : `${secs}s`}</span
 													>{/if}
 												<span
 													>· {`${item.steps.length} ${t(item.steps.length === 1 ? 'step' : 'steps')}`}</span
@@ -1669,6 +1671,27 @@
 											</summary>
 											<Steps steps={item.steps} {t} />
 										</details>
+										{#each item.steps.flatMap((st) => outcomeOf(st.tool) ?? []) as outcome, i (i)}
+											<!-- what a Studio call achieved (a preview to open, a version applied): outside the fold -->
+											<Inline
+												gap="sm"
+												align="center"
+												class="mt-2 text-sm"
+												role="status"
+												data-outcome
+											>
+												<Icon name="lucide:circle-check" class="size-4 shrink-0 text-success" />
+												<span class="min-w-0 whitespace-normal">{t(outcome.text)}</span>
+												{#if outcome.href !== undefined}<Button
+														size="sm"
+														variant="outline"
+														class="shrink-0"
+														href={outcome.href}
+														target="_blank"
+														rel="noreferrer">{t(outcome.action ?? '')}</Button
+													>{/if}
+											</Inline>
+										{/each}
 										{#if item.steps.some((st) => (st.files?.length ?? 0) > 0)}
 											<!-- what the work made (a document, a sandbox output): offered outside the fold, one card per file -->
 											<div class="mt-2 flex flex-wrap gap-2" data-made-files>

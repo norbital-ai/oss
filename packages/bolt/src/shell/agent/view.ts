@@ -359,3 +359,33 @@ export function resultLine(result: unknown): string {
 	const rows = Array.isArray(r['rows']) ? r['rows'] : Array.isArray(r['data']) ? r['data'] : null;
 	return rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`;
 }
+
+/** What a running Studio step is doing, in the person's words: the group's line while it runs. */
+const DOING: { readonly [tool: string]: string } = {
+	workspace_write: 'Editing the source…',
+	workspace_validate: 'Building the preview…',
+	workspace_review: 'Reviewing the changes…'
+};
+export const doingOf = (steps: readonly AgentRow[]): string =>
+	DOING[steps.findLast((s) => s.tool?.running === true)?.tool?.name ?? ''] ?? 'Working…';
+
+/**
+ * A Studio call's outcome, shown outside its folded steps: a built preview's link, or a publish or rollback that switched
+ * the workspace over (its answer, or the restart its switch-over caused). The panel's result is clipped at 600 characters,
+ * so it is matched, not decoded: the host writes `preview` and `restarted`/`live` first.
+ */
+export function outcomeOf(
+	tool: AgentRow['tool']
+): { text: string; href?: string; action?: string } | null {
+	if (tool === undefined || tool.running === true || tool.failed) return null;
+	const result = tool.result ?? '';
+	const preview = /^\{"preview":"([^"\\]+)"/.exec(result)?.[1];
+	if (tool.name === 'workspace_validate' && preview !== undefined)
+		return { text: 'The preview is ready.', href: preview, action: 'Open preview' };
+	if (
+		(tool.name === 'workspace_publish' || tool.name === 'workspace_rollback') &&
+		/^\{"(?:restarted":"|live":\{)/.test(result)
+	)
+		return { text: 'Applied — the workspace is now on the new version. Refresh to see it.' };
+	return null;
+}

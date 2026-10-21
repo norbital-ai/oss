@@ -198,6 +198,7 @@ export type ShellPorts = Pick<
 	| 'notice'
 	| 'environment'
 	| 'apex'
+	| 'live'
 	| 'workspaces'
 	| 'organization'
 	| 'ai'

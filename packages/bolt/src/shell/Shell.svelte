@@ -877,6 +877,18 @@
 							>
 						</Inline>
 					{/if}
+					{#if boot.workspace.live !== undefined}
+						<Inline role="status" justify="between" gap="sm" class="bg-info/15 px-4 py-2 text-xs">
+							<span class="min-w-0 whitespace-normal"
+								>{t(
+									"Preview — changes here are not live yet. Ask Norbius to apply them when you're happy."
+								)}</span
+							>
+							<Button size="sm" variant="outline" class="shrink-0" href={boot.workspace.live}
+								>{t('Open live workspace')}</Button
+							>
+						</Inline>
+					{/if}
 					{#if boot.preview !== null}
 						<Inline role="status" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
 							<span

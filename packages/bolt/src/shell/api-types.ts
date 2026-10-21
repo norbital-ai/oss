@@ -30,6 +30,7 @@ export const ShellWorkspace = Schema.Struct({
 	environment: Optional,
 	handle: Optional,
 	apex: Optional,
+	live: Optional,
 	organization: Schema.optionalKey(Schema.Literal(true))
 });
 /** A shell route refused the call: its code and message, the HTTP status (`0`: unreachable), and the workspace when signed out. */

@@ -248,4 +248,5 @@ before a coordinated immutable package release; consumers import public package 
 - [Identity automation events](./identity-automations.md)
 - [Client bundles and public rendering](./client-bundling.md)
 - [Device, device notices and app sessions](./device.md)
+- [Changing the workspace with Norbius (ask, preview, approve)](./norbius-changes.md)
 - [Self-hosted server (`@norbital-ai/bolt-server`)](../../bolt-server/README.md)

@@ -366,7 +366,9 @@ export type TemplateRunner = (
 >;
 export const resolveLockfile = Effect.fn('bolt.resolveTemplateLock')(function* (
 	template: Template,
-	execute: TemplateRunner = run
+	execute: TemplateRunner = run,
+	/** One run's store and metadata cache, shared by its templates: fresh per run, fetched once instead of per template. */
+	shared?: string
 ) {
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
@@ -389,9 +391,9 @@ export const resolveLockfile = Effect.fn('bolt.resolveTemplateLock')(function* (
 					'--lockfile-only',
 					'--no-frozen-lockfile',
 					'--store-dir',
-					path.join(dir, '.pnpm-store'),
+					path.join(shared ?? dir, '.pnpm-store'),
 					'--cache-dir',
-					path.join(dir, '.pnpm-cache')
+					path.join(shared ?? dir, '.pnpm-cache')
 				],
 				{ cwd: dir }
 			);
@@ -414,12 +416,13 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options:
 			const root = options.root ?? process.cwd();
 			const templates = yield* discoverTemplates(root, options.filter);
 			const drifted: string[] = [];
+			const resolution = yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-lock-shared-' });
 			const store = options.verifyInstall
 				? yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-verify-store-' })
 				: undefined;
 			for (const template of templates) {
 				const committedPath = path.join(template.directory, 'pnpm-lock.yaml');
-				const resolved = yield* resolveLockfile(template);
+				const resolved = yield* resolveLockfile(template, run, resolution);
 				const committed = (yield* fs.exists(committedPath))
 					? yield* fs.readFileString(committedPath)
 					: undefined;

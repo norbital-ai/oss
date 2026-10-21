@@ -6,9 +6,11 @@ import {
 	checkpointSections,
 	childStatus,
 	contextView,
+	doingOf,
 	modelDividers,
 	ORB,
 	orbState,
+	outcomeOf,
 	resultLine,
 	revisable,
 	runState,
@@ -215,5 +217,53 @@ describe('background work in the session rail', () => {
 		expect(
 			['queued', 'running', 'succeeded', 'skipped', 'failed', 'stopped'].map(runState)
 		).toEqual(['running', 'running', 'done', 'done', 'failed', 'stopped']);
+	});
+});
+
+describe('Studio outcomes outside the folded steps', () => {
+	const tool = (name: string, result?: string, o: Partial<NonNullable<AgentRow['tool']>> = {}) => ({
+		name,
+		failed: false,
+		...(result === undefined ? {} : { result }),
+		...o
+	});
+	it('names the running Studio step, else the generic line', () => {
+		const step = (seq: number, name: string, running?: true) =>
+			row(seq, { role: 'tool', tool: tool(name, undefined, running ? { running } : {}) });
+		expect(doingOf([step(1, 'workspace_write'), step(2, 'workspace_validate', true)])).toBe(
+			'Building the preview…'
+		);
+		expect(doingOf([step(1, 'read', true)])).toBe('Working…');
+	});
+	it("offers a built preview's link, even from a clipped result", () => {
+		expect(
+			outcomeOf(tool('workspace_validate', '{"preview":"https://h/acme--u-a","commit":"ab…'))
+		).toEqual({
+			text: 'The preview is ready.',
+			href: 'https://h/acme--u-a',
+			action: 'Open preview'
+		});
+		expect(outcomeOf(tool('workspace_validate', '{"error":"build failed"}'))).toBeNull();
+		expect(
+			outcomeOf(tool('workspace_validate', '{"preview":"https://h/x"}', { running: true }))
+		).toBeNull();
+	});
+	it('reports a publish or rollback that switched over, never a declined or refused one', () => {
+		const applied = {
+			text: 'Applied — the workspace is now on the new version. Refresh to see it.'
+		};
+		expect(outcomeOf(tool('workspace_publish', '{"live":{"commit":"c1"},"draft":"c1"}'))).toEqual(
+			applied
+		);
+		expect(
+			outcomeOf(
+				tool('workspace_rollback', '{"restarted":"The workspace restarted during: Switching…"}')
+			)
+		).toEqual(applied);
+		for (const result of ['{"declined":true}', '{"error":"no"}', '{"live":null,"draft":"c"}'])
+			expect(outcomeOf(tool('workspace_publish', result))).toBeNull();
+		expect(
+			outcomeOf(tool('workspace_publish', '{"live":{"commit":"c"}}', { failed: true }))
+		).toBeNull();
 	});
 });
