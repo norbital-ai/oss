@@ -170,7 +170,12 @@ describe('bolt templates', () => {
 						committed
 					);
 					expect(yield* fs.readFileString(path.join(options.cwd, 'isolated-vm.patch'))).toBe(patch);
-					expect(args).toContain('--no-frozen-lockfile');
+					// install resolves the rest; update re-resolves the first-party entries install would skip
+					expect(args[0] === 'install' ? args : ['--no-frozen-lockfile']).toContain(
+						'--no-frozen-lockfile'
+					);
+					if (args[0] === 'update')
+						expect(args).toEqual(expect.arrayContaining(['@norbital-ai/*', '--lockfile-only']));
 					expect(args).not.toContain('--force');
 					expect(args).not.toContain('--ignore-workspace');
 					return '';

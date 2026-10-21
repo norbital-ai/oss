@@ -394,19 +394,19 @@ export const resolveLockfile = Effect.fn('bolt.resolveTemplateLock')(function* (
 					withoutFirstParty(yield* fs.readFileString(committed))
 				);
 			yield* fs.writeFileString(path.join(dir, '.npmrc'), yield* registryConfiguration);
-			yield* execute(
-				'pnpm',
-				[
-					'install',
-					'--lockfile-only',
-					'--no-frozen-lockfile',
-					'--store-dir',
-					path.join(shared ?? dir, '.pnpm-store'),
-					'--cache-dir',
-					path.join(shared ?? dir, '.pnpm-cache')
-				],
-				{ cwd: dir }
-			);
+			const stores = [
+				'--store-dir',
+				path.join(shared ?? dir, '.pnpm-store'),
+				'--cache-dir',
+				path.join(shared ?? dir, '.pnpm-cache')
+			];
+			yield* execute('pnpm', ['install', '--lockfile-only', '--no-frozen-lockfile', ...stores], {
+				cwd: dir
+			});
+			// `install` skips resolution while the importers still match, so the dropped first-party entries need `update`
+			yield* execute('pnpm', ['update', '@norbital-ai/*', '--lockfile-only', ...stores], {
+				cwd: dir
+			});
 			if (!(yield* fs.exists(path.join(dir, 'pnpm-lock.yaml'))))
 				return yield* fail(`Resolving ${template.slug} produced no pnpm-lock.yaml.`);
 			return yield* fs.readFileString(path.join(dir, 'pnpm-lock.yaml'));
@@ -504,7 +504,10 @@ export const materializeCandidate = Effect.fn('bolt.templateProjection')(functio
 });
 /** Template directories with changes since `since` (the working tree and untracked files included); none when git
  * cannot resolve it (a first push, a rewritten history), so every template is verified. */
-export const changedSince = Effect.fn('bolt.templatesChanged')(function* (root: string, since: string) {
+export const changedSince = Effect.fn('bolt.templatesChanged')(function* (
+	root: string,
+	since: string
+) {
 	const listed = yield* Effect.all([
 		run('git', ['diff', '--name-only', since, '--', '.'], { cwd: root }),
 		run('git', ['ls-files', '--others', '--exclude-standard'], { cwd: root })
@@ -576,14 +579,18 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 				yield* pnpm('fetch', ['fetch', '--frozen-lockfile']);
 				yield* fs.remove(npmrc);
 				yield* pnpm('install', ['install', '--frozen-lockfile', '--offline']);
-				const scripts = (yield* json(Package, path.join(destination, 'package.json'))).scripts ?? {};
+				const scripts =
+					(yield* json(Package, path.join(destination, 'package.json'))).scripts ?? {};
 				const suite = scripts['test'] ?? '';
 				const banked = suite.includes('--bank');
 				if (scripts['check'] !== 'bolt check') yield* pnpm('check', ['check']);
-				if (banked || !/\bbolt build\b/.test(suite)) yield* pnpm('build', ['exec', 'bolt', 'build']);
+				if (banked || !/\bbolt build\b/.test(suite))
+					yield* pnpm('build', ['exec', 'bolt', 'build']);
 				if (scripts['lint'] !== 'prettier --check .') yield* pnpm('lint', ['lint']);
 				if (banked)
-					yield* Console.log(`${template.slug}: its suite reads the seed bank; the local gate runs it.`);
+					yield* Console.log(
+						`${template.slug}: its suite reads the seed bank; the local gate runs it.`
+					);
 				else yield* pnpm('test', ['test']);
 				const artifact = path.join(destination, '.norbital', 'artifact', 'artifact.json');
 				if (!(yield* fs.exists(artifact)))
