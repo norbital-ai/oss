@@ -1143,7 +1143,7 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 	);
 
 	it.effect(
-		'delete: { transform: true } runs the transform as a guard for members; administrators skip it (rules 27, 35)',
+		'delete: { transform: true } runs the transform as a guard for everyone, administrators included (rules 27, 35)',
 		() =>
 			Effect.gen(function* () {
 				const calls: Invocation[] = [];
@@ -1169,11 +1169,12 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 					rule: 'tags.transform'
 				});
 				expect(calls.map((c) => c.input)).toEqual([[{ $delete: true }]]);
-				ok(
+				// an administrator's delete faces the same guard: a business rule (a settled row) is not an authority question
+				expect(
 					(yield* run({ collection: 'tags', verb: 'delete', input: { target: tag } }, guard))
 						.outcome
-				);
-				expect(calls).toHaveLength(1);
+				).toMatchObject({ kind: 'refused', message: 'the tag is in use' });
+				expect(calls).toHaveLength(2);
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 });

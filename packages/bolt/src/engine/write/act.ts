@@ -1241,11 +1241,11 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		'transform' in m.collections[r.collection]!.delete!;
 	const deleteGuard = r.verb === 'delete' && guardsDeletes;
 	// an import's pruned rows face the delete guard too: they are `{ $delete: true }` inputs after the batch's rows
-	const pruneGuard = imp?.prune !== undefined && guardsDeletes && !auth.admin;
+	const pruneGuard = imp?.prune !== undefined && guardsDeletes;
 	// a feed page's one transform sees its upserts and its `removed` patches; a page of deletes alone has no row for it (hook:integrations)
 	const runs =
 		e.transforms?.has(r.collection) === true &&
-		(r.verb !== 'delete' || (deleteGuard && !auth.admin)) &&
+		(r.verb !== 'delete' || deleteGuard) &&
 		(feed === undefined ||
 			submitted.some((i) => i.parent === undefined && i.change.op !== 'delete'));
 	// 6. one transform invocation over the whole batch (rule 27); its payload is the workspace's own work (rule 19)
