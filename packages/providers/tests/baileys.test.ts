@@ -995,13 +995,23 @@ describe('the ingest gate', () => {
 					h = yield* open(f, { creds: CREDS }, { personal: true });
 				const s = f.opened[0]!;
 				expect(s.config.personal).toBe(true);
-				let membership = [
-					{ id: 'opaque@lid', phoneNumber: '6591009037@s.whatsapp.net', notify: 'POC' }
-				];
+				let membership: {
+					id: string;
+					phoneNumber?: string | undefined;
+					notify?: string | undefined;
+				}[] = [{ id: 'opaque@lid', phoneNumber: '6591009037@s.whatsapp.net', notify: 'POC' }];
 				let reads = 0;
 				s.socket.groupMetadata = async (jid) => {
 					reads++;
-					return { id: jid, owner: undefined, subject: 'Customer group', participants: membership };
+					// Baileys' own shape: absent attributes are explicit `undefined`.
+					return {
+						id: jid,
+						owner: undefined,
+						subject: 'Customer group',
+						participants: membership,
+						addressingMode: undefined,
+						ephemeralDuration: undefined
+					};
 				};
 				const group = (id: string) => ({
 					key: { id, remoteJid: '120363123@g.us', participant: '6599999999@s.whatsapp.net' },

@@ -285,13 +285,14 @@ const Group = Schema.Struct({
 	participants: Schema.Array(
 		Schema.Struct({
 			id: Schema.String,
-			phoneNumber: Schema.optionalKey(Schema.String),
-			name: Schema.optionalKey(Schema.String),
-			notify: Schema.optionalKey(Schema.String)
+			// Baileys writes absent attributes as explicit `undefined`.
+			phoneNumber: Schema.optional(Schema.String),
+			name: Schema.optional(Schema.String),
+			notify: Schema.optional(Schema.String)
 		})
 	),
-	addressingMode: Schema.optionalKey(Schema.Literals(['lid', 'pn'])),
-	ephemeralDuration: Schema.optionalKey(Schema.Number)
+	addressingMode: Schema.optional(Schema.Literals(['lid', 'pn'])),
+	ephemeralDuration: Schema.optional(Schema.Number)
 });
 /** Baileys' `messages.delete`: delete-for-me keys, or a cleared chat (`before`, ms, is the realm patch's clear bound). */
 const Deleted = Schema.Union([
