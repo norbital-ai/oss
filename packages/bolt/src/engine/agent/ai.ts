@@ -4,6 +4,7 @@
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
 import {
 	Cause,
+	Clock,
 	Effect,
 	Option,
 	Predicate,
@@ -318,10 +319,12 @@ function jsonSchemaOf(k: Kind): Json {
 
 /**
  * Without the author's `steps`, an inference has no step budget: it goes on until it answers (a structured one, until a
- * submission matches). What ends a runaway is then this ceiling, per batch of files the model reads (MODEL_FILES), and the stall guards (an empty or prose reply 3
+ * submission matches). What ends a runaway is then this ceiling, per batch of files the model reads (MODEL_FILES) — at ANSWER_BY of it the tools end and one final turn answers — and the stall guards (an empty or prose reply 3
  * times running, or a draft-only turn that leaves the answer unchanged 3 times running).
  */
 const INFER_MS = 30 * 60_000;
+/** Past this share of INFER_MS a batch's tools end and its final turn answers, as when `steps` is spent. */
+const ANSWER_BY = 0.8;
 /** The ceiling on one `sys_2.infer` call: INFER_MS for every batch of files it reads. ponytail: counts batches by file count only; a byte-split batch adds a step under the same ceiling. */
 export const inferMs = (args: readonly Json[]): number =>
 	INFER_MS *
@@ -424,7 +427,8 @@ function schemaChecker(output: SchemaOutput): string | ((value: Json) => string[
  * `output`; one that does not match gets every offending field (and broken rule) back and the loop goes on until one
  * matches. More files than one model request carries (MODEL_FILES) are read in batches into the same draft: each batch
  * patches what its files add, and only the last submission is checked. With `tools` (host tools the engine resolved under
- * the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch: once spent, one
+ * the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch, and so does 80% of
+ * the time ceiling, whichever comes first: once spent, one
  * final turn offers only `patch`/`submit` (none for a text answer) and is told to answer; without a valid answer from it
  * (or already in the draft) the call fails `invalid`, naming the spent budget. An empty (reasoning-only) reply is asked to continue, at most 3 times
  * running.
@@ -638,6 +642,7 @@ export function inferFacility(
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
 			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
+			const answerBy = (yield* Clock.currentTimeMillis) + INFER_MS * ANSWER_BY;
 			let text = '',
 				continuation: string | undefined,
 				cutAt: number | undefined,
@@ -655,7 +660,7 @@ export function inferFacility(
 					return held?.ok === true
 						? held
 						: invalid(
-								`the step budget of ${a.steps} tool turns was spent without a valid answer${last !== undefined && !last.ok && last.error.kind === 'invalid' ? `: ${last.error.message}` : ''}`
+								`the tool budget (${a.steps ?? 'no'} steps, ${(INFER_MS * ANSWER_BY) / 60_000} minutes) was spent without a valid answer${last !== undefined && !last.ok && last.error.kind === 'invalid' ? `: ${last.error.message}` : ''}`
 							);
 				}
 				const tooling = spent ? finishing : offered;
@@ -806,13 +811,18 @@ export function inferFacility(
 								last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`)
 							);
 					} else stalls = 0;
-					if (!spent && a.steps !== undefined && ++turns >= a.steps) {
+					// the step budget, or the time the ceiling leaves for one more answer, ends the tools: one final turn answers
+					const outOfSteps = a.steps !== undefined && ++turns >= a.steps;
+					if (!spent && (outOfSteps || (yield* Clock.currentTimeMillis) >= answerBy)) {
 						spent = true;
+						const budget = outOfSteps
+							? `Your tool budget of ${a.steps} steps is spent`
+							: 'Your time for tools is spent';
 						messages.push({
 							role: 'user',
 							content: structured
-								? `Your tool budget of ${a.steps} steps is spent: no more tools. Finish the answer now with ${PATCH} from what you have found, and call ${SUBMIT} in this reply.`
-								: `Your tool budget of ${a.steps} steps is spent: no more tools. Give your answer now from what you have found.`
+								? `${budget}: no more tools. Finish the answer now with ${PATCH} from what you have found, and call ${SUBMIT} in this reply.`
+								: `${budget}: no more tools. Give your answer now from what you have found.`
 						});
 					}
 					continue;

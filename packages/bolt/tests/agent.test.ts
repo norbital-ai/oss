@@ -1,5 +1,6 @@
 // The agent engine's pure parts (rules 60, 62, 63): bounded tool results, context projection and native AI streams.
 import { describe, expect, it } from '@effect/vitest';
+import { TestClock } from 'effect/testing';
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Stream } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -1109,6 +1110,35 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
+		'sys_2.infer: near the time ceiling the tools end and the final turn answers, as when steps are spent',
+		() =>
+			Effect.gen(function* () {
+				// a long research: the first page takes the call past its answer-by time, 24 of its 30 minutes
+				const seen: Json[] = [];
+				const slow = {
+					name: 'browse',
+					description: 'Read a page',
+					input: { type: 'object' },
+					call: (input: Json) =>
+						TestClock.adjust('25 minutes').pipe(
+							Effect.andThen(Effect.sync(() => seen.push(input))),
+							Effect.as({ text: 'rate is 3' })
+						)
+				};
+				const { p, requests } = port([tool('browse', { url: 'https://a' }, 'b1'), patchAndSubmit]);
+				expect(
+					yield* inferFacility(p)(
+						at({ prompt: 'q', output, initial: {}, tools: ['browse'], steps: 1000 }),
+						[slow]
+					)
+				).toEqual({ ok: true, value: { n: 3 } });
+				// with 999 steps left, the second turn is the final one: only patch and submit are offered
+				expect(seen).toHaveLength(1);
+				expect(requests).toHaveLength(2);
+			})
+	);
+
+	it.effect(
 		'sys_2.infer steps: a final turn without a valid answer is a step-budget failure, unless the draft already holds one',
 		() =>
 			Effect.gen(function* () {
@@ -1120,7 +1150,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					])
 				).toEqual({
 					ok: false,
-					error: { kind: 'invalid', message: expect.stringContaining('step budget of 1') }
+					error: { kind: 'invalid', message: expect.stringContaining('tool budget (1 steps') }
 				});
 				// the final turn's browse is not offered, so it is never run
 				expect(spent.seen).toHaveLength(1);

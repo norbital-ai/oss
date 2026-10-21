@@ -43,8 +43,8 @@ similarity callbacks, row mapping and outbound builders remain plain functions. 
 use `Effect.fnUntraced` or `Effect.fnUntracedEager`; Bolt owns the invocation runtime.
 
 `ctx.ai.sys_2.infer` has no step budget unless the request sets `steps` (1–1000 model turns that
-call tools, per batch of files). Once spent, one final turn offers only `patch`/`submit` and must
-answer; without a valid answer there or in the draft the call fails `invalid`, naming the budget.
+call tools, per batch of files). Once spent — or after 24 of the batch's 30-minute ceiling, whichever
+comes first — one final turn offers only `patch`/`submit` and must answer; without a valid answer there or in the draft the call fails `invalid`, naming the budget.
 
 With `runAs` policies, `tools` may name `'read'` beside host tools: the model reads workspace
 records as those policies (grants, field masks and row scopes as for `ctx.read`), one bounded
