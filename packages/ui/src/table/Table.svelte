@@ -832,7 +832,8 @@
 				}
 			]
 		>;
-	}
+	},
+	title = false
 )}
 	{@const displayed = presentRow(row)}
 	{#if col.cell}{@render col.cell({
@@ -846,6 +847,7 @@
 			ref={refOf(displayed, col.field)}
 			name={col.field}
 			dense
+			link={!title}
 		/>{/if}
 {/snippet}
 
@@ -1324,7 +1326,7 @@
 														]}
 														title={fullText(row, col.field) || undefined}
 													>
-														{@render cell(row, col)}
+														{@render cell(row, col, ci === 0 && opens)}
 													</div>
 												{/if}
 												{#if ci === 0 && opens}
@@ -1405,7 +1407,7 @@
 										}}
 									>
 										{#if lead}<span class="truncate text-sm font-medium"
-												>{@render cell(row, lead)}</span
+												>{@render cell(row, lead, opens)}</span
 											>{/if}
 										{#if rest.length > 0}
 											<div class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">

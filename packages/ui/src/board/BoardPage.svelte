@@ -219,6 +219,7 @@
 									ref={refOf(displayed, f)}
 									name={f}
 									dense
+									link={i !== 0}
 								/></span
 							>{/each}
 					{/if}

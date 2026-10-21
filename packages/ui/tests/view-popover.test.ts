@@ -1446,6 +1446,34 @@ it.live(
 );
 
 it.live(
+	"Table: a relation as the row's title is text, so a click on the title opens the row, not the related record",
+	() =>
+		Effect.gen(function* () {
+			const s = yield* browser(() => scripted({ read: (c, o) => ({ rows: relRows, next: null }) }));
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						props: { of: 'jobs', columns: ['account', 'title'] },
+						bolt: s.bolt,
+						catalog: relCatalog
+					},
+					'/'
+				)
+			);
+			const row = element<HTMLElement>(document, '[data-table-wide] tbody tr:not([aria-hidden])');
+			const title = element<HTMLElement>(row, '[data-ref=one]');
+			assert.equal(textOf(title).trim(), 'Acme');
+			assert.equal(title.querySelector('[data-ref-open]'), null, 'the title is not a link');
+			const card = element<HTMLElement>(document, '[data-row-card]');
+			assert.equal(card.querySelector('[data-ref-open]'), null, "a phone card's title is not a link");
+			title.click();
+			assert.deepEqual(new URL(location.href).searchParams.getAll('record'), ['jobs/j1']);
+			yield* browser(v.done);
+		})
+);
+
+it.live(
 	"Table: a column's custom cell renderer gets the row and value; other cells use the kind's default renderer",
 	() =>
 		Effect.gen(function* () {

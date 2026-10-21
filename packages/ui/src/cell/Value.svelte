@@ -16,14 +16,16 @@
 	/** `ref`: a relation's target and label (`unref`), shown as a link opening that record (`?record=`); a many-relation
 	 * shows its first label and a "+N" chip listing the rest. The glyph tells one link from many.
 	 * `dense` (a table cell, a card): one line — a structured value (json, object, list) previews as one line of JSON.
-	 * `name` reaches a custom field's renderer. */
+	 * `name` reaches a custom field's renderer. `link={false}` (a row's title, which opens the row itself) shows a relation as
+	 * text, so a tap on the title never lands on the related record instead. */
 	let {
 		value,
 		kind,
 		row,
 		ref,
 		name,
-		dense = false
+		dense = false,
+		link: linked = true
 	}: {
 		value: import('@norbital-ai/std/kind').Value | undefined;
 		kind?: Kind | undefined;
@@ -31,6 +33,7 @@
 		ref?: Ref | undefined;
 		name?: string;
 		dense?: boolean;
+		link?: boolean;
 	} = $props();
 	const bolt = useBolt();
 	const files = $derived(filesOf(value ?? null));
@@ -38,7 +41,7 @@
 </script>
 
 {#snippet link(of: string, id: string, text: string)}
-	<button
+	{#if !linked}<span class="max-w-full truncate">{text}</span>{:else}<button
 		type="button"
 		class="text-primary max-w-full truncate text-left underline-offset-4 hover:underline"
 		data-ref-open={id}
@@ -46,7 +49,7 @@
 			e.stopPropagation();
 			openRecord(of, id);
 		}}>{text}</button
-	>
+	>{/if}
 {/snippet}
 
 {#if ref?.items !== undefined}
@@ -90,7 +93,7 @@
 	{/if}
 {:else if ref !== undefined && typeof value === 'string'}
 	<span class="inline-flex max-w-full min-w-0 items-center gap-1 align-middle" data-ref="one">
-		<Glyph name="link" class="text-muted-foreground size-3 shrink-0" />{@render link(
+		{#if linked}<Glyph name="link" class="text-muted-foreground size-3 shrink-0" />{/if}{@render link(
 			ref.of,
 			value,
 			ref.text
