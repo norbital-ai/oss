@@ -2,6 +2,7 @@
 // the key store over the instance's credentials (nothing before pairing names the account, one statement per keys.set,
 // the creds coalesced and written before the 515 restart), the ingest gate (stored before the receipt, retried in place,
 // unreceipted on refusal or close), the disconnect classifier, a fence that stops the link for good, and the send shape.
+import { extractGroupMetadata } from '@whiskeysockets/baileys/lib/Socket/groups.js';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber, Random, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
@@ -995,23 +996,13 @@ describe('the ingest gate', () => {
 					h = yield* open(f, { creds: CREDS }, { personal: true });
 				const s = f.opened[0]!;
 				expect(s.config.personal).toBe(true);
-				let membership: {
-					id: string;
-					phoneNumber?: string | undefined;
-					notify?: string | undefined;
-				}[] = [{ id: 'opaque@lid', phoneNumber: '6591009037@s.whatsapp.net', notify: 'POC' }];
+				let membership = [
+					{ id: 'opaque@lid', phoneNumber: '6591009037@s.whatsapp.net', notify: 'POC' }
+				];
 				let reads = 0;
 				s.socket.groupMetadata = async (jid) => {
 					reads++;
-					// Baileys' own shape: absent attributes are explicit `undefined`.
-					return {
-						id: jid,
-						owner: undefined,
-						subject: 'Customer group',
-						participants: membership,
-						addressingMode: undefined,
-						ephemeralDuration: undefined
-					};
+					return { id: jid, owner: undefined, subject: 'Customer group', participants: membership };
 				};
 				const group = (id: string) => ({
 					key: { id, remoteJid: '120363123@g.us', participant: '6599999999@s.whatsapp.net' },
@@ -1044,6 +1035,47 @@ describe('the ingest gate', () => {
 					participants: membership
 				});
 				expect(reads).toBe(3);
+				yield* h.link.close ?? Effect.void;
+			})
+	);
+	it.live(
+		'reads group metadata exactly as Baileys builds it (absent attributes are explicit undefined)',
+		() =>
+			Effect.gen(function* () {
+				const f = fake(),
+					h = yield* open(f, { creds: CREDS }, { personal: true });
+				const s = f.opened[0]!;
+				s.socket.groupMetadata = async () =>
+					extractGroupMetadata({
+						tag: 'iq',
+						attrs: {},
+						content: [
+							{
+								tag: 'group',
+								attrs: {
+									id: '120363123',
+									subject: 'HR group',
+									creator: '6590000000@s.whatsapp.net'
+								},
+								content: [{ tag: 'participant', attrs: { jid: '6591009037@s.whatsapp.net' } }]
+							}
+						]
+					});
+				s.ready();
+				yield* until(() => h.status?.state === 'connected');
+				const message = {
+					key: {
+						id: 'hr-1',
+						remoteJid: '120363123@g.us',
+						participant: '6591009037@s.whatsapp.net'
+					},
+					messageTimestamp: 1_790_000_000,
+					message: { conversation: 'Payroll question' }
+				};
+				yield* sdk(() => s.deliver(message));
+				expect(messagesOf(h.events)).toMatchObject([
+					{ id: 'hr-1', title: 'HR group', participants: [{ handle: '6591009037@s.whatsapp.net' }] }
+				]);
 				yield* h.link.close ?? Effect.void;
 			})
 	);
