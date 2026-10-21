@@ -76,7 +76,8 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	const id = $props.id();
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
-	// what the engine knows the viewer cannot write is a floor no prop lifts; a save in flight holds every editor
+	// what the engine knows the viewer cannot write is a floor no prop lifts (nor does it lift an enclosing readonly); a
+	// save in flight holds every editor
 	const controls = provideControls(() => ({
 		readonly:
 			form !== undefined &&

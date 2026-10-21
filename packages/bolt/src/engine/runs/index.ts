@@ -218,6 +218,71 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 		? { ...base, error: row.error === null ? null : { code: row.error.code } }
 		: null;
 }
+/** `web_read` in an automation's infer: a public document as plain text, one window per call. */
+const WEB_READ_WINDOW = 20_000;
+const WebReadInput = Schema.Struct({
+	url: Schema.String,
+	from: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+	find: Schema.optionalKey(Schema.String)
+});
+const WebReadPage = Schema.Struct({
+	url: Schema.String,
+	title: Schema.NullOr(Schema.String),
+	text: Schema.String,
+	pages: Schema.optionalKey(Schema.Number)
+});
+/** The text from `from`, or with `find` the passages around any of its words, at most one window; `next` reads on. */
+export const webReadWindow = (
+	page: typeof WebReadPage.Type,
+	from = 0,
+	find?: string
+): { [key: string]: Json } => {
+	const words = (find ?? '')
+		.toLowerCase()
+		.split(/\s+/)
+		.filter((word) => word !== '');
+	const lower = page.text.toLowerCase();
+	const spans: [number, number][] = [];
+	if (words.length > 0)
+		for (const word of words)
+			for (
+				let at = lower.indexOf(word, from);
+				at !== -1;
+				at = lower.indexOf(word, at + word.length)
+			)
+				spans.push([Math.max(from, at - 400), Math.min(page.text.length, at + word.length + 400)]);
+	spans.sort((a, b) => a[0] - b[0]);
+	const merged = spans.reduce<[number, number][]>((all, span) => {
+		const last = all.at(-1);
+		if (last !== undefined && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+		else all.push([...span]);
+		return all;
+	}, []);
+	let text = '',
+		next: number | undefined;
+	for (const [start, end] of words.length > 0
+		? merged
+		: [[from, page.text.length] as [number, number]]) {
+		const room = WEB_READ_WINDOW - text.length;
+		if (room <= 0) {
+			next = start;
+			break;
+		}
+		text += (text === '' ? '' : '\n…\n') + page.text.slice(start, Math.min(end, start + room));
+		if (end - start > room) {
+			next = start + room;
+			break;
+		}
+	}
+	return {
+		url: page.url,
+		title: page.title,
+		characters: page.text.length,
+		...(page.pages === undefined ? {} : { pages: page.pages }),
+		text: words.length > 0 && text === '' ? '(no passage has any of those words)' : text,
+		...(next === undefined ? {} : { next })
+	};
+};
 const EVENTS = new Set(['created', 'updated', 'deleted']);
 const MAX_IDS = 10000,
 	DAY = 86400000,
@@ -723,7 +788,7 @@ export const RunsLive = Layer.effect(
 							name === 'read'
 								? reader === undefined
 								: !(authority.admin || authority.capabilities.tools.includes(name)) ||
-									!hosted.some((tool) => tool.name === name)
+									(name !== 'web_read' && !hosted.some((tool) => tool.name === name))
 						);
 						if (missing !== undefined)
 							return {
@@ -757,6 +822,42 @@ export const RunsLive = Layer.effect(
 									})
 							});
 						}
+						// `web_read`: the workspace's own web facility (HTML, PDF and office text), for documents a browser cannot show
+						if (names.includes('web_read'))
+							records.push({
+								name: 'web_read',
+								description:
+									'Read a public http(s) document as plain text: a web page, or a PDF, Word or spreadsheet file that the browser shows as empty. Answers up to 20,000 characters from `from` (default 0) and `next` when more remain; `find` answers only the passages around any of its words.',
+								input: {
+									type: 'object',
+									properties: {
+										url: { type: 'string' },
+										from: { type: 'integer', minimum: 0 },
+										find: { type: 'string' }
+									},
+									required: ['url'],
+									additionalProperties: false
+								},
+								call: (input) =>
+									Effect.gen(function* () {
+										const wanted = Schema.decodeUnknownOption(WebReadInput)(input);
+										if (Option.isNone(wanted))
+											return { error: 'give url, and optionally from and find' };
+										const answer = yield* facilities.dispatch({
+											_tag: 'web.read',
+											args: [wanted.value.url]
+										});
+										if (!answer.ok)
+											return {
+												error:
+													'message' in answer.error ? answer.error.message : answer.error.reason
+											};
+										const page = Schema.decodeUnknownOption(WebReadPage)(answer.value);
+										return Option.isNone(page)
+											? { error: 'the document did not decode' }
+											: webReadWindow(page.value, wanted.value.from, wanted.value.find);
+									})
+							});
 						const tools: InferTool[] = hosted
 							.filter((tool) => names.includes(tool.name))
 							.map((tool) => ({
@@ -768,48 +869,53 @@ export const RunsLive = Layer.effect(
 										const callId = yield* crypto.randomUUIDv4.pipe(
 											Effect.mapError(Port.failure(`tool ${tool.name}`))
 										);
-										const result = yield* Effect.result(
-											Port.attempt(`tool ${tool.name}`, (signal) =>
-												tool.call(
-													input,
-													{
-														actor: authority.actor,
-														conversation: run.id,
-														turn: run.id,
-														callId,
-														attach: () => {}
-													},
-													signal
-												)
+										return yield* Port.attempt(`tool ${tool.name}`, (signal) =>
+											tool.call(
+												input,
+												{
+													actor: authority.actor,
+													conversation: run.id,
+													turn: run.id,
+													callId,
+													attach: () => {}
+												},
+												signal
 											)
 										);
-										// each host tool step is one `infer.tool` event on the run (what it searched or opened), as
-										// `decision.made` traces a sys_1 call: the run's own proof of the research it did
-										yield* db
-											.write({
-												text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
-												params: [
-													new Date(yield* Clock.currentTimeMillis).toISOString(),
-													Result.isSuccess(result) ? 'info' : 'warn',
-													`${run.id}:${run.attempts}`,
-													run.id,
-													{
-														automation: run.automation,
-														tool: tool.name,
-														input: JSON.stringify(input).slice(0, 500),
-														...(Result.isSuccess(result) ? {} : { error: result.failure.message })
-													}
-												]
-											})
-											.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-										if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
-										return result.success;
 									})
 							}));
-						return yield* inferFacility(ai, { load: facilities.fileLoader })(call, [
-							...records,
-							...tools
-						]);
+						// each tool step is one `infer.tool` event on the run (what it read, searched or opened), as `decision.made`
+						// traces a sys_1 call: the run's own record of the research it did
+						const traced = (tool: InferTool): InferTool => ({
+							...tool,
+							call: (input) =>
+								Effect.gen(function* () {
+									const result = yield* Effect.result(tool.call(input));
+									yield* db
+										.write({
+											text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
+											params: [
+												new Date(yield* Clock.currentTimeMillis).toISOString(),
+												Result.isSuccess(result) ? 'info' : 'warn',
+												`${run.id}:${run.attempts}`,
+												run.id,
+												{
+													automation: run.automation,
+													tool: tool.name,
+													input: JSON.stringify(input).slice(0, 500),
+													...(Result.isSuccess(result) ? {} : { error: result.failure.message })
+												}
+											]
+										})
+										.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+									if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
+									return result.success;
+								})
+						});
+						return yield* inferFacility(ai, { load: facilities.fileLoader })(
+							call,
+							[...records, ...tools].map(traced)
+						);
 					}).pipe(
 						Effect.catch((error) =>
 							Effect.succeed({

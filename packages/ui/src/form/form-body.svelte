@@ -59,10 +59,13 @@
 			shared.spec.target.id === spec.target.id &&
 			scope?.historical !== true
 	);
-	const controls = provideControls(() => ({
-		readonly: spec.readonly === true || form.mode === 'view' || asked === true,
-		disabled: askedDisabled === true
-	}));
+	const controls = provideControls(
+		() => ({
+			readonly: spec.readonly === true || form.mode === 'view' || asked === true,
+			disabled: askedDisabled === true
+		}),
+		true
+	);
 	const readonly = $derived(controls.readonly);
 	const t = uiText();
 	const bolt = useBolt();

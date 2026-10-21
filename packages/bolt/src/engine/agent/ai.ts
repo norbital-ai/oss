@@ -196,7 +196,7 @@ const PATCH = 'patch',
 const PAUSES = 3,
 	FAILURES = 3;
 /** The most tool turns an author's `steps` may grant one inference. */
-const MAX_STEPS = 200;
+const MAX_STEPS = 1000;
 
 type PatchOp = { op: 'add' | 'replace' | 'remove'; path: string; value?: Json };
 /** The empty answer a structured inference starts from, by the output's kind. */

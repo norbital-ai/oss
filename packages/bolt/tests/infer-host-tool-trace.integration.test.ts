@@ -7,7 +7,8 @@ import type { AiRequest, Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
-import { Ai } from '../src/engine/ports.ts';
+import { Ai, WebRead } from '../src/engine/ports.ts';
+import { webReadWindow } from '../src/engine/runs/index.ts';
 import { TestWorkspace, respondSystem1, type Kit } from '../src/test/index.ts';
 import { program } from './support/guest-fixture.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
@@ -61,7 +62,7 @@ const manifest = {
 				invoices: { read: true, update: true },
 				purchase_orders: { read: { fields: ['number', 'supplier', 'amount'] } }
 			},
-			capabilities: { tools: ['web_search'] }
+			capabilities: { tools: ['web_search', 'web_read'] }
 		},
 		clerk: {
 			description: 'Enters documents',
@@ -89,7 +90,7 @@ const manifest = {
 } satisfies EngineManifest;
 const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
-const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['web_search'], steps: 2 }));
+const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['web_search', 'web_read'], steps: 2 }));
 export default { automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
@@ -142,7 +143,22 @@ const open = (steps: readonly Step[]) =>
 			TestWorkspace.layer({
 				manifest,
 				guest: yield* guest,
-				ports: Layer.succeed(Ai, ai.port),
+				ports: Layer.mergeAll(
+					Layer.succeed(Ai, ai.port),
+					Layer.succeed(WebRead, {
+						read: (url) =>
+							Effect.succeed({
+								url,
+								title: null,
+								text:
+									'Part 4. ' +
+									'x'.repeat(30_000) +
+									' Overtime is paid at 1.5 times the hourly rate. ' +
+									'y'.repeat(30_000),
+								pages: 12
+							})
+					})
+				),
 				host: {
 					agent: {
 						hostTools: [
@@ -228,4 +244,70 @@ describe('sys_2.infer host tools', () => {
 			})
 		)
 	);
+	it.live(
+		'web_read answers a document window the browser cannot show, and is traced like any tool',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, route, ai } = yield* open([
+						use([
+							{
+								id: 'r1',
+								name: 'web_read',
+								input: { url: 'https://law.example/act.pdf', find: 'overtime' }
+							}
+						]),
+						use([
+							{
+								id: 'p',
+								name: 'patch',
+								input: {
+									ops: [
+										{ op: 'add', path: '/matched', value: false },
+										{ op: 'add', path: '/po', value: '' }
+									]
+								}
+							},
+							{ id: 's', name: 'submit', input: {} }
+						])
+					]);
+					yield* create(t, route, 'invoices.create', {
+						number: 'INV-2',
+						supplier: 'Acme',
+						amount: 1
+					});
+					yield* t.runDue();
+					const [window] = toolResults(ai.requests[1]!);
+					expect(window).toMatchObject({
+						url: 'https://law.example/act.pdf',
+						characters: 60_056,
+						pages: 12
+					});
+					expect(
+						Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(window).text
+					).toContain('Overtime is paid at 1.5 times the hourly rate.');
+					const { rows } = yield* t.db.write({
+						text: "SELECT attributes->>'tool' AS tool FROM sys_event WHERE event = 'infer.tool'",
+						params: []
+					});
+					expect(rows).toEqual([{ tool: 'web_read' }]);
+				})
+			)
+	);
+
+	it('a web_read window pages the text, and find keeps only the passages around its words', () => {
+		const page = {
+			url: 'u',
+			title: null,
+			text: 'a'.repeat(25_000) + ' needle ' + 'b'.repeat(25_000)
+		};
+		const first = webReadWindow(page);
+		expect(first['next']).toBe(20_000);
+		expect(String(first['text'])).toHaveLength(20_000);
+		expect(webReadWindow(page, 40_000)['next']).toBeUndefined();
+		const found = String(webReadWindow(page, 0, 'NEEDLE')['text']);
+		expect(found).toContain('needle');
+		expect(found.length).toBeLessThan(1_000);
+		expect(webReadWindow(page, 0, 'absent')['text']).toBe('(no passage has any of those words)');
+	});
 });

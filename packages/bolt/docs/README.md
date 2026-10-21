@@ -42,7 +42,7 @@ effectful integration/pipeline bodies use `function*` and `yield* ctx.…`. Pure
 similarity callbacks, row mapping and outbound builders remain plain functions. Guest helpers
 use `Effect.fnUntraced` or `Effect.fnUntracedEager`; Bolt owns the invocation runtime.
 
-`ctx.ai.sys_2.infer` has no step budget unless the request sets `steps` (1–200 model turns that
+`ctx.ai.sys_2.infer` has no step budget unless the request sets `steps` (1–1000 model turns that
 call tools, per batch of files). Once spent, one final turn offers only `patch`/`submit` and must
 answer; without a valid answer there or in the draft the call fails `invalid`, naming the budget.
 

@@ -26,6 +26,9 @@ const catalog = {
 		},
 		create: {
 			columns: ['title', 'notes', 'status', 'urgent', 'customer_id', 'owner_id', 'code']
+		},
+		update: {
+			columns: ['title', 'notes', 'status', 'urgent', 'customer_id', 'owner_id', 'code']
 		}
 	},
 	customers: { label: ['name'], fields: { name: { kind: 'text' } } },
@@ -43,11 +46,14 @@ const mounted: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	for (const close of mounted.splice(0).reverse()) await close();
 });
-async function show() {
+async function show(record?: Record<string, string | boolean> & { id: string }) {
 	const { bolt } = await viewFixture({});
 	const target = document.createElement('div');
 	document.body.append(target);
-	const app = mount(Harness, { target, props: { bolt, catalog } });
+	const app = mount(Harness, {
+		target,
+		props: { bolt, catalog, ...(record === undefined ? {} : { record }) }
+	});
 	await settle();
 	mounted.push(async () => {
 		await unmount(app);
@@ -75,4 +81,28 @@ it.live('a required scalar, relation and snippet-rendered field are marked; othe
 		for (const field of ['notes', 'owner_id'])
 			assert.equal(control(target, field), null, `${field}'s control is not aria-required`);
 	})
+);
+
+it.live(
+	"a viewed record's fields are readonly, an `editor` snippet included: nothing is editable before Edit",
+	() =>
+		Effect.gen(function* () {
+			const target = yield* browser(() =>
+				show({
+					id: 'j1',
+					title: 'Pipe',
+					code: 'X1',
+					status: 'open',
+					urgent: false,
+					customer_id: 'c1'
+				})
+			);
+			for (const field of ['title', 'code', 'customer_id'])
+				assert.ok(element(target, `[data-field=${field}]`).hasAttribute('data-readonly'), field);
+			assert.equal(
+				target.querySelector('input, select, textarea, [role=combobox]'),
+				null,
+				'no editor'
+			);
+		})
 );

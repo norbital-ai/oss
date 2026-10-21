@@ -235,7 +235,7 @@ type InferRequest<O, Tools> = {
 	output?: Out<O>;
 	initial?: Json;
 	/**
-	 * The most model turns that may call tools (`patch` and `submit` included), 1–200, per batch of files. Once spent, one
+	 * The most model turns that may call tools (`patch` and `submit` included), 1–1000, per batch of files. Once spent, one
 	 * final turn offers no host tools and must answer; otherwise the call fails `invalid`. Absent: no step budget.
 	 */
 	steps?: number;
