@@ -102,6 +102,18 @@ export type WaOpen = (c: WaConfig) => Promise<{
 	media(message: unknown, download: boolean): Promise<WaMedia | null>;
 }>;
 const CREDS = 'creds';
+// libsignal (under Baileys) prints whole session records — private keys included — through the global console. Keep
+// those lines' text and drop the records; every other console call passes through untouched.
+const SESSION_LOG =
+	/^(Closing session:|Opening session:|Removing old closed session:|Session already (closed|open)|Migrating session to:)/;
+export const redactSessionLogs = (console_: Pick<Console, 'info' | 'warn'>) => {
+	for (const level of ['info', 'warn'] as const) {
+		const write = console_[level].bind(console_);
+		console_[level] = (...args: unknown[]) =>
+			typeof args[0] === 'string' && SESSION_LOG.test(args[0]) ? write(args[0]) : write(...args);
+	}
+};
+redactSessionLogs(console);
 const MEDIA_MAX = 32 * 1024 * 1024;
 export type BaileysOptions = {
 	open?: WaOpen;

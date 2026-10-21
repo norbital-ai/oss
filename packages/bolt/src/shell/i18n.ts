@@ -752,6 +752,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Reconnecting: '重新连接中',
 	'Connection closed': '连接已关闭',
 	Pages: '页面',
+	'Page scope': '页面范围',
 	// system collections in ui's Table (runs, approvals, notices, people, teams, keys, integrations, secrets)
 	Action: '操作',
 	Actions: '操作',

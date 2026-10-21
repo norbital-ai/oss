@@ -292,7 +292,7 @@ describe('the shell renders a page (§5.10)', () => {
 		);
 
 	it.live(
-		'hoists mobile page identity into navigation and restores the desktop hero on resize',
+		'a phone shows one top bar carrying the identity, bell and scope; the desktop hero returns on resize',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -303,28 +303,36 @@ describe('the shell renders a page (§5.10)', () => {
 					yield* until(() => target.querySelector('[data-export]') !== null);
 					// Prime happy-dom's change listener at its initial matching viewport before resizing away.
 					window.dispatchEvent(new Event('resize'));
-					const hero = () => target.querySelector('[data-layout=app-media-header]');
-					const nav = () => target.querySelector('main header');
-					yield* until(() => nav() !== null);
-					expect(present(nav()).textContent).toContain('Dispatch board');
-					expect(present(nav()).textContent).toContain('Every job due today');
-					expect(hero()).toBeNull();
-					expect(target.querySelector('[data-app-actions] [data-export]')).not.toBeNull();
+					const heroes = () => target.querySelectorAll('[data-layout=app-media-header]');
+					const bar = () => target.querySelector('main header[data-layout=app-media-header]');
+					yield* until(() => bar() !== null);
+					// one header: no second hero below it, and the scope controls sit in its lane
+					expect(heroes()).toHaveLength(1);
+					expect(target.querySelectorAll('main header')).toHaveLength(1);
+					expect(present(bar()).textContent).toContain('Dispatch board');
+					expect(present(bar()).textContent).toContain('Every job due today');
+					expect(present(bar()).querySelector('[data-app-actions] [data-export]')).not.toBeNull();
+					expect(
+						present(bar()).querySelector('[data-app-actions]')?.getAttribute('aria-label')
+					).toBe('Page scope');
+					expect(present(bar()).querySelector('[aria-label="Open navigation"]')).not.toBeNull();
+					expect(present(bar()).querySelector('[data-testid=notification-bell]')).not.toBeNull();
 					present(target.querySelector<HTMLButtonElement>('[data-export]')).click();
-					yield* until(() => present(present(nav()).textContent).includes('Dispatch overview'));
-					expect(present(nav()).textContent).toContain('All jobs this week');
+					yield* until(() => present(present(bar()).textContent).includes('Dispatch overview'));
+					expect(present(bar()).textContent).toContain('All jobs this week');
 					expect(target.textContent).not.toContain('Every job due today');
-					expect(hero()).toBeNull();
+					expect(heroes()).toHaveLength(1);
 					mobileResize(1024);
-					yield* until(() => nav() === null);
-					expect(present(hero()).textContent).toContain('Dispatch overview');
-					expect(present(hero()).textContent).toContain('All jobs this week');
+					yield* until(() => bar() === null);
+					expect(heroes()).toHaveLength(1);
+					expect(present(heroes()[0]).textContent).toContain('Dispatch overview');
+					expect(present(heroes()[0]).textContent).toContain('All jobs this week');
 					mobileResize(375);
-					yield* until(() => nav() !== null);
-					expect(present(nav()).textContent).toContain('Dispatch overview');
-					expect(present(nav()).textContent).toContain('All jobs this week');
-					expect(hero()).toBeNull();
-					expect(target.querySelector('[data-app-actions] [data-export]')).not.toBeNull();
+					yield* until(() => bar() !== null);
+					expect(present(bar()).textContent).toContain('Dispatch overview');
+					expect(present(bar()).textContent).toContain('All jobs this week');
+					expect(heroes()).toHaveLength(1);
+					expect(present(bar()).querySelector('[data-app-actions] [data-export]')).not.toBeNull();
 				})
 			)
 	);

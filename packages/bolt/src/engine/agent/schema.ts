@@ -254,7 +254,9 @@ export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	integration: r['integration'] ?? null,
 	// an instance thread's own facts: a direct message or a group chat, and the provider's thread (the peer or the group)
 	kind: r['integration'] == null ? null : (r['kind'] ?? null),
-	thread: r['thread'] ?? null
+	thread: r['thread'] ?? null,
+	// a DM's member, by name, when the sender is one: the selector reads "Dion (+65 9238 8112)"
+	peer: r['peer'] ?? null
 });
 /** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_output`). */
 export const clip = (v: Json | undefined): string => {

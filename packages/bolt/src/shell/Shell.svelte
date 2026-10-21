@@ -520,6 +520,23 @@
 			''
 	);
 	const mobileDescription = $derived(pageIdentity?.description ?? app?.description ?? null);
+	// the open app's identity (its AppShell's once published, the registry's until then): the desktop hero, the phone's bar
+	const hero = $derived(
+		(current.kind === 'page' || current.kind === 'kiosk') &&
+			!portal &&
+			(pageIdentity !== null || (app !== null && boot?.visitor === null))
+			? {
+					src:
+						pageIdentity?.banner === undefined || pageIdentity.banner === null
+							? (app?.thumbnail ?? null)
+							: media(pageIdentity.banner),
+					icon: pageIdentity?.icon ?? app?.icon ?? null,
+					title: pageIdentity?.title ?? app?.label ?? null,
+					description: pageIdentity?.description ?? app?.description ?? null,
+					actions: pageIdentity?.actions
+				}
+			: null
+	);
 	// an administrator's team preview from the account menu: the teams Settings lists
 	const teams = Effect.fn('Shell.teams')(function* () {
 		const r = yield* Effect.result(api.settings());
@@ -565,25 +582,9 @@
 	{#if current.kind === 'home' && model !== null}
 		<Home {model} {t} onNavigate={navigate} />
 	{:else if current.kind === 'page' || current.kind === 'kiosk'}
-		<!-- the open app's banner (its AppShell's identity once published, the registry's until then) and its pages as tabs -->
-		{#if !portal && (pageIdentity !== null || (app !== null && boot?.visitor === null))}
-			{#if narrow.current}
-				{#if pageIdentity?.actions}
-					<div class={cn(INSET_X_CLASS, 'shrink-0 py-2')} data-app-actions>
-						{@render pageIdentity.actions()}
-					</div>
-				{/if}
-			{:else}
-				<MediaHeader
-					src={pageIdentity?.banner === undefined || pageIdentity.banner === null
-						? (app?.thumbnail ?? null)
-						: media(pageIdentity.banner)}
-					icon={pageIdentity?.icon ?? app?.icon ?? null}
-					title={pageIdentity?.title ?? app?.label ?? null}
-					description={pageIdentity?.description ?? app?.description ?? null}
-					{...pageIdentity?.actions === undefined ? {} : { actions: pageIdentity.actions }}
-				/>
-			{/if}
+		<!-- the open app's banner and its pages as tabs; on a phone the shell's top bar carries the banner, except a visitor's -->
+		{#if hero !== null && (!narrow.current || boot?.visitor !== null)}
+			<MediaHeader {...hero} compact={narrow.current} actionsLabel={t('Page scope')} />
 		{/if}
 		{#if strip !== null}
 			<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
@@ -818,31 +819,29 @@
 			{/if}
 			<main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-clip bg-background">
 				{#if narrow.current}
+					<!-- the phone's one top bar: navigation, the open app's identity over its banner, the bell, Norbius, then the page's scope -->
 					<div class="shrink-0" bind:offsetHeight={headerHeight}>
-						<Inline
-							as="header"
-							gap="sm"
-							shrink={false}
-							class="border-b bg-background px-[max(1rem,env(safe-area-inset-left))] pt-[calc(env(safe-area-inset-top)+0.25rem)] pb-1"
+						<MediaHeader
+							compact
+							src={hero?.src ?? null}
+							icon={hero?.icon ?? null}
+							title={mobileTitle}
+							description={mobileDescription}
+							actions={hero?.actions}
+							actionsLabel={t('Page scope')}
 						>
-							<Button
-								variant="ghost"
-								size="icon"
-								class="size-11"
-								aria-label={t('Open navigation')}
-								onclick={() => (navOpen = true)}
-							>
-								<Icon name="lucide:panel-bottom" class="size-4" />
-							</Button>
-							<Stack gap="none" grow>
-								<h1 class="truncate text-sm font-medium">{mobileTitle}</h1>
-								{#if mobileDescription}<p
-										class="line-clamp-2 text-xs leading-snug text-muted-foreground"
-									>
-										{mobileDescription}
-									</p>{/if}
-							</Stack>
-							<Inline gap="xs" shrink={false} class="pr-[env(safe-area-inset-right)]">
+							{#snippet leading()}
+								<Button
+									variant="ghost"
+									size="icon"
+									class="size-11"
+									aria-label={t('Open navigation')}
+									onclick={() => (navOpen = true)}
+								>
+									<Icon name="lucide:panel-bottom" class="size-4" />
+								</Button>
+							{/snippet}
+							{#snippet trailing()}
 								{#if bolt !== null}<Bell
 										{api}
 										{bolt}
@@ -851,7 +850,7 @@
 										header
 										onNavigate={navigate}
 									/>{/if}
-								{#if boot.surfaces.agent}
+								{#if boot?.surfaces.agent}
 									<Button
 										variant="ghost"
 										size="icon"
@@ -863,8 +862,8 @@
 										<NorbiusStrip size={20} />
 									</Button>
 								{/if}
-							</Inline>
-						</Inline>
+							{/snippet}
+						</MediaHeader>
 					</div>
 				{/if}
 				<Stack gap="none" fill class="min-h-0 pb-[env(safe-area-inset-bottom)] md:pb-0">

@@ -11,6 +11,7 @@ import {
 	baileysGroupReceipt,
 	baileysReceipt,
 	classify,
+	redactSessionLogs,
 	whatsappMessage
 } from '../src/baileys/index.ts';
 import { CREDS, fake, ME, raw } from './baileys-fake.ts';
@@ -1111,4 +1112,21 @@ describe('sending', () => {
 			yield* h.link.close ?? Effect.void;
 		})
 	);
+});
+
+it('drops libsignal session records, private keys included, from console lines', () => {
+	const lines: unknown[][] = [];
+	const sink = {
+		info: (...a: unknown[]) => void lines.push(a),
+		warn: (...a: unknown[]) => void lines.push(a)
+	};
+	redactSessionLogs(sink);
+	sink.info('Closing session:', { indexInfo: { privKey: Buffer.from('secret') } });
+	sink.warn('Session already closed', { privKey: 'secret' });
+	sink.info('unrelated', { kept: true });
+	expect(lines).toEqual([
+		['Closing session:'],
+		['Session already closed'],
+		['unrelated', { kept: true }]
+	]);
 });

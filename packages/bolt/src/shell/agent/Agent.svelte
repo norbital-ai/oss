@@ -247,7 +247,9 @@
 		c.title ??
 		(c.integration === null || c.thread === null
 			? t('Conversation')
-			: formatHandle(null, c.thread));
+			: c.peer === null
+				? formatHandle(null, c.thread)
+				: `${c.peer} (${formatHandle(null, c.thread)})`);
 	// svelte-ignore state_referenced_locally
 	const conversations = liveEdge(() =>
 		bolt.live<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] } })

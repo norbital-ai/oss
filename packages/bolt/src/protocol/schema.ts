@@ -354,7 +354,9 @@ export const AgentConversation = Schema.Struct({
 	integration: Schema.NullOr(Schema.String),
 	/** An instance thread's kind and its provider thread; null on an in-app conversation. */
 	kind: Schema.NullOr(Schema.Literals(['dm', 'group'])),
-	thread: Schema.NullOr(Schema.String)
+	thread: Schema.NullOr(Schema.String),
+	/** A DM's member by name when the sender is one; null otherwise. */
+	peer: Schema.NullOr(Schema.String)
 });
 export type AgentConversation = typeof AgentConversation.Type;
 
