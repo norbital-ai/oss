@@ -51,7 +51,7 @@ it.live(
 import { manifest } from ${JSON.stringify(new URL('./engine-fixture.ts', import.meta.url).href)};
 import { Effect, Console } from 'effect';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
-NodeRuntime.runMain(typeIndex(${JSON.stringify(root)}, { ...manifest, models: {}, collections: {}, customFields: {} }).pipe(Effect.flatMap(value => Console.log(JSON.stringify(value)))));`;
+NodeRuntime.runMain(typeIndex(${JSON.stringify(root)}, { ...manifest, models: {}, collections: {}, customFields: {} }).pipe(Effect.flatMap(value => Console.log(JSON.stringify(value.index)))));`;
 				const run = spawnSync(process.execPath, ['--input-type=module', '--eval', code], {
 					encoding: 'utf8',
 					env: { ...process.env, NODE_PATH: '' }

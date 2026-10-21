@@ -3,7 +3,8 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { Result } from 'effect';
 import type { Plugin } from 'vite';
-import type { Discovered, Role } from '../discover.ts';
+import type { Discovered } from '../discover.ts';
+import type { Role } from '../../decl/layout.ts';
 
 /** These roles supply browser modules; every other authored declaration stays on the compiler/server side. */
 const CLIENT_ROLES: ReadonlySet<Role> = new Set([

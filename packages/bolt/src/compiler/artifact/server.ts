@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Effect, FileSystem } from 'effect';
-import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { cachedSvelte } from './svelte-cache.ts';
 import { build, type Rolldown } from 'vite';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import { publicPageKeys } from '../../engine/artifact/read.ts';
@@ -191,11 +191,14 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 								});
 							}
 						},
-						svelte({
-							configFile: false,
-							emitCss: false,
-							compilerOptions: { dev: false, experimental: { async: false } }
-						})
+						cachedSvelte(
+							{
+								configFile: false,
+								emitCss: false,
+								compilerOptions: { dev: false, experimental: { async: false } }
+							},
+							join(root, '.norbital', 'cache', 'svelte')
+						)
 					],
 					build: {
 						ssr: true,

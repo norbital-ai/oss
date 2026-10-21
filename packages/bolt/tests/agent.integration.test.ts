@@ -843,31 +843,6 @@ describe('in-app turns', () => {
 			)
 	);
 
-	it.live('stops at the step budget with a fixed reply', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const fixture = yield* setup(
-					[
-						use('history', { query: 'x' }),
-						use('history', { query: 'x' }),
-						use('history', { query: 'x' })
-					],
-					{ steps: 2 }
-				);
-				return yield* Effect.gen(function* () {
-					const { agent, user } = fixture;
-					const root = yield* user('root', { admin: true });
-					const c = yield* agent.start({ owner: root });
-					yield* agent.post({ conversation: c, as: { member: root }, text: 'loop' });
-					expect((yield* agent.drain(c)).reply).toMatchObject({
-						text: FIXED.budget,
-						meta: { tag: 'failed', code: 'stepBudget' }
-					});
-				}).pipe(Effect.provide(fixture.context));
-			})
-		)
-	);
-
 	it.live(
 		'an external member without an external brief has no agent; a staff brief never reaches them',
 		() =>

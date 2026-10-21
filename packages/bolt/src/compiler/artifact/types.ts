@@ -16,6 +16,8 @@ export type TypeIndex = {
 	entries: { readonly [name: string]: TypeEntry };
 	errors: readonly string[];
 };
+/** The program the index was read from, for the doctor's type-aware pass to reuse; `version` is its TypeScript's. */
+export type TypeProgram = { readonly program: TS.Program; readonly version: string };
 
 type Probe = {
 	name: string;
@@ -78,7 +80,8 @@ export const typeIndex = Effect.fn('bolt.typeIndex')(function* (root: string, m:
 		},
 		catch: (cause) => new TypeIndexError({ cause })
 	});
-	if (parsed === undefined) return { entries: {}, errors: ['tsconfig.json could not be read'] };
+	if (parsed === undefined)
+		return { index: { entries: {}, errors: ['tsconfig.json could not be read'] } };
 	const errors: string[] = [];
 	const virtual = new Map<string, string>();
 	const sources = new Map<string, string>();
@@ -190,7 +193,7 @@ function compileTypeIndex(
 		sources: ReadonlyMap<string, string>;
 		errors: string[];
 	}
-): TypeIndex {
+): { index: TypeIndex; program?: TypeProgram } {
 	const probeFile = join(root, '.norbital', '__types_probe.ts');
 	// the probes: one exported alias per name
 	const probes: Probe[] = [];
@@ -300,8 +303,12 @@ function compileTypeIndex(
 	});
 	const checker = program.getTypeChecker();
 	const source = program.getSourceFile(probeFile);
+	const shared = { program, version: ts.version };
 	if (source === undefined)
-		return { entries: {}, errors: [...errors, 'the type probe did not load'] };
+		return {
+			index: { entries: {}, errors: [...errors, 'the type probe did not load'] },
+			program: shared
+		};
 	const aliases = new Map<string, TS.TypeAliasDeclaration>();
 	source.forEachChild((n) => {
 		if (ts.isTypeAliasDeclaration(n)) aliases.set(n.name.text, n);
@@ -369,5 +376,5 @@ function compileTypeIndex(
 			...(src === undefined ? {} : { source: src })
 		};
 	});
-	return { entries, errors };
+	return { index: { entries, errors }, program: shared };
 }

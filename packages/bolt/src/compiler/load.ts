@@ -2,7 +2,8 @@
 // Loading (§3.2, rule 2): import each role's default export and gather the manifest, keyed by role then path-derived name.
 import { Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
-import { type Diagnostic, type Discovered, ROLES, sourcePath, type Role } from './discover.ts';
+import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
+import { ROLES, type Role } from '../decl/layout.ts';
 import { SYSTEM_COLUMNS } from '../protocol/catalog.ts'; // hook:write
 import { SYSTEM } from '../system/index.ts';
 import { DRIVERS, type IntegrationSpec } from '../decl/runtime/integration.ts';

@@ -214,11 +214,17 @@
 			)
 	);
 	/** The save dialog: asks what the change does, prefilled with a suggestion; `null` when cancelled. */
-	let describing = $state<{ text: string; answer: (message: string | null) => void } | null>(null);
+	// the field starts empty: the suggestion is its placeholder and what an empty answer saves
+	let describing = $state<{
+		text: string;
+		suggestion: string;
+		answer: (message: string | null) => void;
+	} | null>(null);
 	const describe = (suggestion: string) =>
 		Effect.callback<string | null>((resume) => {
 			describing = {
-				text: suggestion,
+				text: '',
+				suggestion,
 				answer: (message) => {
 					describing = null;
 					resume(Effect.succeed(message));
@@ -346,6 +352,10 @@
 				})
 			)
 		);
+	/** A diagnosis checks what is on screen: unsaved drafts are saved (with their description) first. */
+	const diagnose = Effect.fn('Studio.diagnose')(function* () {
+		if (yield* save()) yield* buildPreview(false);
+	});
 	let build = $state<{ commit: string; record: StudioBuildRecord | null } | null>(null);
 	let showBuild = $state(false);
 	const openBuild = Effect.fn('Studio.openBuild')(function* (commit: string) {
@@ -464,10 +474,6 @@
 			}}
 		>
 			<span class="block truncate text-xs font-medium text-foreground">{t('My draft')}</span>
-			<span class="block truncate font-mono text-micro text-muted-foreground"
-				>{#if view?.branch !== undefined}{view.branch} ·
-				{/if}{short(view?.commit ?? '')}</span
-			>
 			<span class="mt-1 block truncate text-micro text-muted-foreground"
 				>{changedFiles(view?.changes.length ?? 0)}{#if (view?.behind ?? 0) > 0}
 					· {view?.behind} {t('behind live')}{/if}</span
@@ -487,8 +493,9 @@
 					}}
 				>
 					<span class="block truncate text-xs font-medium text-foreground">!{m.id} {m.title}</span>
-					<span class="block truncate font-mono text-micro text-muted-foreground"
-						>{m.openedBy} · {short(m.head)}…{short(m.base)}</span
+					<span
+						class="block truncate text-micro text-muted-foreground"
+						title={`${short(m.head)}…${short(m.base)}`}>{m.openedBy}</span
 					>
 					<span class="mt-1 block truncate text-micro text-muted-foreground"
 						>{t(FRESH[reviewFreshness(m)])} · {t('next')}: {t(
@@ -517,16 +524,15 @@
 					browsing = false;
 				}}
 			>
-				<span class="block truncate font-mono text-xs font-medium text-foreground"
-					>{r.commit.slice(0, 12)}</span
+				<span class="block truncate text-xs font-medium text-foreground" title={r.commit}
+					>{r.message || t('Version')}</span
 				>
 				{#if r.current}<span class="mt-1 block text-micro text-muted-foreground"
 						>{t('Serving now')}</span
 					>{/if}
 				{#if r.rollback !== undefined}<span class="mt-1 block text-micro text-muted-foreground"
-						>{t('Rolled back to')} <code class="font-mono">{short(r.rollback)}</code></span
+						>{t('Rolled back')}</span
 					>{/if}
-				<span class="block truncate text-micro text-foreground">{r.message}</span>
 				<span class="block text-micro text-muted-foreground"
 					><time datetime={r.at}>{new Date(r.at).toLocaleString()}</time></span
 				>
@@ -548,8 +554,7 @@
 				class="justify-start px-2 text-micro"
 				disabled={locked}
 				onclick={() => fork(openBuild(built))}
-				><Icon name="lucide:scroll-text" class="size-3.5" />{t('Build log of')}
-				<code class="font-mono">{short(built)}</code></Button
+				><Icon name="lucide:scroll-text" class="size-3.5" />{t('Build log')}</Button
 			>
 		{/if}
 		{#if (view?.builds?.length ?? 0) > 0}
@@ -561,14 +566,14 @@
 					data-status={b.status}
 					onclick={() => fork(openBuild(b.commit))}
 				>
-					<span class="block truncate font-mono text-xs font-medium text-foreground"
-						>{short(b.commit)}
-						<span class={b.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}
-							>{t(b.status === 'failed' ? 'failed' : 'built')}</span
-						>{#if b.live}
-							· {t('live')}{/if}</span
+					<span class="block truncate text-xs font-medium text-foreground" title={b.commit}
+						>{b.message || t('Build')}</span
 					>
-					<span class="block truncate text-micro text-foreground">{b.message}</span>
+					<span class="block truncate text-micro"
+						><span class={b.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}
+							>{t(b.status === 'failed' ? 'failed' : 'built')}</span
+						>{#if b.live}<span class="text-muted-foreground"> · {t('live')}</span>{/if}</span
+					>
 					<span class="block text-micro text-muted-foreground"
 						><time datetime={b.at}>{new Date(b.at).toLocaleString()}</time>{#if b.diagnostics > 0}
 							· {b.diagnostics} {t('diagnostics')}{/if}</span
@@ -623,56 +628,6 @@
 		{#if showPreview}
 			{@const p = view.previewOf}
 			<Stack gap="none" fill class="min-h-0">
-				<Inline
-					gap="xs"
-					shrink={false}
-					class="flex-wrap border-b border-border/60 px-3 py-1.5 text-micro"
-				>
-					{#if target === 'workbench'}
-						<Button
-							size="sm"
-							variant="outline"
-							class="px-2 text-micro"
-							disabled={locked}
-							onclick={() => fork(buildPreview(false))}
-						>
-							<Icon name="lucide:refresh-cw" class="size-3.5" />{t(
-								view.preview === null ? 'Preview on sample data' : 'Rebuild preview'
-							)}
-						</Button>
-						{#if admin}<Button
-								size="sm"
-								variant="ghost"
-								class="px-2 text-micro"
-								disabled={locked}
-								onclick={() => fork(buildPreview(true))}>{t('Preview on live data')}</Button
-							>{/if}
-						{#if view.preview !== null}<Button
-								size="sm"
-								variant="ghost"
-								class="px-2 text-micro"
-								disabled={locked}
-								onclick={() => fork(run({ op: 'exit' }))}>{t('Exit preview')}</Button
-							>{/if}
-					{/if}
-					{#if p !== undefined}
-						<span class="text-muted-foreground"
-							>{t(p.live ? 'on live data' : 'on sample data')} ·
-							<code class="font-mono">{short(p.artifact)}</code>
-							{#if p.stale}
-								· <span class="text-amber-700 dark:text-amber-300"
-									>{t('stale: built from')} <code class="font-mono">{short(p.commit)}</code></span
-								>{/if}
-							· {t('expires')}
-							{new Date(p.expiresAt).toLocaleString()}</span
-						>
-					{/if}
-					{#if building && view.preview !== null}
-						<span role="status" class="inline-flex items-center gap-1 text-foreground"
-							><Spinner class="size-3" />{running}</span
-						>
-					{/if}
-				</Inline>
 				{#if view.preview === null}
 					<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
 						<Icon
@@ -682,14 +637,65 @@
 						<p class="text-xs" role={building ? 'status' : undefined}>
 							{building ? running : t('No preview yet.')}
 						</p>
+						{#if !building && target === 'workbench'}
+							<Button size="sm" disabled={locked} onclick={() => fork(buildPreview(false))}
+								>{t('Preview on sample data')}</Button
+							>
+						{/if}
 					</Stack>
 				{:else}
 					<PreviewFrame
 						src={view.preview}
+						version={p?.artifact}
 						title={t('Workbench preview')}
-						label={`${target === 'workbench' ? t('My draft') : `!${target}`}${p === undefined ? '' : ` · ${short(p.commit)}`}`}
+						label={`${target === 'workbench' ? t('My draft') : `!${target}`}${p?.stale ? ` · ${t('out of date')}` : ''}`}
+						status={building ? running : undefined}
 						{t}
-					/>
+					>
+						{#snippet details()}
+							{#if p !== undefined}
+								<p>
+									{t(p.live ? 'on live data' : 'on sample data')} ·
+									<code class="font-mono">{short(p.commit)}</code>
+								</p>
+								{#if p.stale}<p class="text-amber-700 dark:text-amber-300">
+										{t('stale: built from')} <code class="font-mono">{short(p.commit)}</code>
+									</p>{/if}
+								<p>{t('expires')} {new Date(p.expiresAt).toLocaleString()}</p>
+							{/if}
+						{/snippet}
+						{#snippet menu(close: () => void)}
+							{#if target === 'workbench'}
+								<Button
+									size="sm"
+									variant="ghost"
+									class="justify-start"
+									disabled={locked}
+									onclick={() => (close(), fork(buildPreview(false)))}
+								>
+									<Icon name="lucide:refresh-cw" class="size-3.5" />{t('Rebuild preview')}
+								</Button>
+								{#if admin}<Button
+										size="sm"
+										variant="ghost"
+										class="justify-start"
+										disabled={locked}
+										onclick={() => (close(), fork(buildPreview(true)))}
+									>
+										<Icon name="lucide:database" class="size-3.5" />{t('Preview on live data')}
+									</Button>{/if}
+								<Button
+									size="sm"
+									variant="ghost"
+									class="justify-start"
+									disabled={locked}
+									onclick={() => (close(), fork(run({ op: 'exit' })))}
+								>
+									<Icon name="lucide:circle-x" class="size-3.5" />{t('Exit preview')}
+								</Button>
+							{/if}
+						{/snippet}
+					</PreviewFrame>
 				{/if}
 			</Stack>
 		{:else}
@@ -713,8 +719,9 @@
 					diagnostics={view.diagnostics}
 					stale={draftCount > 0}
 					busy={locked}
+					progress={building ? running : undefined}
 					onopen={openFile}
-					onrerun={() => fork(buildPreview(false))}
+					onrerun={() => fork(diagnose())}
 					{t}
 				/>
 			</Stack>
@@ -896,21 +903,25 @@
 				class="flex flex-col gap-3"
 				onsubmit={(event) => {
 					event.preventDefault();
-					const message = asking.text.trim();
-					if (message !== '') asking.answer(message);
+					asking.answer(asking.text.trim() || asking.suggestion);
 				}}
 			>
 				<div class="flex flex-col gap-1.5">
 					<label for="studio-save-message" class="text-label"
 						>{t('What does this change do?')}</label
 					>
-					<Input id="studio-save-message" required maxlength={200} bind:value={asking.text} />
+					<Input
+						id="studio-save-message"
+						maxlength={200}
+						placeholder={asking.suggestion}
+						bind:value={asking.text}
+					/>
 				</div>
 				<Dialog.Footer>
 					<Button type="button" variant="ghost" onclick={() => asking.answer(null)}
 						>{t('Cancel')}</Button
 					>
-					<Button type="submit" disabled={asking.text.trim() === ''}>{t('Save')}</Button>
+					<Button type="submit">{t('Save')}</Button>
 				</Dialog.Footer>
 			</form>
 		{/if}

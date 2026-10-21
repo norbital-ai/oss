@@ -101,6 +101,14 @@ it('search ranks an exact name first and narrows by namespace', () => {
 		docs.search('add days', { namespaces: ['std/'] }).every((h) => h.namespace.startsWith('std/'))
 	).toBe(true);
 	expect(docs.search('zzzz-no-such-word')).toEqual([]);
+	// a sentence finds what its words name, never nothing when one of them matches
+	const sentence = docs.search('app page table view records edit form');
+	expect(sentence.length).toBeGreaterThan(0);
+	const names = sentence.map((h) => h.name);
+	expect(names).toContain('app');
+	expect(names.some((n) => n.startsWith('Table'))).toBe(true);
+	expect(names).not.toContain('ApprovalPanel'); // "app" matches where a word starts, not inside "approval"
+	expect(docs.search('enum field kind values options')[0]?.name).toBe('FieldKind');
 });
 
 // A complete native context with unrelated capabilities that fail if the docs tool calls them.

@@ -336,6 +336,30 @@ describe('approval decisions through act', () => {
 			})
 	);
 });
+describe('skill', () => {
+	it.effect(
+		'a large skill answers whole sections that fit and names the rest, never a clipped body',
+		() =>
+			Effect.gen(function* () {
+				const big = (n: number) => `## Part ${n}\n${'word '.repeat(1200)}\n`;
+				const text = `---\ndescription: How to author\n---\n${[1, 2, 3, 4, 5].map(big).join('')}`;
+				const answer = yield* result(yield* ctx({ skills: { authoring: text } }), 'skill', {
+					name: 'authoring'
+				});
+				const r = Schema.decodeUnknownSync(
+					Schema.Struct({
+						body: Schema.String,
+						more: Schema.optionalKey(Schema.String),
+						clipped: Schema.optionalKey(Schema.String)
+					})
+				)(Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Unknown }))(answer).result);
+				expect(r.clipped).toBeUndefined();
+				expect(r.body.startsWith('## Part 1')).toBe(true);
+				expect(r.body).not.toContain('## Part 5');
+				expect(r.more).toMatch(/^read each with section: .*Part 5$/);
+			})
+	);
+});
 describe('workspace_search', () => {
 	const source: { [path: string]: string } = {
 		'src/a.ts': 'x\nbolt.read(tasks)\nexport function total(a: number) {\n\treturn a;\n}\n',
@@ -396,7 +420,12 @@ describe('workspace_search', () => {
 					yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_search', {
 						draft: true
 					})
-				).toEqual({ result: { files: ['src/new.ts'] } });
+				).toEqual({
+					result: {
+						files: ['src/new.ts'],
+						read: 'pass path (with draft: true for your draft) to read one of these'
+					}
+				});
 				expect(
 					tool(yield* ctx({ workspace, authority: member({ external: true }) }), 'workspace_search')
 				).toBeUndefined();

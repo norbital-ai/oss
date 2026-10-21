@@ -1,3 +1,4 @@
+import ts from 'typescript';
 /**
  * Every shipped rule runs against its own examples: a `bad` example reports, a `good` one does not. A rule scoped to
  * components is given a component, and a bare script body a `<script>` block, or it would be judged on an empty file.
@@ -119,6 +120,28 @@ it.effect(
 						f.location.split(':').slice(0, 2).join(':')
 					);
 				assert.deepEqual(run(), ['b.ts:2']);
+				// a caller's program over the same files (Bolt's type index) answers the same, and is read, not rebuilt
+				const program = ts.createProgram({
+					rootNames: [join(root, 'a.ts'), join(root, 'b.ts')],
+					options: { noEmit: true, allowJs: true, skipLibCheck: true }
+				});
+				let built = 0;
+				const shared = doctor({
+					root,
+					files: ['a.ts', 'b.ts'],
+					packs: ['realm/types'],
+					program: {
+						program: new Proxy(program, {
+							get: (target, key, receiver) =>
+								key === 'getTypeChecker'
+									? () => (built++, target.getTypeChecker())
+									: Reflect.get(target, key, receiver)
+						}),
+						version: ts.version
+					}
+				}).map((f) => f.location.split(':').slice(0, 2).join(':'));
+				assert.deepEqual(shared, ['b.ts:2']);
+				assert.equal(built, 1);
 				writeFileSync(
 					join(root, 'b.ts'),
 					"import { next, old } from './a.js';\n// repository-health:allow LEGACY2 -- kept until the caller moves\nexport const v = old() + next();\n"

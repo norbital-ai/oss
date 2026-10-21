@@ -78,9 +78,10 @@ export const docs = {
 		return docs.namespace(namespace)?.symbols.find((s) => s.name === name) ?? null;
 	},
 	/**
-	 * Symbols whose name, summary or signature contain every word of `text`, best first: an exact name, then a name
-	 * that starts with or contains the words, then the rest. `namespaces` narrows the search (a prefix ending in `/`
-	 * names a family, `std/` every std entry).
+	 * Symbols whose name, summary or signature contain any word of `text`, best first: an exact name, then a name that
+	 * starts with the words, then by how many words match (a word in the name counts more) — so a sentence ("app page
+	 * table") finds what its words name. `namespaces` narrows the search (a prefix ending in `/` names a family, `std/`
+	 * every std entry).
 	 * @example docs.search('date range', { namespaces: ['std/'] })
 	 */
 	search(text: string, o: { namespaces?: readonly string[]; limit?: number } = {}): DocHit[] {
@@ -88,22 +89,28 @@ export const docs = {
 		const within = (ns: string) =>
 			o.namespaces === undefined ||
 			o.namespaces.some((p) => (p.endsWith('/') ? ns.startsWith(p) : ns === p));
+		const joined = words.join('');
+		// a word matches where a word starts ("app" is not "approval"); a name's own words weigh most
+		const starts = words.map(
+			(w) => new RegExp(`(?:^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+		);
 		const hits: (DocHit & { score: number })[] = [];
 		for (const n of docs.index().namespaces) {
 			if (!within(n.namespace)) continue;
 			for (const s of load<DocNamespace>(docFile(n.namespace)).symbols) {
 				const name = s.name.toLowerCase(),
+					tokens = s.name
+						.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+						.toLowerCase()
+						.split(/[^a-z0-9]+/),
 					hay = `${name} ${s.summary} ${s.signature}`.toLowerCase();
-				if (!words.every((w) => hay.includes(w))) continue;
-				const joined = words.join('');
+				const matched = starts.filter((w) => w.test(hay)).length;
+				if (matched === 0) continue;
 				const score =
-					name === joined
-						? 100
-						: name.startsWith(joined)
-							? 50
-							: words.some((w) => name.includes(w))
-								? 20
-								: 1;
+					(name === joined ? 1000 : name.startsWith(joined) ? 500 : 0) +
+					words.filter((w) => tokens.includes(w)).length * 40 +
+					matched * 10 +
+					(matched === words.length ? 50 : 0);
 				hits.push({
 					namespace: n.namespace,
 					name: s.name,

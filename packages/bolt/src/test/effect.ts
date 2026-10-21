@@ -89,7 +89,7 @@ import {
 	signupOf,
 	type IdentityHost
 } from '../engine/identity/session.ts';
-import { layered, type EngineManifest } from '../engine/manifest.ts';
+import { decodeManifest, layered, type EngineManifest } from '../engine/manifest.ts';
 import { Port, type PortFailure } from '../engine/port.ts';
 import {
 	Ai,
@@ -694,10 +694,133 @@ const invalid = (e: unknown) =>
 const node = NodeChildProcessSpawner.layer.pipe(
 	Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeCrypto.layer))
 );
-const compiled = new Map<
-	string,
-	Effect.Effect<import('../compiler/check/index.ts').CheckResult, KitInvalid>
->();
+type CheckResult = import('../compiler/check/index.ts').CheckResult;
+const compiled = new Map<string, Effect.Effect<CheckResult, KitInvalid>>();
+/** A check result as one run's processes share it: the guest's `?bytes` assets as base64, the manifest as its JSON. */
+const RunChecked = Schema.Struct({
+	stages: Schema.Array(
+		Schema.Literals([
+			'discover',
+			'names',
+			'bundle',
+			'evaluate',
+			'manifest',
+			'seed',
+			'schema',
+			'rules'
+		])
+	),
+	errors: Schema.Array(
+		Schema.Struct({
+			code: Schema.String,
+			path: Schema.String,
+			line: Schema.optionalKey(Schema.Number),
+			message: Schema.String,
+			help: Schema.optionalKey(Schema.String)
+		})
+	),
+	manifest: Schema.optionalKey(Schema.Json),
+	guest: Schema.optionalKey(
+		Schema.Struct({
+			source: Schema.String,
+			sourceMap: Schema.optionalKey(Schema.String),
+			assets: Schema.optionalKey(Schema.Record(Schema.String, Schema.String))
+		})
+	),
+	transforms: Schema.Array(Schema.String),
+	projections: Schema.Array(Schema.String),
+	seed: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Array(Schema.Record(Schema.String, Schema.Json)))
+	)
+});
+const toRun = (c: CheckResult): typeof RunChecked.Encoded => ({
+	stages: c.stages,
+	errors: c.errors,
+	transforms: c.transforms,
+	projections: c.projections,
+	...(c.manifest === undefined
+		? {}
+		: { manifest: Schema.decodeUnknownSync(Schema.Json)(JSON.parse(JSON.stringify(c.manifest))) }),
+	...(c.seed === undefined ? {} : { seed: c.seed }),
+	...(c.guest === undefined
+		? {}
+		: {
+				guest: {
+					source: c.guest.source,
+					...(c.guest.sourceMap === undefined ? {} : { sourceMap: c.guest.sourceMap }),
+					...(c.guest.assets === undefined
+						? {}
+						: {
+								assets: Object.fromEntries(
+									Object.entries(c.guest.assets).map(([hash, bytes]) => [
+										hash,
+										Buffer.from(bytes).toString('base64')
+									])
+								)
+							})
+				}
+			})
+});
+const fromRun = (r: typeof RunChecked.Type) =>
+	Effect.gen(function* () {
+		const manifest =
+			r.manifest === undefined
+				? undefined
+				: yield* Effect.fromResult(decodeManifest(r.manifest)).pipe(Effect.mapError(invalid));
+		const assets = r.guest?.assets;
+		const result: CheckResult = {
+			stages: [...r.stages],
+			errors: r.errors.map((e) => ({ ...e })),
+			transforms: [...r.transforms],
+			projections: [...r.projections],
+			...(manifest === undefined ? {} : { manifest }),
+			...(r.seed === undefined ? {} : { seed: r.seed }),
+			...(r.guest === undefined
+				? {}
+				: {
+						guest: {
+							source: r.guest.source,
+							...(r.guest.sourceMap === undefined ? {} : { sourceMap: r.guest.sourceMap }),
+							...(assets === undefined
+								? {}
+								: {
+										assets: Object.fromEntries(
+											Object.entries(assets).map(([hash, text]) => [
+												hash,
+												new Uint8Array(Buffer.from(text, 'base64'))
+											])
+										)
+									})
+						}
+					})
+		};
+		return result;
+	});
+/**
+ * Each test file runs in a fresh process; `bolt test` hands its processes one directory for the run
+ * (`BOLT_TEST_RUN_CACHE`), so the workspace is checked once per run, not once per file. It is made fresh each run, so a
+ * result never outlives the source or the Bolt it came from.
+ */
+const runChecked = (root: string, compute: Effect.Effect<CheckResult, KitInvalid>) =>
+	Effect.gen(function* () {
+		const dir = process.env['BOLT_TEST_RUN_CACHE'];
+		if (dir === undefined || dir === '') return yield* compute;
+		const fs = yield* FileSystem.FileSystem;
+		const file = join(dir, `${createHash('sha256').update(root).digest('hex')}.json`);
+		const kept = yield* fs.readFileString(file).pipe(Effect.option);
+		if (Option.isSome(kept))
+			return yield* fromRun(
+				yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RunChecked))(kept.value).pipe(
+					Effect.mapError(invalid)
+				)
+			);
+		const result = yield* compute;
+		// written whole, then renamed: a parallel test process never reads half a result
+		const temporary = `${file}.${randomUUID()}`;
+		yield* fs.writeFileString(temporary, JSON.stringify(toRun(result)));
+		yield* fs.rename(temporary, file);
+		return result;
+	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 const checked = (root: string) =>
 	Effect.gen(function* () {
 		let cached = compiled.get(root);
@@ -707,7 +830,7 @@ const checked = (root: string) =>
 				catch: invalid
 			});
 			cached = yield* Effect.cached(
-				compiler.check(root).pipe(Effect.provide(node), Effect.mapError(invalid))
+				runChecked(root, compiler.check(root).pipe(Effect.provide(node), Effect.mapError(invalid)))
 			);
 			compiled.set(root, cached);
 		}
@@ -717,25 +840,67 @@ const checked = (root: string) =>
 export const check = (root: string) => checked(root);
 // Only schema bytes are shared. Every workspace still applies its current source rows and owns its database.
 type SchemaImageFailure = BoltError | DbError | KitInvalid;
+/** The schema image's key: its slice, and the workspace whose `.norbital/cache` keeps it across test processes. */
+const ImageKey = Schema.Struct({ dir: Schema.NullOr(Schema.String), slice: SchemaSliceSchema });
+/** The PGlite build (its versioned store path): an image from another build is another key. */
+const PGLITE = import.meta.resolve('@electric-sql/pglite');
+const KEPT_IMAGES = 4;
+/** initdb (~2 s, ~0.8 GB) and the plan (~1 s) for one schema; each test file runs in a fresh process. */
+const freshImage = (slice: typeof SchemaSliceSchema.Type) =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
+			const db = PgliteDb.make(pg);
+			yield* applyPlan(db, plan(yield* readApplied(db), slice), { accept: true });
+			return yield* Effect.tryPromise({
+				try: () => pg.dumpDataDir('none'),
+				catch: invalid
+			}).pipe(Effect.uninterruptible);
+		})
+	);
+/** The image from the workspace's cache, else built once and kept there (newest few) for the next test process. */
+const storedImage = (dir: string, slice: typeof SchemaSliceSchema.Type) =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const file = join(
+			dir,
+			`${createHash('sha256')
+				.update(JSON.stringify([PGLITE, slice]))
+				.digest('hex')}.tar`
+		);
+		const kept = yield* fs.readFile(file).pipe(Effect.option);
+		if (Option.isSome(kept)) return new Blob([kept.value.slice()]);
+		const image = yield* freshImage(slice);
+		const bytes = new Uint8Array(yield* Effect.promise(() => image.arrayBuffer()));
+		yield* fs.makeDirectory(dir, { recursive: true });
+		// written whole, then renamed: a concurrent test process never reads half an image
+		const temporary = `${file}.${randomUUID()}`;
+		yield* fs.writeFile(temporary, bytes);
+		yield* fs.rename(temporary, file);
+		const images = yield* Effect.forEach(
+			(yield* fs.readDirectory(dir)).filter((name) => name.endsWith('.tar')),
+			(name) =>
+				fs
+					.stat(join(dir, name))
+					.pipe(
+						Effect.map((info) => ({ name, at: Option.getOrElse(info.mtime, () => new Date(0)) }))
+					)
+		);
+		for (const old of images.toSorted((a, b) => b.at.getTime() - a.at.getTime()).slice(KEPT_IMAGES))
+			yield* fs.remove(join(dir, old.name), { force: true });
+		return image;
+	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 let schemaImages: Cache.Cache<string, Blob, SchemaImageFailure> | undefined;
 const images = Effect.suspend(() =>
 	schemaImages === undefined
 		? Cache.makeWith(
 				(key: string): Effect.Effect<Blob, SchemaImageFailure> =>
-					Effect.scoped(
-						Effect.gen(function* () {
-							const slice = yield* Schema.decodeUnknownEffect(
-								Schema.fromJsonString(SchemaSliceSchema)
-							)(key).pipe(Effect.mapError(invalid));
-							const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
-							const db = PgliteDb.make(pg);
-							yield* applyPlan(db, plan(yield* readApplied(db), slice), { accept: true });
-							return yield* Effect.tryPromise({
-								try: () => pg.dumpDataDir('none'),
-								catch: invalid
-							}).pipe(Effect.uninterruptible);
-						})
-					),
+					Effect.gen(function* () {
+						const { dir, slice } = yield* Schema.decodeUnknownEffect(
+							Schema.fromJsonString(ImageKey)
+						)(key).pipe(Effect.mapError(invalid));
+						return yield* dir === null ? freshImage(slice) : storedImage(dir, slice);
+					}),
 				{
 					capacity: 4,
 					timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero)
@@ -746,9 +911,12 @@ const images = Effect.suspend(() =>
 			)
 		: Effect.succeed(schemaImages)
 );
-const schemaDatabase = (manifest: EngineManifest) =>
+const schemaDatabase = (manifest: EngineManifest, root: string | undefined) =>
 	Effect.gen(function* () {
-		const key = JSON.stringify({ ...schemaSlice(manifest), connections: {} });
+		const key = JSON.stringify({
+			dir: root === undefined ? null : join(root, '.norbital', 'cache', 'schema-images'),
+			slice: { ...schemaSlice(manifest), connections: {} }
+		});
 		return PgliteDb.layer(yield* Cache.get(yield* images, key));
 	});
 const namedPack = (root: string, manifest: EngineManifest, name: 'base' | 'sample') =>
@@ -933,7 +1101,9 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							count.writes = 0;
 						}
 					};
-				const dbContext = yield* Layer.build(options.db ?? (yield* schemaDatabase(m))),
+				const dbContext = yield* Layer.build(
+						options.db ?? (yield* schemaDatabase(m, options.root))
+					),
 					inner = Context.get(dbContext, TenantDb);
 				const members = yield* Semaphore.make(1),
 					pending: Sql[] = [];

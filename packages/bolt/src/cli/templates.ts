@@ -11,6 +11,7 @@ import {
 } from 'effect';
 import { Command, Flag } from 'effect/unstable/cli';
 import { ChildProcess } from 'effect/unstable/process';
+import { availableParallelism } from 'node:os';
 import { TemplateManifest } from '../protocol/schema.ts';
 import { readArtifact } from '../engine/artifact/read.ts';
 import { schemaSql } from '../compiler/artifact/index.ts';
@@ -167,6 +168,12 @@ export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 	if (selected.length === 0) return yield* fail(`No template matched ${filter}.`);
 	return selected;
 });
+/** A pnpm lockfile without its `@norbital-ai/*` package and snapshot entries; importers keep their specifiers. */
+export const withoutFirstParty = (lockfile: string): string =>
+	lockfile
+		.split(/\n(?=\S|  \S)/)
+		.filter((block) => !/^  '?@norbital-ai\//.test(block))
+		.join('\n');
 export const unsatisfiedFirstPartyPeers = (lockfile: string): string[] => {
 	const declared = new Map<string, Map<string, string>>();
 	for (const block of lockfile.split(/\n(?=  '@norbital-ai\/)/)) {
@@ -375,14 +382,17 @@ export const resolveLockfile = Effect.fn('bolt.resolveTemplateLock')(function* (
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const dir = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-lock-${template.slug}-` });
-			for (const file of [
-				'package.json',
-				'pnpm-workspace.yaml',
-				'pnpm-lock.yaml',
-				'isolated-vm.patch'
-			])
+			for (const file of ['package.json', 'pnpm-workspace.yaml', 'isolated-vm.patch'])
 				if (yield* fs.exists(path.join(template.directory, file)))
 					yield* fs.copyFile(path.join(template.directory, file), path.join(dir, file));
+			// first-party entries always re-resolve from the registry: a version republished under the same number keeps
+			// its locked integrity otherwise, and the stale lock surfaces only when a host installs it
+			const committed = path.join(template.directory, 'pnpm-lock.yaml');
+			if (yield* fs.exists(committed))
+				yield* fs.writeFileString(
+					path.join(dir, 'pnpm-lock.yaml'),
+					withoutFirstParty(yield* fs.readFileString(committed))
+				);
 			yield* fs.writeFileString(path.join(dir, '.npmrc'), yield* registryConfiguration);
 			yield* execute(
 				'pnpm',
@@ -407,7 +417,6 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options:
 	root?: string;
 	filter?: string;
 	check: boolean;
-	verifyInstall: boolean;
 }) {
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
@@ -417,41 +426,24 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options:
 			const templates = yield* discoverTemplates(root, options.filter);
 			const drifted: string[] = [];
 			const resolution = yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-lock-shared-' });
-			const store = options.verifyInstall
-				? yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-verify-store-' })
-				: undefined;
-			for (const template of templates) {
-				const committedPath = path.join(template.directory, 'pnpm-lock.yaml');
-				const resolved = yield* resolveLockfile(template, run, resolution);
-				const committed = (yield* fs.exists(committedPath))
-					? yield* fs.readFileString(committedPath)
-					: undefined;
-				if (options.check && committed !== resolved)
-					drifted.push(
-						`${template.slug}: ${committed === undefined ? 'missing pnpm-lock.yaml' : 'pnpm-lock.yaml does not match resolved dependencies'}`
-					);
-				else if (!options.check && committed !== resolved)
-					yield* fs.writeFileString(committedPath, resolved);
-				if (store !== undefined) {
-					const dir = yield* fs.makeTempDirectoryScoped({
-						prefix: `norbital-verify-${template.slug}-`
-					});
-					for (const file of ['package.json', 'pnpm-workspace.yaml'])
-						yield* fs.copyFile(path.join(template.directory, file), path.join(dir, file));
-					const patch = path.join(template.directory, 'isolated-vm.patch');
-					if (yield* fs.exists(patch))
-						yield* fs.copyFile(patch, path.join(dir, 'isolated-vm.patch'));
-					yield* fs.writeFileString(path.join(dir, 'pnpm-lock.yaml'), resolved);
-					yield* fs.writeFileString(path.join(dir, '.npmrc'), yield* registryConfiguration);
-					yield* run('pnpm', ['fetch', '--frozen-lockfile', '--store-dir', store], { cwd: dir });
-					yield* fs.remove(path.join(dir, '.npmrc'));
-					yield* run(
-						'pnpm',
-						['install', '--frozen-lockfile', '--offline', '--ignore-scripts', '--store-dir', store],
-						{ cwd: dir }
-					);
-				}
-			}
+			// network-bound resolutions sharing one store and metadata cache
+			yield* Effect.forEach(
+				templates,
+				Effect.fnUntraced(function* (template) {
+					const committedPath = path.join(template.directory, 'pnpm-lock.yaml');
+					const resolved = yield* resolveLockfile(template, run, resolution);
+					const committed = (yield* fs.exists(committedPath))
+						? yield* fs.readFileString(committedPath)
+						: undefined;
+					if (options.check && committed !== resolved)
+						drifted.push(
+							`${template.slug}: ${committed === undefined ? 'missing pnpm-lock.yaml' : 'pnpm-lock.yaml does not match resolved dependencies'}`
+						);
+					else if (!options.check && committed !== resolved)
+						yield* fs.writeFileString(committedPath, resolved);
+				}),
+				{ concurrency: 4, discard: true }
+			);
 			if (drifted.length)
 				return yield* fail(
 					`Template lockfiles are stale. Run \`pnpm templates:lock\`.\n  ${drifted.join('\n  ')}`
@@ -510,6 +502,32 @@ export const materializeCandidate = Effect.fn('bolt.templateProjection')(functio
 	}
 	if (copied === 0) return yield* fail(`Template ${template.slug} has no candidate files.`);
 });
+/** Template directories with changes since `since` (the working tree and untracked files included); none when git
+ * cannot resolve it (a first push, a rewritten history), so every template is verified. */
+export const changedSince = Effect.fn('bolt.templatesChanged')(function* (root: string, since: string) {
+	const listed = yield* Effect.all([
+		run('git', ['diff', '--name-only', since, '--', '.'], { cwd: root }),
+		run('git', ['ls-files', '--others', '--exclude-standard'], { cwd: root })
+	]).pipe(Effect.option);
+	return Option.map(
+		listed,
+		(outputs) =>
+			new Set(
+				outputs
+					.join('\n')
+					.split('\n')
+					.filter(Boolean)
+					.map((file) => file.split('/')[0])
+			)
+	);
+});
+/**
+ * Each template as a tenant receives it: its tracked files alone, installed offline from its committed lock (fetched
+ * once into the shared store, so a lock that cannot install without the network fails here), built, then its suite.
+ * `NORBITAL_TEMPLATES_SINCE` (default `origin/main`; `all` for every template) limits it to the templates changed
+ * since that revision. A `check` or `lint` script that the build or the repository's own format check already runs is
+ * not run twice.
+ */
 export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 	root: string = process.cwd(),
 	filter?: string
@@ -519,17 +537,33 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const keep = yield* Config.string('KEEP_TEMPLATE_PROJECTIONS').pipe(Config.withDefault('0'));
+			const since = yield* Config.string('NORBITAL_TEMPLATES_SINCE').pipe(
+				Config.withDefault('origin/main')
+			);
 			const dir =
 				keep === '1'
 					? yield* fs.makeTempDirectory({ prefix: 'norbital-template-projections-' })
 					: yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-template-projections-' });
 			if (keep === '1')
 				yield* Effect.addFinalizer(() => Console.log(`Kept standalone projections at ${dir}.`));
-			for (const template of yield* discoverTemplates(root, filter)) {
+			const all = yield* discoverTemplates(root, filter);
+			const changed =
+				filter !== undefined || since === 'all' ? Option.none() : yield* changedSince(root, since);
+			const templates = Option.match(changed, {
+				onNone: () => all,
+				onSome: (paths) => all.filter((template) => paths.has(template.path))
+			});
+			if (templates.length < all.length)
+				yield* Console.log(
+					`Verifying ${templates.length} of ${all.length} templates changed since ${since} (NORBITAL_TEMPLATES_SINCE=all for every one).`
+				);
+			const credentials = yield* registryConfiguration;
+			const verify = Effect.fnUntraced(function* (template: Template) {
 				const destination = path.join(dir, template.slug);
 				yield* fs.makeDirectory(destination, { recursive: true });
 				yield* materializeCandidate(root, template, destination);
-				yield* fs.writeFileString(path.join(destination, '.npmrc'), yield* registryConfiguration);
+				const npmrc = path.join(destination, '.npmrc');
+				yield* fs.writeFileString(npmrc, credentials);
 				const pnpm = (label: string, args: readonly string[]) =>
 					run('pnpm', args, { cwd: destination }).pipe(
 						Effect.mapError(
@@ -539,21 +573,28 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 								})
 						)
 					);
-				yield* pnpm('install', ['install', '--frozen-lockfile']);
-				yield* pnpm('check', ['check']);
-				yield* pnpm('build', ['exec', 'bolt', 'build']);
+				yield* pnpm('fetch', ['fetch', '--frozen-lockfile']);
+				yield* fs.remove(npmrc);
+				yield* pnpm('install', ['install', '--frozen-lockfile', '--offline']);
+				const scripts = (yield* json(Package, path.join(destination, 'package.json'))).scripts ?? {};
+				const suite = scripts['test'] ?? '';
+				const banked = suite.includes('--bank');
+				if (scripts['check'] !== 'bolt check') yield* pnpm('check', ['check']);
+				if (banked || !/\bbolt build\b/.test(suite)) yield* pnpm('build', ['exec', 'bolt', 'build']);
+				if (scripts['lint'] !== 'prettier --check .') yield* pnpm('lint', ['lint']);
+				if (banked)
+					yield* Console.log(`${template.slug}: its suite reads the seed bank; the local gate runs it.`);
+				else yield* pnpm('test', ['test']);
 				const artifact = path.join(destination, '.norbital', 'artifact', 'artifact.json');
 				if (!(yield* fs.exists(artifact)))
 					return yield* fail(`${template.slug} bolt build emitted no ${artifact}.`);
-				yield* pnpm('lint', ['lint']);
-				const manifest = yield* json(Package, path.join(destination, 'package.json'));
-				if (!(manifest.scripts?.['test'] ?? '').includes('--bank')) yield* pnpm('test', ['test']);
-				else
-					yield* Console.log(
-						`${template.slug}: its suite reads the seed bank; the local gate runs it.`
-					);
 				yield* Console.log(`Validated clean standalone projection: ${template.slug}.`);
-			}
+			});
+			// ponytail: a fixed bound; each projection peaks near 1 GB (vitest + svelte-check), so half the cores, at most 3
+			yield* Effect.forEach(templates, verify, {
+				concurrency: Math.max(1, Math.min(3, Math.floor(availableParallelism() / 2))),
+				discard: true
+			});
 		})
 	);
 });
@@ -654,11 +695,10 @@ const checkCommand = Command.make('check', { filter: optional('filter') }, ({ fi
 );
 const lockCommand = Command.make(
 	'lock',
-	{ filter: optional('filter'), check: boolean('check'), verifyInstall: boolean('verify-install') },
-	({ filter, check, verifyInstall }) =>
+	{ filter: optional('filter'), check: boolean('check') },
+	({ filter, check }) =>
 		lockTemplates({
 			check,
-			verifyInstall,
 			...(Option.isSome(filter) ? { filter: filter.value } : {})
 		})
 );

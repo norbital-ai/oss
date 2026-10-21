@@ -10,7 +10,6 @@ import { Effect, FileSystem, Schema, Result } from 'effect';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import { build, type Rolldown } from 'vite';
 import type { EngineManifest } from '../../engine/manifest.ts';
@@ -19,6 +18,7 @@ import type { Discovered } from '../discover.ts';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { clientImportBoundary } from './client-boundary.ts';
 import { publicWrapper } from './public-wrapper.ts';
+import { cachedSvelte } from './svelte-cache.ts';
 
 const SOURCE = dirname(fileURLToPath(import.meta.url));
 const SHELL = join(SOURCE, '../../shell');
@@ -144,7 +144,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	yield* fs.makeDirectory(gen, { recursive: true });
 	yield* fs.writeFileString(
 		styles,
-		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n`
+		// the compile caches hold compiled code, never a class source (.gitignore or not)
+		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital', 'cache'))};\n`
 	);
 	// hook:server-cli — the messages: the base (`+messages.ts`) under the reader's first matching `+<locale>.messages.ts`
 	const reps = files
@@ -233,7 +234,7 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 							},
 							load: (id) => (id === `\0${ENTRY}` && typeof source === 'string' ? source : null)
 						},
-						svelte({ configFile: false }),
+						cachedSvelte({ configFile: false }, join(root, '.norbital', 'cache', 'svelte')),
 						tailwindcss()
 					],
 					// maps name their sources but carry none: an asset's placeholder id in a source's text follows emission order, so an

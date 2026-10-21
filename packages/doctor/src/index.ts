@@ -12,6 +12,7 @@ import type { Confidence, Rule, Severity } from './rules.js';
 import type { Constraints, Matcher, Utils } from './matcher.js';
 import { searchRule } from './pattern.js';
 import { runRules, searchRules, sourceFiles, type Match } from './runner.js';
+import type { Program } from 'typescript';
 import { runTypeAware } from './type-aware.js';
 
 export type Finding = Readonly<{
@@ -42,6 +43,8 @@ export function doctor(
 		files?: ReadonlyArray<string>;
 		includeTests?: boolean;
 		packs?: ReadonlyArray<string>;
+		/** A TypeScript program over these files to reuse for the type-aware rules (Bolt's type index builds one). */
+		program?: { readonly program: Program; readonly version: string };
 	}> = {}
 ): ReadonlyArray<Finding> {
 	const root = resolve(options.root ?? process.cwd());
@@ -64,7 +67,12 @@ export function doctor(
 		);
 	}
 	const types = packs.some((pack) => ['realm/types', 'realm/effect', 'boundaries'].includes(pack))
-		? runTypeAware({ root, files, deprecated: packs.includes('realm/types') })
+		? runTypeAware({
+				root,
+				files,
+				deprecated: packs.includes('realm/types'),
+				...(options.program === undefined ? {} : { program: options.program })
+			})
 		: [];
 	return applyAllowances(root, [...runRules({ root, rules, files }), ...types]);
 }

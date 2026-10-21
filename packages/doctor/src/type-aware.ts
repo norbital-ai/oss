@@ -120,6 +120,8 @@ type TypeAwareOptions = Readonly<{
 	/** Repository-relative files the scan selected. Non-program extensions are skipped. */
 	readonly files: ReadonlyArray<string>;
 	readonly deprecated?: boolean;
+	/** A program the caller already built over these files (Bolt's type index); reused when its TypeScript is this one. */
+	readonly program?: { readonly program: ts.Program; readonly version: string };
 }>;
 
 /**
@@ -131,8 +133,14 @@ export function runTypeAware(options: TypeAwareOptions): ReadonlyArray<Finding> 
 	const covered = options.files.filter((file) => PROGRAM_SOURCE.test(file));
 	if (covered.length === 0) return [];
 
+	// a file the shared program holds is read from it; the rest get a program per owning configuration
+	const shared = options.program?.version === ts.version ? options.program.program : undefined;
+	const reused = covered.filter(
+		(file) => shared?.getSourceFile(join(options.root, file)) !== undefined
+	);
 	const groups = new Map<string, Array<string>>();
-	for (const file of covered) {
+	if (shared !== undefined && reused.length > 0) groups.set('\0shared', reused);
+	for (const file of covered.filter((file) => !reused.includes(file))) {
 		const config = owningConfig(options.root, file) ?? '';
 		const bucket = groups.get(config) ?? [];
 		bucket.push(file);
@@ -141,10 +149,13 @@ export function runTypeAware(options: TypeAwareOptions): ReadonlyArray<Finding> 
 
 	const findings: Array<Finding> = [];
 	for (const [config, files] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
-		const program = ts.createProgram({
-			rootNames: files.map((file) => join(options.root, file)),
-			options: compilerOptions(config === '' ? undefined : config)
-		});
+		const program =
+			config === '\0shared' && shared !== undefined
+				? shared
+				: ts.createProgram({
+						rootNames: files.map((file) => join(options.root, file)),
+						options: compilerOptions(config === '' ? undefined : config)
+					});
 		const checker = program.getTypeChecker();
 
 		for (const file of files) {

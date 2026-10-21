@@ -251,7 +251,7 @@ describe('Studio outcomes outside the folded steps', () => {
 		);
 		expect(doingOf([step(1, 'read', true)])).toBe('Working…');
 	});
-	it('offers a built preview as Open preview for the Preview tab, from the whole result however it was clipped', () => {
+	it('offers a built preview as View preview for the previewer, from the whole result however it was clipped', () => {
 		expect(
 			outcomeOf(
 				tool('workspace_validate', '{"commit":"ab","log":["…', { preview: 'https://h/acme--u-a' })
@@ -259,14 +259,14 @@ describe('Studio outcomes outside the folded steps', () => {
 		).toEqual({
 			text: 'The preview is ready.',
 			preview: 'https://h/acme--u-a',
-			action: 'Open preview'
+			action: 'View preview'
 		});
 		expect(outcomeOf(tool('workspace_validate', '{"error":"build failed"}'))).toBeNull();
 		expect(
 			outcomeOf(tool('workspace_validate', '{}', { preview: 'https://h/x', running: true }))
 		).toBeNull();
 	});
-	it('the Preview tab shows built previews and the ones the agent chose among them, never another page', () => {
+	it('the previewer shows built previews and the ones the agent chose among them, never another page', () => {
 		const step = (seq: number, name: string, o: Partial<NonNullable<AgentRow['tool']>>) =>
 			row(seq, { role: 'tool', tool: tool(name, '{}', o) });
 		const about = { environment: 'Preview', commit: 'abc1234def', message: 'Rename title' };
@@ -280,6 +280,13 @@ describe('Studio outcomes outside the folded steps', () => {
 				step(6, 'workspace_view', { about: { ...about, url: 'https://c.test/' } })
 			]).map((p) => p.url)
 		).toEqual(['https://a.test/', 'https://a.test/page', 'https://c.test/']);
+		// a bundle is its release when the step names one, else the step: the same bundle never reloads the frame
+		expect(
+			previewsOf([
+				step(1, 'workspace_validate', { preview: 'https://a.test/', about: { release: 'r1' } }),
+				step(2, 'workspace_validate', { preview: 'https://a.test/' })
+			]).map((p) => p.key)
+		).toEqual(['r1', expect.any(String)]);
 		expect(
 			captionOf(
 				{
@@ -307,7 +314,9 @@ describe('Studio outcomes outside the folded steps', () => {
 	});
 	it('reports a publish or rollback that switched over, never a declined or refused one', () => {
 		const applied = {
-			text: 'Applied — the workspace is now on the new version. Refresh to see it.'
+			text: 'Applied — the workspace is now on the new version.',
+			action: 'View live',
+			reload: true
 		};
 		expect(outcomeOf(tool('workspace_publish', '{"live":{"commit":"c1"},"draft":"c1"}'))).toEqual(
 			applied

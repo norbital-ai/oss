@@ -1,11 +1,11 @@
 <!--
-	The workbench's toolbar : what the workbench is on (the viewer's draft or a merge request),
-	the diff baseline, how far behind live it is, a status badge (working, the running phase, a failure, conflicts) and the
-	unsaved count, scrolling sideways on a phone; then the actions, the primary one last (Update from Live when behind, else
-	Publish for an administrator). Secondary actions collapse to icons on a phone.
+	The workbench's toolbar : what the workbench is on (the viewer's draft or a merge request), how far behind live it is,
+	a status badge (working, the running phase, a failure, conflicts) and the unsaved count; then Save, Preview and the
+	primary action last (Update from Live when behind, else Publish for an administrator). Everything else — a new file, a
+	merge request, the branch and the commit it is based on — is behind "…".
 -->
 <script lang="ts">
-	import { Badge, Button, Combobox, Icon, type BadgeVariant } from '@norbital-ai/ui';
+	import { Badge, Button, Combobox, Icon, Popover, type BadgeVariant } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import {
 		PHASES,
@@ -122,6 +122,11 @@
 		}
 	);
 	const ACTION = 'px-2 text-xs sm:text-micro';
+	let more = $state(false);
+	const pick = (run: () => void) => () => {
+		more = false;
+		run();
+	};
 </script>
 
 {#snippet action(
@@ -161,13 +166,9 @@
 					}}
 				/>
 			</div>
-		{:else if view.branch !== undefined}
-			<code class="shrink-0 font-mono text-micro text-muted-foreground">{view.branch}</code>
+		{:else}
+			<span class="shrink-0 text-xs font-medium text-foreground">{t('My draft')}</span>
 		{/if}
-		<span class="shrink-0 text-micro text-muted-foreground" title={view.commit}>
-			{t(target === 'workbench' ? 'against Live' : 'against MR head')} ·
-			<code class="font-mono">{view.commit.slice(0, 8)}</code>
-		</span>
 		{#if behind > 0}
 			<Badge variant="warning" class="h-5 max-w-48 shrink-0 px-2 py-0 text-micro"
 				>{behind} {t('behind live')}</Badge
@@ -193,19 +194,48 @@
 		{/if}
 	</Scroll>
 	<Inline gap="xs" shrink={false}>
-		{@render action('lucide:file-plus', t('New file'), onnew, busy)}
 		{@render action('lucide:save', t('Save'), onsave, busy || drafts === 0)}
 		{@render action('lucide:scan-eye', t('Preview'), onpreview, busy, previewing)}
-		{#if target === 'workbench'}
-			{#if view.mergeRequests !== undefined}{@render action(
-					'lucide:git-pull-request',
-					t('Open merge request'),
-					onopenmr,
-					busy || view.changes.length === 0
-				)}{/if}
-		{:else}
+		{#if target !== 'workbench'}
 			{@render action('lucide:git-pull-request', t('Review'), onreview, busy)}
 		{/if}
+		<Popover.Root bind:open={more}>
+			<Popover.Trigger
+				class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground max-sm:size-10"
+				aria-label={t('More')}
+				title={t('More')}
+			>
+				<Icon name="lucide:ellipsis" class="size-4" />
+			</Popover.Trigger>
+			<Popover.Content align="end" class="grid w-64 gap-0.5 p-1">
+				<Button
+					size="sm"
+					variant="ghost"
+					class="justify-start"
+					disabled={busy}
+					onclick={pick(onnew)}
+				>
+					<Icon name="lucide:file-plus" class="size-3.5" />{t('New file')}
+				</Button>
+				{#if target === 'workbench' && view.mergeRequests !== undefined}
+					<Button
+						size="sm"
+						variant="ghost"
+						class="justify-start"
+						disabled={busy || view.changes.length === 0}
+						onclick={pick(onopenmr)}
+					>
+						<Icon name="lucide:git-pull-request" class="size-3.5" />{t('Open merge request')}
+					</Button>
+				{/if}
+				<p class="border-t border-border/60 px-2 pt-1.5 pb-1 text-micro text-muted-foreground">
+					{#if view.branch !== undefined}<code class="block truncate font-mono">{view.branch}</code
+						>{/if}
+					{t(target === 'workbench' ? 'against Live' : 'against MR head')} ·
+					<code class="font-mono">{view.commit.slice(0, 8)}</code>
+				</p>
+			</Popover.Content>
+		</Popover.Root>
 		{#if behind > 0}
 			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onrebase}>
 				<Icon name="lucide:arrow-up-from-line" class="size-3.5" />{t('Update from Live')}

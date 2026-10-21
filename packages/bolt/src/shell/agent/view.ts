@@ -371,19 +371,27 @@ export const doingOf = (steps: readonly AgentRow[]): string =>
 	DOING[steps.findLast((s) => s.tool?.running === true)?.tool?.name ?? ''] ?? 'Working…';
 
 /**
- * A Studio call's outcome, shown outside its folded steps: a built preview (opened in the panel's Preview tab, never as a
- * page of its own), or a publish or rollback that switched the workspace over (its answer, or the restart its
+ * A Studio call's outcome, shown outside its folded steps: a built preview ("View preview" opens the panel's previewer, never a
+ * page of its own), or a publish or rollback that switched the workspace over ("View live" loads it here; its answer, or the restart its
  * switch-over caused, settled on its card). The preview is the engine's `tool.preview`, read from the whole result.
  */
 export function outcomeOf(
 	tool: AgentRow['tool']
-): { text: string; preview?: string; action?: string } | null {
+): { text: string; preview?: string; action?: string; reload?: true } | null {
 	if (tool === undefined || tool.running === true || tool.failed) return null;
 	if (tool.studio === 'preview' && tool.preview !== undefined)
-		return { text: 'The preview is ready.', preview: tool.preview, action: 'Open preview' };
-	// the engine's own answer to a declined card is the one non-failed result that changed nothing
-	if ((tool.studio === 'publish' || tool.studio === 'rollback') && tool.result !== '{"declined":true}')
-		return { text: 'Applied — the workspace is now on the new version. Refresh to see it.' };
+		return { text: 'The preview is ready.', preview: tool.preview, action: 'View preview' };
+	// the engine's own answer to a declined card is the one non-failed result that changed nothing; live is this very page,
+	// so viewing it is loading the new version here
+	if (
+		(tool.studio === 'publish' || tool.studio === 'rollback') &&
+		tool.result !== '{"declined":true}'
+	)
+		return {
+			text: 'Applied — the workspace is now on the new version.',
+			action: 'View live',
+			reload: true
+		};
 	return null;
 }
 
@@ -419,20 +427,25 @@ export function captionOf(
 }
 
 /**
- * What the Preview tab may show, oldest first: each preview a host built or captured (a `preview` or `view` role's
+ * What the previewer may show (one at a time), oldest first: each preview a host built or captured (a `preview` or `view` role's
  * step), and each one the agent chose with `preview_show` on one of those previews' origins — the agent picks among built
  * previews, never an arbitrary page.
  */
 export function previewsOf(
 	rows: readonly AgentRow[]
-): { url: string; about?: { readonly [k: string]: string } }[] {
+): { url: string; key: string; about?: { readonly [k: string]: string } }[] {
 	const built = new Set<string>();
 	return rows.flatMap((r) => {
 		const tool = r.tool,
 			url = tool?.preview ?? (tool?.studio === 'view' ? tool.about?.['url'] : undefined);
 		if (tool === undefined || tool.failed || url === undefined || !URL.canParse(url)) return [];
+		// the bundle: its release when the step names one, else the step itself (a rebuild at the same address)
 		const origin = new URL(url).origin,
-			shown = { url, ...(tool.about === undefined ? {} : { about: tool.about }) };
+			shown = {
+				url,
+				key: tool.about?.['release'] ?? r.id,
+				...(tool.about === undefined ? {} : { about: tool.about })
+			};
 		if (tool.studio === 'preview' || tool.studio === 'view') {
 			built.add(origin);
 			return [shown];

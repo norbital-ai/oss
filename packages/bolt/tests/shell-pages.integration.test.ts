@@ -286,7 +286,9 @@ it('Studio rolls back across a schema change only after naming the data lost, an
 			x.textContent?.trim().startsWith(label)
 		)!;
 	await press(button('Live'));
-	expect(el.textContent).toContain('Rolled back to c1');
+	// a version reads as what it changed; its commit is only a hover title
+	expect(el.textContent).toContain('Rolled back');
+	expect(el.querySelector('aside [title="c1"]')).not.toBeNull();
 	await press(
 		[...el.querySelectorAll<HTMLElement>('aside button')].find(
 			(x) => x.textContent?.includes('one') && !x.textContent.includes('Rolled')
@@ -296,7 +298,7 @@ it('Studio rolls back across a schema change only after naming the data lost, an
 	asked.push(await answer(true));
 	expect(asked[0]).toContain('will be lost');
 	expect(ran).toEqual([{ op: 'rollback', commit: 'c1', discardDataSince: '2026-09-24T00:00:00Z' }]);
-	await press(button('Build log of'));
+	await press(button('Build log'));
 	await settle();
 	expect(read).toEqual(['c1']);
 	expect(document.body.textContent).toContain('compiled one');
@@ -349,8 +351,14 @@ it('Studio shows a member who is not an administrator their own draft and merge 
 	);
 	await settle();
 	const buttons = () => [...el.querySelectorAll('button')].map((b) => b.textContent?.trim());
-	expect(buttons()).toContain('Open merge request');
 	expect(buttons()).not.toContain('Publish');
+	// a merge request is opened from the toolbar's "…" menu
+	await press(el.querySelector<HTMLElement>('[aria-label=More]')!);
+	expect([...document.querySelectorAll('button')].map((b) => b.textContent?.trim())).toContain(
+		'Open merge request'
+	);
+	document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+	await settle();
 	// the target picker offers the member's own merge request, never another's
 	await press(el.querySelector<HTMLElement>('[role=combobox][aria-label=Target]')!);
 	expect(

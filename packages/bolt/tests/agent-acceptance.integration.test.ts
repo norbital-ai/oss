@@ -201,6 +201,36 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 	);
 
 	it.live(
+		'a workspace_search identical to the one that just answered is not run again; the file list says how to read one',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const ai = cassette([
+						use('workspace_search', { limit: 5 }),
+						use('workspace_search', { limit: 5 }),
+						say('listed')
+					]);
+					const { t, agent } = yield* setup({
+						root: GOOD,
+						seed: 'none',
+						ports: ai.ports,
+						host: { agent: { workspace } }
+					});
+					yield* t.db.write(member('ann', { admin: true }));
+					const c = yield* agent.start({ owner: 'ann' });
+					yield* agent.post({ conversation: c, as: { member: 'ann' }, text: 'List the files.' });
+					yield* agent.drain(c);
+					expect(results(ai.requests[1]!)[0]).toMatchObject({
+						read: expect.stringContaining('pass path')
+					});
+					expect(results(ai.requests[2]!)[1]).toMatchObject({
+						error: expect.stringContaining('you just made this exact call')
+					});
+				})
+			)
+	);
+
+	it.live(
 		'workspace_search pages a long file as numbered lines with its line count, unclipped; from and to read a range',
 		() =>
 			Effect.scoped(

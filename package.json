@@ -10,7 +10,6 @@
 	"scripts": {
 		"build": "turbo build --concurrency=1",
 		"check": "pnpm packages:build && pnpm lint && pnpm types:compat && pnpm exec turbo run test --concurrency=1 && pnpm test:scripts && pnpm build && pnpm publication:check",
-		"check:ci": "pnpm packages:build && pnpm lint && pnpm types:compat && pnpm exec turbo run test --concurrency=1 && pnpm test:scripts && pnpm build && pnpm publication:check",
 		"check:packages:ci": "pnpm exec turbo run build --concurrency=1 && pnpm exec turbo run lint --concurrency=1 && pnpm types:compat && pnpm exec turbo run test --concurrency=1 && pnpm test:scripts && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",

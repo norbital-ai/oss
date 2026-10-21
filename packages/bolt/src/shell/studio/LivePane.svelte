@@ -117,15 +117,14 @@
 		>
 			<Stack gap="xs" grow class="min-w-0">
 				<Cluster gap="xs">
-					<h2 class="truncate font-mono text-sm font-semibold text-foreground">
-						{release.commit.slice(0, 12)}
+					<h2 class="truncate text-sm font-semibold text-foreground" title={release.commit}>
+						{release.message || t('Version')}
 					</h2>
 					{#if release.current}<span
 							class="rounded-full border border-border/70 bg-muted px-2 py-0.5 text-micro"
 							>{t('Serving now')}</span
 						>{/if}
 				</Cluster>
-				<p class="truncate text-xs text-foreground">{release.message}</p>
 				<p class="text-micro text-muted-foreground">
 					<time datetime={release.at}>{new Date(release.at).toLocaleString()}</time>
 					{#if release.checkpoint}

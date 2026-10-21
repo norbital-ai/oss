@@ -1,7 +1,7 @@
 // The agent engine (§5.9, rules 57–63b): a turn is a loop over a conversation's rows. Each step claims the queued inputs
 // (a steer joins at the next step and acts as its own sender), builds the context, makes one model request under the
 // 60 s wall and runs the tool calls it asks for as the actor. A turn ends on a reply with no tool calls, a confirmation
-// card, a stop or its step budget. An executed plan is checked by an independent verifier sub-run; a sub-agent is a
+// card or a stop: no step count ends it, only guards against no progress. An executed plan is checked by an independent verifier sub-run; a sub-agent is a
 // child conversation run under the delegating turn's `as`, never wider. Hosts drive `drain`; nothing here names a host.
 // A claimed turn holds a one-minute lease its heartbeat renews and queues the platform run `agent.turn`, so a turn
 // whose process died is taken over once the lease lapses (rule 48), and never runs twice at once.
@@ -186,8 +186,6 @@ export type AgentConfig = {
 	windows?: {
 		readonly [modelClass: string]: number;
 	};
-	/** Rule 72: 40 per turn. */
-	steps?: number;
 	wallMs?: number;
 };
 /**
@@ -197,7 +195,7 @@ export type AgentConfig = {
 class Unusable extends Schema.TaggedError<Unusable>()('Unusable', { message: Schema.String }) {}
 const AI_GAUGE_USD = 5;
 export const AGENT_LIMITS = {
-	steps: 40,
+	/** Checkpoints in a row with no model step between them: compaction that frees nothing stops here. */
 	compactions: 3,
 	compactAt: 0.9,
 	window: 200000,
@@ -227,12 +225,13 @@ export const NUDGE = {
 		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.'
 } as const;
 /** The whole results of this conversation's clipped tool calls, as `read_output` and the scratch files hold them. */
-const Outputs = Schema.Array(Schema.Struct({ call: Schema.String, tool: Schema.String, full: Schema.Json }));
+const Outputs = Schema.Array(
+	Schema.Struct({ call: Schema.String, tool: Schema.String, full: Schema.Json })
+);
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
 	failed:
 		'I could not finish this request because a service it needs did not answer. Please try again later.',
-	budget: 'I stopped here: this request needs more steps than one turn allows. Ask me to continue.',
 	unavailable: 'The assistant is not available to you here.',
 	stale: 'I could not act for this message: its sender no longer has access.',
 	stuck:
@@ -654,7 +653,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			Effect.repeat(Schedule.spaced(AGENT_LIMITS.heartbeatMs)),
 			Effect.forkScoped
 		);
-		const budget = config.steps ?? AGENT_LIMITS.steps;
 		const mcp = yield* mcpSessions(m, config.mcp);
 		let mcpTools: Effect.Success<ReturnType<typeof mcp.tools>> | null = null,
 			mcpFor = '';
@@ -662,6 +660,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			files: ToolContext['files'] = [],
 			work = yield* jobs(),
 			failures = new Map<string, number>();
+		// a pure tool's call just made, as its key, when it succeeded: the same call again straight after answers nothing new
+		let previous = '';
 		const usage: Usage = { input: 0, output: 0, calls: 0 };
 		const add = (u: Partial<Usage>, calls: number) => {
 			usage.input += u.input ?? 0;
@@ -948,11 +948,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					if (compactions < AGENT_LIMITS.compactions) yield* compact(conv, rows, [], 'manual');
 					if (yield* settle(id)) break;
 					continue;
-				}
-				if (steps >= budget) {
-					yield* fail(conv, FIXED.budget, 'stepBudget');
-					yield* cancelQueued(id);
-					break;
 				}
 				if ((yield* overLimit(db, settings, conv.owner, authority.policies)) !== null) {
 					yield* fail(conv, FIXED.limit, 'spendLimit');
@@ -1355,6 +1350,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					continue;
 				}
 				yield* used(r);
+				// a model step is progress: compaction may run again as often as a long turn needs
+				compactions = 0;
 				lastInput = r.usage.input;
 				const text: string = (cut?.text ?? '') + textOf(r.content);
 				// L-BOLT-412: reasoning is an ordinary part of the reply, stored verbatim beside its text and sent back with it
@@ -1509,8 +1506,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						key = `${call.name}\u0000${JSON.stringify(call.input)}`,
 						// what the step is to the shell's Studio surfaces, as the tool declared it
 						role = tool?.studio === undefined ? {} : { studio: tool.studio };
-					// the same call that already failed this often is not run again
-					const skip = tool === undefined || (failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure;
+					// the same call that already failed this often is not run again; nor is a call identical to the one
+					// just made (beside it or the step before), whose answer the model already has
+					const repeated = key === previous;
+					const skip =
+						tool === undefined || repeated || (failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure;
 					const answer =
 						tool === undefined
 							? { result: { error: `No tool '${call.name}'.` } as Json }
@@ -1523,10 +1523,21 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								: skip
 									? {
 											result: {
-												error: 'Not run: this exact call already failed several times this turn.'
+												error: repeated
+													? 'Not run: you just made this exact call; its answer is above. Change the arguments to get something new.'
+													: 'Not run: this exact call already failed several times this turn.'
 											} as Json
 										}
 									: yield* tool.run(call.input, call.id);
+					previous =
+						tool?.pure !== true ||
+						('result' in answer &&
+							answer.result !== null &&
+							typeof answer.result === 'object' &&
+							!Array.isArray(answer.result) &&
+							'error' in answer.result)
+							? ''
+							: key;
 					if ('confirm' in answer && conv.parent !== null) {
 						yield* wrote(
 							yield* rewrite(
@@ -1724,21 +1735,21 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	 * no reply after it): the new generation runs the turn that reports it. One statement at start, none while idle.
 	 */
 	const resumeSettled = Effect.gen(function* () {
-			const rows = yield* changed(
-				q(
-					`UPDATE sys_message m SET content = content || '{"resumed":true}'::jsonb
+		const rows = yield* changed(
+			q(
+				`UPDATE sys_message m SET content = content || '{"resumed":true}'::jsonb
 				WHERE m.role = 'tool' AND m.state IS NULL AND m.meta->>'tag' = 'confirm' AND NOT m.content ? 'resumed'
 				AND (m.content->'result' ? 'restarted' OR m.content->'result'->>'error' = $1)
 				AND NOT EXISTS (SELECT 1 FROM sys_message a WHERE a.conversation = m.conversation AND a.seq > m.seq AND a.role = 'assistant')`,
-					FIXED.unreported
-				)
+				FIXED.unreported
+			)
+		);
+		for (const id of new Set(rows.map((r) => r.conversation)))
+			yield* FiberSet.run(
+				detached,
+				drain(id, { force: true }).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 			);
-			for (const id of new Set(rows.map((r) => r.conversation)))
-				yield* FiberSet.run(
-					detached,
-					drain(id, { force: true }).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
-				);
-		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+	}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/**
 	 * A sub-agent's turn ended (its answer, a question for its parent, a failure or a stop): its report lands in the parent
 	 * conversation as a queued input from the same sender, which a running parent turn claims at its next step and an idle

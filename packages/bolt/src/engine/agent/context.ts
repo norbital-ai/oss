@@ -9,6 +9,7 @@ import type { AiMessage } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { ambient, authorOf, type ConversationRow, type MessageRow } from './schema.ts';
 import type { StudioRole } from './tools.ts';
+import { LAYOUT_HELP } from '../../decl/layout.ts';
 
 /** Rule 62: tool results are bounded; clipped cells and dropped rows say so. */
 export const BOUNDS = { resultBytes: 16 * 1024, cellBytes: 1_200 } as const;
@@ -292,6 +293,16 @@ export function messages(
 	});
 }
 
+/** The outline's file list past this many bytes lists folders with counts instead. */
+const SOURCE_FILES_BYTES = 6000;
+
+/** How a workspace's source is laid out, from the compiler's own role table, and how to find a file in it. */
+const SOURCE_LAYOUT = `# Source layout
+${LAYOUT_HELP}
+Find things with workspace_search: { path } reads one file as numbered lines (from/to a range), { text } finds lines,
+{ rule } matches code by an ast-grep rule, { paths } narrows to folders, draft: true searches your Studio draft. Read by
+the exact path the outline's Source files list names; never guess a file name.`;
+
 /**
  * The workspace outline in the system prompt: every collection, app, automation, policy and agent with where its source
  * lives, from the manifest and the released file list. Names, enum values and each collection's write contract (the
@@ -375,9 +386,6 @@ export function outline(m: EngineManifest, files: readonly string[] | null): str
 	);
 	const out = [
 		'# Workspace outline',
-		'Source under src/: collection c is data/model/+c.model.ts (fields) and data/collection/c/+collection.ts (reads, writes, ' +
-			'queries, actions; +representation.svelte its record view); relations in data/+relationship.ts; app a is app/a/+app.ts with +<page>.page.svelte; automation n is ' +
-			'automation/+n.automation.ts; policy p is access_control/policy/+p.policy.ts; integration i is integration/i/+integration.ts; envoy e is agent/envoy/+e.envoy.ts.',
 		'',
 		'## Collections',
 		'Each line: description | fields | relations | writes, queries, actions, its import/export pipeline and the feed that writes it. create(a, b?, rel{create(c, d), link}) names the columns a write ' +
@@ -456,22 +464,21 @@ export function outline(m: EngineManifest, files: readonly string[] | null): str
 			.filter(([, names]) => names.length > 0)
 			.map(([k, names]) => `- ${k}: ${names.join(', ')}`)
 	);
-	// the rest of the source by folder: the modules behind the declarations (conventional + files are implied above)
-	const rest = new Map<string, string[]>();
+	// every source file by folder, so a read names an exact path instead of guessing one; a large workspace lists its
+	// folders with their file counts past the bound
+	const folders = new Map<string, string[]>();
 	for (const f of files ?? []) {
-		if (
-			!f.startsWith('src/') ||
-			/^src\/(data\/(model|collection|custom_field)\/|app\/.*\/\+|automation\/\+|access_control\/(policy|team)\/\+|agent\/envoy\/\+|integration\/[^/]+\/\+)/.test(
-				f
-			)
-		)
-			continue;
+		if (!f.startsWith('src/')) continue;
 		const dir = f.slice(0, f.lastIndexOf('/') + 1);
-		rest.set(dir, [...(rest.get(dir) ?? []), f.slice(dir.length)]);
+		folders.set(dir, [...(folders.get(dir) ?? []), f.slice(dir.length)]);
 	}
+	const sorted = [...folders].sort(([a], [b]) => a.localeCompare(b));
+	const listed = sorted.map(([d, fs]) => `- ${d} ${fs.join(' ')}`);
 	section(
-		'Other source',
-		[...rest].sort(([a], [b]) => a.localeCompare(b)).map(([d, fs]) => `- ${d} ${fs.join(' ')}`)
+		'Source files',
+		listed.join('\n').length <= SOURCE_FILES_BYTES
+			? listed
+			: sorted.map(([d, fs]) => `- ${d} (${fs.length} files)`)
 	);
 	return out.join('\n');
 }
@@ -516,9 +523,8 @@ export function system(parts: {
 		skills.length === 0
 			? undefined
 			: `Skills (read one with the skill tool):\n${skills.join('\n')}`,
-		parts.outline === undefined || !source
-			? parts.outline
-			: `${parts.outline}\nSearch or read any path with workspace_search.`
+		source ? SOURCE_LAYOUT : undefined,
+		parts.outline
 	]
 		.filter((p): p is string => p !== undefined && p.trim() !== '')
 		.join('\n\n');

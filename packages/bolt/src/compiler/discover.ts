@@ -4,40 +4,7 @@ import { Effect, FileSystem, Path } from 'effect';
 import { join, relative, sep } from 'node:path';
 import { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
 import { SYSTEM } from '../system/index.ts';
-
-/** The file roles of §3.2. `dir` is under `src/`: `*` is one name segment, `**` one or more (app paths); `*` in `file` is the name. */
-export const ROLES = [
-	{ role: 'workspace', dir: '', file: '+workspace.ts' },
-	{ role: 'secrets', dir: '', file: '+secrets.ts' },
-	{ role: 'relationship', dir: 'data', file: '+relationship.ts' },
-	{ role: 'model', dir: 'data/model', file: '+*.model.ts' },
-	{ role: 'custom_field', dir: 'data/custom_field/*', file: '+definition.ts' },
-	{ role: 'renderer', dir: 'data/custom_field/*', file: '+renderer.svelte' },
-	{ role: 'collection', dir: 'data/collection/**', file: '+collection.ts' },
-	{ role: 'representation', dir: 'data/collection/**', file: '+representation.svelte' },
-	{ role: 'integration_definition', dir: 'integration/*', file: '+integration.ts' },
-	{ role: 'integration_setup', dir: 'integration/*', file: '+integration.svelte' },
-	{ role: 'pipeline', dir: 'data/collection/**', file: '+pipeline.ts' },
-	{ role: 'policy', dir: 'access_control/policy', file: '+*.policy.ts' },
-	{ role: 'team', dir: 'access_control/team', file: '+team.ts' },
-	{ role: 'agent', dir: 'agent', file: '+agent.md' },
-	{ role: 'agent_external', dir: 'agent', file: '+agent.external.md' },
-	{ role: 'envoy', dir: 'agent/envoy', file: '+*.envoy.ts' },
-	{ role: 'skill', dir: 'agent/skill', file: '+*.skill.md' },
-	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts' },
-	{ role: 'automation', dir: 'automation', file: '+*.automation.ts' },
-	{ role: 'app', dir: 'app/**', file: '+app.ts' },
-	{ role: 'kiosk', dir: 'kiosk/**', file: '+kiosk.ts' },
-	{ role: 'kiosk_page', dir: 'kiosk/**', file: '+*.page.svelte' },
-	{ role: 'kiosk_page_server', dir: 'kiosk/**', file: '+*.page.server.ts' },
-	{ role: 'session', dir: 'app/**', file: '+session.svelte' },
-	{ role: 'page', dir: 'app/**', file: '+*.page.svelte' },
-	{ role: 'page_server', dir: 'app/**', file: '+*.page.server.ts' },
-	{ role: 'messages', dir: 'i18n', file: '+messages.ts' },
-	{ role: 'locale', dir: 'i18n', file: '+*.messages.ts' },
-	{ role: 'group', dir: 'app/**', file: '+group.ts' }
-] as const;
-export type Role = (typeof ROLES)[number]['role'];
+import { LAYOUT_HELP, NAME, ROLES, type Role } from '../decl/layout.ts';
 
 /**
  * A discovered role file. `name` is the path-derived name: the folder's (`orders`, `hr/kiosk`) or the file's
@@ -51,16 +18,9 @@ export type Diagnostic = {
 	help?: string;
 };
 
-const NAME = /^[a-z][a-z0-9_]*$/;
 /** Names the built-in layer (`src/system/**`) takes, besides the `sys_*` and `bolt_*` prefixes. */
 const reserved = (name: string): boolean =>
 	/^(sys_|bolt_)/.test(name) || Object.hasOwn(SYSTEM.models, name);
-
-/** The help text of every layout error prints the §3.2 table. */
-export const LAYOUT_HELP = `A + file is a compiler role; files without + are ordinary modules and may sit anywhere.
-If the folder names the thing the file is +<role>.<ext>, otherwise +<name>.<role>.<ext>. Folder names are singular;
-names match ${NAME.source}. The roles:
-${ROLES.map((r) => `  src/${r.dir.replaceAll('**', '<app>').replaceAll('*', '<name>')}${r.dir ? '/' : ''}${r.file.replace('*', '<name>')}`).join('\n')}`;
 
 const escape = (s: string) => s.replace(/[.+]/g, '\\$&');
 const fileRe = (file: string) => new RegExp(`^${escape(file).replace('*', '([^.]+)')}$`);

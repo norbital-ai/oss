@@ -1,18 +1,20 @@
 import { it } from '@effect/vitest';
 import { fileURLToPath } from 'node:url';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, FileSystem, Path } from 'effect';
+import { Effect, FileSystem, Option, Path } from 'effect';
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process';
 import { describe, expect } from 'vitest';
 import {
 	actualCounts,
+	changedSince,
 	checkTemplates,
 	discoverTemplates,
 	publishTemplates,
 	resolveLockfile,
 	run,
 	unsatisfiedFirstPartyPeers,
-	verifyTemplates
+	verifyTemplates,
+	withoutFirstParty
 } from '../src/cli/templates.ts';
 
 const metadata = {
@@ -229,9 +231,10 @@ describe('bolt templates', () => {
 					yield* verifyTemplates(root).pipe(
 						Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, processes)
 					);
+					// fetched with the registry, installed without it; `bolt check` is the build's own first half
 					expect(commands).toEqual([
-						['install', '--frozen-lockfile'],
-						['check'],
+						['fetch', '--frozen-lockfile'],
+						['install', '--frozen-lockfile', '--offline'],
 						['exec', 'bolt', 'build'],
 						['lint'],
 						...(bankDependent ? [] : [['test']])
@@ -284,3 +287,31 @@ it.live(
 		}).pipe(Effect.provide(NodeServices.layer)),
 	30_000
 );
+
+it.live('names the templates changed since a revision, and none it cannot resolve', () =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const path = yield* Path.Path;
+		const { root, directory } = yield* fixture;
+		const git = (args: readonly string[]) => run('git', args, { cwd: root });
+		yield* git(['init', '--initial-branch=main']);
+		yield* git(['config', 'user.email', 'template-fixture@example.test']);
+		yield* git(['config', 'user.name', 'Template fixture']);
+		yield* git(['add', '.']);
+		yield* git(['commit', '-m', 'fixture']);
+		expect(yield* changedSince(root, 'HEAD')).toEqual(Option.some(new Set()));
+		yield* fs.writeFileString(path.join(directory, 'README.md'), 'changed');
+		expect(yield* changedSince(root, 'HEAD')).toEqual(Option.some(new Set(['fixture'])));
+		expect(yield* changedSince(root, 'origin/main')).toEqual(Option.none());
+	}).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+);
+
+it('drops first-party package and snapshot entries so a republished version re-resolves; importers keep theirs', () => {
+	const lock = `lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      '@norbital-ai/bolt':\n        specifier: 0.0.1\n        version: 0.0.1\n\npackages:\n\n  '@norbital-ai/bolt@0.0.1':\n    resolution: {integrity: sha512-old}\n\n  effect@4.0.0:\n    resolution: {integrity: sha512-e}\n\nsnapshots:\n\n  '@norbital-ai/bolt@0.0.1(effect@4.0.0)':\n    dependencies: {}\n\n  effect@4.0.0: {}\n`;
+	const stripped = withoutFirstParty(lock);
+	expect(stripped).not.toContain('sha512-old');
+	expect(stripped).not.toContain("'@norbital-ai/bolt@0.0.1(");
+	expect(stripped).toContain("'@norbital-ai/bolt':\n        specifier: 0.0.1");
+	expect(stripped).toContain('effect@4.0.0:\n    resolution');
+	expect(stripped).toContain('  effect@4.0.0: {}');
+});

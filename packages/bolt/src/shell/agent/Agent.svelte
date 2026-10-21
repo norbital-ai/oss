@@ -200,6 +200,8 @@
 	let connectors = $state<readonly { name: string; description: string }[]>([]);
 	/** The session rail is open. */
 	let rail = $state(false);
+	/** The rail widened (its expand control, or a preview opened in it): its sections at a useful size. */
+	let wide = $state(false);
 	/** The rail stays mounted through its short slide out. */
 	// svelte-ignore state_referenced_locally
 	let railShown = $state(rail);
@@ -849,7 +851,9 @@
 	const thinking = $derived(since === null ? 0 : Math.max(0, Math.floor((now - since) / 1000)));
 	// an approved Studio call's card ticks its phase's elapsed time, counted from when this panel first saw it approved
 	const approvals = new Map<string, number>();
-	const approvedSince = (id: string) => approvals.get(id) ?? approvals.set(id, now).get(id) ?? now;
+	// the moment it is first seen approved, not the last tick of an idle clock
+	const approvedSince = (id: string) =>
+		approvals.get(id) ?? approvals.set(id, Date.now()).get(id) ?? Date.now();
 	watch(
 		() => rows.some((r) => r.state === 'approved'),
 		(running) => {
@@ -987,6 +991,8 @@
 			const x = decided.get(row.id),
 				block = out.at(-1);
 			if (x === undefined || closes.get(x.event.id) !== row.id) return out;
+			// a member's own conversation answers every message: only a channel thread shows its triage marks
+			if (!thread && x.d.action === 'respond') return out;
 			if (block !== undefined && 'ignored' in block && x.d.action !== 'respond') block.decision = x;
 			else out.push({ decision: x, awaiting: x.d.action === 'respond' && index > replied });
 			return out;
@@ -1131,27 +1137,27 @@
 	const kinds = useKinds();
 	/** A stored file's link (a made file's card, a workspace screenshot). */
 	const fileHref = (id: string) => bolt.fileUrl({ id });
-	// the Preview tab: the latest preview this conversation built or the agent chose, unless the reader picked an earlier
-	// one since (a newer preview replaces their pick); its frame mounts only while the tab is open
-	let tab = $state<'chat' | 'preview'>('chat'),
-		pickedPreview = $state<{ url: string; over: string | null } | null>(null);
+	// the previewer: one bundle at a time — the one a "View" button last chose, or the latest built — in the session rail's
+	// Preview section (there only once something was previewed); its frame mounts only while that section is open
+	let previewing = $state(false),
+		pickedPreview = $state<{ key: string; over: string | null } | null>(null);
 	const previews = $derived(previewsOf(rows));
 	const newest = $derived(previews.at(-1) ?? null);
 	const shownPreview = $derived.by(() => {
 		const p = pickedPreview;
 		return (
-			(p !== null && p.over === (newest?.url ?? null)
-				? previews.findLast((x) => x.url === p.url)
+			(p !== null && p.over === (newest?.key ?? null)
+				? previews.findLast((x) => x.key === p.key)
 				: undefined) ?? newest
 		);
 	});
-	const TABS: readonly (readonly ['chat' | 'preview', string])[] = [
-		['chat', 'Chat'],
-		['preview', 'Preview']
-	];
 	function openPreview(url: string): void {
-		pickedPreview = { url, over: newest?.url ?? null };
-		tab = 'preview';
+		const chosen = previews.findLast((x) => x.url === url);
+		if (chosen !== undefined) pickedPreview = { key: chosen.key, over: newest?.key ?? null };
+		previewing = true;
+		focus = null;
+		wide = true;
+		rail = true;
 	}
 	function mentions(q: string): Effect.Effect<CommandItem[], Error> {
 		return Effect.suspend(() => {
@@ -1372,9 +1378,11 @@
 		what it changed, and the connected services -->
 	<aside
 		bind:this={railEl}
-		class="absolute inset-y-0 right-0 z-30 flex {focus === null
-			? 'w-80'
-			: 'w-[28rem]'} max-w-full animate-in flex-col gap-2 overflow-auto border-l border-border bg-card p-3 shadow-lg fade-in-0 slide-in-from-right-4 animation-duration-200 ease-out motion-reduce:animate-none @3xl:relative @3xl:border-l-0 @3xl:shadow-none"
+		class="absolute inset-y-0 right-0 z-30 flex {wide
+			? 'w-[56rem]'
+			: focus === null
+				? 'w-80'
+				: 'w-[28rem]'} max-w-full animate-in flex-col gap-2 overflow-auto border-l border-border bg-card p-3 shadow-lg fade-in-0 slide-in-from-right-4 animation-duration-200 ease-out motion-reduce:animate-none @3xl:relative @3xl:border-l-0 @3xl:shadow-none"
 		aria-label={t('Session')}
 		data-agent-rail
 	>
@@ -1390,6 +1398,18 @@
 			{:else}
 				<p class="pl-1 text-overline text-muted-foreground">{t('Session')}</p>
 			{/if}
+			<span class="flex-1"></span>
+			<Button
+				size="icon-sm"
+				variant="ghost"
+				class="shrink-0 text-muted-foreground hover:text-foreground"
+				aria-label={t(wide ? 'Narrow' : 'Expand')}
+				title={t(wide ? 'Narrow' : 'Expand')}
+				aria-pressed={wide}
+				onclick={() => (wide = !wide)}
+				data-rail-expand
+				><Icon name={wide ? 'lucide:minimize-2' : 'lucide:maximize-2'} class="size-4" /></Button
+			>
 			<Button
 				size="icon-sm"
 				variant="ghost"
@@ -1553,6 +1573,57 @@
 						changesBody
 					)}
 				</div>
+				{#if shownPreview !== null && !thread}
+					<!-- the one previewer: the bundle a "View" button chose, or the latest; open, it fills the widened rail -->
+					<section
+						class="overflow-hidden rounded-xl border border-border bg-background shadow-xs"
+						data-rail="preview"
+					>
+						<button
+							type="button"
+							class="flex w-full cursor-pointer items-center gap-1.5 px-4 py-3 text-left text-sm hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+							aria-expanded={previewing}
+							onclick={() => {
+								previewing = !previewing;
+								if (previewing) wide = true;
+							}}
+							data-rail-preview-toggle
+						>
+							<span class="font-medium">{t('Preview')}</span>
+							<Icon
+								name="lucide:chevron-right"
+								class="size-3.5 text-muted-foreground transition-transform {previewing
+									? 'rotate-90'
+									: ''}"
+							/>
+							<span class="flex-1"></span>
+							<span class="min-w-0 truncate text-tiny text-muted-foreground"
+								>{shownPreview.about?.['environment'] ?? ''}</span
+							>
+						</button>
+						{#if previewing}
+							<div
+								class="flex h-[70vh] min-h-80 flex-col border-t border-border"
+								data-agent-preview={shownPreview.url}
+							>
+								<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
+								<PreviewFrame
+									src={shownPreview.url}
+									version={shownPreview.key}
+									title={t('Preview')}
+									{t}
+									onClose={() => (previewing = false)}
+								>
+									{#snippet details()}
+										{#if shownPreview.about !== undefined}<p data-preview-caption>
+												{captionOf(shownPreview.about, kinds.zone)}
+											</p>{:else}<p>{shownPreview.url}</p>{/if}
+									{/snippet}
+								</PreviewFrame>
+							</div>
+						{/if}
+					</section>
+				{/if}
 				{#if connectors.length > 0}
 					{#snippet connectorsBody()}
 						<ul class="grid gap-1.5">
@@ -1730,6 +1801,12 @@
 														class="shrink-0"
 														onclick={() => openPreview(url)}
 														data-open-preview>{t(outcome.action ?? '')}</Button
+													>{:else if outcome.reload}<Button
+														size="sm"
+														variant="outline"
+														class="shrink-0"
+														onclick={() => location.reload()}
+														data-view-live>{t(outcome.action ?? '')}</Button
 													>{/if}
 											</Inline>
 										{/each}
@@ -1903,11 +1980,11 @@
 											class="rounded-xl border border-border/70 bg-background p-3 shadow-sm"
 											data-role="confirm"
 										>
-											<p class="font-medium">{confirmTitle(call.studio)}</p>
+											<p class="text-sm font-medium text-foreground">{confirmTitle(call.studio)}</p>
 											{#if call.studio === 'publish' || call.studio === 'rollback'}
 												<StudioApproval {api} studio={call.studio} input={call.input} {t} />
 											{/if}
-											{#if hint}<p class="mt-1 text-sm text-muted-foreground">{hint}</p>{/if}
+											{#if hint}<p class="mt-1 text-xs text-muted-foreground">{hint}</p>{/if}
 											<details class="mt-1 text-xs text-muted-foreground">
 												<summary class="cursor-pointer">{t('Details')}</summary>
 												<pre
@@ -1929,7 +2006,7 @@
 														disabled={busy}
 														onclick={() => confirm(row, false)}>{t('Decline')}</Button
 													>{/if}
-												{#if busy}<span class="text-sm text-muted-foreground" role="status"
+												{#if busy}<span class="text-xs text-muted-foreground" role="status"
 														>{row.progress === undefined
 															? t('Working on it… you can keep using the app.')
 															: `${t(stepLabel(PHASES.indexOf(row.progress)))} · ${elapsedText(now - approvedSince(row.id))}`}</span
@@ -2068,41 +2145,7 @@
 					</div>
 				{/snippet}
 
-				{#if previews.length > 0 && !thread}
-					<!-- Chat and the Preview tab: the agent's previews in the shared web view, never Studio or a new page -->
-					<div class="flex shrink-0 gap-1 border-b border-border px-3 pt-1.5" role="tablist">
-						{#each TABS as [key, label] (key)}
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === key}
-								class="-mb-px border-b-2 px-2 pb-1.5 text-xs font-medium {tab === key
-									? 'border-foreground text-foreground'
-									: 'border-transparent text-muted-foreground hover:text-foreground'}"
-								onclick={() => (tab = key)}
-								data-agent-tab={key}>{t(label)}</button
-							>
-						{/each}
-					</div>
-				{/if}
-				{#if tab === 'preview' && shownPreview !== null && !thread}
-					<div class="flex min-h-0 flex-1 flex-col" data-agent-preview={shownPreview.url}>
-						{#if shownPreview.about !== undefined}<p
-								class="shrink-0 truncate px-3 py-1 text-xs text-muted-foreground"
-								data-preview-caption
-							>
-								{captionOf(shownPreview.about, kinds.zone)}
-							</p>{/if}
-						{#key shownPreview.url}<PreviewFrame
-								src={shownPreview.url}
-								title={t('Preview')}
-								{t}
-								onClose={() => (tab = 'chat')}
-							/>{/key}
-					</div>
-				{:else}
-					{@render transcriptTab()}
-				{/if}
+				{@render transcriptTab()}
 			</div>
 			{#if thread}
 				<p
@@ -2207,7 +2250,7 @@
 								data-ai-unconfigured
 							>
 								{t(
-									'AI provider not configured. An administrator must set one up (BOLT_AI_SYS_1_* and BOLT_AI_SYS_2_*) before the assistant can answer.'
+									'The assistant is not set up yet. Ask an administrator to connect an AI provider.'
 								)}
 							</p>
 						{/if}
@@ -2283,7 +2326,7 @@
 								{@const chip = mode === 'compact' ? 'compact' : 'plan'}
 								<Inline gap="xs" class="pt-1" data-mode={chip}>
 									<span
-										class="inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 font-mono text-xs"
+										class="inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 text-xs"
 										title={chip === 'plan' ? t('Switch between Agent and Plan (Tab)') : undefined}
 									>
 										<Icon
@@ -2309,7 +2352,7 @@
 								{mentions}
 								aria-label={t('Message')}
 								class="[&_textarea]:max-h-40 [&_textarea]:min-h-14 [&_textarea]:resize-none [&_textarea]:border-0 [&_textarea]:bg-transparent [&_textarea]:px-0 [&_textarea]:py-3 [&_textarea]:text-sm [&_textarea]:leading-relaxed [&_textarea]:shadow-none [&_textarea]:focus-visible:ring-0 dark:[&_textarea]:bg-transparent"
-								placeholder={t('Ask anything, or type /plan, /compact or /export')}
+								placeholder={t('Ask anything · / for commands')}
 								onkeydown={keydown}
 								onpaste={paste}
 							/>
@@ -2371,7 +2414,7 @@
 								>
 									<Icon name="lucide:chart-pie" class="size-3.5" /><span
 										>{meter.percent === null ? '—' : `${Math.round(meter.percent)}%`}</span
-									><span>· {meter.cost === null ? '—' : usd(meter.cost)}</span>
+									>
 								</button>
 								<span class="flex-1"></span>
 								{#if models.length > 1}

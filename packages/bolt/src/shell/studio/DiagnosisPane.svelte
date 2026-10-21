@@ -3,7 +3,7 @@
 	and a rerun, then the findings grouped by file, each opening its source. A merge request's diagnosis uses it too.
 -->
 <script lang="ts">
-	import { Button, Icon } from '@norbital-ai/ui';
+	import { Button, Icon, Spinner } from '@norbital-ai/ui';
 	import { Cluster, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { StudioDiagnostic } from './model.ts';
 
@@ -11,6 +11,7 @@
 		diagnostics,
 		stale = false,
 		busy = false,
+		progress,
 		onopen,
 		onrerun,
 		t
@@ -18,6 +19,8 @@
 		diagnostics: readonly StudioDiagnostic[] | undefined;
 		stale?: boolean;
 		busy?: boolean;
+		/** The running build's step and elapsed time: shown in place of the findings while it runs. */
+		progress?: string | undefined;
 		onopen: (path: string) => void;
 		onrerun?: () => void;
 		t: (key: string) => string;
@@ -37,7 +40,11 @@
 	<Cluster gap="sm" align="start">
 		<Stack gap="xs" grow class="min-w-0">
 			<h2 class="text-xs font-semibold text-foreground">{t('Diagnosis')}</h2>
-			{#if diagnostics === undefined}
+			{#if progress !== undefined}
+				<p class="inline-flex items-center gap-1.5 text-meta text-foreground" role="status">
+					<Spinner class="size-3" />{progress}
+				</p>
+			{:else if diagnostics === undefined}
 				<p class="text-meta">{t('No diagnosis yet. Run one to check this source.')}</p>
 			{:else if stale}
 				<p class="text-meta">{t('These findings cover an earlier version.')}</p>

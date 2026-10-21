@@ -17,6 +17,7 @@ import {
 	projection,
 	system
 } from '../src/engine/agent/context.ts';
+import { LAYOUT_HELP } from '../src/decl/layout.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respondSystem1 } from '../src/test/effect.ts';
@@ -174,9 +175,17 @@ describe('the context projection (rule 60)', () => {
 		);
 		expect(
 			system({ skills: {}, outline: '# Workspace outline', tools: [{ name: 'workspace_search' }] })
-		).toMatch(
-			/workspace_search reads the source[\s\S]*Search or read any path with workspace_search/
-		);
+		).toMatch(/workspace_search reads the source[\s\S]*# Source layout/);
+		// the layout is the compiler's own role table, so a file is never guessed without its +
+		const layout = system({
+			skills: {},
+			outline: '# Workspace outline',
+			tools: [{ name: 'workspace_search' }]
+		});
+		expect(layout).toContain(LAYOUT_HELP);
+		expect(layout).toContain('src/data/model/+<name>.model.ts');
+		expect(layout).toContain('src/app/<app>/+<name>.page.svelte');
+		expect(layout).toContain('src/data/collection/<name>/+collection.ts');
 	});
 });
 
@@ -253,6 +262,17 @@ describe('the workspace outline', () => {
 			'create(title), update(title, done), upsert, pipeline(import|export)'
 		);
 		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('done("2"|"10")');
+		// every source file by folder, + files included, so a read names the exact path
+		expect(
+			outline(m, [
+				'src/data/model/+jobs.model.ts',
+				'src/data/collection/jobs/+collection.ts',
+				'src/lib/util.ts',
+				'package.json'
+			])
+		).toContain(
+			'## Source files\n- src/data/collection/jobs/ +collection.ts\n- src/data/model/ +jobs.model.ts\n- src/lib/ util.ts'
+		);
 	});
 });
 

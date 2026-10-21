@@ -330,12 +330,12 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Editing the source…': '正在编辑源代码…',
 	'Reviewing the changes…': '正在审查更改…',
 	'The preview is ready.': '预览已就绪。',
-	'Open preview': '打开预览',
-	'Applied — the workspace is now on the new version. Refresh to see it.':
-		'已应用 — 工作区现已使用新版本。刷新即可查看。',
-	// Norbius panel: the Preview tab and Studio results
-	Chat: '聊天',
-	'Open in Preview tab': '在预览标签中打开',
+	'View preview': '查看预览',
+	'View live': '查看线上版本',
+	'Applied — the workspace is now on the new version.': '已应用 — 工作区现已使用新版本。',
+	// Norbius panel: the previewer and Studio results
+	Expand: '展开',
+	Narrow: '收窄',
 	'Workspace screenshot': '工作区截图',
 	'log line': '条日志',
 	'log lines': '条日志',
@@ -860,15 +860,21 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 		'用几个字描述这次更改。审核和发布时都会显示。',
 	'What does this change do?': '这次更改做了什么？',
 	'Starting the preview…': '正在启动预览…',
+	'The preview could not load': '预览无法加载',
 	'Building the preview…': '正在生成预览…',
 	'Before the last reset — can’t roll back to this': '在上次重置之前 — 无法回滚到此版本',
 	'This version has no checkpoint to roll back to': '此版本没有可回滚的检查点',
 	Phone: '手机',
 	Tablet: '平板',
 	Desktop: '桌面',
-	'Fills the pane': '填满窗格',
 	'Close preview': '关闭预览',
+	Device: '设备',
+	'out of date': '已过时',
 	'Serving now': '正在提供服务',
+	'Build log': '构建日志',
+	Version: '版本',
+	Build: '构建',
+	'Rolled back': '已回滚',
 	'Edit safely, preview the exact result, then ask for review.':
 		'安全编辑、预览准确结果，然后请求审核。',
 	'Preview on sample data': '用示例数据预览',
@@ -929,7 +935,9 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'No conversations yet': '暂无对话',
 	'Start a conversation. Ask for help or switch to Plan to work through an approach.':
 		'开始对话。寻求帮助，或切换到“计划”梳理思路。',
-	'Ask anything, or type /plan, /compact or /export': '可直接提问，或输入 /plan、/compact、/export',
+	'Ask anything · / for commands': '可直接提问 · 输入 / 查看命令',
+	'The assistant is not set up yet. Ask an administrator to connect an AI provider.':
+		'助手尚未设置。请管理员连接 AI 服务。',
 	'Attach media or files': '附加媒体或文件',
 	'Jump to latest': '跳到最新',
 	'Summarize this conversation and keep its transcript available.':

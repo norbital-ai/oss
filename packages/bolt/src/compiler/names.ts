@@ -2,7 +2,8 @@
 // The names index (§3.1, rule 8): `.norbital/names.ts`, the only generated code. Each path-derived name maps to
 // `typeof import('<path>').default`; the feed targets (`fed`) are literals read from the evaluated definitions.
 import { Effect, FileSystem, Path } from 'effect';
-import type { Discovered, Role } from './discover.ts';
+import type { Discovered } from './discover.ts';
+import type { Role } from '../decl/layout.ts';
 import { type Manifest, spec } from './load.ts';
 
 /** `Names` part → the role it indexes; `one` parts are the singleton file's own type. */

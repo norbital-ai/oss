@@ -23,6 +23,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { AgentEngine as Engine } from './index.ts';
 import { lowerRead } from '../query/engine.ts';
 import {
+	BOUNDS,
 	bound,
 	bounded,
 	filesOf,
@@ -268,6 +269,8 @@ export type Tool = {
 	description: string;
 	input: Schema.Top;
 	studio?: StudioRole;
+	/** Its answer depends only on its arguments within a turn: the same call again straight after is not run. */
+	pure?: true;
 	run(input: unknown, callId: string): Effect.Effect<ToolAnswer>;
 };
 /** Filter operators supported by period fields (`…_range`). */
@@ -979,9 +982,11 @@ export function catalogue(x: ToolContext): Tool[] {
 		name: string,
 		description: string,
 		input: S,
-		run: (input: S['Type'], callId: string) => Effect.Effect<ToolAnswer, EngineError | PortFailure>
+		run: (input: S['Type'], callId: string) => Effect.Effect<ToolAnswer, EngineError | PortFailure>,
+		pure = false
 	) => {
-		tools.push(tool(name, description, input, run));
+		const made = tool(name, description, input, run);
+		tools.push(pure ? { ...made, pure: true } : made);
 	};
 	const read = readTool({
 		engine: e,
@@ -1229,8 +1234,28 @@ export function catalogue(x: ToolContext): Tool[] {
 					const t = skills.find(([n]) => n === i.name)?.[1];
 					if (t === undefined) return err(`No skill '${i.name}' is available.`);
 					const s = skillOf(t);
-					if (i.section === undefined)
-						return ok({ description: s.description, sections: s.sections, body: bound(s.body) });
+					if (i.section === undefined) {
+						// whole sections that fit the result bound, then the names of the rest: a section is read by name,
+						// never through a clipped body
+						const parts = s.body.split(/^(?=##\s)/m);
+						let body = '',
+							shown = 0;
+						for (const part of parts) {
+							if (shown > 0 && size(body + part) > BOUNDS.resultBytes - 2000) break;
+							body += part;
+							shown++;
+						}
+						const rest = parts
+							.slice(shown)
+							.map((p) => /^##\s+(.+)$/m.exec(p)?.[1]?.trim())
+							.filter((name): name is string => name !== undefined);
+						return ok({
+							description: s.description,
+							sections: s.sections,
+							body: shown === 1 && parts.length === 1 ? bound(body) : body,
+							...(rest.length === 0 ? {} : { more: `read each with section: ${rest.join(', ')}` })
+						});
+					}
 					return ok(
 						section(s.body, i.section) ?? {
 							error: `No section '${i.section}'.`,
@@ -1634,8 +1659,12 @@ export function catalogue(x: ToolContext): Tool[] {
 									hits.push({ path, line: n + 1, text: line.trim().slice(0, 200) });
 						return ok({ total, hits });
 					}
-					return ok({ files });
-				})
+					return ok({
+						files,
+						read: 'pass path (with draft: true for your draft) to read one of these'
+					});
+				}),
+			true
 		);
 	// the platform's API reference (`@norbital-ai/bolt/docs`), narrowed to what a workspace imports; authoring is the staff's
 	if (staff)
@@ -2090,40 +2119,40 @@ export function catalogue(x: ToolContext): Tool[] {
 			)
 				tools.push({
 					...tool(host.name, host.description, host.input, (input, id) =>
-					Effect.gen(function* () {
-						if (host.confirm === true) return { confirm: true } as const;
-						const context: HostToolContext = {
-							actor: a.actor,
-							conversation: x.conv.id,
-							turn: x.turn,
-							callId: id,
-							...(x.question === undefined ? {} : { question: x.question }),
-							attach: (file) => {
-								attach(x.files, file);
-								if (host.studio === 'view') shown.push(file);
-							}
-						};
-						const shown: { mime: string; bytes: Uint8Array }[] = [];
-						const job = yield* x.jobs.add(
-							host.name,
-							host.call(input, context).pipe(Port.call(host.name, JOBS.hostMs))
-						);
-						const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
-						if (inline === null) return ok({ job, note: 'still running; collect it with wait' });
-						const result = inline.result;
-						// a screenshot the person sees too: stored as their file, offered on the step like a sandbox output
-						if (shown.length === 0 || e.files === undefined || !Predicate.isObject(result))
-							return ok(result);
-						const files: Json[] = [];
-						for (const [n, f] of shown.entries())
-							files.push(
-								yield* storeFile(x, e.files, {
-									name: `${host.name}-${n + 1}.${f.mime.split('/')[1] ?? 'png'}`,
-									...f
-								})
+						Effect.gen(function* () {
+							if (host.confirm === true) return { confirm: true } as const;
+							const context: HostToolContext = {
+								actor: a.actor,
+								conversation: x.conv.id,
+								turn: x.turn,
+								callId: id,
+								...(x.question === undefined ? {} : { question: x.question }),
+								attach: (file) => {
+									attach(x.files, file);
+									if (host.studio === 'view') shown.push(file);
+								}
+							};
+							const shown: { mime: string; bytes: Uint8Array }[] = [];
+							const job = yield* x.jobs.add(
+								host.name,
+								host.call(input, context).pipe(Port.call(host.name, JOBS.hostMs))
 							);
-						return ok({ ...result, files });
-					})
+							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
+							if (inline === null) return ok({ job, note: 'still running; collect it with wait' });
+							const result = inline.result;
+							// a screenshot the person sees too: stored as their file, offered on the step like a sandbox output
+							if (shown.length === 0 || e.files === undefined || !Predicate.isObject(result))
+								return ok(result);
+							const files: Json[] = [];
+							for (const [n, f] of shown.entries())
+								files.push(
+									yield* storeFile(x, e.files, {
+										name: `${host.name}-${n + 1}.${f.mime.split('/')[1] ?? 'png'}`,
+										...f
+									})
+								);
+							return ok({ ...result, files });
+						})
 					),
 					...(host.studio === undefined ? {} : { studio: host.studio })
 				});

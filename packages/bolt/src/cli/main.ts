@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --no-node-snapshot
 /// <reference types="node" />
-import { Effect, Console, Option, Schema } from 'effect';
+import { Effect, Console, FileSystem, Option, Schema } from 'effect';
 import { Argument, Command, Flag } from 'effect/unstable/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -85,6 +85,15 @@ const test = Effect.fn('bolt.test')(function* (dir: string, args: readonly strin
 					? plugin.apply(config, environment)
 					: plugin.apply === environment.command))
 	}));
+	// one directory per run: the test files' processes share the workspace check through it (`runChecked` in test/effect)
+	const fs = yield* FileSystem.FileSystem;
+	const runCache = yield* fs
+		.makeTempDirectory({ prefix: 'bolt-test-run-' })
+		.pipe(
+			Effect.mapError(
+				(cause) => new ToolFailure({ message: 'bolt test: no temporary directory', cause })
+			)
+		);
 	const kit: Plugin = {
 		name: 'bolt:test',
 		config(config) {
@@ -92,6 +101,7 @@ const test = Effect.fn('bolt.test')(function* (dir: string, args: readonly strin
 			setup.testTimeout ??= 180_000;
 			setup.hookTimeout ??= 60_000;
 			setup.fileParallelism ??= false;
+			setup.env = { ...setup.env, BOLT_TEST_RUN_CACHE: runCache };
 			if (setup.browser?.enabled !== true) {
 				setup.pool ??= 'forks';
 				if (setup.pool === 'forks')
@@ -132,7 +142,9 @@ const test = Effect.fn('bolt.test')(function* (dir: string, args: readonly strin
 		try: () =>
 			runner.startVitest('test', filter, { ...options, root }, { plugins: [...mine, kit] }),
 		catch: (cause) => new ToolFailure({ message: 'The workspace test runner failed.', cause })
-	});
+	}).pipe(
+		Effect.ensuring(fs.remove(runCache, { recursive: true, force: true }).pipe(Effect.ignore))
+	);
 	const code = Number(process.exitCode ?? 0);
 	process.exitCode = 0;
 	return code === 0 ? 0 : code === 1 ? 1 : 2;
