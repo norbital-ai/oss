@@ -4,6 +4,7 @@ import type { CollectionExposure } from '../kinds/context.js';
 import type { ChildInput } from '../kinds/context.js';
 import { initial, problems, type Fields, type Value, type Kind } from '../kinds/kind.js';
 import { encodeWire } from '@norbital-ai/std/wire';
+import type { Where } from '@norbital-ai/std/kind';
 import { Equal } from 'effect';
 
 /** A row's values by field name. */
@@ -39,7 +40,7 @@ export type FormSpec = {
 		kind: Kind;
 		readonly?: true;
 		reason?: 'integrationOwned' | 'ownedParent';
-		relation?: { targets: readonly string[] };
+		relation?: { targets: readonly string[]; where?: Where | undefined };
 	}[];
 	callable: string;
 	/** An update the caller may read but not make: every field shown locked, no submit. */
@@ -108,7 +109,8 @@ export function formSpec(
 							kind: 'id',
 							of: relation.targets[0] ?? '',
 							...(relation.optional || filled ? { optional: true as const } : {}),
-							...(relation.label === undefined ? {} : { label: relation.label })
+							...(relation.label === undefined ? {} : { label: relation.label }),
+							...(relation.where === undefined ? {} : { where: relation.where })
 						} satisfies Kind,
 						relation
 					}

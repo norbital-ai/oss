@@ -1,4 +1,5 @@
 // The caller's authorized collection catalogue for generated forms and record views.
+import { Schema } from 'effect';
 import type { CollectionExposure, Fields, Kind } from '@norbital-ai/ui';
 import type { Authority } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
@@ -6,6 +7,9 @@ import { relations as manifestRelations } from '../manifest.ts';
 import { admits, writableColumns } from './authority.ts';
 import { nullableOfExpr } from '../../decl/model.ts';
 import { SYSTEM } from '../../system/index.ts';
+
+/** A relationship's static `where` is JSON by construction; decoded once for the browser's picker. */
+const pickerWhere = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
 
 type ChildInput = NonNullable<NonNullable<CollectionExposure['update']>['with']>[string];
 type Selection = NonNullable<EngineManifest['collections'][string]['update']>['input'];
@@ -257,7 +261,9 @@ export function exposure(
 							{
 								targets: [r.to].flat(),
 								...(r.optional === true ? { optional: true as const } : {}),
-								...(r.inverse === undefined ? {} : { inverse: r.inverse })
+								...(r.inverse === undefined ? {} : { inverse: r.inverse }),
+								// what a picker for this reference offers, as a write would accept it
+								...(r.where === undefined ? {} : { where: pickerWhere(r.where) })
 							}
 						] as const
 					]

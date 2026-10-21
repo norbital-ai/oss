@@ -6,6 +6,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import { Array as Arr } from 'effect';
 	import type { Value, Kind } from './kind.js';
 	import type { JsonSchema } from './json-schema.js';
+	import type { Where } from '@norbital-ai/std/kind';
 
 	/** The editor of one value by its kind (every §3.3.2 kind; derived kinds render read-only). */
 	export type EditorProps = {
@@ -31,7 +32,7 @@ The editor of one value by its field kind: every kind's input in one component (
 		address?: string;
 		onAddress?(address: string | null): void;
 		/** One-relation target(s), when `kind` is the FK column of a relationship. */
-		relation?: { targets: readonly string[] };
+		relation?: { targets: readonly string[]; where?: Where | undefined };
 	};
 	// IANA zones grouped by region; "kuala lumpur" finds Asia/Kuala_Lumpur. Built once, not per mounted editor.
 	const zones = (
@@ -153,7 +154,15 @@ The editor of one value by its field kind: every kind's input in one component (
 		/>
 	</div>
 {:else if relation !== undefined}
-	<Picker of={relation.targets[0] ?? ''} value={str(v)} {onChange} {id} {disabled} {invalid} />
+	<Picker
+		of={relation.targets[0] ?? ''}
+		value={str(v)}
+		where={relation.where}
+		{onChange}
+		{id}
+		{disabled}
+		{invalid}
+	/>
 {:else if plan.derived}
 	<!-- derived and state values are never typed: a state moves by its edges (an action or a board move) -->
 	<Show {kind} {value} {name} {row} />

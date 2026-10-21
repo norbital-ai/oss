@@ -332,6 +332,18 @@ describe('exposure (the boot catalog ui reads)', () => {
 			owned: true
 		});
 	});
+	it("sends a relationship's where so a picker offers only what a write accepts", () => {
+		const narrowed: EngineManifest = {
+			...em,
+			relationships: {
+				'jobs.site': { to: 'sites', optional: true, where: { title: { eq: 'Yard' } } }
+			},
+			collections: { jobs: { read: { fields: ['title'], relations: ['site'] } } }
+		};
+		expect(exposure(narrowed, { ...member([]), admin: true })['jobs']?.relations).toEqual({
+			site: { targets: ['sites'], optional: true, where: { title: { eq: 'Yard' } } }
+		});
+	});
 	it('exposes readable source-owned fields with a restriction reason and keeps owned parents immutable', () => {
 		const source: EngineManifest = {
 			...em,

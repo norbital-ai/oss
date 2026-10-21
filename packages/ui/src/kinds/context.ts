@@ -11,7 +11,7 @@ import {
 import { getContext, setContext, type Component } from 'svelte';
 import type { ActFailure, ReadError } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
-import type { FileUrlOptions } from '@norbital-ai/std/kind';
+import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
 
 export type ChildInput = {
 	collection: string;
@@ -45,6 +45,8 @@ export type CollectionExposure = {
 			optional?: true;
 			label?: string;
 			inverse?: string;
+			/** The relationship's static `where`: a picker offers only the records a write would accept. */
+			where?: Where;
 		};
 	};
 	/** Many-relations (inverses) the collection exposes; each child is the collection whose relation names it as `inverse`. */
