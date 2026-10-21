@@ -495,7 +495,7 @@ describe('the Google Calendar link', () => {
 			yield* restored.link.close ?? Effect.void;
 		})
 	);
-	it.effect('keeps a pending registration for recovery after a lost response', () =>
+	it.effect('keeps a pending registration after a lost response and polls meanwhile', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture([
 				(call) => {
@@ -503,10 +503,46 @@ describe('the Google Calendar link', () => {
 					return undefined;
 				}
 			]);
-			expect(yield* Effect.flip(f.link.renew!())).toMatchObject({
-				message: expect.stringMatching(/operation failed/)
-			});
+			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
 			expect(JSON.stringify(f.h.values.get('state'))).toContain('pending');
+			expect(invalidations(f.h)).toEqual([
+				{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
+			]);
+			yield* f.link.close ?? Effect.void;
+		})
+	);
+	it.effect('polls without a pending registration when Google refuses the webhook', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture([
+				(call) =>
+					call.url.endsWith('/events/watch')
+						? json({ error: { message: 'Unauthorized WebHook callback channel' } }, 401)
+						: undefined
+			]);
+			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
+			expect(JSON.stringify(f.h.values.get('state'))).not.toContain('pending');
+			expect(invalidations(f.h)).toHaveLength(1);
+			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
+			expect(invalidations(f.h)).toHaveLength(2);
+			yield* f.link.close ?? Effect.void;
+		})
+	);
+	it.effect('drops a registration still pending after ten minutes', () =>
+		Effect.gen(function* () {
+			let lost = true;
+			const f = yield* fixture([
+				(call) => {
+					if (lost && call.url.endsWith('/events/watch')) throw new Error('response lost');
+					return undefined;
+				},
+				watchResponse
+			]);
+			yield* f.link.renew!();
+			lost = false;
+			yield* f.now(NOW + 601000);
+			yield* f.link.renew!();
+			expect(JSON.stringify(f.h.values.get('state'))).not.toContain('pending');
+			expect(JSON.stringify(f.h.values.get('state'))).toContain('active');
 			yield* f.link.close ?? Effect.void;
 		})
 	);

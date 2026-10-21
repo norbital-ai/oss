@@ -31,6 +31,7 @@ const API = 'https://www.googleapis.com/calendar/v3';
 const READ = 'https://www.googleapis.com/auth/calendar.readonly',
 	WRITE = 'https://www.googleapis.com/auth/calendar.events';
 const SCOPES = [READ, WRITE];
+const WATCH_MS = 86400000;
 const RECONSENT =
 	'Reconnect this calendar to let Norbital update its events; until then it only imports them.';
 const Watch = Schema.Struct({
@@ -400,6 +401,63 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			state.watches.map((value) => (value.id === watch.id ? { ...value, reconcile: false } : value))
 		);
 	});
+	const register = Effect.fn('GoogleCalendar.registerWatch')(function* (
+		calendar: string,
+		now: number
+	) {
+		const watch: Watch = {
+			id: ctx.state(),
+			token: ctx.state(),
+			calendar,
+			resource: null,
+			expiration: now + WATCH_MS,
+			phase: 'pending'
+		};
+		yield* save([...state.watches, watch]);
+		const response = yield* call({
+			method: 'POST',
+			path: `/calendars/${encodeURIComponent(calendar)}/events/watch`,
+			body: {
+				id: watch.id,
+				token: watch.token,
+				type: 'web_hook',
+				address: ctx.webhookUrl,
+				expiration: String(watch.expiration)
+			}
+		});
+		if (response.status < 200 || response.status >= 300)
+			yield* Effect.logWarning('calendar watch refused', response.status, response.body);
+		yield* ok(response.status);
+		const registered = yield* decode(Registered, response.body),
+			expiration = Number(registered.expiration);
+		const found = state.watches.find((value) => value.id === watch.id);
+		if (
+			registered.id !== watch.id ||
+			found === undefined ||
+			(found.resource !== null && found.resource !== registered.resourceId) ||
+			!Number.isSafeInteger(expiration) ||
+			expiration <= (yield* Clock.currentTimeMillis) + 60000
+		)
+			return yield* Effect.fail(
+				new ProviderUnavailable({
+					message: 'Calendar watch registration identity or expiration is invalid'
+				})
+			);
+		yield* save(
+			state.watches.map((value) =>
+				value.id === watch.id
+					? {
+							...value,
+							resource: registered.resourceId,
+							expiration,
+							phase: 'active',
+							reconcile: true
+						}
+					: value
+			)
+		);
+		yield* reconcile(watch);
+	});
 	const renew = Effect.fn('GoogleCalendar.renew')(function* () {
 		const now = yield* Clock.currentTimeMillis;
 		if (closed) return null;
@@ -425,7 +483,20 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			if (watch.phase === 'stopping' || !wanted.includes(watch.calendar)) yield* stop(watch);
 			else if (watch.reconcile) yield* reconcile(watch);
 		}
-		yield* save(state.watches.filter((watch) => watch.expiration > now));
+		// Google answers a registration with its first `sync` notification at once; a pending watch still without a
+		// resource ten minutes on was never created, so it is dropped rather than blocking every later registration.
+		yield* save(
+			state.watches.filter(
+				(watch) =>
+					watch.expiration > now &&
+					!(
+						watch.phase === 'pending' &&
+						watch.resource === null &&
+						now > watch.expiration - WATCH_MS + 600000
+					)
+			)
+		);
+		let polling = false;
 		for (const calendar of wanted) {
 			if (
 				state.watches.some(
@@ -436,65 +507,41 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 				)
 			)
 				continue;
-			if (
-				state.watches.filter((watch) => watch.calendar === calendar && watch.phase === 'pending')
-					.length >= 4
-			)
-				return yield* Effect.fail(
-					new ProviderUnavailable({ message: 'Calendar watch registration needs reconciliation' })
-				);
-			const watch: Watch = {
-				id: ctx.state(),
-				token: ctx.state(),
-				calendar,
-				resource: null,
-				expiration: now + 86400000,
-				phase: 'pending'
-			};
-			yield* save([...state.watches, watch]);
-			const response = yield* call({
-				method: 'POST',
-				path: `/calendars/${encodeURIComponent(calendar)}/events/watch`,
-				body: {
-					id: watch.id,
-					token: watch.token,
-					type: 'web_hook',
-					address: ctx.webhookUrl,
-					expiration: String(watch.expiration)
-				}
-			});
-			yield* ok(response.status);
-			const registered = yield* decode(Registered, response.body),
-				expiration = Number(registered.expiration);
-			const found = state.watches.find((value) => value.id === watch.id);
-			if (
-				registered.id !== watch.id ||
-				found === undefined ||
-				(found.resource !== null && found.resource !== registered.resourceId) ||
-				!Number.isSafeInteger(expiration) ||
-				expiration <= (yield* Clock.currentTimeMillis) + 60000
-			)
-				return yield* Effect.fail(
-					new ProviderUnavailable({
-						message: 'Calendar watch registration identity or expiration is invalid'
+			// Without a push channel (Google refused the webhook, or the answer was lost) the calendar is read on the renew
+			// cadence, so changes still arrive within minutes; the next renew tries the channel again. Only a refusal
+			// proves no channel exists — a lost answer keeps its pending identity until it goes stale above.
+			const pending = state.watches.filter(
+				(watch) => watch.calendar === calendar && watch.phase === 'pending'
+			).length;
+			yield* (
+				pending >= 4
+					? Effect.fail(
+							new ProviderUnavailable({ message: 'Calendar watch registration is pending' })
+						)
+					: register(calendar, now)
+			).pipe(
+				Effect.catch((error) =>
+					Effect.gen(function* () {
+						yield* Effect.logWarning('calendar push unavailable; polling', calendar, error);
+						if (error._tag === 'ProviderRefused')
+							yield* save(
+								state.watches.filter(
+									(watch) =>
+										!(
+											watch.calendar === calendar &&
+											watch.phase === 'pending' &&
+											watch.resource === null
+										)
+								)
+							);
+						yield* invalidate(calendar);
+						polling = true;
 					})
-				);
-			yield* save(
-				state.watches.map((value) =>
-					value.id === watch.id
-						? {
-								...value,
-								resource: registered.resourceId,
-								expiration,
-								phase: 'active',
-								reconcile: true
-							}
-						: value
 				)
 			);
-			yield* reconcile(watch);
 		}
 		const deadlines = state.watches.map((watch) => Math.max(now + 1000, watch.expiration - 300000));
+		if (polling) deadlines.push(now + 300000);
 		return deadlines.length === 0 ? null : new Date(Math.min(...deadlines)).toISOString();
 	});
 	const notification = Effect.fn('GoogleCalendar.notification')(function* (request: Request) {

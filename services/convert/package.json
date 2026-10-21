@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/convert-service",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"private": true,
 	"description": "Markdown or HTML to pdf, docx, pptx, odt, epub or html over HTTP: API keys, a durable shared queue, pandoc and Typst.",
 	"license": "AGPL-3.0-only",
