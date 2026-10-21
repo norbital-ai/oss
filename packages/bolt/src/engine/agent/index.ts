@@ -233,8 +233,14 @@ export const FIXED = {
 		'I stopped here: the data this needs kept failing to load, so I have no answer. Try rephrasing, or ask me what data is available.',
 	empty: 'I could not put an answer together for this request. Please try again or rephrase it.',
 	limit:
-		'I stopped here: the assistant reached its spending limit for this month. An administrator can raise it in Settings.'
+		'I stopped here: the assistant reached its spending limit for this month. An administrator can raise it in Settings.',
+	unreported:
+		'The workspace restarted before this reported back, so whether it finished is unknown. Check before running it again.',
+	/** A call whose own last step restarts the workspace (a publish's switch-over): the step it reached is its answer. */
+	restartedDuring: (step: string) => `The workspace restarted during: ${step}`
 } as const;
+/** A confirmation card's second answer (a repeat press, another tab): refused, so its call never runs twice. */
+export const ANSWERED = 'This was already answered.';
 /** `modelCall`'s reason when the host binds no AI port. */
 const NO_AI = 'the host provides no ai';
 const CONV_COLS = 'id, title, owner, envoy, integration, parent, status, model, plan, goals';
@@ -1972,109 +1978,161 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			by: Authority
 		) {
 			const [r] = yield* rowsOf(
-				(yield* db.read([
-					q(`SELECT ${MSG} FROM sys_message m WHERE id = $1 AND state = 'confirm'`, messageId)
-				]))[0]!.rows
+				(yield* db.read([q(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, messageId)]))[0]!.rows
 			);
 			if (r === undefined || r.meta?.tag !== 'confirm')
 				return yield* Effect.fail(
 					new AgentRefusal({ message: 'nothing awaits confirmation here' })
 				);
+			if (r.state !== 'confirm') return yield* Effect.fail(new AgentRefusal({ message: ANSWERED }));
 			if (r.as === null || !owns(by, r.as))
 				return yield* Effect.fail(
 					new AgentRefusal({ message: 'only the person this turn serves can confirm it' })
 				);
+			const as = r.as;
+			// one answer per card: the claim moves it out of `confirm` first, so a second press never runs the call again
+			if (
+				(yield* changed(
+					q(
+						`UPDATE sys_message m SET state = 'approved' WHERE id = $1 AND state = 'confirm' `,
+						messageId
+					)
+				)).length === 0
+			)
+				return yield* Effect.fail(new AgentRefusal({ message: ANSWERED }));
 			const call = r.meta.call;
-			let result: Json = { declined: true };
 			const receipts: Receipt[] = [];
-			if (approve) {
-				const authority = yield* resolve(r.as);
-				if (authority === null) result = { error: FIXED.stale };
-				else if (call.name === 'read') {
-					const input = yield* Schema.decodeUnknownEffect(ReadInput)(call.input).pipe(
-						Effect.mapError((error) =>
-							BoltError.make('invalidInput', 'decode', error.message, error)
-						)
-					);
-					if (input.query === undefined)
-						return yield* Effect.fail(
-							new AgentRefusal({ message: 'only a collection query awaits confirmation' })
+			const settle = (result: Json) =>
+				changed(
+					q(
+						`UPDATE sys_message m SET state = NULL, content = $2::jsonb WHERE id = $1 AND state = 'approved' `,
+						messageId,
+						j({ id: call.id, name: call.name, result })
+					)
+				);
+			// a host call's steps reach the card live while it runs; the settle replaces them
+			const steps = yield* Queue.unbounded<string>();
+			/** The last step the call reported: what the card says if the workspace restarts mid-call. */
+			let reached: string | null = null;
+			const answer = Effect.gen(function* () {
+				let result: Json = { declined: true };
+				if (approve) {
+					const authority = yield* resolve(as);
+					if (authority === null) result = { error: FIXED.stale };
+					else if (call.name === 'read') {
+						const input = yield* Schema.decodeUnknownEffect(ReadInput)(call.input).pipe(
+							Effect.mapError((error) =>
+								BoltError.make('invalidInput', 'decode', error.message, error)
+							)
 						);
-					const name =
-							input.query.includes('.') || input.collection === undefined
-								? input.query
-								: `${input.collection}.${input.query}`,
-						dot = name.lastIndexOf('.');
-					result = yield* e.calls.query({
-						authority,
-						bindings: yield* config.bindings,
-						invocationId: `${r.turn}:${call.id}`,
-						from: 'Client',
-						collection: name.slice(0, dot),
-						query: name.slice(dot + 1),
-						input: input.input ?? {}
-					});
-				} else if (call.name !== 'act') {
-					// a held host tool runs on approval as the person, still gated as when it was offered
-					const staff = authority.actor.kind === 'member' && !authority.actor.external;
-					const tools =
-						!staff || config.hostTools === undefined
-							? []
-							: typeof config.hostTools === 'function'
-								? yield* Port.attempt('agent.hostTools', () =>
-										typeof config.hostTools === 'function'
-											? config.hostTools(authority, r.conversation)
-											: Promise.resolve([])
-									).pipe(Effect.catch(() => Effect.succeed([])))
-								: config.hostTools;
-					const host = tools.find(
-						(t) =>
-							t.name === call.name &&
-							t.confirm === true &&
-							(authority.admin || authority.capabilities.tools.includes(t.name))
-					);
-					result =
-						host === undefined
-							? { error: `${call.name} is no longer offered to you.` }
-							: yield* Port.attempt(host.name, (signal) =>
-									host.call(
-										call.input,
-										{
-											actor: authority.actor,
-											conversation: r.conversation,
-											turn: r.turn ?? r.id,
-											callId: call.id,
-											attach: () => {}
-										},
-										signal
-									)
-								).pipe(Effect.catch((failure) => Effect.succeed<Json>({ error: failure.message })));
-				} else
-					result = yield* performAll(
-						{
-							engine: e,
+						if (input.query === undefined)
+							return yield* Effect.fail(
+								new AgentRefusal({ message: 'only a collection query awaits confirmation' })
+							);
+						const name =
+								input.query.includes('.') || input.collection === undefined
+									? input.query
+									: `${input.collection}.${input.query}`,
+							dot = name.lastIndexOf('.');
+						result = yield* e.calls.query({
 							authority,
 							bindings: yield* config.bindings,
-							turn: r.turn ?? r.id,
-							receipts
-						},
-						writesOf(
-							yield* Schema.decodeUnknownEffect(WriteInput)(call.input).pipe(
-								Effect.mapError((error) =>
-									BoltError.make('invalidInput', 'decode', error.message, error)
+							invocationId: `${r.turn}:${call.id}`,
+							from: 'Client',
+							collection: name.slice(0, dot),
+							query: name.slice(dot + 1),
+							input: input.input ?? {}
+						});
+					} else if (call.name !== 'act') {
+						// a held host tool runs on approval as the person, still gated as when it was offered
+						const staff = authority.actor.kind === 'member' && !authority.actor.external;
+						const tools =
+							!staff || config.hostTools === undefined
+								? []
+								: typeof config.hostTools === 'function'
+									? yield* Port.attempt('agent.hostTools', () =>
+											typeof config.hostTools === 'function'
+												? config.hostTools(authority, r.conversation)
+												: Promise.resolve([])
+										).pipe(Effect.catch(() => Effect.succeed([])))
+									: config.hostTools;
+						const host = tools.find(
+							(t) =>
+								t.name === call.name &&
+								t.confirm === true &&
+								(authority.admin || authority.capabilities.tools.includes(t.name))
+						);
+						result =
+							host === undefined
+								? { error: `${call.name} is no longer offered to you.` }
+								: yield* Port.attempt(host.name, (signal) =>
+										host.call(
+											call.input,
+											{
+												actor: authority.actor,
+												conversation: r.conversation,
+												turn: r.turn ?? r.id,
+												callId: call.id,
+												attach: () => {},
+												progress: (step) => {
+													reached = step;
+													Queue.offerUnsafe(steps, step);
+												}
+											},
+											signal
+										)
+									).pipe(
+										Effect.catch((failure) => Effect.succeed<Json>({ error: failure.message }))
+									);
+					} else
+						result = yield* performAll(
+							{
+								engine: e,
+								authority,
+								bindings: yield* config.bindings,
+								turn: r.turn ?? r.id,
+								receipts
+							},
+							writesOf(
+								yield* Schema.decodeUnknownEffect(WriteInput)(call.input).pipe(
+									Effect.mapError((error) =>
+										BoltError.make('invalidInput', 'decode', error.message, error)
+									)
 								)
-							)
+							),
+							call.id
+						);
+				}
+				return result;
+			});
+			const result = yield* Effect.scoped(
+				Effect.gen(function* () {
+					yield* Stream.fromQueue(steps).pipe(
+						Stream.runForEach((step) =>
+							changed(
+								q(
+									`UPDATE sys_message m SET content = content || jsonb_build_object('progress', $2::text) WHERE id = $1 AND state = 'approved' `,
+									messageId,
+									step
+								)
+							).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 						),
-						call.id
+						Effect.forkScoped
 					);
-			}
-			yield* changed(
-				q(
-					`UPDATE sys_message m SET state = NULL, content = $2::jsonb WHERE id = $1 `,
-					messageId,
-					j({ id: call.id, name: call.name, result })
+					return yield* answer;
+				})
+			).pipe(
+				Effect.catch((failure) => Effect.succeed<Json>({ error: failure.message })),
+				// the call can outlive this generation (a publish restarts the workspace): the card still gets its answer
+				Effect.onInterrupt(() =>
+					settle(
+						reached === null
+							? { error: FIXED.unreported }
+							: { restarted: FIXED.restartedDuring(reached) }
+					).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				)
 			);
+			yield* settle(result);
 			return yield* drain(r.conversation, { force: true, receipts });
 		}),
 		/** The agent's live surface: the model classes and the MCP servers this actor may use (rule 63b). */

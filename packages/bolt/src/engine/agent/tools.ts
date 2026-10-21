@@ -45,6 +45,8 @@ export type HostToolContext = {
 	question?: string;
 	/** An image the model sees on its next step (a screenshot, a sandbox output). */
 	attach(file: { mime: string; bytes: Uint8Array }): void;
+	/** A confirmed call's latest step in plain words ("Building…"), shown live on its card; absent elsewhere. */
+	progress?(step: string): void;
 };
 /** A host capability (`capabilities.tools`): offered to staff members in the app only; `readOnly` ones also while planning. */
 export type HostTool = {

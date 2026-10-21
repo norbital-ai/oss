@@ -15,6 +15,7 @@ import {
 	Predicate,
 	Queue,
 	Result,
+	Schedule,
 	Schema,
 	Scope,
 	Stream
@@ -23,6 +24,7 @@ import type { Json } from '../src/decl/values.ts';
 import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
 import {
+	ANSWERED,
 	FIXED,
 	NUDGE,
 	RECOVERY,
@@ -617,6 +619,79 @@ describe('in-app turns', () => {
 						expect(calls).toEqual([{ input: { commit: 'c2' }, actor: root, callId: 'g2' }]);
 						expect(reply?.text).toBe('Published.');
 						expect(toolResults(ai.requests[3]!).at(-1)).toMatchObject({ live: true });
+						// a repeat press is refused: the call never runs a second time
+						expect(
+							(yield* Effect.flip(agent.confirm(second.id, true, yield* authority(root)))).message
+						).toBe(ANSWERED);
+						expect(calls).toHaveLength(1);
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+
+	it.live(
+		'an approved host call is claimed once, shows its steps, and still settles when its confirm is interrupted',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					let calls = 0;
+					const publish: HostTool = {
+						name: 'go_live',
+						description: 'Go live',
+						input: { type: 'object' },
+						confirm: true,
+						// like a publish whose cutover retires the generation running it: it never answers here
+						call: (_input, context, signal) => {
+							calls += 1;
+							context.progress?.('Building the new version…');
+							return new Promise((_resolve, reject) =>
+								signal.addEventListener('abort', () => reject(signal.reason))
+							);
+						}
+					};
+					const fixture = yield* setup([use('go_live', { commit: 'c1' }, 'g1')], {
+						hostTools: async () => [publish]
+					});
+					return yield* Effect.gen(function* () {
+						const { agent, user, authority } = fixture;
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'publish' });
+						yield* agent.drain(c);
+						const held = (yield* agent.transcript(c)).find((r) => r.state === 'confirm')!;
+						const pressed = yield* Effect.forkChild(
+							agent.confirm(held.id, true, yield* authority(root))
+						);
+						const row = Effect.map(agent.transcript(c), (rows) =>
+							rows.find((r) => r.id === held.id)
+						);
+						// the card is claimed and shows the host's step while the call runs
+						const running = yield* row.pipe(
+							Effect.repeat({
+								until: (r) =>
+									r?.state === 'approved' &&
+									Predicate.isObject(r.content) &&
+									r.content['progress'] === 'Building the new version…',
+								schedule: Schedule.spaced('10 millis'),
+								times: 500
+							})
+						);
+						expect(running?.state).toBe('approved');
+						expect(
+							(yield* Effect.flip(agent.confirm(held.id, true, yield* authority(root)))).message
+						).toBe(ANSWERED);
+						yield* Fiber.interrupt(pressed);
+						const settled = yield* row;
+						expect(settled?.state).toBeNull();
+						expect(settled?.content).toMatchObject({
+							id: 'g1',
+							name: 'go_live',
+							result: { restarted: FIXED.restartedDuring('Building the new version…') }
+						});
+						expect(
+							(yield* Effect.flip(agent.confirm(held.id, true, yield* authority(root)))).message
+						).toBe(ANSWERED);
+						expect(calls).toBe(1);
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)

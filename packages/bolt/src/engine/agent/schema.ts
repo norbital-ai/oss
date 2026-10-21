@@ -160,6 +160,7 @@ export const Message = Schema.Struct({
 			'consumed',
 			'cancelled',
 			'confirm',
+			'approved',
 			'streaming',
 			'running'
 		])
@@ -336,6 +337,9 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			? { detail: meta.detail }
 			: {}), // hook:agent-ui — rule 59: the reason reaches staff, never a sender
 		...(meta?.tag === 'confirm' ? { call: { name: meta.call.name, input: meta.call.input } } : {}),
+		...(r.state === 'approved' && typeof step.progress === 'string'
+			? { progress: step.progress }
+			: {}),
 		...(r.role === 'tool' && meta?.tag !== 'confirm'
 			? {
 					tool: {

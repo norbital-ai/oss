@@ -265,8 +265,14 @@ export function messages(
 				return {
 					role: 'tool',
 					content:
-						r.state === 'confirm'
-							? { ...(r.content as object), result: "awaiting the person's confirmation" }
+						r.state === 'confirm' || r.state === 'approved'
+							? {
+									...(r.content as object),
+									result:
+										r.state === 'confirm'
+											? "awaiting the person's confirmation"
+											: 'approved by the person; still running'
+								}
 							: r.content
 				};
 			case 'system':

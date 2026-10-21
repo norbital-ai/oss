@@ -480,10 +480,12 @@
 				Effect.tap((answer) =>
 					Effect.sync(() => {
 						const problem = refused(answer);
-						if (problem !== null) confirmFailed.set(row.id, problem);
+						// on success the card stays busy until the server's `approved` state replaces its buttons
+						if (problem === null) return;
+						confirmFailed.set(row.id, problem);
+						answering.delete(row.id);
 					})
 				),
-				Effect.ensuring(Effect.sync(() => answering.delete(row.id))),
 				Effect.asVoid
 			)
 		);
@@ -915,7 +917,7 @@
 			r.text !== '/compact' &&
 			(r.state !== 'queued' || thread) &&
 			(!!r.text || (r.files?.length ?? 0) > 0)) ||
-		(r.state === 'confirm' && r.call !== undefined) ||
+		((r.state === 'confirm' || r.state === 'approved') && r.call !== undefined) ||
 		(r.role === 'assistant' && !!r.text) ||
 		(r.role === 'system' && (r.tag === 'compact' || r.tag === 'verdict') && !!r.text);
 	// the work between two messages folds into one group, Codex-style: each tool call and each piece of reasoning (a
@@ -1821,10 +1823,10 @@
 												</span>
 											{/if}
 										</li>
-									{:else if !thread && row.state === 'confirm' && row.call}
+									{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call}
 										{@const call = row.call}
 										{@const hint = confirmHint(call.name)}
-										{@const busy = answering.has(row.id)}
+										{@const busy = answering.has(row.id) || row.state === 'approved'}
 										<li
 											{@attach turns.measure(itemKey(at))}
 											class="rounded-xl border border-border/70 bg-background p-3 shadow-sm"
@@ -1842,17 +1844,19 @@
 													)}</pre>
 											</details>
 											<Inline gap="xs" class="mt-2" align="center">
-												<Button size="sm" disabled={busy} onclick={() => confirm(row, true)}
-													>{t('Approve')}</Button
-												>
-												<Button
-													size="sm"
-													variant="outline"
-													disabled={busy}
-													onclick={() => confirm(row, false)}>{t('Decline')}</Button
-												>
+												{#if row.state === 'confirm'}<Button
+														size="sm"
+														disabled={busy}
+														onclick={() => confirm(row, true)}>{t('Approve')}</Button
+													>
+													<Button
+														size="sm"
+														variant="outline"
+														disabled={busy}
+														onclick={() => confirm(row, false)}>{t('Decline')}</Button
+													>{/if}
 												{#if busy}<span class="text-sm text-muted-foreground" role="status"
-														>{t('Working on it… you can keep using the app.')}</span
+														>{row.progress ?? t('Working on it… you can keep using the app.')}</span
 													>{/if}
 											</Inline>
 											{#if confirmFailed.has(row.id)}<p

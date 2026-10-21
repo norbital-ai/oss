@@ -245,7 +245,7 @@ export const AgentRow = Schema.Struct({
 	seq: Schema.Number,
 	role: Schema.NullOr(Schema.Literals(['user', 'assistant', 'tool', 'system'])),
 	text: Schema.NullOr(Schema.String),
-	/** `streaming`: a reply still being written (its text grows patch by patch); `running`: a tool call still running. */
+	/** `streaming`: a reply still being written (its text grows patch by patch); `running`: a tool call still running; `approved`: a confirmed call being carried out. */
 	state: Schema.NullOr(
 		Schema.Literals([
 			'pending',
@@ -253,6 +253,7 @@ export const AgentRow = Schema.Struct({
 			'consumed',
 			'cancelled',
 			'confirm',
+			'approved',
 			'streaming',
 			'running'
 		])
@@ -261,6 +262,8 @@ export const AgentRow = Schema.Struct({
 	at: Schema.optionalKey(Schema.String),
 	tag: Schema.NullOr(Schema.String),
 	call: Schema.optionalKey(Schema.Struct({ name: Schema.String, input: Schema.Json })),
+	/** An `approved` call's latest step, in plain words, as the host reports it. */
+	progress: Schema.optionalKey(Schema.String),
 	receipts: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({

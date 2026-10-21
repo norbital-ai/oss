@@ -25,7 +25,8 @@ export function orbState(o: {
 	failed?: boolean;
 }): Orb {
 	if (o.failed === true) return 'failed';
-	if (o.pending === true || o.status === 'running') return 'working';
+	if (o.pending === true || o.status === 'running' || o.rows.some((r) => r.state === 'approved'))
+		return 'working';
 	if (o.status === 'stopped') return 'stopped';
 	if (o.rows.some((r) => r.state === 'confirm')) return 'waiting';
 	const last = o.rows.findLast((r) => r.role === 'assistant');
