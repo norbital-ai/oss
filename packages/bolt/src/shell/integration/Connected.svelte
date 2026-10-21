@@ -1,13 +1,14 @@
 <!--
-	A connected instance's summary: who it answers as, through which provider, and the facts the host published (the
-	webhook URL, an address, a bot); then its verbs. Test connection sends a short message where a conversation provider
-	can (to a handle the operator types when the provider names one, else to the account itself) and runs the
-	definition's own test; Reconnect draws the setup again; Disconnect unpairs.
+	A connected instance's details: the facts the host published (the webhook URL, an address, a bot) — who it answers as
+	and through which provider are the status line above, never repeated here — then its verbs. Test connection sends a
+	short message where a conversation provider can (to a handle the operator types when the provider names one, else to
+	the account itself) and runs the definition's own test; Reconnect draws the setup again; Disconnect (only where no
+	card above owns it) asks in-app, then unpairs.
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { fork } from '@norbital-ai/ui/effect';
-	import { Button, Input } from '@norbital-ai/ui';
+	import { Button, confirmAction, Input } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type { ImportStartInput } from '../../protocol/instance-status.ts';
@@ -38,11 +39,10 @@
 	const say = $derived(sayOf(t, locale));
 	const c = $derived(status);
 	const active = $derived(providerOf(c));
-	const facts = $derived<(readonly [string, Json])[]>([
-		...(c?.account ? [[t('Connected as'), c.account] as const] : []),
-		...(active === undefined ? [] : [[t('Provider'), say(active.label)] as const]),
-		...Object.entries(aboutOf(c))
-	]);
+	// `account` is the status line's "Connected as"; the same fact under `about` would be its second copy
+	const facts = $derived<(readonly [string, Json])[]>(
+		Object.entries(aboutOf(c)).filter(([k, v]) => k !== 'account' || v !== c?.account)
+	);
 	// a conversation provider tests only when it says it can; any other driver runs its definition's own test
 	const testable = $derived(
 		c !== null && (c.test !== undefined || !('conversation' in DRIVERS[c.driver]))
@@ -140,16 +140,31 @@
 			{#if testable}<Button size="sm" variant="outline" type="submit" disabled={busy}
 					>{t('Test connection')}</Button
 				>{/if}
-			{#if paired && controls}
-				<Button size="sm" variant="ghost" disabled={busy} onclick={reconnect}
+			{#if paired}
+				<Button size="sm" variant="ghost" disabled={busy} onclick={reconnect} data-reconnect
 					>{t('Reconnect')}</Button
 				>
+			{/if}
+			{#if paired && controls}
 				<Button
 					size="sm"
 					variant="ghost"
 					class="text-destructive"
 					disabled={busy}
-					onclick={() => fork(unpair())}>{t('Disconnect')}</Button
+					data-disconnect
+					onclick={() =>
+						fork(
+							confirmAction({
+								title: t('Disconnect {name}?').replace(
+									'{name}',
+									active === undefined ? (c?.account ?? '') : say(active.label)
+								),
+								body: t('This logs the account out and deletes its stored credentials.'),
+								confirmLabel: t('Disconnect'),
+								cancelLabel: t('Cancel'),
+								destructive: true
+							}).pipe(Effect.flatMap((confirmed) => (confirmed ? unpair() : Effect.void)))
+						)}>{t('Disconnect')}</Button
 				>
 			{/if}
 			<!-- the holder shows a refused test as its error, so "passed" is only a test that drew none -->

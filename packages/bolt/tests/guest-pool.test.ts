@@ -9,7 +9,11 @@ import { GuestConfig, IsolatesLive, type GuestProgram } from '../src/engine/gues
 import { Guest, GuestLimits, Isolates, type Bridge } from '../src/engine/services.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 
-const observed = vi.hoisted(() => ({ scopes: new Set<Scope.Closeable>(), enabled: false, maps: 0 }));
+const observed = vi.hoisted(() => ({
+	scopes: new Set<Scope.Closeable>(),
+	enabled: false,
+	maps: 0
+}));
 vi.mock('effect', async (importOriginal) => {
 	const original = await importOriginal<typeof import('effect')>();
 	return {

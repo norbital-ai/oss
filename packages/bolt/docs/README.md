@@ -54,16 +54,18 @@ reader is then named `read_answer`.
 
 ```ts
 // three-way match: the invoice against its open PO and goods receipts
-const match = yield* ctx.ai.sys_2.infer({
-	prompt: `Invoice ${inv.number} from supplier ${inv.supplier}: ${JSON.stringify(inv.lines)}.
+const match =
+	yield *
+	ctx.ai.sys_2.infer({
+		prompt: `Invoice ${inv.number} from supplier ${inv.supplier}: ${JSON.stringify(inv.lines)}.
 Read open purchase_orders and goods_receipts for this supplier; match quantities and unit prices.`,
-	output: {
-		kind: 'object',
-		fields: { matched: { kind: 'bool' }, variances: { kind: 'list', of: { kind: 'text' } } }
-	},
-	tools: ['read'],
-	steps: 6
-});
+		output: {
+			kind: 'object',
+			fields: { matched: { kind: 'bool' }, variances: { kind: 'list', of: { kind: 'text' } } }
+		},
+		tools: ['read'],
+		steps: 6
+	});
 ```
 
 Pages use `$bolt`: `bolt` is the typed `PageBolt`, reads and acts are Effects, and `bolt.live(read)`
@@ -116,18 +118,18 @@ child it touched), and a log of every interaction. The one transition table is
 `src/engine/approvals/machine.ts`. The engine enforces it, and the approval view's buttons are its
 answer for the viewer.
 
-| From             | Move           | By                                 | To                                        | Effect                                                     |
-| ---------------- | -------------- | ---------------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
-| Pending k/n      | approve        | step k's approvers                 | Pending k+1, or Approved after the last   | the change stands                                          |
-| Pending          | reject         | step's approvers                   | Rejected                                  | rollback to the checkpoint                                 |
-| Pending          | requestChanges | step's approvers (reason required) | ChangesRequested                          | data stays; only the requester edits                       |
-| Pending          | withdraw       | requester                          | Withdrawn                                 | rollback                                                   |
-| Pending          | supersede      | admin or `superseded_by` (reason)  | Superseded                                | the change stands                                          |
-| ChangesRequested | resubmit       | requester (optional note)          | Pending 1/n (same request, same log)      | —                                                          |
-| ChangesRequested | reject         | that step's approvers              | Rejected                                  | rollback                                                   |
-| ChangesRequested | withdraw       | requester                          | Withdrawn                                 | rollback                                                   |
-| open             | comment        | requester, approvers, superseders  | unchanged                                 | a log entry                                                |
-| open             | close          | admin, only once a release removed the collection or record | Withdrawn (reason `source changed`) | rollback of what still exists |
+| From             | Move           | By                                                          | To                                      | Effect                               |
+| ---------------- | -------------- | ----------------------------------------------------------- | --------------------------------------- | ------------------------------------ |
+| Pending k/n      | approve        | step k's approvers                                          | Pending k+1, or Approved after the last | the change stands                    |
+| Pending          | reject         | step's approvers                                            | Rejected                                | rollback to the checkpoint           |
+| Pending          | requestChanges | step's approvers (reason required)                          | ChangesRequested                        | data stays; only the requester edits |
+| Pending          | withdraw       | requester                                                   | Withdrawn                               | rollback                             |
+| Pending          | supersede      | admin or `superseded_by` (reason)                           | Superseded                              | the change stands                    |
+| ChangesRequested | resubmit       | requester (optional note)                                   | Pending 1/n (same request, same log)    | —                                    |
+| ChangesRequested | reject         | that step's approvers                                       | Rejected                                | rollback                             |
+| ChangesRequested | withdraw       | requester                                                   | Withdrawn                               | rollback                             |
+| open             | comment        | requester, approvers, superseders                           | unchanged                               | a log entry                          |
+| open             | close          | admin, only once a release removed the collection or record | Withdrawn (reason `source changed`)     | rollback of what still exists        |
 
 Approved, Rejected, Withdrawn and Superseded are terminal. A finished request is never deleted,
 reset or reused. Erasure is the only exception: it removes the requests that hold an erased record.

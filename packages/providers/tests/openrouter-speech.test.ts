@@ -229,6 +229,17 @@ describe('parseHeard', () => {
 			});
 		})
 	);
+	it.effect('reads the object out of prose and repairs trailing commas', () =>
+		Effect.gen(function* () {
+			for (const content of [
+				'Here is the transcript:\n```json\n{"language":null,"speakers":[],"segments":[{"speaker":"S1","start":0,"end":1,"text":"Hi"}]}\n```\nDone.',
+				'{"language":null,"speakers":[],"segments":[{"speaker":"S1","start":0,"end":1,"text":"Hi"},],}'
+			]) {
+				const h = yield* parseHeard({ choices: [{ message: { content } }] });
+				expect(h.segments).toEqual([seg('S1', 0, 1, 'Hi')]);
+			}
+		})
+	);
 	it.effect('refuses prose, no text and segments out of the schema as SpeechFailure', () =>
 		Effect.gen(function* () {
 			for (const body of [

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // One connector row (the member's Connections, an envoy's channel): Connect makes the instance and starts pairing in the
 // same click for a provider that pairs at once (the QR, the sign-in), reserving the sign-in window from that click; a
-// provider the host cannot sign in is offered as unavailable; Disconnect unpairs, then removes the instance.
+// provider the host cannot sign in is offered as unavailable; Disconnect asks in-app (never `window.confirm`, which
+// WebViews suppress), unpairs, then removes the instance and shows it gone at once.
 import './setup-happy-dom.js';
 import { Deferred, Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect';
 import { mountEdge, run } from '@norbital-ai/ui/effect';
@@ -125,6 +126,7 @@ function show(props: {
 			remove: (instance: string) =>
 				Effect.sync(() => {
 					calls.push(`remove ${instance}`);
+					return true;
 				}),
 			onManage: props.onManage,
 			t: (k: string) => k,
@@ -316,8 +318,12 @@ it('a provider the host cannot sign in is unavailable; the other ways stay offer
 	await vi.waitFor(() => expect(other.calls).toEqual(['create']));
 });
 
-it('Disconnect unpairs the instance, then removes it', async () => {
-	vi.stubGlobal('confirm', () => true);
+const dialog = () => document.querySelector<HTMLElement>('[data-confirm-dialog]');
+
+it('Disconnect asks in-app, unpairs on confirm, then removes the instance and shows it not connected', async () => {
+	// a WebView answers `window.confirm` with false at once: the card must never depend on it
+	const native = vi.fn(() => false);
+	vi.stubGlobal('confirm', native);
 	const { el, calls } = show({
 		providers: [LINKED],
 		instance: { id: 'phone', status: { state: 'connected', account: '6591234567' } },
@@ -325,9 +331,49 @@ it('Disconnect unpairs the instance, then removes it', async () => {
 	});
 	await settle();
 	await vi.waitFor(() => expect(el.textContent).toContain('Connected as 6591234567'));
+	expect(el.textContent?.match(/6591234567/g)).toHaveLength(1); // the account once, in the one status line
 	expect(el.querySelector('[data-connect]')).toBeNull();
 	el.querySelector<HTMLButtonElement>('[data-disconnect]')!.click();
+	await vi.waitFor(() => expect(dialog()).not.toBeNull());
+	expect(dialog()!.getAttribute('role')).toBe('alertdialog');
+	expect(dialog()!.textContent).toContain('Disconnect WhatsApp?');
+	expect(calls).toEqual([]);
+	dialog()!.querySelector<HTMLButtonElement>('[data-confirm-accept]')!.click();
 	await vi.waitFor(() => expect(calls).toEqual(['unpair phone', 'remove phone']));
+	await vi.waitFor(() =>
+		expect(el.querySelector('[data-connector-state]')?.textContent?.trim()).toBe('Not connected')
+	);
+	expect(el.querySelector('[data-disconnect]')).toBeNull();
+	expect(el.querySelector('[data-connect]')).not.toBeNull();
+	expect(native).not.toHaveBeenCalled();
+});
+
+it('Disconnect cancelled in-app (or by Escape) leaves the connection alone', async () => {
+	const { el, calls } = show({
+		providers: [LINKED],
+		instance: { id: 'phone', status: { state: 'connected', account: '6591234567' } },
+		connection: { state: 'connected', stored: true, account: '6591234567' }
+	});
+	await vi.waitFor(() => expect(el.querySelector('[data-disconnect]')).not.toBeNull());
+	el.querySelector<HTMLButtonElement>('[data-disconnect]')!.click();
+	await vi.waitFor(() => expect(dialog()).not.toBeNull());
+	dialog()!.querySelector<HTMLButtonElement>('[data-confirm-cancel]')!.click();
+	await vi.waitFor(() => expect(dialog()?.dataset['state']).not.toBe('open'));
+	el.querySelector<HTMLButtonElement>('[data-disconnect]')!.click();
+	await vi.waitFor(() =>
+		expect(document.querySelector('[data-confirm-dialog][data-state=open]')).not.toBeNull()
+	);
+	document
+		.querySelector('[data-confirm-dialog][data-state=open]')!
+		.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+	await vi.waitFor(() =>
+		expect(document.querySelector('[data-confirm-dialog][data-state=open]')).toBeNull()
+	);
+	await settle();
+	expect(calls).toEqual([]);
+	expect(el.querySelector('[data-connector-state]')?.textContent).toContain(
+		'Connected as 6591234567'
+	);
 });
 
 it('keeps every reported connection state and waits for a fresh status instead of saying not paired', async () => {
@@ -353,8 +399,6 @@ it('keeps every reported connection state and waits for a fresh status instead o
 });
 
 it('offers cancellation before authentication, without a disconnect confirmation', async () => {
-	const confirm = vi.fn();
-	vi.stubGlobal('confirm', confirm);
 	const { el, calls } = show({
 		providers: [LINKED],
 		instance: { id: 'phone', status: { state: 'pairing' } },
@@ -367,7 +411,7 @@ it('offers cancellation before authentication, without a disconnect confirmation
 	);
 	el.querySelector<HTMLButtonElement>('[data-cancel-setup]')!.click();
 	await vi.waitFor(() => expect(calls).toEqual(['unpair phone', 'remove phone']));
-	expect(confirm).not.toHaveBeenCalled();
+	expect(dialog()).toBeNull();
 });
 
 it('shows a newly paired success before details, then opens details only through Manage', async () => {
@@ -384,7 +428,7 @@ it('shows a newly paired success before details, then opens details only through
 	f.publish({ state: 'connected', stored: true, account: '6591234567' });
 	await vi.waitFor(() =>
 		expect(f.el.querySelector('[data-connection-success][role=status]')?.textContent?.trim()).toBe(
-			'Connected'
+			'Connected as 6591234567'
 		)
 	);
 	expect(f.el.querySelector('[data-setup-view]')).toBeNull();
@@ -420,11 +464,10 @@ it('opens the full settings sheet for its existing instance and keeps a paused c
 	});
 	await settle();
 	expect(el.querySelector('[data-connector-state=paused]')?.textContent?.trim()).toBe('Paused');
-	const manage = [...el.querySelectorAll('button')].find(
-		(button) => button.textContent?.trim() === 'Manage'
-	);
-	if (manage === undefined) throw new Error('Missing instance management action.');
-	manage.click();
+	const settings = el.querySelector<HTMLButtonElement>('[data-settings]');
+	if (settings === null) throw new Error('Missing instance settings action.');
+	expect(settings.getAttribute('aria-label')).toBe('Settings');
+	settings.click();
 	expect(managed).toEqual(['desk']);
 	expect(calls).toEqual([]);
 	expect(el.querySelector('[data-setup-view]')).toBeNull();

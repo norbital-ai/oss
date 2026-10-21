@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { CollectionKey, Row } from '../collection/types.js';
+	import type { CollectionKey, InsertOf, Row } from '../collection/types.js';
 	import type { Outcome } from '../client/contract.js';
 	import type { FormProps } from '../form/form.svelte';
 	import type { RunsForProps } from '../runs/RunsFor.svelte';
@@ -76,6 +76,7 @@
 	import { Badge } from '../primitives/badge/index.js';
 	import { Tooltip } from '../primitives/tooltip/index.js';
 	import { Button } from '../primitives/button/index.js';
+	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import { TAB_LEVEL, Tabs, type TabItem } from '../primitives/tabs/index.js';
 	import Form from '../form/form.svelte';
 	import ChildGrid from '../relations/ChildGrid.svelte';
@@ -115,7 +116,7 @@
 		of,
 		id,
 		mode = 'view',
-		values = {},
+		values,
 		fields = [],
 		sections = [],
 		title,
@@ -288,7 +289,7 @@
 	const row = $derived(shownPast ?? live);
 	const view = $derived.by<RecordView | null>(() =>
 		mode === 'create'
-			? { collection: of, mode: 'create', values }
+			? { collection: of, mode: 'create', values: (values ?? {}) as Partial<InsertOf<C>> }
 			: row === null
 				? null
 				: {
@@ -429,7 +430,11 @@
 			localController = new FormState(
 				spec,
 				live,
-				Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)),
+				Object.fromEntries(
+					Object.entries((values ?? {}) as Partial<InsertOf<C>>).filter(
+						([, value]) => value !== undefined
+					)
+				),
 				(callable, input, options) => bolt.act(callable, input, options),
 				{
 					pendingApproval: formText('pendingApproval'),
@@ -636,8 +641,21 @@
 					class="px-2.5 text-xs"
 					disabled={controller.pending}
 					onclick={() => {
-						if (controller?.dirty && !confirm(formText('discardDraft'))) return;
-						controller?.view();
+						if (!controller?.dirty) return void controller?.view();
+						fork(
+							confirmAction({
+								title: formText('discardDraft'),
+								confirmLabel: formText('discard'),
+								cancelLabel: formText('cancel'),
+								destructive: true
+							}).pipe(
+								Effect.tap((confirmed) =>
+									Effect.sync(() => {
+										if (confirmed) controller?.view();
+									})
+								)
+							)
+						);
 					}}>{msg(bolt, 'record.cancel', 'Cancel')}</Button
 				>
 				<Button

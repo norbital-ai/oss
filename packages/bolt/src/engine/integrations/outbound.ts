@@ -7,8 +7,9 @@
 // conversation (a command: per instance and record), leased, and skips rows of another environment epoch. A message goes
 // through the instance's link: 8 attempts, `uncertain` on a final timeout, its delivery reports and replies on the
 // timeline and, through the rule's `events`, patching only the record. A command runs until acknowledged: transient
-// failures back off (capped), never terminal; `ctx.key` is the remote's idempotency key. Reads of `from` carry
-// `$outbound` (each rule's latest row); receipts never touch the record's history.
+// failures back off (capped), never terminal; `ctx.key` is the remote's idempotency key, and its answer's `set` patches
+// the record (a remote version or etag). A personal instance never sends a message; a command may write back to it (a
+// member's own calendar). Reads of `from` carry `$outbound` (each rule's latest row); receipts never touch the record's history.
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Drivers, Files } from '../ports.ts';
@@ -192,7 +193,7 @@ export const outboundFrom = (m: EngineManifest): ReadonlySet<string> => {
 };
 /**
  * hook:integrations (write/commit.ts) — the act statement's outbound piece, over the statement's own direct writes (`allp`)
- * of `written` tables: one queued row per matching rule, through an instance of its definition (never a personal one),
+ * of `written` tables: one queued row per matching rule, through an instance of its definition (a personal one for commands only),
  * keyed so a record and version send once. An instance taken off pause wakes the delivery of what waited for it.
  */
 export function outboundPiece(
@@ -227,7 +228,7 @@ export function outboundPiece(
 			})
 			.join(
 				' UNION ALL '
-			)}) o JOIN sys_integration i ON i.id = o.instance AND i.integration = o.def AND i.owner IS NULL
+			)}) o JOIN sys_integration i ON i.id = o.instance AND i.integration = o.def AND (i.owner IS NULL OR o.class = 'command')
 		WHERE o.version IS NOT NULL AND ${GATED} ON CONFLICT (key) DO NOTHING`,
 			'id'
 		);
@@ -592,7 +593,12 @@ function makeOutbound(cfg: OutboundConfig) {
 			request: true
 		}).pipe(
 			Effect.flatMap((out) =>
-				Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.NonEmptyString }))(out).pipe(
+				Schema.decodeUnknownEffect(
+					Schema.Struct({
+						id: Schema.NonEmptyString,
+						set: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
+					})
+				)(out).pipe(
 					Effect.mapError(() =>
 						BoltError.make('badAnswer', 'guest', `${rule.name}: run answered no { id }`)
 					)
@@ -616,6 +622,12 @@ function makeOutbound(cfg: OutboundConfig) {
 				entry({ kind: 'sent', at: now, provider: 'bolt' })
 			)
 		);
+		const set = result.success.set;
+		if (set !== undefined && Object.keys(set).length > 0) {
+			const outcome = yield* apply(r, rule, String(r['id']), 'receipt', set);
+			if (outcome?.kind === 'refused')
+				yield* Effect.logWarning(`${rule.name}: its receipt patched nothing: ${outcome.message}`);
+		}
 		touched(r);
 		return 'sent' as const;
 	});
@@ -808,7 +820,7 @@ function makeOutbound(cfg: OutboundConfig) {
 		const personal = msg(
 			cleanup,
 			`UPDATE sys_message SET status = 'failed', error = 'a personal account never sends'
-            WHERE direction = 'outbound' AND status IN ('queued', 'sending') AND integration IN (SELECT id FROM sys_integration WHERE owner IS NOT NULL)`,
+            WHERE direction = 'outbound' AND status IN ('queued', 'sending') AND class <> 'command' AND integration IN (SELECT id FROM sys_integration WHERE owner IS NOT NULL)`,
 			'1 AS changed'
 		);
 		yield* db.write(
@@ -959,9 +971,26 @@ function makeOutbound(cfg: OutboundConfig) {
 					};
 		if (!Predicate.isObject(result.success) || Object.keys(result.success).length === 0)
 			return null;
-		const set = result.success,
-			collection = rec['collection'],
+		return yield* apply(row, rule, String(event['message']), kind, result.success);
+	});
+	/** `set` onto the row's record as the rule's system actor, retried over write conflicts. */
+	const apply = Effect.fn('Outbound.apply')(function* (
+		row: Obj,
+		rule: Rule,
+		message: string,
+		kind: string,
+		set: Obj
+	) {
+		const rec = row['record'];
+		if (
+			!Predicate.isObject(rec) ||
+			typeof rec['collection'] !== 'string' ||
+			typeof rec['id'] !== 'string'
+		)
+			return null;
+		const collection = rec['collection'],
 			id = rec['id'];
+		const actor = actorOf(rule, String(row['integration']), `outbound:${message}`);
 		const authority = yield* cfg.engine.authority(
 			{ actor, policies: [], admin: true },
 			`outbound:${rule.name}`
@@ -969,7 +998,7 @@ function makeOutbound(cfg: OutboundConfig) {
 		let attempt = 0;
 		return yield* Effect.gen(function* () {
 			const bindings = yield* cfg.engine.bindings(),
-				key = `outbound:${rule.name}:${String(event['message'])}:${kind}:${attempt++}`;
+				key = `outbound:${rule.name}:${message}:${kind}:${attempt++}`;
 			return (yield* cfg.engine.act({
 				collection,
 				verb: 'update',

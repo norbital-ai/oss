@@ -16,7 +16,7 @@
 <script lang="ts">
 	import { attach, fork } from '@norbital-ai/ui/effect';
 	import { Cause, Effect, Queue, Schema, Stream } from 'effect';
-	import { Button, Icon, Sheet, Tabs } from '@norbital-ai/ui';
+	import { Button, confirmAction, Icon, Sheet, Tabs } from '@norbital-ai/ui';
 	import { Inline, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
 	import BuildLog from './BuildLog.svelte';
@@ -210,7 +210,14 @@
 						'Roll back live to this commit? Its build runs again as a new deployment and live keeps all its data. The workbench keeps its source.'
 					)
 				: `${t('Roll back live to this commit? Its schema differs from live’s, so the data written after')} ${new Date(lost).toLocaleString()} ${t('will be lost. Its build runs again as a new deployment.')}`;
-		if (confirm(asked))
+		if (
+			yield* confirmAction({
+				title: asked,
+				confirmLabel: t('Roll back'),
+				cancelLabel: t('Cancel'),
+				destructive: lost !== undefined
+			})
+		)
 			yield* run({
 				op: 'rollback',
 				commit,
@@ -236,7 +243,16 @@
 		if (title && (yield* save())) yield* run({ op: 'mr.open', title });
 	});
 	const switchTo = Effect.fn('Studio.switchTo')(function* (target: string) {
-		if (Object.keys(drafts).length > 0 && !confirm(t('Discard unsaved drafts and switch?'))) return;
+		if (
+			Object.keys(drafts).length > 0 &&
+			!(yield* confirmAction({
+				title: t('Discard unsaved drafts and switch?'),
+				confirmLabel: t('Discard and switch'),
+				cancelLabel: t('Cancel'),
+				destructive: true
+			}))
+		)
+			return;
 		drafts = {};
 		if (yield* run({ op: 'switch', target })) go('workbench');
 	});

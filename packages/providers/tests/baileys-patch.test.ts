@@ -290,4 +290,43 @@ describe('the Baileys patch', () => {
 			expect(p.ends).toEqual([]);
 		})
 	);
+	it.live(
+		'a chat cleared on another device is a messages.delete bounded by its last cleared message',
+		() =>
+			Effect.gen(function* () {
+				type Sync = {
+					processSyncAction(
+						action: object,
+						ev: { emit(event: string, data: unknown): void },
+						me: object
+					): void;
+				};
+				const b = yield* Schema.decodeUnknownEffect(
+					Schema.declare<Sync>(
+						(value): value is Sync =>
+							typeof value === 'object' &&
+							value !== null &&
+							'processSyncAction' in value &&
+							typeof value.processSyncAction === 'function'
+					)
+				)(yield* Effect.tryPromise(() => import('@whiskeysockets/baileys')));
+				const emitted: [string, unknown][] = [];
+				const ev = { emit: (event: string, data: unknown) => void emitted.push([event, data]) };
+				const clear = (value: object) =>
+					b.processSyncAction(
+						{ syncAction: { value }, index: ['clearChat', '659@s.whatsapp.net', '1', '0'] },
+						ev,
+						{ id: '6580000000:1@s.whatsapp.net' }
+					);
+				clear({
+					timestamp: 1_790_000_100_000,
+					clearChatAction: { messageRange: { lastMessageTimestamp: 1_790_000_000 } }
+				});
+				clear({ timestamp: 1_790_000_100_000, clearChatAction: {} });
+				expect(emitted).toEqual([
+					['messages.delete', { jid: '659@s.whatsapp.net', all: true, before: 1_790_000_000_000 }],
+					['messages.delete', { jid: '659@s.whatsapp.net', all: true, before: 1_790_000_100_000 }]
+				]);
+			})
+	);
 });

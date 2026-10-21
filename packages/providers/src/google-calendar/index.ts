@@ -1,4 +1,6 @@
-// Calendar feeds keep snapshot/sync cursors and sealed watch identities across renewals.
+// Calendar feeds keep snapshot/sync cursors and sealed watch identities across renewals. Writes are the driver's `call`:
+// an http-shaped op on one calendar's events through this standing link, answered `{ status, body }` for the definition's
+// outbound run to read (a 412 its conflict). A sign-in sealed before it could write keeps importing and says to reconnect.
 import { Clock, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
 import { Instant, PlainDate } from '@norbital-ai/std/date';
@@ -7,7 +9,8 @@ import {
 	OAUTH_CALLBACK,
 	type DriverOpen,
 	type DriverPage,
-	type Json
+	type Json,
+	type LinkStatus
 } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, LinkClosed, PairingInvalid, ProviderUnavailable } from '../errors.ts';
@@ -16,6 +19,7 @@ import {
 	authorizeUrl,
 	callbackCompletion,
 	grant,
+	revoke,
 	STATE_MS,
 	tokenHolder,
 	Tokens,
@@ -24,7 +28,11 @@ import {
 import { hostCall, same, str, withFetch, type Obj } from '../util.ts';
 
 const API = 'https://www.googleapis.com/calendar/v3';
-const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
+const READ = 'https://www.googleapis.com/auth/calendar.readonly',
+	WRITE = 'https://www.googleapis.com/auth/calendar.events';
+const SCOPES = [READ, WRITE];
+const RECONSENT =
+	'Reconnect this calendar to let Norbital update its events; until then it only imports them.';
 const Watch = Schema.Struct({
 	id: Schema.NonEmptyString,
 	token: Schema.NonEmptyString,
@@ -68,11 +76,24 @@ const Cursor = Schema.Struct({
 	page: Schema.optionalKey(Schema.String)
 });
 type ApiCall = {
-	method: 'GET' | 'POST';
+	method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
 	path: string;
 	query?: { readonly [k: string]: string };
+	headers?: { readonly [k: string]: string };
 	body?: Json;
 };
+const Scalar = Schema.Union([Schema.String, Schema.Number, Schema.Boolean]);
+/** What `ctx.request` hands a calendar: an http op on one calendar's events (insert, get, patch, delete). */
+const CallOp = Schema.Struct({
+	method: Schema.Literals(['GET', 'POST', 'PATCH', 'DELETE']),
+	// encoded segments only, never a dot segment: the path stays on one calendar's events
+	path: Schema.String.check(
+		Schema.isPattern(/^\/calendars\/[^/?#.][^/?#]*\/events(\/[^/?#.][^/?#]*)?$/)
+	),
+	query: Schema.optionalKey(Schema.Record(Schema.String, Scalar)),
+	headers: Schema.optionalKey(Schema.Struct({ 'if-match': Schema.optionalKey(Schema.String) })),
+	body: Schema.optionalKey(Schema.Json)
+});
 
 export function googleCalendar(): ProviderDef {
 	return {
@@ -95,6 +116,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 	const app: OAuthApp = {
 		authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
 		tokenUrl: 'https://oauth2.googleapis.com/token',
+		revokeUrl: 'https://oauth2.googleapis.com/revoke',
 		scopes: oauth?.scopes ?? SCOPES,
 		params: { access_type: 'offline', prompt: 'consent' }
 	};
@@ -108,8 +130,18 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 				: Effect.succeed(configured);
 		});
 	const stored = yield* hostCall('read calendar credentials', () => ctx.credentials.load());
-	const decodedToken = Schema.decodeUnknownOption(Tokens)(stored.get('token'));
-	let tokens = Option.getOrNull(decodedToken);
+	const decodedToken = Option.getOrNull(Schema.decodeUnknownOption(Tokens)(stored.get('token')));
+	// a sign-in sealed before its scopes were recorded asked only to read
+	let tokens =
+		decodedToken === null || decodedToken.scope !== undefined
+			? decodedToken
+			: { ...decodedToken, scope: READ };
+	const writable = () => tokens?.scope?.split(' ').includes(WRITE) === true;
+	const connected = (): LinkStatus => ({
+		state: 'connected',
+		account: state.account ?? null,
+		...(writable() ? {} : { detail: RECONSENT })
+	});
 	let state: State = stored.has('state')
 		? yield* Schema.decodeUnknownEffect(State)(stored.get('state')).pipe(
 				Effect.mapError(
@@ -182,7 +214,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			return yield* Effect.fail(new LinkClosed({ message: 'Google Calendar link is closed' }));
 		const bearer = token ?? (yield* access());
 		const http = HttpClientRequest.make(request.method)(`${API}${request.path}`, {
-			headers: { authorization: `Bearer ${bearer}` },
+			headers: { ...request.headers, authorization: `Bearer ${bearer}` },
 			urlParams: request.query
 		});
 		const response = yield* withFetch(
@@ -201,8 +233,12 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			response.status === 204
 				? null
 				: yield* HttpClientResponse.schemaBodyJson(Schema.Json)(response).pipe(
-						Effect.mapError(
-							() => new ProviderUnavailable({ message: 'Google Calendar response is not JSON' })
+						Effect.catch(() =>
+							response.status >= 200 && response.status < 300
+								? Effect.fail(
+										new ProviderUnavailable({ message: 'Google Calendar response is not JSON' })
+									)
+								: Effect.succeed(null)
 						)
 					);
 		return { status: response.status, body };
@@ -245,6 +281,27 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			if (page === undefined) break;
 		}
 		return result;
+	});
+	const request = Effect.fn('GoogleCalendar.call')(function* (op: Json) {
+		const decoded = Schema.decodeUnknownOption(CallOp)(op, { onExcessProperty: 'error' });
+		if (Option.isNone(decoded))
+			return {
+				status: 400,
+				body: 'A calendar call is { method, path: /calendars/<id>/events[/<event>], query?, headers?: { if-match }, body? }.'
+			};
+		const { method, path, query, headers, body } = decoded.value;
+		if (method !== 'GET' && !writable()) return { status: 403, body: RECONSENT };
+		return yield* call({
+			method,
+			path,
+			...(query === undefined
+				? {}
+				: { query: Object.fromEntries(Object.entries(query).map(([k, v]) => [k, String(v)])) }),
+			...(headers?.['if-match'] === undefined
+				? {}
+				: { headers: { 'if-match': headers['if-match'] } }),
+			...(body === undefined ? {} : { body })
+		});
 	});
 	const read = Effect.fn('GoogleCalendar.read')(function* (
 		_feed: string,
@@ -493,6 +550,9 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 								code_verifier: pairing.verifier
 							})
 						);
+						// a grant that names no scope gave the ones asked for (RFC 6749 §5.1)
+						const sealed =
+							granted.scope === undefined ? { ...granted, scope: app.scopes.join(' ') } : granted;
 						const account = (yield* list(granted.access)).find((calendar) => calendar.primary)?.id;
 						const next: State = { watches: [], ...(account === undefined ? {} : { account }) };
 						// Host persistence cannot be canceled; finish adoption before disconnect can wipe its keys.
@@ -500,17 +560,15 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 							yield* hostCall('store calendar pairing', () =>
 								ctx.credentials.write(
 									new Map<string, Json>([
-										['token', granted],
+										['token', sealed],
 										['state', next]
 									])
 								)
 							);
-							tokens = granted;
+							tokens = sealed;
 							state = next;
-							yield* holder.set(granted);
-							yield* hostCall('report calendar pairing', () =>
-								ctx.status({ state: 'connected', account: account ?? null })
-							);
+							yield* holder.set(sealed);
+							yield* hostCall('report calendar pairing', () => ctx.status(connected()));
 							for (const calendar of calendars()) yield* invalidate(calendar);
 						}).pipe(Effect.uninterruptible);
 						return pairing.returnTo === null
@@ -534,11 +592,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 				})
 		);
 	yield* hostCall('report calendar status', () =>
-		ctx.status(
-			tokens === null
-				? { state: 'unpaired' }
-				: { state: 'connected', account: state.account ?? null }
-		)
+		ctx.status(tokens === null ? { state: 'unpaired' } : connected())
 	);
 	return {
 		pair: (input: Json) =>
@@ -580,6 +634,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		test: (_input: Json) => list().pipe(Effect.asVoid),
 		discover: () =>
 			list().pipe(Effect.map((calendars) => calendars.map(({ id, label }) => ({ id, label })))),
+		request,
 		read,
 		renew,
 		webhook: (request: Request) =>
@@ -598,6 +653,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 								message: 'A pending calendar watch must reconcile or expire before disconnect'
 							})
 						);
+					yield* withFetch(ctx, revoke(app, tokens));
 					tokens = null;
 					state = { watches: [] };
 					yield* holder.set(null);

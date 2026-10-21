@@ -302,6 +302,42 @@ describe('instance links', () => {
 	);
 
 	it.live(
+		'unpair has the provider forget this host, then leaves no credential row — not even one its close flushed',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { host, sealed, row } = yield* open();
+					const base = fake('twilio');
+					let unpaired = 0;
+					const links = yield* host([
+						{
+							...base,
+							async open(ctx) {
+								const link = await base.open(ctx);
+								return {
+									...link,
+									async unpair() {
+										unpaired++;
+									},
+									async close() {
+										await ctx.credentials.write(new Map([['keys', { late: true }]]));
+									}
+								};
+							}
+						}
+					]);
+					yield* links.pair('a', { key: 'k' });
+					yield* links.unpair('a');
+					expect(unpaired).toBe(1);
+					expect(yield* sealed('a')).toEqual({});
+					expect((yield* row('a'))['status']).toMatchObject({ state: 'unpaired', account: null });
+					expect(yield* links.state('a')).toMatchObject({ state: 'unpaired', stored: false });
+					yield* links.close;
+				})
+			)
+	);
+
+	it.live(
 		'resume opens only active instances that store a registered provider; the webhook routes by instance and resolves after the engine committed',
 		() =>
 			Effect.scoped(

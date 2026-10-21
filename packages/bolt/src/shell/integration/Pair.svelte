@@ -5,8 +5,9 @@
 	different data, so a different screen. Secrets are masked and cleared once sent; nothing stored is shown back.
 -->
 <script lang="ts">
+	import { Effect } from 'effect';
 	import { fork } from '@norbital-ai/ui/effect';
-	import { Button, Combobox, Input, Qr } from '@norbital-ai/ui';
+	import { Button, Combobox, confirmAction, Input, Qr } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type { ImportStartInput, SetupField } from '../../protocol/instance-status.ts';
@@ -81,6 +82,23 @@
 			pairing.value !== null
 			? pairing
 			: null
+	);
+	// the code's own deadline, counted down; past it the code is refused, so the page offers a fresh one
+	let now = $state(Date.now());
+	const expiresAt = $derived(shown?.expiresAt === undefined ? null : Date.parse(shown.expiresAt));
+	watch(
+		() => expiresAt,
+		(deadline) => {
+			if (deadline === null || Number.isNaN(deadline)) return;
+			now = Date.now();
+			const timer = setInterval(() => (now = Date.now()), 1_000);
+			return () => clearInterval(timer);
+		}
+	);
+	const left = $derived(
+		expiresAt === null || Number.isNaN(expiresAt)
+			? null
+			: Math.max(0, Math.ceil((expiresAt - now) / 1000))
 	);
 	const signIn = $derived(
 		c?.state !== 'error' && pairing?.kind === 'oauth' && pairing.value !== null
@@ -261,7 +279,9 @@
 
 		{#if shown !== null}
 			<Stack gap="xs" align="center" data-pairing={shown.kind}>
-				{#if shown.kind === 'qr'}
+				{#if left === 0}
+					<p class="text-sm" role="status" data-pairing-expired>{t('This code expired.')}</p>
+				{:else if shown.kind === 'qr'}
 					<Qr
 						value={shown.value ?? ''}
 						alt={t('Scannable code for {instance}').replace('{instance}', c?.instance ?? '')}
@@ -279,6 +299,16 @@
 						{t('Enter this code in the app on the phone this instance should answer as.')}
 					</p>
 				{/if}
+				{#if left !== null && left > 0}<p class="text-meta tabular-nums" data-pairing-expiry>
+						{t('Expires in {n}s').replace('{n}', String(left))}
+					</p>{/if}
+				<Button
+					size="sm"
+					variant={left === 0 ? 'default' : 'ghost'}
+					disabled={busy}
+					onclick={start}
+					data-pairing-refresh>{t('Get a new code')}</Button
+				>
 			</Stack>
 			{#if (choice.setup.kind === 'qr' || choice.setup.kind === 'code') && (choice.setup.fields ?? []).length > 0}
 				<!-- the QR is the way in; its fields (a phone number, for a code instead) stay one click away -->
@@ -334,7 +364,20 @@
 				variant="ghost"
 				class="text-destructive"
 				disabled={busy}
-				onclick={() => fork(unpair())}>{t('Disconnect')}</Button
+				data-disconnect
+				onclick={() =>
+					fork(
+						confirmAction({
+							title: t('Disconnect {name}?').replace(
+								'{name}',
+								choice === undefined ? '' : say(choice.label)
+							),
+							body: t('This logs the account out and deletes its stored credentials.'),
+							confirmLabel: t('Disconnect'),
+							cancelLabel: t('Cancel'),
+							destructive: true
+						}).pipe(Effect.flatMap((confirmed) => (confirmed ? unpair() : Effect.void)))
+					)}>{t('Disconnect')}</Button
 			>
 		</Cluster>
 	{/if}

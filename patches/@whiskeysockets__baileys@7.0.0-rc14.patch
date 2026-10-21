@@ -333,3 +333,19 @@ diff --git a/lib/Types/Socket.d.ts b/lib/Types/Socket.d.ts
      /** transaction capability options for SignalKeyStore */
      transactionOpts: TransactionCapabilityOptions;
      /** marks the client as online whenever the socket successfully connects */
+diff --git a/lib/Utils/chat-utils.js b/lib/Utils/chat-utils.js
+--- a/lib/Utils/chat-utils.js
++++ b/lib/Utils/chat-utils.js
+@@ -768,6 +768,12 @@
+             ev.emit('chats.delete', [id]);
+         }
+     }
++    // Realm patch: a chat cleared on another device is cleared here too, up to its last cleared message (ms).
++    else if (action?.clearChatAction || type === 'clearChat') {
++        const range = action?.clearChatAction?.messageRange;
++        const last = toNumber(range?.lastMessageTimestamp) || toNumber(range?.lastSystemMessageTimestamp);
++        ev.emit('messages.delete', { jid: id, all: true, before: last ? last * 1000 : toNumber(action?.timestamp) });
++    }
+     else if (action?.labelEditAction) {
+         const { name, color, deleted, predefinedId } = action.labelEditAction;
+         ev.emit('labels.edit', {

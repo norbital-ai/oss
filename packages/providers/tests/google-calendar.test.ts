@@ -12,7 +12,14 @@ import { fakeFetch, host, json, until, type Host, type HostOptions, type Route }
 const NOW = Date.parse('2026-10-12T08:00:00Z');
 const HOOK = 'https://host.example/acme/hooks/integration/desk',
 	REDIRECT = 'https://host.example/acme/hooks/oauth/callback';
-const TOKEN = { access: 'secret-access-token', refresh: 'refresh-1', exp: NOW + 3_600_000 };
+const READ = 'https://www.googleapis.com/auth/calendar.readonly',
+	WRITE = 'https://www.googleapis.com/auth/calendar.events';
+const TOKEN = {
+	access: 'secret-access-token',
+	refresh: 'refresh-1',
+	exp: NOW + 3_600_000,
+	scope: `${READ} ${WRITE}`
+};
 const definition: DriverOpen['definition'] = {
 	description: 'Calendars',
 	driver: 'calendar',
@@ -440,7 +447,8 @@ describe('the Google Calendar link', () => {
 			});
 			yield* second.link.unpair!();
 			expect(second.fetch.calls.map((call) => new URL(call.url).pathname)).toEqual([
-				'/calendar/v3/channels/stop'
+				'/calendar/v3/channels/stop',
+				'/revoke'
 			]);
 			expect(second.h.values.get('state')).toEqual({ watches: [] });
 			expect(yield* second.link.webhook!(notification(watch, '34', 'exists'))).toMatchObject({
@@ -592,7 +600,7 @@ describe('the Google Calendar sign-in', () => {
 					response_type: 'code',
 					client_id: 'client-1',
 					redirect_uri: REDIRECT,
-					scope: 'https://www.googleapis.com/auth/calendar.readonly',
+					scope: `${READ} ${WRITE}`,
 					access_type: 'offline',
 					prompt: 'consent',
 					code_challenge_method: 'S256'
@@ -875,5 +883,174 @@ describe('the Google Calendar sign-in', () => {
 				});
 				yield* f.link.close ?? Effect.void;
 			})
+	);
+});
+
+// Two-way sync: the driver's `call` writes one calendar's events through the standing link; a read-only sign-in keeps
+// importing, says to reconnect, and never widens its scope on refresh.
+describe('the Google Calendar call', () => {
+	const EVENTS = '/calendars/visits%40example.com/events';
+	const store = () => {
+		const events = new Map<string, { [k: string]: Json }>();
+		let version = 0;
+		const route: Route = (call) => {
+			const url = new URL(call.url);
+			const path = url.pathname.replace('/calendar/v3', '');
+			if (!path.startsWith(EVENTS)) return undefined;
+			const id = decodeURIComponent(path.slice(EVENTS.length + 1));
+			const current = events.get(id);
+			const body: { [k: string]: Json } =
+				call.body === ''
+					? {}
+					: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.JsonObject))(call.body);
+			const match = call.headers['if-match'];
+			if (call.method === 'POST') {
+				const key = typeof body['id'] === 'string' ? body['id'] : `generated-${events.size}`;
+				if (events.has(key)) return json({ error: { code: 409 } }, 409);
+				const made = { ...body, id: key, etag: `"v${++version}"`, status: 'confirmed' };
+				events.set(key, made);
+				return json(made);
+			}
+			if (current === undefined) return json({ error: { code: 404 } }, 404);
+			if (match !== undefined && match !== current['etag'])
+				return json({ error: { code: 412 } }, 412);
+			if (call.method === 'GET') return json(current);
+			if (call.method === 'DELETE') {
+				events.set(id, { ...current, status: 'cancelled', etag: `"v${++version}"` });
+				return new Response(null, { status: 204 });
+			}
+			const patched = { ...current, ...body, etag: `"v${++version}"` };
+			events.set(id, patched);
+			return json(patched);
+		};
+		return { events, route };
+	};
+
+	it.effect(
+		'inserts, patches with If-Match and deletes; never emails guests unless asked; a stale etag is a 412',
+		() =>
+			Effect.gen(function* () {
+				const google = store();
+				const f = yield* fixture([google.route]);
+				const insert = yield* f.link.request!({
+					method: 'POST',
+					path: EVENTS,
+					query: { sendUpdates: 'none' },
+					body: { id: 'hq1', summary: 'Kick-off' }
+				});
+				expect(insert).toMatchObject({ status: 200, body: { id: 'hq1', etag: '"v1"' } });
+				expect(new URL(f.fetch.calls[0]!.url).searchParams.get('sendUpdates')).toBe('none');
+				expect(
+					yield* f.link.request!({
+						method: 'POST',
+						path: EVENTS,
+						body: { id: 'hq1', summary: 'Kick-off' }
+					})
+				).toMatchObject({ status: 409 });
+				const patched = yield* f.link.request!({
+					method: 'PATCH',
+					path: `${EVENTS}/hq1`,
+					headers: { 'if-match': '"v1"' },
+					body: { summary: 'Kick-off (moved)' }
+				});
+				expect(patched).toMatchObject({
+					status: 200,
+					body: { summary: 'Kick-off (moved)', etag: '"v2"' }
+				});
+				expect(f.fetch.calls.at(-1)?.headers['if-match']).toBe('"v1"');
+				expect(
+					yield* f.link.request!({
+						method: 'PATCH',
+						path: `${EVENTS}/hq1`,
+						headers: { 'if-match': '"v1"' },
+						body: { summary: 'clobber' }
+					})
+				).toMatchObject({ status: 412, body: { error: { code: 412 } } });
+				expect(
+					yield* f.link.request!({
+						method: 'DELETE',
+						path: `${EVENTS}/hq1`,
+						headers: { 'if-match': '"v2"' }
+					})
+				).toEqual({ status: 204, body: null });
+				expect(google.events.get('hq1')).toMatchObject({ status: 'cancelled' });
+				expect(
+					f.fetch.calls.every((call) => new URL(call.url).origin === 'https://www.googleapis.com')
+				).toBe(true);
+				yield* f.link.close ?? Effect.void;
+			})
+	);
+	it.effect.each([
+		{ method: 'GET', path: '/users/me/calendarList' },
+		{ method: 'POST', path: '/calendars/primary/events/../../channels/stop' },
+		{ method: 'PATCH', path: `${EVENTS}/hq1`, headers: { authorization: 'Bearer stolen' } },
+		{ method: 'PUT', path: `${EVENTS}/hq1` }
+	])('refuses a call outside one calendar’s events: $method $path', (op) =>
+		Effect.gen(function* () {
+			const f = yield* fixture([]);
+			expect(yield* f.link.request!(op)).toMatchObject({ status: 400 });
+			expect(f.fetch.calls).toEqual([]);
+			yield* f.link.close ?? Effect.void;
+		})
+	);
+	it.effect(
+		'a sign-in sealed read-only keeps importing, asks to reconnect, refuses writes and refreshes without widening',
+		() =>
+			Effect.gen(function* () {
+				const refreshes: URLSearchParams[] = [];
+				const legacy = { access: 'old-access', refresh: 'old-refresh', exp: NOW - 1 };
+				const f = yield* fixture(
+					[
+						(call) => {
+							if (call.url !== 'https://oauth2.googleapis.com/token') return undefined;
+							refreshes.push(new URLSearchParams(call.body));
+							return json({ access_token: 'at-2', expires_in: 3600, scope: READ });
+						},
+						(call) =>
+							call.url.includes('/events?') ? json({ items: [], nextSyncToken: 's1' }) : undefined
+					],
+					{ token: legacy }
+				);
+				expect(f.h.status).toMatchObject({
+					state: 'connected',
+					detail: expect.stringContaining('Reconnect')
+				});
+				expect(yield* read(f, null)).toMatchObject({ cursor: { sync: 's1' } });
+				expect(refreshes.map((body) => body.get('scope'))).toEqual([READ]);
+				expect(f.h.values.get('token')).toMatchObject({ access: 'at-2', scope: READ });
+				expect(
+					yield* f.link.request!({ method: 'POST', path: EVENTS, body: { summary: 'x' } })
+				).toMatchObject({ status: 403, body: expect.stringContaining('Reconnect') });
+				expect(
+					f.fetch.calls.some((call) => call.method === 'POST' && call.url.includes('/events'))
+				).toBe(false);
+				yield* f.link.close ?? Effect.void;
+			})
+	);
+	it.effect('a new sign-in asks to write and reports no reconnect once Google grants it', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture(
+				[
+					(call) =>
+						call.url === 'https://oauth2.googleapis.com/token'
+							? json({
+									access_token: 'at-1',
+									refresh_token: 'rt-1',
+									expires_in: 3600,
+									scope: `${READ} ${WRITE}`
+								})
+							: call.url.includes('/calendarList')
+								? json({ items: [{ id: 'ana@example.com', summary: 'Ana', primary: true }] })
+								: undefined
+				],
+				{}
+			);
+			yield* f.link.pair!({});
+			const state = new URL(f.h.pairing!.value!).searchParams.get('state')!;
+			yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+			expect(f.h.status).toEqual({ state: 'connected', account: 'ana@example.com' });
+			expect(f.h.values.get('token')).toMatchObject({ scope: `${READ} ${WRITE}` });
+			yield* f.link.close ?? Effect.void;
+		})
 	);
 });

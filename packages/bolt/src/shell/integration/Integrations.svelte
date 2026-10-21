@@ -1,7 +1,8 @@
 <!--
 	Settings → Integrations: each envoy's channel as one-click connectors (`Envoys`), then the other `sys_integration`
-	rows with their account, state and owner. Each connection appears once; Manage on an agent channel opens the same
-	sheet as a table row. New makes one of any definition (a member's own account where the driver syncs one). A row opens its
+	rows with their account, state and owner. Each connection appears once. An agent channel's card owns its connection
+	(pair, test, reconnect, disconnect), so its Settings sheet holds only its configuration and messages; a table row's
+	sheet holds the connection too, as its first tab. New makes one of any definition (a member's own account where the driver syncs one). A row opens its
 	sheet: the generic setup over the host's verbs (provider choice, pairing, test, reconnect, disconnect), then the
 	instance's own fields (name, active, the envoy answering a workspace conversation instance, the configuration its
 	definition declares) and, for a conversation, its raw messages. Every write is the collection's native form or act.
@@ -15,6 +16,7 @@
 	import {
 		Button,
 		Combobox,
+		confirmAction,
 		Dialog,
 		Editor,
 		Field,
@@ -108,22 +110,26 @@
 		}
 	);
 	function remove(i: Instance): void {
-		if (
-			!confirm(
-				t(
-					'Delete {name}? Its credentials, feed progress, conversations and messages are deleted with it.'
-				).replace('{name}', i.name)
-			)
-		)
-			return;
 		fork(
-			bolt.act('sys_integration.delete', { target: i.id }).pipe(
-				Effect.tap((outcome) =>
-					Effect.sync(() => {
-						if (outcome.kind === 'committed') open = null;
-					})
-				),
-				Effect.andThen(reload())
+			confirmAction({
+				title: t('Delete {name}?').replace('{name}', i.name),
+				body: t('Its credentials, feed progress, conversations and messages are deleted with it.'),
+				confirmLabel: t('Delete'),
+				cancelLabel: t('Cancel'),
+				destructive: true
+			}).pipe(
+				Effect.flatMap((confirmed) =>
+					confirmed
+						? bolt.act('sys_integration.delete', { target: i.id }).pipe(
+								Effect.tap((outcome) =>
+									Effect.sync(() => {
+										if (outcome.kind === 'committed') open = null;
+									})
+								),
+								Effect.andThen(reload())
+							)
+						: Effect.void
+				)
 			),
 			(cause) => {
 				error = cause.message;
@@ -206,6 +212,7 @@
 		{t}
 		{locale}
 		onManage={(instance) => (open = instance)}
+		{reload}
 	/>{/if}
 
 <section class="flex flex-col gap-2" data-integration-connections>
@@ -247,6 +254,7 @@
 {#if current !== undefined}
 	{@const i = current}
 	{@const d = definition(i.integration)}
+	{@const channel = settings.envoys.some((e) => e.id === i.envoy)}
 	<DetailSheet
 		title={i.name}
 		onClose={() => (open = null)}
@@ -277,9 +285,18 @@
 			</p>{/if}
 		<div class="border-t pt-3">
 			{#snippet connectionTab()}
+				<!-- a durable move (connected, unpaired, error) re-reads the rows, so the table never shows the old state -->
 				{#if client !== null}<IntegrationSetup
 						{client}
 						setup={integrationSetups?.[i.integration]}
+						onStateChange={(state, previous) => {
+							if (
+								previous !== undefined &&
+								state !== previous &&
+								(state === 'connected' || state === 'unpaired' || state === 'error')
+							)
+								fork(reload());
+						}}
 						{t}
 						{locale}
 					/>{/if}
@@ -426,15 +443,19 @@
 			{/snippet}
 			<Tabs
 				orientation="horizontal"
-				value="connection"
+				value={channel ? 'settings' : 'connection'}
 				tabs={[
-					{
-						name: 'connection',
-						title: t('Connection'),
-						icon: 'lucide:plug',
-						body: connectionTab,
-						keepAlive: true
-					},
+					...(channel
+						? []
+						: [
+								{
+									name: 'connection',
+									title: t('Connection'),
+									icon: 'lucide:plug',
+									body: connectionTab,
+									keepAlive: true as const
+								}
+							]),
 					{
 						name: 'settings',
 						title: t('Configuration'),

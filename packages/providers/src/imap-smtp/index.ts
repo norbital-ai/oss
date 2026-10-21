@@ -27,6 +27,7 @@ import {
 	authorizeUrl,
 	callbackCompletion,
 	grant,
+	revoke,
 	tokenHolder,
 	Tokens,
 	type OAuthApp
@@ -57,6 +58,7 @@ const appOf = (m: Mailbox, personal = false): OAuthApp =>
 		? {
 				authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
 				tokenUrl: 'https://oauth2.googleapis.com/token',
+				revokeUrl: 'https://oauth2.googleapis.com/revoke',
 				// `openid email`: the sign-in names the mailbox, so nobody types its address
 				scopes: ['https://mail.google.com/', 'openid', 'email'],
 				params: { access_type: 'offline', prompt: 'consent' }
@@ -765,6 +767,12 @@ const open = Effect.fn('Mailbox.open')(function* (
 		unpair: () =>
 			completion.reset(
 				FiberHandle.clear(supervisor).pipe(
+					// the provider forgets the grant too (Microsoft has no per-token revocation; its tokens just go)
+					Effect.andThen(
+						box === null || box.method === 'password'
+							? Effect.void
+							: withFetch(ctx, revoke(appOf(box, personal), tokens))
+					),
 					Effect.tap(() =>
 						Effect.sync(() => {
 							pending = null;

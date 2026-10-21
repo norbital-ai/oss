@@ -754,3 +754,120 @@ describe('a message', () => {
 		})
 	);
 });
+
+const diary = Result.getOrThrow(
+	decodeManifest({
+		workspace: { tz: 'UTC', locale: 'en' },
+		models: {
+			visits: {
+				description: 'A visit on a member calendar',
+				label: 'title',
+				fields: {
+					title: { kind: 'text' },
+					rev: { kind: 'int', default: 0 },
+					etag: { kind: 'text', optional: true }
+				}
+			}
+		},
+		relationships: {
+			'visits.calendar': { to: 'sys_integration', where: { integration: { eq: 'diary' } } }
+		},
+		collections: {
+			visits: {
+				read: { fields: 'all' },
+				create: { input: { columns: ['title', 'rev', 'calendar'] } },
+				update: { input: { columns: ['title', 'rev', 'etag'] } }
+			}
+		},
+		integrations: {
+			diary: {
+				description: 'A member calendar',
+				driver: 'calendar',
+				outbound: {
+					visits: {
+						from: 'visits',
+						on: ['create', 'update'],
+						when: { rev: { gt: 0 } },
+						via: 'calendar',
+						version: 'rev'
+					}
+				}
+			}
+		},
+		connections: {},
+		pipelines: {},
+		policies: {},
+		teams: {},
+		automations: {},
+		envoys: {},
+		mcp: {},
+		apps: {},
+		customFields: {},
+		agent: { skills: {} }
+	})
+);
+/** The diary's write is the calendar driver's `call`; its receipt patches the record with the remote's etag. */
+const diarySource = `export default { integration_definition: {
+	diary: { bodies: { feeds: {}, outbound: { visits: {
+		build: (v) => ({ title: v.title, rev: Number(v.rev) }),
+		run: function* (p, ctx) {
+			const event = yield* ctx.request({ method: 'POST', path: '/calendars/primary/events', body: { summary: p.title }, output: { kind: 'json' } });
+			return { id: event.id, set: { etag: event.etag } };
+		},
+	} } } },
+} };`;
+
+describe('a personal command', () => {
+	it.live(
+		"writes back to a member's own account through its call, patches the receipt onto the record and never echoes it",
+		() =>
+			Effect.gen(function* () {
+				const calls: Json[] = [];
+				const f = yield* setup({
+					manifest: diary,
+					source: diarySource,
+					links: {
+						sent: [],
+						send: () => Effect.die('a calendar never sends'),
+						answer: (_instance, op) =>
+							Effect.sync(() => {
+								calls.push(op);
+								return {
+									status: 200,
+									body: { id: `event-${calls.length}`, etag: `"e${calls.length}"` }
+								};
+							})
+					}
+				});
+				const alice = f.t.member([]);
+				const account = required(
+					ok(
+						yield* f.act('sys_integration.create', {
+							integration: 'diary',
+							name: "Alice's calendar",
+							owner: alice.id
+						})
+					).records[0]
+				).id;
+				const id = required(
+					ok(yield* f.act('visits.create', { title: 'Site visit', rev: 1, calendar: account }))
+						.records[0]
+				).id;
+				yield* f.t.runDue();
+				expect(yield* f.outbound()).toMatchObject([{ status: 'sent', class: 'command' }]);
+				expect(calls).toMatchObject([
+					{ method: 'POST', path: '/calendars/primary/events', body: { summary: 'Site visit' } }
+				]);
+				expect(yield* f.get('visits', id)).toMatchObject({ etag: '"e1"', rev: 1 });
+				// the receipt's own patch, and any edit under the same rev, write nothing again
+				ok(yield* f.act('visits.update', { target: id, set: { title: 'Site visit (moved)' } }));
+				yield* f.t.runDue();
+				expect(calls).toHaveLength(1);
+				ok(yield* f.act('visits.update', { target: id, set: { rev: 2 } }));
+				yield* f.t.runDue();
+				expect(calls).toHaveLength(2);
+				expect((yield* f.outbound()).map((row) => row['status'])).toEqual(['sent', 'sent']);
+				expect(yield* f.get('visits', id)).toMatchObject({ etag: '"e2"' });
+			})
+	);
+});

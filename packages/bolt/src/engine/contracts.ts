@@ -450,12 +450,14 @@ export interface WebReadPort {
 /**
  * What an instance's link hands the engine (§4.5, `integrations.receive`): inbound conversation messages (each attachment
  * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's
- * report on a message it sent (§5.9; `providerId` is what its `send` answered), or a pushing driver's changed feed
+ * report on a message it sent (§5.9; `providerId` is what its `send` answered), a chat the account cleared or deleted
+ * (`clear`: every message of `thread` sent at or before `before` is tombstoned), or a pushing driver's changed feed
  * partition.
  */
 export type DriverEvent =
 	| { kind: 'messages'; messages: readonly Json[]; history?: true; bins?: readonly Uint8Array[] }
 	| { kind: 'delivery'; providerId: string; report: DeliveryReport }
+	| { kind: 'clear'; thread: string; before: string }
 	| { kind: 'invalidate'; feed: string; partition: string };
 /**
  * One of `message.attachments` (stored FileRefs, in order) as bolt hands it to `send`: the bytes read through the host's files

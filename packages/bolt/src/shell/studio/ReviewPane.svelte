@@ -5,7 +5,7 @@
 	log). Files and Manifest describe the viewer's target, so another merge request offers to switch to it first.
 -->
 <script lang="ts">
-	import { Button, CodeEditor, Icon, Tabs, Textarea } from '@norbital-ai/ui';
+	import { Button, CodeEditor, confirmAction, Icon, Tabs, Textarea } from '@norbital-ai/ui';
 	import { fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import { Cluster, Columns, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -451,10 +451,19 @@
 							size="sm"
 							variant="ghost"
 							disabled={busy}
-							onclick={() => {
-								if (confirm(t('Close this merge request?')))
-									fork(run({ op: 'mr.close', id: m.id }));
-							}}>{t('Close')}</Button
+							onclick={() =>
+								fork(
+									confirmAction({
+										title: t('Close this merge request?'),
+										confirmLabel: t('Close'),
+										cancelLabel: t('Cancel'),
+										destructive: true
+									}).pipe(
+										Effect.flatMap((confirmed) =>
+											confirmed ? run({ op: 'mr.close', id: m.id }) : Effect.void
+										)
+									)
+								)}>{t('Close')}</Button
 						>
 					</Cluster>
 				{/if}

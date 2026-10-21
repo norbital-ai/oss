@@ -67,7 +67,9 @@ export class FormState {
 	#validators = new Set<() => Effect.Effect<boolean>>();
 	#rules = $state.raw<readonly (() => readonly SemanticIssue[])[]>([]);
 	/** Every registered rule's current issues; kept apart from `errors` so fixing a value clears its issue at once. */
-	readonly semanticErrors: readonly SemanticIssue[] = $derived(this.#rules.flatMap((rule) => rule()));
+	readonly semanticErrors: readonly SemanticIssue[] = $derived(
+		this.#rules.flatMap((rule) => rule())
+	);
 
 	constructor(
 		spec: FormSpec,
@@ -139,10 +141,7 @@ export class FormState {
 	/** Permission plus validity: Save stays disabled while any error or broken invariant remains. */
 	get canSave(): boolean {
 		return (
-			this.canSubmit &&
-			!this.pending &&
-			this.errors.size === 0 &&
-			this.semanticErrors.length === 0
+			this.canSubmit && !this.pending && this.errors.size === 0 && this.semanticErrors.length === 0
 		);
 	}
 	/** Registers a synchronous invariant rule, re-evaluated reactively; returns its unregister. */

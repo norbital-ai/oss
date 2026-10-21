@@ -29,6 +29,7 @@ A related-record grid with explicit child operations, original revisions and par
 	import { changed, formSpec, locked } from '../form/draft.js';
 	import type { ChildOperation } from '../form/child-operations.js';
 	import { Button } from '../primitives/button/index.js';
+	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import Picker from '../kinds/picker.svelte';
 	import { openRecord } from '../record/navigation.js';
@@ -659,14 +660,26 @@ A related-record grid with explicit child operations, original revisions and par
 				variant="outline"
 				disabled={linkBusy || [...drafts.values()].some((entry) => entry.form.pending)}
 				onclick={() => {
-					if (
-						independentEdit &&
-						[...drafts.values()].some((entry) => entry.form.dirty) &&
-						!confirm(msg(bolt, 'form.discardDraft', 'Discard unsaved changes?'))
-					)
-						return;
-					if (independentEdit) reset();
-					independentEdit = !independentEdit;
+					const toggle = () => {
+						if (independentEdit) reset();
+						independentEdit = !independentEdit;
+					};
+					if (!independentEdit || ![...drafts.values()].some((entry) => entry.form.dirty))
+						return toggle();
+					fork(
+						confirmAction({
+							title: msg(bolt, 'form.discardDraft', 'Discard unsaved changes?'),
+							confirmLabel: msg(bolt, 'form.discard', 'Discard'),
+							cancelLabel: msg(bolt, 'record.cancel', 'Cancel'),
+							destructive: true
+						}).pipe(
+							Effect.tap((confirmed) =>
+								Effect.sync(() => {
+									if (confirmed) toggle();
+								})
+							)
+						)
+					);
 				}}
 				>{independentEdit
 					? msg(bolt, 'record.cancel', 'Cancel')

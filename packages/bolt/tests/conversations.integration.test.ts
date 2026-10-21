@@ -1336,6 +1336,38 @@ describe('inbound (§4.3)', () => {
 			)
 	);
 
+	it.live(
+		'a cleared chat tombstones its rows up to the clear in one statement; an admitted row keeps its transcript',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t;
+					yield* t.receive('desk_wa', [
+						chat({ id: 'C1' }),
+						chat({ id: 'C2', sentAt: '2026-09-25T10:05:00.000Z' }),
+						chat({ id: 'C3', sentAt: '2026-09-25T10:10:00.000Z' }),
+						chat({ id: 'O1', thread: '6590000000@s.whatsapp.net' })
+					]);
+					yield* t.db.write({
+						text: `UPDATE sys_message SET role = 'user' WHERE provider_id = 'C2'`,
+						params: []
+					});
+					yield* f.conversations.receive('desk_wa', {
+						kind: 'clear',
+						thread: '6591234567@s.whatsapp.net',
+						before: '2026-09-25T10:05:00.000Z'
+					});
+					expect(yield* f.history()).toMatchObject([
+						{ provider_id: 'C1', text: '', deleted: true },
+						{ provider_id: 'C2', text: 'first', deleted: true },
+						{ provider_id: 'C3', text: 'first', deleted: false },
+						{ provider_id: 'O1', text: 'first', deleted: false }
+					]);
+				})
+			)
+	);
+
 	it.live('the same provider id on two instances is two rows in two conversations', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

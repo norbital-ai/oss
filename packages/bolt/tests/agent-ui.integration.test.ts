@@ -381,8 +381,7 @@ describe('read_attachment on an xlsx', () => {
 	});
 	it('retains ISO date cells and clock offsets without producing NaN for invalid dates', () => {
 		const book = xlsx({
-			'xl/workbook.xml':
-				'<workbook><sheets><sheet name="Dates" sheetId="1"/></sheets></workbook>',
+			'xl/workbook.xml': '<workbook><sheets><sheet name="Dates" sheetId="1"/></sheets></workbook>',
 			'xl/worksheets/sheet1.xml':
 				'<worksheet><sheetData><row r="1"><c r="A1" t="d"><v>2026-06-03T00:00:00.000Z</v></c><c r="B1" t="d"><v>2026-06-03T08:15:30.125+08:00</v></c><c r="C1" t="d"><v>2026-06-03</v></c><c r="D1" t="d"><v>not-a-date</v></c><c r="E1" t="d"><v>2026-02-30T00:00:00Z</v></c></row></sheetData></worksheet>'
 		});

@@ -311,7 +311,7 @@ it.live(
 						JSON.stringify({ ...body, hash: yield* artifactHash(dir, body) })
 					);
 				});
-			const older = sha256Hex('@norbital-ai/bolt@0.0.1');
+			const older = sha256Hex('@norbital-ai/bolt@0.0.0-older');
 			yield* write(older);
 			expect((yield* readArtifact(dir, [older])).manifest).toEqual(manifest);
 			yield* write(CONTRACT);

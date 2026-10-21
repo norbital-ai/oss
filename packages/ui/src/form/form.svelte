@@ -22,6 +22,10 @@
 	/** What a form edits: a collection's row, or an action's input. */
 	export type FormSource = CollectionKey | { [A in ActionKey]: { action: A } }[ActionKey];
 	type Target<S> = S extends { action: `${infer C}.${string}` } ? C : S;
+	/** A record action's act input is `{ target, input }`: its form starts from part of `input`. */
+	type ActionValues<I> = I extends { target: unknown; input?: infer V }
+		? { input?: Partial<NonNullable<V>> }
+		: Partial<I>;
 	/** The props of `Form`: what it edits (`of`), create or update, the row id, and the layout of its fields. */
 	export type FormProps<S = FormSource> = {
 		of: S;
@@ -30,8 +34,8 @@
 		id?: IdOf<Target<S>>;
 		/** The stored row, when the page already reads it; else the enclosing `RecordShell`'s shown row (the scrubbed revision while one is picked) when it is this record, else the form reads it once. */
 		record?: (S extends string ? RecordOf<S> : Row) | null;
-		/** Create and action forms start from these values over the defaults. */
-		values?: Partial<S extends { action: infer A } ? ActionInputOf<A> : InsertOf<S>>;
+		/** Create and action forms start from these values over the defaults; a record action's from its `input`. */
+		values?: S extends { action: infer A } ? ActionValues<ActionInputOf<A>> : Partial<InsertOf<S>>;
 		/** A subset and order of the generated fields. */
 		fields?: readonly (S extends string ? RecordFieldOf<S> : string)[];
 		/** The generated fields grouped into collapsible `Section`s, in order; fields no section lists follow, untitled. */
@@ -70,7 +74,7 @@
 		mode,
 		id,
 		record,
-		values = {},
+		values,
 		fields,
 		sections,
 		submit,
@@ -101,6 +105,15 @@
 	);
 	const readOnly = $derived(readonly === true || mode === 'view');
 	const spec = $derived(formSpec(of, exposure, resolved, id));
+	// a record action's values are shaped like its act input (`{ input }`): the fields start from `input`
+	const seeded = $derived.by((): Row => {
+		const given: Row = (values ?? {}) as Row;
+		if (spec?.target.of !== 'action' || !spec.target.record) return given;
+		const input = given['input'];
+		return typeof input === 'object' && input !== null && !Array.isArray(input)
+			? (input as Row)
+			: {};
+	});
 	const updating = $derived(typeof of === 'string' && resolved === 'update');
 	const act = (
 		callable: string,
@@ -135,7 +148,7 @@
 	);
 	const parents = $derived.by(() => {
 		if (typeof of !== 'string' || resolved !== 'create' || exposure === undefined) return [];
-		const given = values;
+		const given: Row = (values ?? {}) as Row;
 		const own = Object.keys(exposure.fields).filter(
 			(field) => exposure.fields[field]?.kind === 'currency' && given[field] == null
 		);
@@ -202,7 +215,7 @@
 					<FormBody
 						{spec}
 						record={stored}
-						values={{ ...inherited, ...(values as Row) }}
+						values={{ ...inherited, ...seeded }}
 						modelFields={exposure?.fields ?? {}}
 						{act}
 						{fields}

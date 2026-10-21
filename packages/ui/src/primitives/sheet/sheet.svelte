@@ -37,6 +37,9 @@ screen from its header.
 
 <script lang="ts">
 	import { setContext } from 'svelte';
+	import { Effect } from 'effect';
+	import { fork } from '../../effect/index.js';
+	import { confirmAction } from '../dialog/confirm.js';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { watch } from 'runed';
 	import { resetInset } from '../../layout/inset.svelte.js';
@@ -74,10 +77,35 @@ screen from its header.
 		drafts.add(dirty);
 		return () => void drafts.delete(dirty);
 	});
-	const close = () => {
-		if ([...drafts].some((dirty) => dirty()) && !confirm(t('discardDraft'))) return;
+	const shut = () => {
 		asked = true;
 		open = false;
+	};
+	// the Esc that dismisses the question must not ask it again
+	let asking = false;
+	const close = () => {
+		if (asking) return;
+		if (![...drafts].some((dirty) => dirty())) return shut();
+		asking = true;
+		fork(
+			confirmAction({
+				title: t('discardDraft'),
+				confirmLabel: t('discard'),
+				cancelLabel: t('cancel'),
+				destructive: true
+			}).pipe(
+				Effect.tap((confirmed) =>
+					Effect.sync(() => {
+						if (confirmed) shut();
+					})
+				),
+				Effect.ensuring(
+					Effect.sync(() => {
+						asking = false;
+					})
+				)
+			)
+		);
 	};
 	watch(
 		() => open,

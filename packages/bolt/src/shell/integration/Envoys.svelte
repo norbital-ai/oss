@@ -3,7 +3,7 @@
 	every conversation definition this host can connect is offered, and Connect makes
 	the instance for the envoy and pairs it in one click (WhatsApp shows its QR, a mailbox signs in with Google, Telegram
 	asks for its bot token). Disconnect unpairs it and deletes it — a `+workspace.ts` connection is source's, so it is
-	only unpaired.
+	only unpaired — then the settings are read again.
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
@@ -23,7 +23,8 @@
 		settings,
 		t,
 		locale,
-		onManage
+		onManage,
+		reload
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
@@ -31,6 +32,8 @@
 		t: (key: string) => string;
 		locale: string;
 		onManage: (instance: string) => void;
+		/** Re-reads the settings after a channel was removed. */
+		reload: () => Effect.Effect<void>;
 	} = $props();
 
 	const offers = query(() =>
@@ -44,9 +47,12 @@
 				Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.')))
 			);
 	const removed = (instance: string) =>
-		settings.instances.find((i) => i.id === instance)?.named === true
-			? Effect.void
-			: bolt.act('sys_integration.delete', { target: instance }).pipe(Effect.asVoid);
+		(settings.instances.find((i) => i.id === instance)?.named === true
+			? Effect.succeed(false)
+			: bolt
+					.act('sys_integration.delete', { target: instance })
+					.pipe(Effect.map((outcome) => outcome.kind === 'committed'))
+		).pipe(Effect.tap(() => reload()));
 </script>
 
 {#snippet connector(
@@ -96,7 +102,7 @@
 								size="sm"
 								variant="ghost"
 								class="self-start"
-								onclick={() => onManage(channel.id)}>{t('Manage')}</Button
+								onclick={() => onManage(channel.id)}>{t('Settings')}</Button
 							>
 						{:else}
 							<ul class="flex flex-col gap-2">{@render connector(e, offer, channel)}</ul>

@@ -711,10 +711,14 @@ export const integrationLinks = (
 					Effect.mapError(Port.failure('link')),
 					Effect.flatMap((held) => held.calls.typing(to))
 				),
+			// a request driver opens a link per call; a pushing driver's call (a calendar write) goes through its standing link
 			request: (instance, op) =>
-				transient(instance, (held) => held.calls.request(op)).pipe(
-					Effect.mapError(linkFailure(instance))
-				),
+				Effect.gen(function* () {
+					const x = yield* row(instance);
+					if (x !== undefined && !isRequest(x.definition.driver))
+						return yield* linked(instance).pipe(Effect.flatMap((held) => held.calls.request(op)));
+					return yield* transient(instance, (held) => held.calls.request(op));
+				}).pipe(Effect.mapError(linkFailure(instance))),
 			read: (instance, feed, partition, cursor) =>
 				linked(instance).pipe(
 					Effect.mapError(Port.failure('link')),
@@ -974,16 +978,13 @@ export const integrationLinks = (
 					instance,
 					Effect.gen(function* () {
 						const held = live.get(instance);
+						// the provider forgets this host first (a linked device logs out, a grant is revoked) …
 						if (held !== undefined && !held.replaced)
-							yield* held.calls.unpair.pipe(
-								Effect.andThen(persist(held, wipe(held.values.keys()))),
-								Effect.ensuring(shut(instance))
-							);
-						else {
-							const loaded = yield* h.credentials.open(instance);
-							yield* h.credentials.write(instance, loaded.epoch, wipe(loaded.values.keys()));
-							yield* shut(instance);
-						}
+							yield* held.calls.unpair.pipe(Effect.ensuring(shut(instance)));
+						else yield* shut(instance);
+						// … then every stored credential goes, after the link closed: a close that flushes keys cannot rewrite them
+						const loaded = yield* h.credentials.open(instance);
+						yield* h.credentials.write(instance, loaded.epoch, wipe(loaded.values.keys()));
 						yield* status(instance, {
 							state: 'unpaired',
 							account: null,

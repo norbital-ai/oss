@@ -42,7 +42,8 @@ const settle = async () => {
 async function show(part: 'record' | 'create') {
 	const acts: Json[] = [];
 	const { bolt } = await viewFixture({
-		get: (c, id) => (c === 'jobs' && id === 'j1' ? { id: 'j1', revision: 1, title: 'Paint' } : null),
+		get: (c, id) =>
+			c === 'jobs' && id === 'j1' ? { id: 'j1', revision: 1, title: 'Paint' } : null,
 		act: (_callable, input) => {
 			acts.push(input);
 			return { kind: 'committed', output: null, records: [] };
@@ -80,7 +81,10 @@ it.live('a broken invariant disables the create footer Save until the value is f
 		assert.equal(button(v.target, 'Create').disabled, true);
 		const input = element<HTMLInputElement>(v.target, '[data-field=title] input');
 		assert.equal(input.getAttribute('aria-invalid'), 'true');
-		assert.match(textOf(element(v.target, '[data-field=title] [role=alert]')), /Title cannot be bad/);
+		assert.match(
+			textOf(element(v.target, '[data-field=title] [role=alert]')),
+			/Title cannot be bad/
+		);
 		assert.equal(input.disabled || input.readOnly, false, 'the field stays editable');
 		yield* browser(() => type(v.target, 'good'));
 		assert.equal(button(v.target, 'Create').disabled, false);

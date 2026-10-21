@@ -8,7 +8,8 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // instance imports its account (origin `sync`), never sends and never admits. A file a row cannot store stays a named
 // descriptor (no `id`) and a malformed message is logged: neither is a failure the link would redeliver forever.
 // Replies are matched to the outbound row they answer — a redelivered one again, since a match that failed after its row
-// was stored is what the provider redelivers it for; every send is a queued row `integrations.deliver` delivers.
+// was stored is what the provider redelivers it for; every send is a queued row `integrations.deliver` delivers. A cleared
+// or deleted chat tombstones its rows up to the clear in one statement, under the same admitted-transcript rule.
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import { teams } from '../manifest.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
@@ -35,7 +36,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { AgentEngine } from '../agent/index.ts';
 import type { Bindings } from '../contracts.ts';
 import { conversationOf, definitionOf, integrationBody } from '../integrations/instances.ts';
-import { messageFeedRuns } from '../integrations/feeds.ts';
+import { feedsOf, messageFeedRuns } from '../integrations/feeds.ts';
 import { canonical, Chain } from '../write/sql.ts';
 import { InboundMessage, normalizeInbound, type Inbound } from './inbound.ts';
 import { ImportStart } from '../../protocol/schema.ts';
@@ -76,6 +77,7 @@ type Instance = {
 /** An admitted row (`role` set) keeps its transcript content; only unadmitted history is rewritten by an edit or a revoke. */
 const KEEP = (col: string) =>
 	`CASE WHEN sys_message.role IS NULL AND excluded.version > sys_message.version THEN excluded.${col} ELSE sys_message.${col} END`;
+/** A revoke, a delete for me or a cleared chat stamps `deleted_at` on every row; it erases content only where no agent saw it. */
 const TOMBSTONE = `text = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.text END, preview = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.preview END,
 	files = CASE WHEN sys_message.role IS NULL THEN '[]'::jsonb ELSE sys_message.files END, email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
 export function conversations(cfg: ConversationsConfig) {
@@ -415,6 +417,57 @@ export function conversations(cfg: ConversationsConfig) {
 		if (nextDueAt !== undefined) yield* cfg.announce?.(nextDueAt) ?? Effect.void;
 		return result;
 	});
+	/** A cleared or deleted chat: one statement tombstones its rows up to `before`; one run per `messages` feed names them. */
+	const clear = Effect.fn('Agents.clear')(function* (
+		inst: Instance,
+		thread: string,
+		before: string
+	) {
+		const now = yield* clock,
+			c = new Chain();
+		c.cte(
+			'source',
+			`SELECT id FROM sys_integration WHERE id = ${c.p(inst.id)} AND import_start IS NOT DISTINCT FROM ${c.p(inst.importStartRaw)}::jsonb FOR SHARE`
+		);
+		const gone = messagePiece(
+			c,
+			`UPDATE sys_message SET deleted_at = ${c.p(now)}::timestamptz, ${TOMBSTONE}
+		WHERE conversation = ${c.p(conversationId(inst.id, thread))} AND sent_at <= ${c.p(before)}::timestamptz AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM source)`,
+			'id'
+		);
+		const feeds = [...feedsOf(m).values()]
+			.filter((f) => f.definition === inst.integration && f.from === 'messages')
+			.map((f) => f.run);
+		const runs =
+			feeds.length === 0
+				? []
+				: [
+						enqueue(
+							c,
+							{
+								select: `SELECT x.run AS automation, jsonb_build_object('instance', ${c.p(inst.id)}::text, 'messages', (SELECT jsonb_agg(id) FROM ${gone})) AS input,
+					${c.p(now)}::timestamptz AS due_at, jsonb_build_array('feed', x.run, 'clear', ${c.p(thread)}::text, ${c.p(now)}::text)::text AS key, 'provider'::text AS cause, 0 AS depth
+					FROM jsonb_array_elements_text(${c.p(feeds)}::jsonb) AS x(run) WHERE EXISTS (SELECT 1 FROM ${gone})`
+							},
+							{ conflict: 'keep' }
+						)
+					];
+		const [row] = (yield* db.write(
+			c.sql(
+				`EXISTS (SELECT 1 FROM source) AS admitted, ${counted(runs)} AS queued, ${nextDue(c)}::text AS next_due`
+			)
+		)).rows;
+		if (row?.['admitted'] !== true)
+			return yield* Effect.fail(
+				BoltError.make(
+					'sourceChanged',
+					'admission',
+					'The integration import start changed; redeliver this clear.'
+				)
+			);
+		const due = row?.['next_due'];
+		if (typeof due === 'string') yield* cfg.announce?.(due) ?? Effect.void;
+	});
 	const replied = Effect.fn('Agents.replied')(function* (
 		instance: string,
 		got: NonNullable<Effect.Success<ReturnType<typeof ingest>>>
@@ -480,6 +533,7 @@ export function conversations(cfg: ConversationsConfig) {
 					'The integration import start changed; reopen the link before importing.'
 				)
 			);
+		if (event.kind === 'clear') return yield* clear(inst, event.thread, event.before);
 		for (const message of event.messages) {
 			const got = yield* ingest(inst, message, event.bins, event.history === true);
 			// a new message, or a redelivered one (its match may be what failed; a recorded match records nothing again), never an edit

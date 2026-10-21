@@ -41,7 +41,9 @@ import type { ConnectionsOf, SecretName } from './names.ts';
  * Each driver's contract: `request`, what `ctx.request` takes (`http` ops or `database` statements); `credential`, the
  * definition declares the secret the host seals at pairing; `conversation`, the messages it carries and the member handle
  * a sender is matched by (`null`: none, so a private envoy admits nobody); `feed`, the items it pushes; `oauth`, the host
- * may run an OAuth grant with the definition's `oauth` client; `personal`, a member's own account syncs (never sends, never an envoy).
+ * may run an OAuth grant with the definition's `oauth` client; `personal`, a member's own account syncs (never sends a
+ * message, never an envoy; an outbound command may write back to it); `call`, what `ctx.request` takes through a pushing
+ * driver's standing link (its provider's own API under its sign-in: a calendar's event writes).
  */
 export const DRIVERS = {
 	http: { request: 'http', credential: true, oauth: true },
@@ -52,7 +54,7 @@ export const DRIVERS = {
 	slack: { conversation: { kind: 'chat', handle: null } },
 	discord: { conversation: { kind: 'chat', handle: null } },
 	wechat: { conversation: { kind: 'chat', handle: null } },
-	calendar: { feed: 'calendar', oauth: true, personal: true }
+	calendar: { feed: 'calendar', oauth: true, personal: true, call: 'http' }
 } as const;
 /** A driver kind: what a definition's `driver` names. */
 export type DriverName = keyof typeof DRIVERS;
@@ -236,7 +238,12 @@ type KindIn<S> = S extends { conversation: { kind: infer K } }
 	: Contract<DriverIn<S>> extends { conversation: { kind: infer K } }
 		? K
 		: never;
-type RequestIn<S> = Contract<DriverIn<S>> extends { request: infer R } ? R : never;
+type RequestIn<S> =
+	Contract<DriverIn<S>> extends { request: infer R }
+		? R
+		: Contract<DriverIn<S>> extends { call: infer R }
+			? R
+			: never;
 // distributive over the request kind: no kind (a conversation driver) is no request
 type Requester<S, R = RequestIn<S>> = R extends 'http'
 	? HttpRequester
@@ -558,7 +565,11 @@ type Outbound<N extends string, S> = [KindIn<S>] extends [never]
 			name: R,
 			body: {
 				build: (row: Row<From<S, R>>) => P | null;
-				run: (payload: NoInfer<P>, ctx: RunCtx<N, S>) => BodyReturn<{ readonly id: string }>;
+				/** Acknowledged by the remote's `id`; `set` patches the record with what the remote answered (its version, an etag). */
+				run: (
+					payload: NoInfer<P>,
+					ctx: RunCtx<N, S>
+				) => BodyReturn<{ readonly id: string; readonly set?: Patch<From<S, R>> }>;
 			}
 		) => void
 	: <R extends keyof Outbounds<S> & string>(

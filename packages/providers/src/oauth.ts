@@ -11,13 +11,17 @@ import { same } from './util.ts';
 export type OAuthApp = {
 	authorizeUrl: string;
 	tokenUrl: string;
+	/** Where a token is revoked (RFC 7009), when the provider offers it: an unpair forgets the grant there too. */
+	revokeUrl?: string;
 	scopes: readonly string[];
 	params?: { readonly [k: string]: string };
 };
 export const Tokens = Schema.Struct({
 	access: Schema.NonEmptyString,
 	refresh: Schema.NullOr(Schema.String),
-	exp: Schema.Number
+	exp: Schema.Number,
+	/** The scopes the server granted (space-separated), when it said; a refresh asks for these, never more. */
+	scope: Schema.optionalKey(Schema.String)
 });
 export type Tokens = typeof Tokens.Type;
 
@@ -81,6 +85,7 @@ const Grant = Schema.Struct({
 	access_token: Schema.optionalKey(Schema.String),
 	refresh_token: Schema.optionalKey(Schema.String),
 	expires_in: Schema.optionalKey(Schema.Number),
+	scope: Schema.optionalKey(Schema.String),
 	error: Schema.optionalKey(Schema.String),
 	error_description: Schema.optionalKey(Schema.String)
 });
@@ -160,12 +165,25 @@ export const grant = Effect.fn('OAuth.grant')(function* (
 			})
 		);
 	}
-	return {
+	const tokens: Tokens = {
 		access: body.access_token,
 		refresh: body.refresh_token ?? null,
-		exp: (yield* Clock.currentTimeMillis) + (body.expires_in ?? 3600) * 1000
+		exp: (yield* Clock.currentTimeMillis) + (body.expires_in ?? 3600) * 1000,
+		...(body.scope === undefined ? {} : { scope: body.scope })
 	};
+	return tokens;
 });
+
+/** Revokes the grant where the provider can (the refresh token revokes the whole grant at Google). Best effort: the
+ * caller drops its tokens whatever the provider answers, so a failure is only logged. */
+export const revoke = (app: OAuthApp, tokens: Tokens | null) =>
+	app.revokeUrl === undefined || tokens === null
+		? Effect.void
+		: HttpClient.execute(
+				HttpClientRequest.post(app.revokeUrl).pipe(
+					HttpClientRequest.bodyUrlParams({ token: tokens.refresh ?? tokens.access })
+				)
+			).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 
 /** `t` if it is still good, else refreshed (the old refresh token kept when the provider does not rotate it). */
 export const tokenHolder = Effect.fn('OAuth.tokenHolder')(function* (
@@ -193,12 +211,18 @@ export const tokenHolder = Effect.fn('OAuth.tokenHolder')(function* (
 								revoked: true
 							})
 						);
+					// a refresh asking for more than the grant gave is refused (`invalid_scope`): an older, narrower sign-in keeps working
 					const granted = yield* grant(app, yield* client(), {
 						grant_type: 'refresh_token',
 						refresh_token: tokens.refresh,
-						scope: app.scopes.join(' ')
+						scope: tokens.scope ?? app.scopes.join(' ')
 					});
-					const next = { ...granted, refresh: granted.refresh ?? tokens.refresh };
+					const scope = granted.scope ?? tokens.scope;
+					const next: Tokens = {
+						...granted,
+						refresh: granted.refresh ?? tokens.refresh,
+						...(scope === undefined ? {} : { scope })
+					};
 					yield* onRefresh(next);
 					return [next, next] as const;
 				})

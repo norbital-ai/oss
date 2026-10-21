@@ -1150,10 +1150,15 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 						await ctx.credentials.write(new Map([['credential', { key }]]));
 						await ctx.status({ state: 'connected', account: key });
 					},
+					async unpair() {
+						logouts++;
+					},
 					async close() {}
 				};
 			}
 		};
+		/** How often the provider was asked to forget this host (a linked device logging out). */
+		let logouts = 0;
 		const boot = () =>
 			Effect.gen(function* () {
 				vi.stubGlobal(
@@ -1164,7 +1169,6 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 						close() {}
 					}
 				);
-				vi.stubGlobal('confirm', () => true);
 				const context = yield* workspace({
 					manifest: source,
 					secretsKey: Redacted.make(randomBytes(32))
@@ -1323,12 +1327,65 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 						yield* until(() => sheet() === undefined);
 						press(
 							present(
-								button(present(channels.querySelector('[data-envoy-channel=desk]')), 'Manage')
+								channels.querySelector<HTMLElement>('[data-envoy-channel=desk] [data-settings]')
 							)
 						);
 						yield* until(() => tab('Configuration') !== undefined && tab('Messages') !== undefined);
 						expect(present(sheet()).textContent).toContain('desk');
 						expect(button(present(sheet()), 'Delete')).toBeUndefined();
+						// the channel's card owns its connection: the sheet does not draw a second one
+						expect(tab('Connection')).toBeUndefined();
+					})
+				)
+		);
+
+		it.live(
+			"an agent channel's Disconnect asks in-app, logs the provider out, drops the credentials and shows Not paired",
+			() =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const { t, context, manager } = yield* boot();
+						// a WebView answers `window.confirm` false at once; the card must not depend on it
+						const native = vi.fn(() => false);
+						vi.stubGlobal('confirm', native);
+						logouts = 0;
+						yield* t.db.write({
+							text: `UPDATE sys_integration SET envoy = 'service' WHERE id = 'desk'`,
+							params: []
+						});
+						yield* manager.pair('desk', { key: 'k1' });
+						const { target } = yield* open(
+							context,
+							'/settings/integrations',
+							{},
+							undefined,
+							undefined,
+							true,
+							false,
+							manager
+						);
+						const card = () =>
+							target.querySelector<HTMLElement>('[data-envoy-channel=desk] [data-connector]') ??
+							undefined;
+						const state = () =>
+							card()?.querySelector('[data-connector-state]')?.textContent?.trim();
+						yield* until(() => state() === 'Connected as k1');
+						expect(card()?.textContent?.match(/k1/g)).toHaveLength(1); // the account once
+						press(present(card()?.querySelector<HTMLElement>('[data-disconnect]')));
+						yield* until(() => document.body.querySelector('[data-confirm-dialog]') !== null);
+						expect(logouts).toBe(0); // nothing happens before the answer
+						press(present(document.body.querySelector<HTMLElement>('[data-confirm-accept]')));
+						yield* until(() => state() === 'Not paired');
+						expect(logouts).toBe(1);
+						expect(native).not.toHaveBeenCalled();
+						expect(yield* instance(t, 'desk')).toMatchObject({
+							status: { state: 'unpaired', account: null }
+						});
+						const [stored] = yield* t.db.read([
+							{ text: 'SELECT name FROM bolt_credential WHERE instance = $1', params: ['desk'] }
+						]);
+						expect(present(stored).rows).toEqual([]);
+						expect(card()?.querySelector('[data-connect]')).not.toBeNull();
 					})
 				)
 		);
@@ -1395,6 +1452,8 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 							200
 						);
 						press(present(button(present(sheet()), 'Delete')));
+						yield* until(() => document.body.querySelector('[data-confirm-accept]') !== null);
+						press(present(document.body.querySelector<HTMLElement>('[data-confirm-accept]')));
 						yield* until(() =>
 							Effect.gen(function* () {
 								return (

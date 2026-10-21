@@ -23,6 +23,7 @@ import type { FormProps } from '../src/form/form.svelte';
 import type { Checkpoint } from '../src/record/history.ts';
 import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import { it, afterEach } from '@effect/vitest';
+import { vi } from 'vitest';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 
@@ -138,6 +139,18 @@ const settle = async () => {
 		await tick();
 		await new Promise((r) => setTimeout(r, 0));
 	}
+};
+/** The in-app discard question (never `window.confirm`, which WebViews suppress): asked exactly once, then declined. */
+const declineDiscard = async () => {
+	const asking = () => [
+		...document.querySelectorAll<HTMLElement>('[data-confirm-dialog][data-state=open]')
+	];
+	await vi.waitFor(() => assert.equal(asking().length, 1));
+	const dialog = required(asking()[0]);
+	assert.equal(dialog.getAttribute('role'), 'alertdialog');
+	element<HTMLButtonElement>(dialog, '[data-confirm-cancel]').click();
+	await vi.waitFor(() => assert.equal(asking().length, 0));
+	await settle();
 };
 const mounted: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -466,56 +479,58 @@ it.live('a completed approval remains readable from the record without a pending
 	})
 );
 
-it.live('under the approval lock, Edit is disabled and the compact chip says who may change it', () =>
-	Effect.gen(function* () {
-		const held = {
-			...LIVE,
-			$approval: {
-				requestId: 'r1',
-				state: 'Pending',
-				step: 0,
-				steps: 2,
-				requestedBy: 'Ada',
-				waitingOn: ['Finance']
-			}
-		};
-		const reasons = ['underApproval'] as const;
-		const v = yield* browser(() =>
-			show(held, catalog, undefined, () => ({
-				collection: 'jobs',
-				id: 'j1',
-				revision: 3,
-				fields: {
-					title: { writable: false, proposal: false, reasons },
-					crew: { writable: false, proposal: false, reasons }
-				},
-				update: { allowed: false, proposal: false, reasons },
-				delete: { allowed: false, proposal: false, reasons },
-				moves: {},
-				proposalMoves: {}
-			}))
-		);
-		const button = required(edit(v.target));
-		assert.equal(button.disabled, true);
-		assert.equal(button.title, 'Under approval: Finance may change it');
-		assert.equal(v.target.querySelector('[data-view=approval-lock]'), null);
-		assert.doesNotMatch(
-			textOf(element<HTMLElement>(v.target, '[data-record-head]')),
-			/Finance may change it/
-		);
-		const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
-		assert.equal(textOf(badge).trim(), 'Under approval');
-		assert.equal(badge.getAttribute('aria-label'), 'Under approval: Finance may change it');
-		assert.equal(badge.tabIndex, 0);
-		yield* browser(async () => {
-			badge.focus();
-			await settle();
-		});
-		assert.match(
-			textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
-			/Under approval: Finance may change it/
-		);
-	})
+it.live(
+	'under the approval lock, Edit is disabled and the compact chip says who may change it',
+	() =>
+		Effect.gen(function* () {
+			const held = {
+				...LIVE,
+				$approval: {
+					requestId: 'r1',
+					state: 'Pending',
+					step: 0,
+					steps: 2,
+					requestedBy: 'Ada',
+					waitingOn: ['Finance']
+				}
+			};
+			const reasons = ['underApproval'] as const;
+			const v = yield* browser(() =>
+				show(held, catalog, undefined, () => ({
+					collection: 'jobs',
+					id: 'j1',
+					revision: 3,
+					fields: {
+						title: { writable: false, proposal: false, reasons },
+						crew: { writable: false, proposal: false, reasons }
+					},
+					update: { allowed: false, proposal: false, reasons },
+					delete: { allowed: false, proposal: false, reasons },
+					moves: {},
+					proposalMoves: {}
+				}))
+			);
+			const button = required(edit(v.target));
+			assert.equal(button.disabled, true);
+			assert.equal(button.title, 'Under approval: Finance may change it');
+			assert.equal(v.target.querySelector('[data-view=approval-lock]'), null);
+			assert.doesNotMatch(
+				textOf(element<HTMLElement>(v.target, '[data-record-head]')),
+				/Finance may change it/
+			);
+			const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
+			assert.equal(textOf(badge).trim(), 'Under approval');
+			assert.equal(badge.getAttribute('aria-label'), 'Under approval: Finance may change it');
+			assert.equal(badge.tabIndex, 0);
+			yield* browser(async () => {
+				badge.focus();
+				await settle();
+			});
+			assert.match(
+				textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
+				/Under approval: Finance may change it/
+			);
+		})
 );
 
 it.live(
@@ -685,6 +700,34 @@ it.live('editing a line prices in the line own currency', () =>
 			)
 		);
 		assert.match(textOf(element<HTMLElement>(target, '[data-field=unit_price]')), /CNY/);
+	})
+);
+
+it.live('an action form starts from the input of its act-shaped values', () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(() => fake(null));
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog: {
+					jobs: {
+						label: ['title'],
+						fields: { title: { kind: 'text' } },
+						actions: { rename: { target: 'record', input: { title: { kind: 'text' } } } }
+					}
+				},
+				part: 'form',
+				props: { of: { action: 'jobs.rename' }, id: 'j1', values: { input: { title: 'Paint' } } }
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		yield* browser(() => settle());
+		assert.equal(element<HTMLInputElement>(target, '[data-field=title] input').value, 'Paint');
 	})
 );
 
@@ -971,36 +1014,25 @@ it.live(
 			input.value = 'A changed title';
 			input.dispatchEvent(new Event('input', { bubbles: true }));
 			yield* browser(() => settle());
-			const original = globalThis.confirm;
-			let asked = 0;
-			globalThis.confirm = () => {
-				asked++;
-				return false;
-			};
-			try {
-				required(
-					[...v.target.querySelectorAll<HTMLButtonElement>('button')].find(
-						(b) => textOf(b).trim() === 'Cancel'
-					)
-				).click();
-				yield* browser(() => settle());
-				assert.equal(asked, 1);
-				assert.equal(
-					element<HTMLInputElement>(v.target, '[data-field=title] input').value,
-					'A changed title'
-				);
-				element<HTMLElement>(v.target, 'form').dispatchEvent(
-					new Event('submit', { bubbles: true, cancelable: true })
-				);
-				yield* browser(() => settle());
-				assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
-				assert.deepEqual(required(v.calls.acts[0]).input, {
-					target: 'j1',
-					set: { title: 'A changed title' }
-				});
-			} finally {
-				globalThis.confirm = original;
-			}
+			required(
+				[...v.target.querySelectorAll<HTMLButtonElement>('button')].find(
+					(b) => textOf(b).trim() === 'Cancel'
+				)
+			).click();
+			yield* browser(() => declineDiscard());
+			assert.equal(
+				element<HTMLInputElement>(v.target, '[data-field=title] input').value,
+				'A changed title'
+			);
+			element<HTMLElement>(v.target, 'form').dispatchEvent(
+				new Event('submit', { bubbles: true, cancelable: true })
+			);
+			yield* browser(() => settle());
+			assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
+			assert.deepEqual(required(v.calls.acts[0]).input, {
+				target: 'j1',
+				set: { title: 'A changed title' }
+			});
 		})
 );
 
@@ -1018,19 +1050,11 @@ it.live('closing the sheet while saving asks before removing the pending draft',
 		);
 		yield* browser(() => settle());
 		assert.equal(element<HTMLElement>(v.target, 'form').getAttribute('aria-busy'), 'true');
-		const original = globalThis.confirm;
-		let asked = 0;
-		globalThis.confirm = () => {
-			asked++;
-			return false;
-		};
 		try {
 			element<HTMLElement>(v.target, '[data-sheet-close]').click();
-			yield* browser(() => settle());
-			assert.equal(asked, 1);
+			yield* browser(() => declineDiscard());
 			assert.ok(element<HTMLElement>(v.target, 'form[aria-busy=true]'));
 		} finally {
-			globalThis.confirm = original;
 			yield* Deferred.succeed(work, {
 				kind: 'committed',
 				output: null,

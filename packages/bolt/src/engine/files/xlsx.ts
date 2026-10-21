@@ -60,18 +60,18 @@ function worksheetRefs(read: (name: string) => string): { name: string; path: st
 	const attr = (xml: string, name: string) =>
 		new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(xml)?.[1];
 	const rels = [
-		...read('xl/_rels/workbook.xml.rels').matchAll(
-			/<(?:[\w.-]+:)?Relationship\b([^>]*?)\/?\s*>/g
-		)
+		...read('xl/_rels/workbook.xml.rels').matchAll(/<(?:[\w.-]+:)?Relationship\b([^>]*?)\/?\s*>/g)
 	].map((m) => ({ id: attr(m[1]!, 'Id'), target: attr(m[1]!, 'Target') }));
-	return [...read('xl/workbook.xml').matchAll(/<(?:[\w.-]+:)?sheet\b([^>]*?)\/?\s*>/g)].map((m, i) => {
-		const name = attr(m[1]!, 'name') ?? `Sheet ${i + 1}`;
-		const target = rels.find((r) => r.id === attr(m[1]!, '[\\w.-]+:id'))?.target;
-		return {
-			name: unxml(name),
-			path: target?.replace(/^\/?(xl\/)?/, 'xl/') ?? `xl/worksheets/sheet${i + 1}.xml`
-		};
-	});
+	return [...read('xl/workbook.xml').matchAll(/<(?:[\w.-]+:)?sheet\b([^>]*?)\/?\s*>/g)].map(
+		(m, i) => {
+			const name = attr(m[1]!, 'name') ?? `Sheet ${i + 1}`;
+			const target = rels.find((r) => r.id === attr(m[1]!, '[\\w.-]+:id'))?.target;
+			return {
+				name: unxml(name),
+				path: target?.replace(/^\/?(xl\/)?/, 'xl/') ?? `xl/worksheets/sheet${i + 1}.xml`
+			};
+		}
+	);
 }
 
 export function xlsxSheets(zip: Uint8Array): string[] {

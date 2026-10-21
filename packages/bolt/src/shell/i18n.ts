@@ -160,8 +160,15 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Each envoy answers on one channel. Connect it with one click.':
 		'每个使者在一个渠道上应答，一键即可连接。',
 	Paused: '已暂停',
-	'Delete {name}? Its credentials, feed progress, conversations and messages are deleted with it.':
-		'删除 {name}？其凭据、同步进度、会话和消息也将删除。',
+	'Delete {name}?': '删除 {name}？',
+	'Its credentials, feed progress, conversations and messages are deleted with it.':
+		'其凭据、同步进度、会话和消息也将删除。',
+	'This logs the account out and deletes its stored credentials.':
+		'这会登出该账号并删除其已存储的凭据。',
+	'Get a new code': '获取新的代码',
+	'Expires in {n}s': '{n} 秒后过期',
+	'This code expired.': '此代码已过期。',
+	'Discard and switch': '放弃并切换',
 	'Each instance is one external account: a number, a mailbox, a bot, a database or a calendar account.':
 		'每个实例对应一个外部账号：电话号码、邮箱、机器人、数据库或日历账号。',
 	State: '状态',
@@ -1057,6 +1064,7 @@ const VIEW_ZH = {
 	'ui.form.conflict': '记录已更改。请检查草稿后重试。',
 	'ui.form.unknown': '结果尚未确定。请重试以检查同一请求。',
 	'ui.form.discardDraft': '放弃未保存的更改？',
+	'ui.form.discard': '放弃',
 	'ui.record.permissionsFailed': '无法加载记录权限。',
 	'ui.record.noAccess': '无权访问',
 	'ui.record.save': '保存',

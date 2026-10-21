@@ -1,13 +1,17 @@
 <!--
-	One connector as a row, the way a plugin list draws it: the provider's mark, its name and one line, where it stands,
-	and one button. Connect makes the instance when there is none (`create`) and, for a provider that pairs at once (a QR,
-	a code, a sign-in), starts pairing in the same click; the instance's setup then opens beneath the row. Disconnect
-	unpairs and removes the instance (`remove`). Other ways to connect (another mailbox) open the setup's provider choice.
+	One connection as one card: the provider's mark and name, ONE status line (Not connected → Pairing → Connected as … /
+	Needs attention), and one set of actions, each drawn once. The card owns the lifecycle: Connect (makes the instance when
+	there is none and, for a provider that pairs at once — a QR, a code, a sign-in — starts pairing in the same click),
+	Try again after an error, Cancel while pairing, Disconnect once connected (asked in-app: it logs the provider out and
+	deletes the credentials, then `remove`s the instance). While pairing the setup opens beneath the card (the QR or code
+	with its expiry and a fresh one on request, the sign-in, a form's own Connect); once connected Manage opens the details
+	(Test, Import start, Reconnect). Settings (`onManage`)
+	opens the instance's sheet for its configuration and messages.
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { fork } from '@norbital-ai/ui/effect';
-	import { Button, Icon } from '@norbital-ai/ui';
+	import { Button, confirmAction, Icon } from '@norbital-ai/ui';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type {
@@ -57,9 +61,9 @@
 		client: (instance: string) => IntegrationClient;
 		/** Makes the instance and answers its id. */
 		create: () => Effect.Effect<string, { readonly message: string }>;
-		/** Removes the instance once it was unpaired. */
-		remove: (instance: string) => Effect.Effect<void, { readonly message: string }>;
-		/** Opens the full instance sheet when this connector is part of Settings. */
+		/** Removes the instance once it was unpaired; `true` when the row is gone (a source connection stays, unpaired). */
+		remove: (instance: string) => Effect.Effect<boolean, { readonly message: string }>;
+		/** Opens the instance's sheet (its configuration and messages) when this connector is part of Settings. */
 		onManage?: (instance: string) => void;
 		t: (key: string) => string;
 		locale: string;
@@ -72,7 +76,9 @@
 	const primary = $derived(shown?.available === false ? undefined : shown);
 	const name = $derived(shown?.name === undefined ? driverLabel(driver) : say(shown.name));
 	let made = $state<string | null>(null);
-	const id = $derived(instance?.id ?? made);
+	/** The instance this card disconnected and removed: gone now, before the owner's list catches up. */
+	let dropped = $state<string | null>(null);
+	const id = $derived(instance === null || instance.id === dropped ? made : instance.id);
 	const setupClient = $derived(id === null ? null : client(id));
 	let open = $state(false);
 	let busy = $state(false);
@@ -116,8 +122,8 @@
 			);
 		});
 	/** The instance (made now when absent); with `pairing`, the primary provider's pairing starts too. */
-	function connect(pairing: boolean, waiting = false, importStart?: ImportStartInput): void {
-		if (busy || waiting) return;
+	function connect(pairing: boolean, importStart?: ImportStartInput): void {
+		if (busy) return;
 		pairedNow = false;
 		const p = primary;
 		const starts = pairing && pairsAtOnce(p);
@@ -127,6 +133,7 @@
 				Effect.gen(function* () {
 					const target = id ?? (yield* create());
 					made = target;
+					dropped = null;
 					open = true;
 					if (starts && p !== undefined)
 						yield* client(target).pair({
@@ -137,20 +144,37 @@
 			)
 		);
 	}
-	function disconnect(connected: boolean): void {
+	/** Unpairs (the provider logs out, the credentials are deleted) and removes the instance; a connected one asks first. */
+	function disconnect(connected: boolean, source: IntegrationSetupProps | null): void {
 		const target = id;
-		if (target === null) return;
-		if (connected && !confirm(t('Disconnect {name}?').replace('{name}', name))) return;
-		fork(
-			settle(
-				Effect.gen(function* () {
-					yield* client(target).unpair();
-					yield* remove(target);
-					made = null;
-					pairedNow = false;
-					boundary = undefined;
-					open = false;
+		if (target === null || busy) return;
+		const ask = connected
+			? confirmAction({
+					title: t('Disconnect {name}?').replace('{name}', name),
+					body: t('This logs the account out and deletes its stored credentials.'),
+					confirmLabel: t('Disconnect'),
+					cancelLabel: t('Cancel'),
+					destructive: true
 				})
+			: Effect.succeed(true);
+		fork(
+			ask.pipe(
+				Effect.flatMap((confirmed) =>
+					confirmed
+						? settle(
+								Effect.gen(function* () {
+									// through the card's own holder, so its status shows Not paired from the unpair answer
+									yield* source === null ? client(target).unpair() : source.unpair();
+									const gone = yield* remove(target);
+									if (gone) dropped = target;
+									made = null;
+									pairedNow = false;
+									boundary = undefined;
+									open = false;
+								})
+							)
+						: Effect.void
+				)
 			)
 		);
 	}
@@ -164,13 +188,15 @@
 		status?.state === 'connecting' ||
 		status?.state === 'reconnecting'}
 	{@const working = busy || source?.busy === true}
-	{@const failure = error ?? source?.error ?? null}
+	{@const failure =
+		error ?? source?.error ?? (status?.state === 'error' ? (status.error ?? null) : null)}
 	{@const active =
 		status?.providers?.find((provider) => provider.id === status.provider) ?? primary}
 	{@const draft =
 		primary === undefined
 			? undefined
 			: (boundary ?? importStartDraft(status?.importStart, primary, id === null))}
+	{@const paused = instance !== null && instance.id === id && instance.active === false}
 	<li class="flex flex-col gap-3 rounded-lg border bg-card px-4 py-3" data-connector={driver}>
 		<div class="flex items-center justify-between gap-3">
 			<div class="flex min-w-0 items-center gap-3">
@@ -182,7 +208,29 @@
 					<p class="truncate text-meta">
 						{shown?.description === undefined ? description : say(shown.description)}
 					</p>
-					{#if id !== null && status !== null && active?.importStart !== undefined}
+					<p
+						class="text-meta"
+						data-connector-state={paused
+							? 'paused'
+							: id === null
+								? 'none'
+								: (status?.state ?? 'loading')}
+						data-connection-success={pairedNow && connected ? '' : undefined}
+						role="status"
+					>
+						{#if pairedNow && connected}<Icon
+								name="lucide:circle-check"
+								class="mr-1 inline size-3.5"
+							/>{/if}
+						{paused
+							? t('Paused')
+							: primary === undefined
+								? t('Not available on this host')
+								: id === null
+									? t('Not connected')
+									: statusLabel(status, t)}
+					</p>
+					{#if connected && status !== null && active?.importStart !== undefined}
 						<p class="text-meta wrap-anywhere" data-import-start-active>
 							{t('Import start')}: {importStartLabel(status.importStart, t, locale)}
 						</p>
@@ -194,66 +242,50 @@
 							</p>
 						{/if}
 					{/if}
-					<p
-						class="text-meta"
-						data-connector-state={instance?.active === false
-							? 'paused'
-							: (status?.state ?? 'loading')}
-						data-connection-success={pairedNow && connected ? '' : undefined}
-						role="status"
-					>
-						{#if pairedNow && connected}<Icon
-								name="lucide:circle-check"
-								class="mr-1 inline size-3.5"
-							/>{/if}
-						{instance?.active === false
-							? t('Paused')
-							: primary === undefined
-								? t('Not available on this host')
-								: pairedNow && connected
-									? t('Connected')
-									: instance === null && made === null
-										? t('Not connected')
-										: statusLabel(status, t)}
-					</p>
 				</Stack>
 			</div>
 			<div class="flex shrink-0 items-center gap-1">
-				{#if id !== null && onManage !== undefined}
-					<Button size="sm" variant="ghost" onclick={() => id !== null && onManage?.(id)}
-						>{t('Manage')}</Button
-					>
-				{:else if connected}
-					<Button size="sm" variant="ghost" onclick={() => (open = !open)}
-						>{open ? t('Hide') : t('Manage')}</Button
+				{#if connected && source !== null}
+					<Button
+						size="sm"
+						variant="ghost"
+						aria-expanded={open}
+						onclick={() => (open = !open)}
+						data-manage>{open ? t('Hide') : t('Manage')}</Button
 					>
 				{/if}
-				{#if !connected && (!open || waiting || source === null)}
+				{#if id !== null && onManage !== undefined}
+					<Button
+						size="sm"
+						variant="ghost"
+						aria-label={t('Settings')}
+						title={t('Settings')}
+						onclick={() => id !== null && onManage?.(id)}
+						data-settings><Icon name="lucide:settings-2" class="size-4" /></Button
+					>
+				{/if}
+				{#if !connected && !waiting && !open && (id === null || status !== null)}
 					<Button
 						size="sm"
 						disabled={working ||
-							waiting ||
 							primary === undefined ||
-							(id !== null && status === null) ||
 							(draft !== undefined && primary !== undefined && !validImportStart(draft, primary))}
-						onclick={() => connect(true, waiting, boundary ?? (id === null ? draft : undefined))}
+						onclick={() => connect(true, boundary ?? (id === null ? draft : undefined))}
 						data-connect
 						>{working
 							? t('Connecting…')
-							: waiting
-								? statusLabel(status, t)
-								: status?.state === 'error' || failure !== null
-									? t('Try again')
-									: t('Connect')}</Button
+							: status?.state === 'error' || failure !== null
+								? t('Try again')
+								: t('Connect')}</Button
 					>
 				{/if}
-				{#if id !== null}
+				{#if id !== null && status !== null}
 					<Button
 						size="sm"
 						variant="ghost"
 						class="text-destructive"
 						disabled={working}
-						onclick={() => disconnect(connected)}
+						onclick={() => disconnect(connected, source)}
 						data-disconnect={connected ? '' : undefined}
 						data-cancel-setup={!connected ? '' : undefined}
 						>{t(connected ? 'Disconnect' : waiting ? 'Cancel pairing' : 'Cancel setup')}</Button
@@ -274,17 +306,17 @@
 				{locale}
 			/>
 		{/if}
-		{#if !connected && !open && offered.some((p) => p !== primary)}
+		{#if !connected && !waiting && !open && offered.some((p) => p !== primary)}
 			<button
 				type="button"
 				class="self-start text-meta underline-offset-2 hover:underline"
-				disabled={working || waiting}
-				onclick={() => connect(false, waiting)}>{t('Other ways to connect')}</button
+				disabled={working}
+				onclick={() => connect(false)}>{t('Other ways to connect')}</button
 			>
 		{/if}
 		{#if open && source !== null}
 			<div class="border-t pt-3">
-				<Setup {...source} error={failure} controls={false} />
+				<Setup {...source} error={error ?? source.error} controls={false} />
 			</div>
 		{/if}
 	</li>

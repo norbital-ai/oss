@@ -130,6 +130,12 @@ function show(props: {
 		state
 	};
 }
+/** The in-app confirmation's accept button, once it is open. */
+const accept = async () => {
+	const open = '[data-confirm-dialog][data-state=open] [data-confirm-accept]';
+	await vi.waitFor(() => expect(document.querySelector(open)).not.toBeNull());
+	document.querySelector<HTMLButtonElement>(open)!.click();
+};
 const button = (el: HTMLElement, label: string) =>
 	[...el.querySelectorAll<HTMLButtonElement | HTMLAnchorElement>('button, a')].find(
 		(b) => b.textContent?.trim() === label
@@ -313,6 +319,34 @@ it('sends a single provider’s fields alone, with no provider key', async () =>
 	expect(paired).toEqual([{ token: '123:AA' }]);
 });
 
+it('counts a published code down to its expiry, then offers a fresh one that pairs again', async () => {
+	const { el, paired, state, waitPair } = show({
+		connection: base({
+			provider: 'linked',
+			state: 'pairing',
+			pairing: {
+				kind: 'qr',
+				value: '2@abc',
+				expiresAt: new Date(Date.now() + 30_000).toISOString()
+			}
+		})
+	});
+	await settle();
+	expect(el.querySelector('[data-pairing-expiry]')?.textContent).toMatch(/Expires in (29|30)s/);
+	expect(el.querySelector('[data-pairing=qr] [data-pairing-expired]')).toBeNull();
+	state.connection = base({
+		provider: 'linked',
+		state: 'pairing',
+		pairing: { kind: 'qr', value: '2@abc', expiresAt: new Date(Date.now() - 1_000).toISOString() }
+	});
+	await settle();
+	expect(el.querySelector('[data-pairing-expired]')).not.toBeNull();
+	expect(el.querySelector('[data-pairing-expiry]')).toBeNull();
+	el.querySelector<HTMLButtonElement>('[data-pairing-refresh]')!.click();
+	await waitPair();
+	expect(paired).toEqual([{ provider: 'linked' }]);
+});
+
 it('draws the QR, then the code, the provider publishes while pairing; an optional field left empty is not sent', async () => {
 	const { el, paired, state, waitPair } = show({ connection: base({ provider: 'linked' }) });
 	await settle();
@@ -362,15 +396,15 @@ it('switches from Setup to the Connected summary when the host says connected, a
 	expect(el.querySelector('[data-connection-state]')!.textContent).toBe(
 		'Connected as {as}'.replace('{as}', '+6500000000')
 	);
+	// who and through which provider are the header's, once: the facts below never repeat them
 	expect([...card.querySelectorAll('dt')].map((x) => x.textContent)).toEqual([
-		'Connected as',
-		'Provider',
 		'Webhook URL',
 		'Sender'
 	]);
-	expect(card.querySelector('[data-fact=Provider]')!.textContent).toContain('Official'); // the label, not the id
+	expect(el.textContent?.match(/Connected as/g)).toHaveLength(1);
 	expect(card.querySelector('[data-fact=webhookUrl]')!.textContent).toContain(HOOK);
 	button(el, 'Disconnect')!.click();
+	await accept();
 	await waitUnpair();
 	expect(unpaired()).toBe(1);
 });
@@ -395,6 +429,7 @@ it('shows connection progress after pairing, keeps disconnect, and restores setu
 	expect(el.textContent).not.toContain('The code appears when the provider publishes it.');
 	expect(el.textContent?.match(/Linked device/g)).toHaveLength(1);
 	button(el, 'Disconnect')!.click();
+	await accept();
 	await waitUnpair();
 	expect(unpaired()).toBe(1);
 	state.connection = base({

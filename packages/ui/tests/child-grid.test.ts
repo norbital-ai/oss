@@ -14,6 +14,12 @@ import type { Json } from '@norbital-ai/std/wire';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { KindsHost, ChildInput } from '../src/kinds/context.ts';
 import { it } from '@effect/vitest';
+import { vi } from 'vitest';
+// discarding a dirty grid asks in-app (a real-browser concern, bolt tests/sheet-discard.browser.test.ts); here it agrees
+vi.mock('../src/primitives/dialog/confirm.ts', async () => {
+	const { Effect } = await import('effect');
+	return { confirmAction: () => Effect.succeed(true) };
+});
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const settle = async () => {
@@ -316,8 +322,6 @@ it.live('parent Cancel resets child drafts and explicit operations together', ()
 			target,
 			props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
 		});
-		const previous = globalThis.confirm;
-		globalThis.confirm = () => true;
 		try {
 			yield* browser(() => settle());
 			required(button(target, 'Edit')).click();
@@ -339,7 +343,6 @@ it.live('parent Cancel resets child drafts and explicit operations together', ()
 			);
 			assert.equal(acts.length, 0);
 		} finally {
-			globalThis.confirm = previous;
 			yield* browser(() => unmount(app));
 			target.remove();
 		}
@@ -585,8 +588,6 @@ it.live('independent row drafts guard unloading and Cancel clears the guard', ()
 				props: { of: 'jobs', relation: 'lines', id: 'j1', save: 'independent', columns: ['amount'] }
 			}
 		});
-		const previous = globalThis.confirm;
-		globalThis.confirm = () => true;
 		try {
 			yield* browser(() => settle());
 			required(button(target, 'Edit')).click();
@@ -604,7 +605,6 @@ it.live('independent row drafts guard unloading and Cancel clears the guard', ()
 			window.dispatchEvent(clean);
 			assert.equal(clean.defaultPrevented, false);
 		} finally {
-			globalThis.confirm = previous;
 			yield* browser(() => unmount(app));
 			target.remove();
 		}

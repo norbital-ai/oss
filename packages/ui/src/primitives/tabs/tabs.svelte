@@ -23,6 +23,8 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		class?: string;
 		/** Rendered at the list's end (a toolbar, a trailing action). */
 		trailing?: Snippet;
+		/** Rendered before the list (a scope picker the tabs read): the tabs then sit flush right, wrapping below on narrow. */
+		leading?: Snippet;
 		/**
 		 * The hierarchy level: 1 `segmented` (top), 2 `underline`, 3 `chips`. Omitted, it is one below the enclosing
 		 * `Tabs` (1 at the top); an explicit level out of that order warns in the console.
@@ -68,6 +70,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		onValueChange,
 		class: className,
 		trailing,
+		leading,
 		level: explicit,
 		orientation
 	}: TabsProps = $props();
@@ -114,12 +117,18 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		data-tabs-orientation={vertical ? 'vertical' : 'horizontal'}
 	>
 		<div
-			class={cn('flex min-w-0 items-center gap-2', vertical && '@2xl:flex-col @2xl:items-stretch')}
+			class={cn(
+				'flex min-w-0 items-center gap-2',
+				leading && 'flex-wrap items-end',
+				vertical && '@2xl:flex-col @2xl:items-stretch'
+			)}
 		>
+			{#if leading}<div class="min-w-0 flex-1 basis-64">{@render leading()}</div>{/if}
 			<Tabs.List
 				data-tabs-variant={vertical ? 'rail' : variant}
 				class={cn(
-					'relative flex min-w-0 flex-1 flex-nowrap items-center',
+					'relative flex min-w-0 flex-nowrap items-center',
+					leading ? 'ml-auto flex-none' : 'flex-1',
 					vertical ? RAIL_LIST : LIST[variant],
 					SCROLL_AXIS_CLASSES.x
 				)}

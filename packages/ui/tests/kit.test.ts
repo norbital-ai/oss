@@ -13,6 +13,24 @@ import { tabLevel } from '../src/primitives/tabs/level.ts';
 import { escapes, navigates } from '../src/primitives/sheet/dismiss.ts';
 import { filterLogs, wantsOlder, type LogLine } from '../src/logs/logs.ts';
 import { offsets, windowOf } from '../src/primitives/virtual/virtual.ts';
+
+// The in-app question itself is a real-browser concern (bolt tests/sheet-discard.browser.test.ts); here it is a queue the
+// test answers, so happy-dom never runs bits-ui's dialog layers.
+const dialog = vi.hoisted(() => ({
+	pending: [] as { title: string; answer: (confirmed: boolean) => void }[]
+}));
+vi.mock('../src/primitives/dialog/confirm.ts', async () => {
+	const { Effect } = await import('effect');
+	return {
+		confirmAction: (options: { title: string }) =>
+			Effect.callback<boolean>((resume) => {
+				dialog.pending.push({
+					title: options.title,
+					answer: (confirmed) => resume(Effect.succeed(confirmed))
+				});
+			})
+	};
+});
 // after the DOM hook: static imports link before it registers
 const { flushSync, mount, unmount } = await import('svelte');
 const { default: Harness } = await import('./kit-harness.svelte');
@@ -152,36 +170,49 @@ it.live('sheet: blocked session storage does not prevent opening or resizing', (
 	})
 );
 
-it.live('sheet: closing over an unsaved draft asks first; a clean sheet closes at once', () =>
-	browser(async () => {
-		const asked: string[] = [];
-		let answer = false;
-		const confirm = globalThis.confirm;
-		globalThis.confirm = (message?: string) => (asked.push(String(message)), answer);
-		try {
-			let dirty = true;
-			const v = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
-			window.dispatchEvent(key('Escape'));
-			flushSync();
-			assert.deepEqual(asked, ['Discard your unsaved changes?']);
-			assert.ok(document.querySelector('[role=dialog]'), 'kept: the person said no');
-			answer = true;
-			element<HTMLButtonElement>(document, '[data-sheet-close]').click();
-			flushSync();
-			assert.equal(document.querySelector('[role=dialog]'), null, 'closed once the person agreed');
-			await v.done();
-			dirty = false;
-			asked.length = 0;
-			const clean = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
-			window.dispatchEvent(key('Escape'));
-			flushSync();
-			assert.deepEqual(asked, [], 'nothing unsaved: no question');
-			assert.equal(document.querySelector('[role=dialog]'), null);
-			await clean.done();
-		} finally {
-			globalThis.confirm = confirm;
-		}
-	})
+it.live(
+	'sheet: closing over an unsaved draft asks first, in-app; a clean sheet closes at once',
+	() =>
+		browser(async () => {
+			// a WebView answers `window.confirm` false at once: the sheet must never depend on it
+			const native = vi.fn(() => false);
+			vi.stubGlobal('confirm', native);
+			const asking = () => dialog.pending[0];
+			const answer = async (accept: boolean) => {
+				await vi.waitFor(() => assert.ok(asking()));
+				dialog.pending.shift()!.answer(accept);
+				flushSync();
+			};
+			try {
+				let dirty = true;
+				const v = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
+				window.dispatchEvent(key('Escape'));
+				flushSync();
+				await vi.waitFor(() => assert.ok(asking()));
+				assert.equal(asking()!.title, 'Discard your unsaved changes?');
+				await answer(false);
+				assert.ok(document.querySelector('[role=dialog]'), 'kept: the person said no');
+				element<HTMLButtonElement>(document, '[data-sheet-close]').click();
+				flushSync();
+				await answer(true);
+				assert.equal(
+					document.querySelector('[role=dialog]'),
+					null,
+					'closed once the person agreed'
+				);
+				await v.done();
+				dirty = false;
+				const clean = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
+				window.dispatchEvent(key('Escape'));
+				flushSync();
+				assert.equal(asking(), undefined, 'nothing unsaved: no question');
+				assert.equal(document.querySelector('[role=dialog]'), null);
+				await clean.done();
+				assert.equal(native.mock.calls.length, 0);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		})
 );
 
 it.live('sheet: Esc closes only the topmost, never a handled or composing key', () =>

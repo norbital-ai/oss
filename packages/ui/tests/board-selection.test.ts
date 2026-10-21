@@ -11,6 +11,24 @@ import type { ViewBolt } from '../src/client/contract.ts';
 import type { ToolbarItem } from '../src/collection/ViewToolbar.svelte';
 import { fromWhere, matches } from '../src/filter/filter.ts';
 import { element } from './elements.ts';
+
+// The in-app question itself is a real-browser concern (bolt tests/sheet-discard.browser.test.ts); here it is a queue the
+// test answers, so happy-dom never runs bits-ui's dialog layers.
+const dialog = vi.hoisted(() => ({
+	pending: [] as { title: string; answer: (confirmed: boolean) => void }[]
+}));
+vi.mock('../src/primitives/dialog/confirm.ts', async () => {
+	const { Effect } = await import('effect');
+	return {
+		confirmAction: (options: { title: string }) =>
+			Effect.callback<boolean>((resume) => {
+				dialog.pending.push({
+					title: options.title,
+					answer: (confirmed) => resume(Effect.succeed(confirmed))
+				});
+			})
+	};
+});
 import {
 	browser,
 	required,
@@ -209,13 +227,16 @@ it.live(
 	'delete cancellation and refusal retain cards; a committed delete clears the selection',
 	() =>
 		Effect.gen(function* () {
-			let accept = false;
 			let refuse = true;
 			const confirmations: string[] = [];
-			vi.stubGlobal('confirm', (message: string) => {
-				confirmations.push(String(message));
-				return accept;
-			});
+			// the in-app confirmation (never `window.confirm`, which WebViews suppress): its title, then the answer
+			const answer = async (accept: boolean) => {
+				await vi.waitFor(() => assert.ok(dialog.pending[0]));
+				const asked = dialog.pending.shift()!;
+				confirmations.push(asked.title);
+				asked.answer(accept);
+				await settle();
+			};
 			const { target, acts } = yield* browser(() =>
 				show({
 					toolbar: { delete: true },
@@ -234,16 +255,19 @@ it.live(
 			yield* browser(settle);
 			yield* browser(() => openMenu(target));
 			yield* browser(() => press('delete'));
+			yield* browser(() => answer(false));
 			assert.deepEqual(acts, []);
 			assert.equal(select(target, 'c').getAttribute('aria-checked'), 'true');
-			accept = true;
 			yield* browser(() => openMenu(target));
 			yield* browser(() => press('delete'));
+			yield* browser(() => answer(true));
+			yield* browser(() => openMenu(target));
 			assert.equal(menuRow('delete').dataset.status, 'failed');
 			assert.equal(textOf(element(menuRow('delete'), '[data-menu-error]')), 'Deletion is locked');
 			assert.equal(select(target, 'c').getAttribute('aria-checked'), 'true');
 			refuse = false;
 			yield* browser(() => press('delete'));
+			yield* browser(() => answer(true));
 			assert.deepEqual(acts, [
 				{ callable: 'jobs.delete', input: { target: ['c'] } },
 				{ callable: 'jobs.delete', input: { target: ['c'] } }

@@ -140,6 +140,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { Debounced, watch as onChange_ } from 'runed';
 	import { Button } from '../primitives/button/index.js';
+	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import { Tooltip } from '../primitives/tooltip/index.js';
 	import { Combobox } from '../primitives/combobox/index.js';
@@ -627,12 +628,21 @@
 		);
 	}
 	function rowAct(a: RowAction<RowIn<S>>, row: RowIn<S>) {
-		if (a.confirm !== undefined && !confirm(a.confirm)) return;
 		const input = a.input !== undefined ? a.input(row) : recordRow(row) ? { target: row.id } : null;
 		if (input === null) return;
+		const asked =
+			a.confirm === undefined
+				? Effect.succeed(true)
+				: confirmAction({ title: a.confirm, confirmLabel: a.label ?? a.action });
 		fork(
-			actOutcome(bolt.act(a.action, input)).pipe(
-				Effect.tap((outcome) => Effect.sync(() => say(outcome)))
+			asked.pipe(
+				Effect.flatMap((confirmed) =>
+					confirmed
+						? actOutcome(bolt.act(a.action, input)).pipe(
+								Effect.tap((outcome) => Effect.sync(() => say(outcome)))
+							)
+						: Effect.void
+				)
 			)
 		);
 	}
@@ -839,12 +849,17 @@
 		/>{/if}
 {/snippet}
 
-{#snippet footer()}
+<!-- the footer: the selection (when rows can be selected) or the range, then the pager. The selection lives here, not
+     above the rows, so choosing a row never moves the header or the rows under the pointer -->
+{#snippet footer(rows: readonly RowIn<S>[])}
 	<footer
 		class="text-muted-foreground flex shrink-0 min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t px-2 py-1 text-xs"
 		data-table-footer
 	>
-		<span class="px-1 tabular-nums" data-range>{range}</span>
+		{#if selectable && !(kind === 'local' && onChange)}{@render selection(rows)}{:else}<span
+				class="px-1 tabular-nums"
+				data-range>{range}</span
+			>{/if}
 		{#if paged}
 			<div class="flex items-center gap-1" data-pager>
 				<Combobox
@@ -949,16 +964,11 @@
 	{/if}
 {/snippet}
 
-<!-- the selection bar (both layouts): the page's checkbox (the card list has no header), the count, every matching row -->
+<!-- the footer's selection (both layouts): the page's checkbox (the card list has no header), then the count and every
+     matching row in place of the range while rows are selected -->
 {#snippet selection(rows: readonly RowIn<S>[])}
 	{@const all = pageAll(rows)}
-	<div
-		class={[
-			'bg-muted/40 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-t-md border-b px-3 py-1.5 text-xs',
-			selected.size === 0 && '@3xl:hidden'
-		]}
-		data-selection
-	>
+	<div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-1" data-selection>
 		<label class="inline-flex items-center gap-2 @3xl:hidden">
 			<input
 				type="checkbox"
@@ -992,7 +1002,7 @@
 				onclick={() => selected.clear()}
 				data-select-clear>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button
 			>
-		{/if}
+		{:else}<span class="tabular-nums" data-range>{range}</span>{/if}
 	</div>
 {/snippet}
 
@@ -1086,7 +1096,6 @@
 				{/if}
 			{:else}
 				<div class="bg-card flex min-h-0 min-w-0 flex-1 flex-col rounded-md border" data-table-card>
-					{#if selectable && !(kind === 'local' && onChange)}{@render selection(rows)}{/if}
 					<!-- its own scroll port : the grey header sticks, pinned columns stay while the rest scrolls sideways.
 					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
 					     the nowrap row actions never squeeze a truncating column down to its first letters -->
@@ -1441,7 +1450,7 @@
 								></li>{/if}
 						</ul>
 					{/if}
-					{@render footer()}
+					{@render footer(rows)}
 				</div>
 			{/if}
 		{/snippet}

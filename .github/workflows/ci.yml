@@ -55,6 +55,7 @@ jobs:
       # Without the browser those tests fail as "Executable doesn't exist", which is a runner
       # gap rather than a driver verdict; a skip would make the suite green without the proof.
       - name: Install Playwright Chromium
+        if: vars.SKIP_CI_TESTS != 'true'
         run: pnpm --filter @norbital-ai/bolt exec playwright install --with-deps chromium
 
       # Public and private templates have their own repositories and CI; this repository gates the
@@ -62,5 +63,12 @@ jobs:
       #
       # `test` here is the unit suite. Bolt's database-backed suite runs in integration.yml — see
       # packages/bolt/vitest.config.ts for why it is not on the merge path.
+      # Repository variable SKIP_CI_TESTS=true (owner, 2026-10-21: the suites ran locally) keeps the build, lint and
+      # publication gates and skips the test suites; unset it to restore them.
       - name: Check publishable packages
-        run: pnpm check:packages:ci
+        run: |
+          if [ "${{ vars.SKIP_CI_TESTS }}" = "true" ]; then
+            pnpm exec turbo run build --concurrency=1 && pnpm exec turbo run lint --concurrency=1 && pnpm publication:check
+          else
+            pnpm check:packages:ci
+          fi

@@ -437,11 +437,17 @@ export const instanceRequest = (
 			instancesOf(cfg.manifest, cfg.db, { ids: [to] }).pipe(Effect.map(([first]) => first));
 		if (instance === undefined) return fail('invalidInput', `No integration instance '${to}'.`);
 		const driver = DRIVERS[instance.definition.driver],
-			kind = 'request' in driver ? driver.request : undefined;
+			kind = 'request' in driver ? driver.request : 'call' in driver ? driver.call : undefined;
 		if (kind === undefined)
 			return fail(
 				'invalidInput',
 				`'${to}' is a ${instance.definition.driver} instance; it takes no request.`
+			);
+		// a member's own account answers only its definition's bodies (they pass `known`), never an automation
+		if (instance.owner !== null && known === undefined)
+			return fail(
+				'invalidInput',
+				`'${to}' is a member's own account; only its integration calls it.`
 			);
 		if (!instance.active)
 			return {

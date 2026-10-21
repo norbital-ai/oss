@@ -198,6 +198,34 @@ describe('WhatsApp (Baileys) messages', () => {
 			invocation: 'direct'
 		});
 	});
+	it('a revoke names only its target; wrapped edits and disappearing messages are read through', () => {
+		const dm = { remoteJid: '6591234567@s.whatsapp.net' };
+		expect(
+			whatsappMessage(wa(dm, { protocolMessage: { type: 0, key: { id: 'OLD' } } }), self)
+		).toEqual({ id: 'OLD', sentAt: new Date(1_790_000_000_000).toISOString(), deleted: true });
+		expect(
+			whatsappMessage(
+				wa(dm, {
+					editedMessage: {
+						message: {
+							protocolMessage: {
+								type: 14,
+								key: { id: 'OLD' },
+								editedMessage: { extendedTextMessage: { text: 'fixed' } }
+							}
+						}
+					}
+				}),
+				self
+			)
+		).toMatchObject({ id: 'OLD', text: 'fixed' });
+		expect(
+			whatsappMessage(
+				wa(dm, { ephemeralMessage: { message: { conversation: 'vanishing' } } }),
+				self
+			)
+		).toMatchObject({ id: 'M1', text: 'vanishing', invocation: 'direct' });
+	});
 	it('reads each disconnect: an end that needs the operator, a restart now, or a jittered retry', () => {
 		expect(classify(401, true)).toMatchObject({ kind: 'terminal', code: 'loggedOut', clear: true });
 		expect(classify(419, true)).toMatchObject({ kind: 'terminal', code: 'loggedOut', clear: true });
@@ -1041,6 +1069,161 @@ describe('the ingest gate', () => {
 				]);
 				yield* h.link.close ?? Effect.void;
 			})
+	);
+});
+
+describe('deletions and deltas', () => {
+	const dm = '659@s.whatsapp.net';
+	it.live(
+		'a revoke tombstones only its target; an edit converges its text, both through the receipt gate',
+		() =>
+			Effect.gen(function* () {
+				const f = fake(),
+					h = yield* open(f, { creds: CREDS });
+				const s = f.opened[0]!;
+				s.ready();
+				yield* sdk(() => s.deliver(raw('M1', 'hi')));
+				yield* sdk(() =>
+					s.deliver({
+						key: { id: 'E1', remoteJid: dm },
+						messageTimestamp: 1_790_000_060,
+						message: {
+							editedMessage: {
+								message: {
+									protocolMessage: {
+										type: 14,
+										key: { id: 'M1' },
+										editedMessage: { conversation: 'hi, fixed' }
+									}
+								}
+							}
+						}
+					})
+				);
+				yield* sdk(() =>
+					s.deliver({
+						key: { id: 'R1', remoteJid: dm },
+						messageTimestamp: 1_790_000_120,
+						message: { protocolMessage: { type: 0, key: { id: 'M1' } } }
+					})
+				);
+				expect(s.receipts).toEqual(['M1', 'E1', 'R1']);
+				expect(messagesOf(h.events)).toEqual([
+					expect.objectContaining({ id: 'M1', text: 'hi' }),
+					expect.objectContaining({
+						id: 'M1',
+						text: 'hi, fixed',
+						version: new Date(1_790_000_060_000).toISOString()
+					}),
+					{ id: 'M1', deleted: true, sourceAt: new Date(1_790_000_120_000).toISOString() }
+				]);
+				yield* h.link.close ?? Effect.void;
+			})
+	);
+	it.live(
+		'delete for me is one sparse batch; a cleared or deleted chat is one clear by its thread',
+		() =>
+			Effect.gen(function* () {
+				const f = fake(),
+					h = yield* open(f, { creds: CREDS });
+				const s = f.opened[0]!;
+				s.socket.signalRepository = {
+					lidMapping: {
+						getLIDForPN: async () => null,
+						getPNForLID: async (lid) => (lid === '4242@lid' ? '6591234567:0@s.whatsapp.net' : null)
+					}
+				};
+				s.ready();
+				yield* until(() => h.status?.state === 'connected');
+				s.ev.emit('messages.delete', {
+					keys: [
+						{ remoteJid: dm, id: 'A', fromMe: false },
+						{ remoteJid: dm, id: 'B', fromMe: true }
+					]
+				});
+				// the realm patch's clear chat: up to the last cleared message, and a LID chat names its phone thread
+				s.ev.emit('messages.delete', { jid: '4242@lid', all: true, before: 1_790_000_000_000 });
+				s.ev.emit('chats.delete', ['120363123@g.us']);
+				yield* until(() => h.events.length === 3);
+				expect(h.events).toEqual([
+					{
+						kind: 'messages',
+						messages: [
+							{ id: 'A', deleted: true },
+							{ id: 'B', deleted: true }
+						]
+					},
+					{
+						kind: 'clear',
+						thread: '6591234567@s.whatsapp.net',
+						before: new Date(1_790_000_000_000).toISOString()
+					},
+					{ kind: 'clear', thread: '120363123@g.us', before: expect.any(String) }
+				]);
+				yield* h.link.close ?? Effect.void;
+			})
+	);
+	it.live(
+		'app-state versions and keys persist, so a reopened link resyncs from them and imports nothing again',
+		() =>
+			Effect.gen(function* () {
+				const f = fake(),
+					h = yield* open(f, { creds: CREDS });
+				const s = f.opened[0]!;
+				s.ready();
+				yield* until(() => h.status?.state === 'connected');
+				s.ev.emit('messaging-history.set', { messages: [raw('H1')] });
+				yield* until(() => h.events.length === 1);
+				const version = { version: 7, hash: 'lt-hash', indexValueMap: {} },
+					key = { keyData: 'secret', timestamp: 1 };
+				yield* sdk(() =>
+					s.config.store.set({
+						'app-state-sync-version': { regular_high: version },
+						'app-state-sync-key': { AAAA: key }
+					})
+				);
+				expect(h.values.get('app-state-sync-version:regular_high')).toEqual(version);
+				expect(h.values.get('app-state-sync-key:AAAA')).toEqual(key);
+				yield* h.link.close ?? Effect.void;
+
+				const again = fake(),
+					reopened = yield* open(again, Object.fromEntries(h.values));
+				const next = again.opened[0]!;
+				expect(next.config.store.creds).toEqual(CREDS);
+				expect(next.config.store.get('app-state-sync-version', ['regular_high'])).toEqual({
+					regular_high: version
+				});
+				expect(next.config.store.get('app-state-sync-key', ['AAAA'])).toEqual({ AAAA: key });
+				next.ready();
+				yield* until(() => reopened.status?.state === 'connected');
+				yield* wait(20);
+				expect(reopened.events).toEqual([]);
+				yield* reopened.link.close ?? Effect.void;
+			})
+	);
+	it.live('a personal link that imports from now asks for no full history', () =>
+		Effect.gen(function* () {
+			const now = fake(),
+				all = fake();
+			const a = yield* open(
+				now,
+				{ creds: CREDS },
+				{
+					personal: true,
+					importStart: {
+						kind: 'since',
+						at: new Date(1_790_000_000_000).toISOString(),
+						zone: 'UTC',
+						origin: 'now'
+					}
+				}
+			);
+			const b = yield* open(all, { creds: CREDS }, { personal: true });
+			expect(now.opened[0]!.config.fullHistory).toBe(false);
+			expect(all.opened[0]!.config.fullHistory).toBe(true);
+			yield* a.link.close ?? Effect.void;
+			yield* b.link.close ?? Effect.void;
+		})
 	);
 });
 

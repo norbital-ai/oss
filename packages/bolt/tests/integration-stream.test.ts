@@ -14,9 +14,9 @@ it.live(
 				onmessage: ((event: MessageEvent<string>) => void) | null = null;
 				onerror: (() => void) | null = null;
 				closed = false;
-			readonly url: string;
-			constructor(url: string) {
-				this.url = url;
+				readonly url: string;
+				constructor(url: string) {
+					this.url = url;
 					opened.push(this);
 				}
 				close() {

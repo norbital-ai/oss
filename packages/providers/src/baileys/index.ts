@@ -82,6 +82,8 @@ export type WaConfig = {
 	store: WaStore;
 	/** A personal account (full history, the desktop companion); a workspace one skips the full history. */
 	personal: boolean;
+	/** Ask the phone for its whole history: a personal account, unless its import starts now (nothing older is kept). */
+	fullHistory: boolean;
 	/** The patch's hook: resolves once the message is stored; a rejection withholds the receipt and ends the socket. */
 	beforeReceipt(message: unknown, type: 'notify' | 'append'): Promise<void>;
 	/** Stores a decoded history chunk before the notification's receipt permits the next chunk. */
@@ -291,6 +293,17 @@ const Group = Schema.Struct({
 	addressingMode: Schema.optionalKey(Schema.Literals(['lid', 'pn'])),
 	ephemeralDuration: Schema.optionalKey(Schema.Number)
 });
+/** Baileys' `messages.delete`: delete-for-me keys, or a cleared chat (`before`, ms, is the realm patch's clear bound). */
+const Deleted = Schema.Union([
+	Schema.Struct({
+		keys: Schema.Array(Schema.Struct({ id: Schema.optional(Schema.NullOr(Schema.String)) }))
+	}),
+	Schema.Struct({
+		jid: Schema.String,
+		all: Schema.Literal(true),
+		before: Schema.optional(Schema.Finite)
+	})
+]);
 const Outbound = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
 export const InboundMessage = Schema.Struct({
 	id: Schema.String,
@@ -540,6 +553,49 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 					Effect.orElseSucceed(() => null)
 				);
 	};
+	/** A chat's thread as `wire` names it: a DM by its phone JID once the LID resolves, a group by its JID. */
+	const threadOf = (socket: WaSocket, jid: string) =>
+		jid.endsWith('@lid')
+			? resolvePhone(socket, jid).pipe(
+					Effect.map((phone) =>
+						phone?.endsWith('@s.whatsapp.net')
+							? phone.replace(/:\d+(?=@s\.whatsapp\.net$)/, '')
+							: jid
+					)
+				)
+			: Effect.succeed(jid);
+	const deletes = (got: Opened, type: 'messages.delete' | 'chats.delete', value: unknown) =>
+		Effect.gen(function* () {
+			const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+			const clears: { jid: string; before: string }[] = [],
+				ids: Json[] = [];
+			if (type === 'chats.delete')
+				for (const jid of Option.getOrElse(
+					Schema.decodeUnknownOption(Schema.Array(Schema.String))(value),
+					() => []
+				))
+					clears.push({ jid, before: now });
+			else {
+				const decoded = Schema.decodeUnknownOption(Deleted)(value);
+				if (Option.isNone(decoded)) return;
+				const deleted = decoded.value;
+				if ('keys' in deleted) {
+					for (const key of deleted.keys)
+						if (typeof key.id === 'string') ids.push({ id: key.id, deleted: true });
+				} else
+					clears.push({
+						jid: deleted.jid,
+						before: deleted.before === undefined ? now : new Date(deleted.before).toISOString()
+					});
+			}
+			for (const clear of clears)
+				yield* emitting({
+					kind: 'clear',
+					thread: yield* threadOf(got.socket, clear.jid),
+					before: clear.before
+				});
+			if (ids.length > 0) yield* emitting({ kind: 'messages', messages: ids });
+		});
 	const wire = (got: Opened, raw: unknown, live: boolean) =>
 		Effect.gen(function* () {
 			const found = whatsappMessage(raw, got.socket.user?.id, {
@@ -554,6 +610,15 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				Date.parse(sentAt) < Date.parse(ctx.importStart.at)
 			)
 				return null;
+			// a revoke names only its target: the engine tombstones the row, or holds the id so a later copy never lands
+			if (found['deleted'] === true) {
+				const revoke: Json = {
+					id: String(found['id']),
+					deleted: true,
+					...(sentAt === null ? {} : { sourceAt: sentAt })
+				};
+				return { message: revoke, bins: undefined };
+			}
 			const group = found['group'] === true ? yield* groupOf(String(found['thread'])) : undefined;
 			const participants =
 				group?.participants === undefined || !ctx.personal
@@ -574,7 +639,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 			const sender = Predicate.isObject(found['from']) ? str(found['from']['handle']) : null;
 			const phone = sender?.endsWith('@lid') ? yield* resolvePhone(got.socket, sender) : sender;
 			const media = yield* hostCall('read WhatsApp media', () => got.media(raw, live));
-			if (found['text'] === '' && media === null && found['deleted'] !== true) return null;
+			if (found['text'] === '' && media === null) return null;
 			const message = yield* Schema.decodeUnknownEffect(InboundMessage)({
 				...found,
 				sourceAt: found['sentAt'],
@@ -694,6 +759,9 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 						update: (creds) => sdk(store.update(creds))
 					},
 					personal: ctx.personal,
+					fullHistory:
+						ctx.personal &&
+						!(ctx.importStart?.kind === 'since' && ctx.importStart.origin === 'now'),
 					beforeHistory: (messages) =>
 						sdk(
 							Effect.gen(function* () {
@@ -798,6 +866,8 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							'messaging-history.set',
 							'messages.upsert',
 							'messages.update',
+							'messages.delete',
+							'chats.delete',
 							'message-receipt.update'
 						])
 							got.socket.ev.on(type, (value: unknown) => {
@@ -898,6 +968,13 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 										})
 									);
 								}
+							} else if (type === 'messages.delete' || type === 'chats.delete') {
+								// app-state deletes (delete for me, clear chat, delete chat): Baileys has already stored the
+								// collection's version, so a refused emit is logged, not retried by a reconnect
+								yield* deletes(got, type, value).pipe(
+									Effect.tapCause(Effect.logWarning),
+									Effect.ignore
+								);
 							} else if (type === 'creds.update') {
 								if (synced(store.creds)) yield* Deferred.succeed(syncedGate, undefined);
 							} else if (type === 'messages.update' || type === 'message-receipt.update') {
@@ -1154,7 +1231,7 @@ export function whatsappMessage(
 	const key = msg['key'],
 		jid = str(key['remoteJid']),
 		id = str(key['id']),
-		content = msg['message'];
+		content = unwrap(msg['message']);
 	const ts = Number(msg['messageTimestamp']);
 	if (jid === null || id === null || !Predicate.isObject(content) || !Number.isFinite(ts))
 		return null;
@@ -1182,19 +1259,19 @@ export function whatsappMessage(
 			? { direction: key['fromMe'] === true ? 'outbound' : 'inbound' }
 			: {})
 	};
-	// a sender's revoke tombstones the message; an edit converges its text (the target id is the edited message's)
+	// a sender's revoke tombstones the message (sparse: the engine tombstones or holds the id); an edit converges its
+	// text (the target id is the edited message's)
 	const protocol = content['protocolMessage'];
 	if (Predicate.isObject(protocol)) {
 		const target = Predicate.isObject(protocol['key']) ? str(protocol['key']['id']) : null;
 		if (target === null) return null;
-		if (Number(protocol['type']) === 0)
-			return { ...base, id: target, text: '', deleted: true, invocation: 'ambient' };
-		if (Number(protocol['type']) !== 14 || !Predicate.isObject(protocol['editedMessage']))
-			return null;
+		if (Number(protocol['type']) === 0) return { id: target, sentAt, deleted: true };
+		const edited = unwrap(protocol['editedMessage']);
+		if (Number(protocol['type']) !== 14 || !Predicate.isObject(edited)) return null;
 		return {
 			...base,
 			id: target,
-			text: whatsappText(protocol['editedMessage']),
+			text: whatsappText(edited),
 			version: sentAt,
 			invocation: 'ambient'
 		};
@@ -1240,6 +1317,27 @@ export function whatsappMessage(
 					: 'ambient'
 	};
 }
+/** The content inside WhatsApp's future-proof wrappers (disappearing, view-once, edited, captioned document), as Baileys' `normalizeMessageContent`. */
+const WRAPPERS = [
+	'ephemeralMessage',
+	'viewOnceMessage',
+	'documentWithCaptionMessage',
+	'viewOnceMessageV2',
+	'viewOnceMessageV2Extension',
+	'editedMessage',
+	'associatedChildMessage',
+	'groupStatusMessage',
+	'groupStatusMessageV2'
+] as const;
+const unwrap = (content: unknown): unknown => {
+	for (let depth = 0; depth < 5 && Predicate.isObject(content); depth++) {
+		const outer = content;
+		const inner = WRAPPERS.map((k) => outer[k]).find(Predicate.isObject);
+		if (inner === undefined) break;
+		content = inner['message'];
+	}
+	return content;
+};
 function whatsappMediaDescription(content: Readonly<Record<string, unknown>>): string {
 	for (const [kind, label] of [
 		['documentMessage', 'Document'],
@@ -1391,15 +1489,13 @@ export const baileysSocket: WaOpen = async (c) => {
 		getMessage: c.getMessage,
 		cachedGroupMetadata: c.cachedGroupMetadata,
 		msgRetryCounterCache: c.msgRetryCounterCache,
-		// a personal account imports its whole history as a desktop companion; a workspace one keeps Baileys' default history filter
-		...(c.personal
-			? {
-					// WhatsApp terminates a 'Desktop' companion before the QR (2026-10); 'Chrome' still syncs full history
-					browser: b.Browsers.macOS('Chrome'),
-					syncFullHistory: true,
-					shouldSyncHistoryMessage: () => true
-				}
-			: { browser: b.Browsers.ubuntu('Bolt'), syncFullHistory: false })
+		// WhatsApp terminates a 'Desktop' companion before the QR (2026-10); 'Chrome' still syncs full history
+		browser: c.personal ? b.Browsers.macOS('Chrome') : b.Browsers.ubuntu('Bolt'),
+		// full history only when it is kept; otherwise Baileys' default filter (no FULL chunks) still bootstraps the
+		// LID mappings and the first app-state sync that the RECENT notification triggers
+		...(c.fullHistory
+			? { syncFullHistory: true, shouldSyncHistoryMessage: () => true }
+			: { syncFullHistory: false })
 	});
 	// Baileys merges each update into `creds` first; the whole creds goes to the store
 	socket.ev.on('creds.update', () => {
@@ -1410,7 +1506,10 @@ export const baileysSocket: WaOpen = async (c) => {
 	return {
 		socket,
 		async media(message, download) {
-			const decoded = Schema.decodeUnknownOption(MediaEnvelope)(message);
+			// a disappearing or view-once message wraps its media; `downloadMediaMessage` unwraps the same way
+			const decoded = Schema.decodeUnknownOption(MediaEnvelope)({
+				message: Predicate.isObject(message) ? unwrap(message['message']) : null
+			});
 			if (Option.isNone(decoded)) return null;
 			const content = decoded.value.message ?? {};
 			const kind = (

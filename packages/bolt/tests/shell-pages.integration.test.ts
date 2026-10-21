@@ -52,6 +52,19 @@ const settle = async () => {
 
 /** Studio's runtime log reads `sys_event` through the logs port; an empty page is enough here. */
 const logs = () => Effect.succeed<LogRow[]>([]);
+/** Answers the open in-app confirmation (never `window.confirm`, which WebViews suppress); its text is returned. */
+const answer = async (accept: boolean) => {
+	await vi.waitFor(() =>
+		expect(document.querySelector('[data-confirm-dialog][data-state=open]')).not.toBeNull()
+	);
+	const dialog = document.querySelector<HTMLElement>('[data-confirm-dialog][data-state=open]')!;
+	const text = dialog.textContent ?? '';
+	dialog
+		.querySelector<HTMLButtonElement>(accept ? '[data-confirm-accept]' : '[data-confirm-cancel]')!
+		.click();
+	await settle();
+	return text;
+};
 const press = async (b: HTMLElement) => {
 	b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
 	b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
@@ -86,7 +99,6 @@ it('Studio keeps the tab hierarchy and restores live to a recorded commit throug
 		}
 	};
 	const ran: StudioOp[] = [];
-	vi.stubGlobal('confirm', () => true);
 	const el = show(Studio, {
 		logs,
 		studio: () => Effect.succeed(view),
@@ -137,6 +149,8 @@ it('Studio keeps the tab hierarchy and restores live to a recorded commit throug
 		)!
 	);
 	await click('Roll back');
+	expect(ran).toEqual([]);
+	await answer(true);
 	expect(ran).toEqual([{ op: 'rollback', commit: 'c1' }]);
 	// Operations (L-BOLT-534): the routed environments, live first
 	await click('Operations');
@@ -252,7 +266,6 @@ it('Studio rolls back across a schema change only after naming the data lost, an
 	const ran: StudioOp[] = [],
 		asked: string[] = [],
 		read: string[] = [];
-	vi.stubGlobal('confirm', (text: string) => (asked.push(text), true));
 	const el = show(Studio, {
 		logs,
 		studio: () => Effect.succeed(view),
@@ -280,6 +293,7 @@ it('Studio rolls back across a schema change only after naming the data lost, an
 		)!
 	);
 	await press(button('Roll back'));
+	asked.push(await answer(true));
 	expect(asked[0]).toContain('will be lost');
 	expect(ran).toEqual([{ op: 'rollback', commit: 'c1', discardDataSince: '2026-09-24T00:00:00Z' }]);
 	await press(button('Build log of'));

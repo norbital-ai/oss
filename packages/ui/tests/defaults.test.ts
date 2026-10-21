@@ -483,11 +483,17 @@ test("select-all: the card list selects its page, then every matching row, besid
 		bolt,
 		jobs
 	);
+	const card = element(t, '[data-table-card]');
+	const before = [...card.children];
 	const page = t.querySelector<HTMLInputElement>('[data-select-page]');
 	assert.ok(page, 'the card list has its own page checkbox');
 	page.click();
 	await settle();
 	assert.equal(element(t, '[data-selected-count]').textContent, '25 selected');
+	// the selection sits in the footer in place of the range: nothing is inserted above the rows
+	assert.ok(element(t, '[data-table-footer] [data-selected-count]'));
+	assert.equal(t.querySelector('[data-table-footer] [data-range]'), null);
+	assert.deepEqual([...card.children], before);
 	assert.equal(t.querySelectorAll('[data-table-list] input[type=checkbox]:checked').length, 25);
 	assert.equal(
 		element<HTMLInputElement>(t, 'thead input[type=checkbox]').checked,
@@ -506,6 +512,10 @@ test("select-all: the card list selects its page, then every matching row, besid
 	element(t, '[data-select-clear]').click();
 	await settle();
 	assert.equal(t.querySelector('[data-selected-count]'), null);
+	assert.ok(
+		element(t, '[data-table-footer] [data-range]'),
+		'the range returns once nothing is selected'
+	);
 });
 
 test("CustomView with `collection`: the menu offers that collection's pipeline, and the search stays on the view's own rows", async () => {

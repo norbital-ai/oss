@@ -14,7 +14,7 @@ Configuration contains safe runtime settings and uses declared input fields. Cre
 
 ## Native accounts and source roles
 
-Create and edit accounts through `sys_integration` and ordinary grants. Its fields include the definition, display name, optional owner, active flag, configuration and optional envoy. Every write decodes the configuration and fills its defaults, so each body reads a defaulted field as present; only an `optional` field without a default may be absent or null. An owner's account is personal: it synchronizes, never sends and never deploys an envoy. Permissions must scope personal accounts to their owner and intended definitions.
+Create and edit accounts through `sys_integration` and ordinary grants. Its fields include the definition, display name, optional owner, active flag, configuration and optional envoy. Every write decodes the configuration and fills its defaults, so each body reads a defaulted field as present; only an `optional` field without a default may be absent or null. An owner's account is personal: it synchronizes, never sends a message and never deploys an envoy; an outbound command may write back to it (a calendar's `call` driver writes events through the standing link, and the run's `{ id, set }` answer patches the record with the remote's version). Permissions must scope personal accounts to their owner and intended definitions.
 
 A `+workspace.ts` connection declares a named default instance, for example `connections: { support: { integration: 'email', envoy: 'service' } }`. Its slot is the instance ID; the named instance cannot be deleted through the collection. Other accounts receive native IDs.
 

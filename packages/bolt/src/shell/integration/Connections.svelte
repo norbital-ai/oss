@@ -59,7 +59,9 @@
 				Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.')))
 			);
 	const removed = (instance: string) =>
-		bolt.act('sys_integration.delete', { target: instance }).pipe(Effect.asVoid);
+		bolt
+			.act('sys_integration.delete', { target: instance })
+			.pipe(Effect.map((outcome) => outcome.kind === 'committed'));
 	const failure = $derived(offers.error?.message ?? owned.error?.message ?? null);
 </script>
 

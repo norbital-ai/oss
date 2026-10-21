@@ -453,6 +453,13 @@
 	body {
 		@apply bg-background text-foreground;
 	}
+
+	/* bits-ui copies its content's z-index onto this body-portaled wrapper only in a later animation frame; until
+	   then (a throttled or hidden tab never runs it) the wrapper is `z-index: auto` and a popover opened in a z-40
+	   sheet lies under the sheet's form. The floating layer owns z-50 from its first frame. */
+	[data-bits-floating-content-wrapper] {
+		z-index: 50;
+	}
 }
 
 /* ================================================================ */

@@ -35,12 +35,16 @@
 	<RecordShell of="jobs" id="j1">
 		{#snippet children()}
 			<Form of="jobs" id="j1">
-				{#snippet children(form)}<div {@attach () => onForm(form)}><Field name="title" /></div>{/snippet}
+				{#snippet children(form)}<div {@attach () => onForm(form)}>
+						<Field name="title" />
+					</div>{/snippet}
 			</Form>
 		{/snippet}
 	</RecordShell>
 {:else}
 	<Form of="jobs" mode="create">
-		{#snippet children(form)}<div {@attach () => onForm(form)}><Field name="title" /></div>{/snippet}
+		{#snippet children(form)}<div {@attach () => onForm(form)}>
+				<Field name="title" />
+			</div>{/snippet}
 	</Form>
 {/if}

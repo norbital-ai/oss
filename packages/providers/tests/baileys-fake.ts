@@ -20,7 +20,10 @@ export type Sock = {
 	ended: boolean;
 	media: (message: unknown, download: boolean) => Promise<WaMedia | null>;
 	/** The patched receipt path: the gate, then the receipt; a refusal ends the socket unreceipted (428). */
-	deliver(raw: { key: { id: string } }): Promise<void>;
+	deliver(raw: {
+		key: { id: string; remoteJid?: string };
+		[field: string]: unknown;
+	}): Promise<void>;
 	drop(code: number, message?: string): void;
 	/** Logged in, and caught up on the offline backlog. */
 	ready(): void;

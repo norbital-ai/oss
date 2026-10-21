@@ -2,6 +2,8 @@
 	One integration instance's setup, end to end. A definition's own `+integration.svelte` draws it when the workspace has
 	one; every other instance by what its host publishes: the provider and its state first, then Pair while it is not
 	connected (or while the operator reconnects it), the Connected summary once it is. Unboxed: its host owns the surface.
+	Inside a connector card (`controls` false) the card owns the name, the one status line and Disconnect, so neither is
+	drawn here again.
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
@@ -74,40 +76,43 @@
 	{/await}
 {:else}
 	<Stack gap="md">
-		<Inline gap="md" data-connection-progress={connecting ? '' : undefined}>
-			{#if connecting}
-				<span class="relative shrink-0" aria-hidden="true">
-					<AccretionDisc size={80} class="text-muted-foreground" />
-					<span class="absolute inset-0 grid place-items-center">
-						<Icon name="lucide:plug" class="size-5" />
+		{#if controls}<Inline gap="md" data-connection-progress={connecting ? '' : undefined}>
+				{#if connecting}
+					<span class="relative shrink-0" aria-hidden="true">
+						<AccretionDisc size={80} class="text-muted-foreground" />
+						<span class="absolute inset-0 grid place-items-center">
+							<Icon name="lucide:plug" class="size-5" />
+						</span>
 					</span>
-				</span>
-			{/if}
-			<Stack
-				gap="xs"
-				role={connecting ? 'status' : undefined}
-				aria-live={connecting ? 'polite' : undefined}
-				aria-atomic={connecting ? 'true' : undefined}
-			>
-				{#if status !== null}<p class="text-sm font-medium">
-						{provider === undefined ? driverLabel(status.driver) : say(provider.label)}
-					</p>{/if}
-				<p
-					class="text-meta"
-					aria-live={connecting ? undefined : 'polite'}
-					data-connection-state={status?.state ?? 'loading'}
+				{/if}
+				<Stack
+					gap="xs"
+					role={connecting ? 'status' : undefined}
+					aria-live={connecting ? 'polite' : undefined}
+					aria-atomic={connecting ? 'true' : undefined}
 				>
-					{statusLabel(status, t)}
-				</p>
-				{#if connecting && status?.detail !== undefined}<p class="text-meta wrap-anywhere">
-						{status.detail}
-					</p>{/if}
-			</Stack>
-		</Inline>
+					{#if status !== null}<p class="text-sm font-medium">
+							{provider === undefined ? driverLabel(status.driver) : say(provider.label)}
+						</p>{/if}
+					<p
+						class="text-meta"
+						aria-live={connecting ? undefined : 'polite'}
+						data-connection-state={status?.state ?? 'loading'}
+					>
+						{statusLabel(status, t)}
+					</p>
+					{#if connecting && status?.detail !== undefined}<p class="text-meta wrap-anywhere">
+							{status.detail}
+						</p>{/if}
+				</Stack>
+			</Inline>{/if}
 		{#if error !== null}<p role="alert" class="text-sm text-destructive" data-connection-error>
 				{error}
 			</p>{/if}
-		{#if !connecting && status?.detail !== undefined}<p class="text-meta" aria-live="polite">
+		{#if (!connecting || !controls) && status?.detail !== undefined}<p
+				class="text-meta"
+				aria-live="polite"
+			>
 				{status.detail}
 			</p>{/if}
 		{#if status?.state === 'error' && status.error !== undefined}<p

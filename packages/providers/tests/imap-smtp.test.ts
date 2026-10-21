@@ -807,6 +807,21 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 		})
 	);
 
+	it.effect('unpair revokes the Google grant before the tokens are dropped', () =>
+		Effect.gen(function* () {
+			const { h, fetch } = yield* setup();
+			yield* h.link.pair!({});
+			const state = new URL(h.pairing!.value!).searchParams.get('state')!;
+			yield* h.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+			yield* h.link.unpair!();
+			const revoked = fetch.calls.filter(
+				(call) => call.url === 'https://oauth2.googleapis.com/revoke'
+			);
+			expect(revoked).toHaveLength(1);
+			expect(new URLSearchParams(revoked[0]!.body).get('token')).toBe('rt-1');
+		})
+	);
+
 	it.effect(
 		'disconnect waits for an irreversible Gmail credential write before wiping its keys',
 		() =>

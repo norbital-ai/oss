@@ -39,7 +39,7 @@ export type DriverOpen = {
 	instance: string;
 	/** The instance's definition (`integration('<name>', …)`): its `http`, `credential` fields and `conversation`. */
 	definition: IntegrationSpec;
-	/** A personal instance (an owner's own account): sync only, it never sends. */
+	/** A personal instance (an owner's own account): it syncs and never sends a message; a command may write back to it. */
 	personal: boolean;
 	configuration: Json;
 	/** Frozen source import boundary; absent or null retains all history. */
@@ -93,7 +93,7 @@ export type Link = { close(): Promise<void> } & Partial<{
 		attachments?: readonly OutboundAttachment[]
 	): Promise<{ providerId: string; presumeAfterMs?: number }>;
 	typing(to: string, signal: AbortSignal): Promise<void>;
-	/** A request driver's op (an http `{ method, path, … }` answering `{ status, body }`, a database request its rows). */
+	/** A request driver's op (an http `{ method, path, … }` answering `{ status, body }`, a database request its rows), or a pushing driver's `call` through this link. */
 	request(op: Json, signal: AbortSignal): Promise<Json>;
 	/** A pushing driver's feed page from `cursor` (its `invalidate` event said which feed and partition moved). */
 	read(

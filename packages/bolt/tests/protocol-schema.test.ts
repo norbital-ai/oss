@@ -149,7 +149,8 @@ describe('the wire Schemas', () => {
 			envoy: null,
 			integration: null,
 			kind: null,
-			thread: null
+			thread: null,
+			peer: null
 		});
 		for (const request of [
 			{ path: 'code', body: { address: '+6591234567', via: 'whatsapp' } },

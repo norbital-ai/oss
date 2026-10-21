@@ -124,6 +124,7 @@
 	import { encodeWire } from '@norbital-ai/std/wire';
 	import { fork, attach } from '../effect/index.js';
 	import { Button } from '../primitives/button/index.js';
+	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { useKinds } from '../kinds/context.js';
@@ -838,10 +839,29 @@
 	}
 
 	const accept = (file: string) => perform('import', () => startImport(file, true));
-	const remove = () =>
-		confirm(msg(bolt, 'table.confirmDelete', 'Delete {n} rows?', { n: picked.length }))
-			? bolt.act(`${collection}.delete`, { target: [...picked] })
-			: undefined;
+	/** Asks in-app first; the delete itself runs as its own action once confirmed. */
+	function remove(): void {
+		const target = [...picked];
+		fork(
+			confirmAction({
+				title: msg(bolt, 'table.confirmDelete', 'Delete {n} rows?', { n: target.length }),
+				confirmLabel: msg(bolt, 'view.deleteButton', 'Delete'),
+				cancelLabel: msg(bolt, 'record.cancel', 'Cancel'),
+				destructive: true
+			}).pipe(
+				Effect.tap((confirmed) =>
+					Effect.sync(() => {
+						if (confirmed)
+							perform(
+								'delete',
+								() => bolt.act(`${collection}.delete`, { target }),
+								msg(bolt, 'outcome.deleted', 'Deleted')
+							);
+					})
+				)
+			)
+		);
+	}
 	function updateSelected() {
 		if (!editReady) return;
 		const target = [...picked],

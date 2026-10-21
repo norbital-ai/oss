@@ -10,6 +10,7 @@
 		Button,
 		Checkbox,
 		Combobox,
+		confirmAction,
 		Dialog,
 		format,
 		Input,
@@ -246,17 +247,22 @@
 					{ label: t('Rotate'), run: () => fork(rotate(k.id)) },
 					{
 						label: t('Revoke'),
-						run: () => {
-							if (
-								confirm(
-									t('Revoke the key {name}? Programs using it stop at once.').replace(
+						run: () =>
+							fork(
+								confirmAction({
+									title: t('Revoke the key {name}? Programs using it stop at once.').replace(
 										'{name}',
 										k.name
+									),
+									confirmLabel: t('Revoke'),
+									cancelLabel: t('Cancel'),
+									destructive: true
+								}).pipe(
+									Effect.flatMap((confirmed) =>
+										confirmed ? op('revokeKey', { id: k.id }) : Effect.void
 									)
 								)
-							)
-								fork(op('revokeKey', { id: k.id }));
-						},
+							),
 						variant: 'destructive'
 					}
 				];

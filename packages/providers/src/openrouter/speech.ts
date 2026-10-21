@@ -244,9 +244,11 @@ export const parseHeard = Effect.fn('Speech.parseHeard')(function* (body: unknow
 		return yield* Effect.fail(
 			new SpeechFailure({ kind: 'upstream', message: 'the transcription model answered no text' })
 		);
-	const parsed = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
-		content.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')
-	).pipe(
+	// the object itself, whatever fence or prose the model wrapped it in; one repair: trailing commas dropped
+	const text = content.slice(content.indexOf('{'), content.lastIndexOf('}') + 1);
+	const json = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json));
+	const parsed = yield* json(text).pipe(
+		Effect.catch(() => json(text.replace(/,\s*([}\]])/g, '$1'))),
 		Effect.mapError(
 			() =>
 				new SpeechFailure({

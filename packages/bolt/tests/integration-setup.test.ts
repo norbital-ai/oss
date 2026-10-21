@@ -117,6 +117,12 @@ const show = async (client: Client, ready: Effect.Effect<void> = Effect.void) =>
 	await settle();
 	return target;
 };
+/** The in-app confirmation's accept button, once it is open. */
+const accept = async () => {
+	const open = '[data-confirm-dialog][data-state=open] [data-confirm-accept]';
+	await vi.waitFor(() => expect(document.querySelector(open)).not.toBeNull());
+	document.querySelector<HTMLButtonElement>(open)!.click();
+};
 const button = (target: HTMLElement, text: string) => {
 	const found = [...target.querySelectorAll('button')].find((b) => b.textContent?.trim() === text);
 	if (!found) throw new Error(`button '${text}' not found`);
@@ -142,6 +148,7 @@ it('draws the provider’s form masked, pairs with what it collected, clears the
 	);
 	expect(target.textContent).not.toContain('private-key');
 	button(target, 'Disconnect').click();
+	await accept();
 	await run(f.unpaired);
 	expect(f.unpair).toHaveBeenCalledOnce();
 	await vi.waitFor(() => expect(target.querySelector('[data-setup-view=pair]')).not.toBeNull());
