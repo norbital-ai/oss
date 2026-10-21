@@ -375,3 +375,34 @@ test.skipIf(!hasPandoc || !hasPdfText)(
 		assert.ok(!xml.includes('\u200b'));
 	}
 );
+
+test.skipIf(!hasPandoc || !hasPdfText)(
+	'plain-text identifiers and timestamps in table cells wrap inside their column',
+	async () => {
+		const id = '01a15a24-311c-7431-85a2-3f583c558501';
+		const at = '2026-10-20T16:20:44.405Z';
+		const row = `| SCOPE-09 | ${at} | Synthetic two-speaker QA | ${id} (“automatic recognition”) |`;
+		const source = `| Requirement ID | At | Subject | Evidence |\n| --- | --- | --- | --- |\n${Array(6).fill(row).join('\n')}`;
+		const filter = new URL('../src/convert.lua', import.meta.url).pathname;
+		const typst = execFileSync('pandoc', ['-t', 'typst', `--lua-filter=${filter}`], {
+			input: source
+		}).toString();
+		assert.ok(typst.includes('85a2-#text(spacing: 0pt, " ")3f583c558501'));
+		assert.ok(typst.includes('20T16:#text(spacing: 0pt, " ")20:'));
+		assert.ok(typst.includes('two-speaker'));
+		const pdfPath = join(dir, 'wrapped-plain-identifiers.pdf');
+		writeFileSync(
+			pdfPath,
+			await Effect.runPromise(
+				pandoc({ timeoutMs: 30_000, heap: '512m' })({ from: 'markdown', to: 'pdf', source }, null)
+			)
+		);
+		const text = execFileSync('pdftotext', ['-raw', pdfPath, '-']).toString().replace(/\s/g, '');
+		assert.equal(text.split(id).length - 1, 6);
+		assert.equal(text.split(at).length - 1, 6);
+		const bounds = execFileSync('pdftotext', ['-bbox', pdfPath, '-']).toString();
+		const pageWidth = Number(/<page width="([\d.]+)"/.exec(bounds)?.[1]);
+		const rightEdges = [...bounds.matchAll(/<word [^>]*xMax="([\d.]+)"/g)].map((m) => Number(m[1]));
+		assert.ok(rightEdges.length > 0 && rightEdges.every((x) => x <= pageWidth - 80));
+	}
+);

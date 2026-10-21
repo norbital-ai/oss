@@ -33,7 +33,7 @@ headers and footers the output takes (pandoc's `--reference-doc`); a docx withou
 margins. HTML is read for its structure; CSS does not carry.
 
 `src/convert.lua` runs on every conversion: Chinese falls back to Noto Sans CJK SC (the image's one CJK family) in a PDF,
-a long table breaks across pages, a table cell starting `- `, `+ `, `1. `, `= ` or `/ ` stays text, and a data-URI image
+a long table breaks across pages, a long identifier or timestamp in a table cell wraps inside its column, a table cell starting `- `, `+ `, `1. `, `= ` or `/ ` stays text, and a data-URI image
 is not its own description in a docx, pptx or odt.
 
 ```bash

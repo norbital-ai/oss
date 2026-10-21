@@ -33,24 +33,37 @@ local function escape(blocks)
   end
 end
 
+-- Typst does not break a UUID or timestamp after a hyphen followed by a digit (UAX #14), so a long identifier ran over
+-- its neighbouring cell or the page edge. Layout-only zero-width spacing after `-_.:/` lets identifiers, paths and field
+-- names wrap without putting invisible characters into copied PDF text. Only before an alphanumeric, so the call never
+-- swallows a following `(`.
+local BREAK = '#text(spacing: 0pt, " ")'
+local function breakable(text, make)
+  local parts = pandoc.Inlines{}
+  for part in text:gmatch('[^%-%_%.:/]*[%-%_%.:/]?') do
+    if part ~= '' then
+      if #parts > 0 and part:match('^%w') then parts:insert(pandoc.RawInline('typst', BREAK)) end
+      parts:insert(make(part))
+    end
+  end
+  return parts
+end
+
 function Table(tbl)
   if FORMAT ~= 'typst' then return end
   local function rows(list)
     for _, row in ipairs(list) do
       for _, cell in ipairs(row.cells) do
         escape(cell.contents)
-        -- Raw code does not break numeric identifiers at punctuation. Layout-only zero-width spacing lets UUIDs,
-        -- paths and field names wrap without putting invisible characters into copied PDF text.
-        cell.contents = cell.contents:walk({Code = function(code)
-          local parts = pandoc.Inlines{}
-          for part in code.text:gmatch('[^%-%_%.:/]*[%-%_%.:/]?') do
-            if part ~= '' then
-              if #parts > 0 then parts:insert(pandoc.RawInline('typst', '#text(spacing: 0pt, " ")')) end
-              parts:insert(pandoc.Code(part, code.attr))
-            end
+        cell.contents = cell.contents:walk({
+          Code = function(code)
+            return breakable(code.text, function(part) return pandoc.Code(part, code.attr) end)
+          end,
+          -- Plain-text identifiers too; ordinary words (under 16 bytes) keep their own line breaking.
+          Str = function(str)
+            if #str.text >= 16 then return breakable(str.text, pandoc.Str) end
           end
-          return parts
-        end})
+        })
       end
     end
   end
