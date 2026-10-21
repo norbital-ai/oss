@@ -31,7 +31,7 @@
 	import { attach as attachEffect, live as liveEdge, fork } from '@norbital-ai/ui/effect';
 	import { Effect, FiberSet, Option, Predicate, Result, Schedule, Schema, Stream } from 'effect';
 	import { getContext, tick, type Snippet } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { watch } from 'runed';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
@@ -468,18 +468,39 @@
 			})
 		);
 	}
+	/** Confirmations whose answer is still being carried out: a publish can take minutes while the workspace rebuilds. */
+	const answering = new SvelteSet<string>();
+	const confirmFailed = new SvelteMap<string, string>();
 	function confirm(row: AgentRow, approve: boolean): void {
+		if (answering.has(row.id)) return;
+		answering.add(row.id);
+		confirmFailed.delete(row.id);
 		dispatch(
 			Effect.result(api.agent.confirm(row.id, approve)).pipe(
 				Effect.tap((answer) =>
 					Effect.sync(() => {
-						error = refused(answer);
+						const problem = refused(answer);
+						if (problem !== null) confirmFailed.set(row.id, problem);
 					})
 				),
+				Effect.ensuring(Effect.sync(() => answering.delete(row.id))),
 				Effect.asVoid
 			)
 		);
 	}
+	/** What a person is asked to approve, in words; the raw input stays one click away. */
+	const confirmTitle = (name: string) =>
+		name === 'workspace_publish'
+			? t('Publish these changes to the workspace?')
+			: name === 'workspace_rollback'
+				? t('Roll the workspace back to an earlier version?')
+				: t('Allow Norbius to do this?');
+	const confirmHint = (name: string) =>
+		name === 'workspace_publish' || name === 'workspace_rollback'
+			? t(
+					'The workspace updates for everyone. It can take a few minutes, and pages may briefly show as unavailable.'
+				)
+			: null;
 	const empty = $derived(draft.trim() === '' && attached.length === 0);
 	const lastPending = $derived(rows.findLast((r) => r.state === 'pending')?.id);
 	const lastReply = $derived(rows.findLastIndex((r) => r.role === 'assistant'));
@@ -1801,24 +1822,45 @@
 											{/if}
 										</li>
 									{:else if !thread && row.state === 'confirm' && row.call}
+										{@const call = row.call}
+										{@const hint = confirmHint(call.name)}
+										{@const busy = answering.has(row.id)}
 										<li
 											{@attach turns.measure(itemKey(at))}
 											class="rounded-xl border border-border/70 bg-background p-3 shadow-sm"
 											data-role="confirm"
 										>
-											<p class="font-medium">{t('Confirm this action?')}</p>
-											<pre
-												class="mt-1 max-h-48 overflow-auto rounded-md bg-muted/60 p-2 text-xs">{JSON.stringify(
-													row.call.input,
-													null,
-													2
-												)}</pre>
-											<Inline gap="xs" class="mt-2">
-												<Button size="sm" onclick={() => confirm(row, true)}>{t('Confirm')}</Button>
-												<Button size="sm" variant="outline" onclick={() => confirm(row, false)}
-													>{t('Decline')}</Button
+											<p class="font-medium">{confirmTitle(call.name)}</p>
+											{#if hint}<p class="mt-1 text-sm text-muted-foreground">{hint}</p>{/if}
+											<details class="mt-1 text-xs text-muted-foreground">
+												<summary class="cursor-pointer">{t('Details')}</summary>
+												<pre
+													class="mt-1 max-h-48 overflow-auto rounded-md bg-muted/60 p-2">{JSON.stringify(
+														call.input,
+														null,
+														2
+													)}</pre>
+											</details>
+											<Inline gap="xs" class="mt-2" align="center">
+												<Button size="sm" disabled={busy} onclick={() => confirm(row, true)}
+													>{t('Approve')}</Button
 												>
+												<Button
+													size="sm"
+													variant="outline"
+													disabled={busy}
+													onclick={() => confirm(row, false)}>{t('Decline')}</Button
+												>
+												{#if busy}<span class="text-sm text-muted-foreground" role="status"
+														>{t('Working on it… you can keep using the app.')}</span
+													>{/if}
 											</Inline>
+											{#if confirmFailed.has(row.id)}<p
+													class="mt-2 text-sm text-destructive"
+													role="alert"
+												>
+													{confirmFailed.get(row.id)}
+												</p>{/if}
 										</li>
 									{:else if row.role === 'assistant' && row.text}
 										{@const model = dividers.get(row.id)}

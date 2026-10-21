@@ -267,12 +267,15 @@ describe('the in-app agent panel (§5.9)', () => {
 				expect(target.querySelector('[data-role="user"] [data-text]')?.textContent).toBe(
 					'mark a chair'
 				);
-				expect(target.querySelector('[data-role="confirm"] pre')?.textContent).toContain(
+				expect(target.querySelector('[data-role="confirm"] p')?.textContent).toBe(
+					'Allow Norbius to do this?'
+				);
+				expect(target.querySelector('[data-role="confirm"] details pre')?.textContent).toContain(
 					'quotes.mark'
 				);
 				required(
 					[...target.querySelectorAll<HTMLButtonElement>('[data-role="confirm"] button')].find(
-						(b) => b.textContent?.trim() === 'Confirm'
+						(b) => b.textContent?.trim() === 'Approve'
 					)
 				).click();
 				yield* until(
