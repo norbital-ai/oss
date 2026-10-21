@@ -32,6 +32,14 @@ to the real workspace. Try the change there; anything you enter in a preview sta
 Back in the chat, ask Norbius to apply the change. It shows a card naming what will happen, with **Approve** and
 **Decline**. Nothing changes until you press Approve. Only an administrator can approve.
 
+**The approval rule.** Every change to what the workspace's users get — publishing, merging, rolling back — waits for an
+explicit Approve, and the approval says what it is for. Under the card's plain title, Norbius's summary of the change
+("Fix: submission status buttons") is shown in full, followed by the facts Studio holds: the draft's commit message for
+a publish; for a rollback, the checkpoint's time and description and whether data written after it will be discarded.
+Norbius cannot ask without a summary. The card answers once: a second press, or another tab, never starts a second run.
+
+![The approval card with its summary](./images/norbius-flow-7.png)
+
 ## 5. Live progress
 
 After Approve, the card stays and reports each step as it happens: "Getting ready…", "Building the new version…",
@@ -46,6 +54,24 @@ The workspace restarts with the new version; refresh the page to use it.
 
 ![The applied outcome in the chat](./images/norbius-flow-6.png)
 
+## Rolling back
+
+Ask Norbius "roll back to before yesterday's change". It lists the checkpoints in plain terms — when, what the change
+was, and whether rolling back keeps all data — and asks which one. Its card names the checkpoint ("Roll back to 21 Oct
+10:51 — before the status change"); when the schema changed since, a red line warns that data written after that time
+will be discarded. After Approve the card reports "Getting ready…", then "Switching the workspace over…", then
+**Applied**. Everyone stays signed in, including people who signed in after the checkpoint.
+
+![A rollback approval card](./images/norbius-flow-8.png)
+
+## What everyone else sees
+
+While the workspace switches over (a few seconds), pages keep working: requests wait and a small "Updating to a new
+version…" notice shows at the bottom. When the new version is live, open pages reload on their own, or show "This
+workspace was updated. Reload to continue with the new version." when a form is unsaved. Nobody is signed out.
+
+The same path without Norbius is [Workspace Studio](./studio-changes.md).
+
 ## Screenshots to capture
 
 | File                 | Must show                                                                                            |
@@ -56,3 +82,5 @@ The workspace restarts with the new version; refresh the page to use it.
 | `norbius-flow-4.png` | The preview tab opened from that button, signed in, with the preview banner and Open live workspace. |
 | `norbius-flow-5.png` | The approval card after Approve: buttons gone, a progress line such as "Building the new version…".  |
 | `norbius-flow-6.png` | The chat after the switch-over: the "Applied — … Refresh to see it." line visible without expanding. |
+| `norbius-flow-7.png` | A publish card before Approve: plain title, the summary below it, then "Draft: <commit message>".    |
+| `norbius-flow-8.png` | A rollback card: the summary, "Checkpoint: <time> — <description>" and the red discard warning.      |

@@ -1,10 +1,11 @@
-import { Effect, Fiber, Stream } from 'effect';
+import { Effect, Fiber, Stream, SubscriptionRef } from 'effect';
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http';
 import { TestClock } from 'effect/testing';
 import { expect, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { createBolt } from '../src/page/bolt.ts';
 import { liveStream, type EventSourceLike } from '../src/page/stream.ts';
+import { browserTransport, updating } from '../src/protocol/client.ts';
 import { HEADERS } from '../src/protocol/wire.ts';
 
 it.effect('a fake HttpClient sees the act contract/key headers and reads revive decimals', () =>
@@ -59,5 +60,50 @@ it.effect('every reconnect is bounded by thirty seconds and closing interrupts i
 		yield* Fiber.interrupt(fiber);
 		yield* TestClock.adjust('30 seconds');
 		expect(sources).toHaveLength(opened);
+	})
+);
+
+const answering = (first: Response) => {
+	const keys: Array<string | undefined> = [];
+	const httpClient = HttpClient.make((request) => {
+		keys.push(request.headers[HEADERS.key.toLowerCase()]);
+		return Effect.succeed(
+			HttpClientResponse.fromWeb(
+				request,
+				keys.length === 1 ? first : Response.json({ outcome: 'done' })
+			)
+		);
+	});
+	return { keys, transport: browserTransport({ base: 'https://workspace.test', httpClient }) };
+};
+const refused = (code: string) =>
+	Response.json(
+		{ error: { code, message: 'a release cutover holds admission closed' } },
+		{ status: 503, headers: { 'retry-after': '1' } }
+	);
+
+it.effect('a cutover busy refusal is resent with its key after retry-after, never surfaced', () =>
+	Effect.gen(function* () {
+		const { keys, transport } = answering(refused('busy'));
+		const fiber = yield* transport
+			.request('POST', '/__bolt/act', {}, { [HEADERS.key]: 'k1' })
+			.pipe(Effect.forkScoped);
+		// the fake fetch answers on a real promise: let it land before reading the notice count
+		for (let i = 0; i < 50 && SubscriptionRef.getUnsafe(updating) === 0; i++)
+			yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
+		expect(SubscriptionRef.getUnsafe(updating)).toBe(1);
+		yield* TestClock.adjust('1 second');
+		expect(yield* Fiber.join(fiber)).toEqual({ status: 200, body: { outcome: 'done' } });
+		expect(keys).toEqual(['k1', 'k1']);
+		expect(SubscriptionRef.getUnsafe(updating)).toBe(0);
+	})
+);
+
+it.effect('any other 503 is answered as is', () =>
+	Effect.gen(function* () {
+		const { keys, transport } = answering(refused('unavailable'));
+		const reply = yield* transport.request('GET', '/__bolt/shell');
+		expect(reply.status).toBe(503);
+		expect(keys).toHaveLength(1);
 	})
 );

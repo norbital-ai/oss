@@ -60,6 +60,7 @@
 	import type { LogRow } from '../logs/data.ts';
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
+	import StudioApproval from './StudioApproval.svelte';
 	import {
 		background,
 		checkpointSections,
@@ -502,7 +503,7 @@
 	const confirmHint = (name: string) =>
 		name === 'workspace_publish' || name === 'workspace_rollback'
 			? t(
-					'The workspace updates for everyone. It can take a few minutes, and pages may briefly show as unavailable.'
+					'The workspace updates for everyone. It can take a few minutes; pages wait while it switches over and nobody is signed out.'
 				)
 			: null;
 	const empty = $derived(draft.trim() === '' && attached.length === 0);
@@ -1856,6 +1857,9 @@
 											data-role="confirm"
 										>
 											<p class="font-medium">{confirmTitle(call.name)}</p>
+											{#if call.name === 'workspace_publish' || call.name === 'workspace_rollback'}
+												<StudioApproval {api} name={call.name} input={call.input} {t} />
+											{/if}
 											{#if hint}<p class="mt-1 text-sm text-muted-foreground">{hint}</p>{/if}
 											<details class="mt-1 text-xs text-muted-foreground">
 												<summary class="cursor-pointer">{t('Details')}</summary>

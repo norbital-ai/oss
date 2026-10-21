@@ -5,7 +5,8 @@
 -->
 <script lang="ts">
 	import { attach, fork, run } from '@norbital-ai/ui/effect';
-	import { Effect, Exit, FiberHandle, Scope, Stream } from 'effect';
+	import { Effect, Exit, FiberHandle, Scope, Stream, SubscriptionRef } from 'effect';
+	import { updating } from '../protocol/client.ts';
 	import { setContext, tick, type Component } from 'svelte';
 	import { watch } from 'runed';
 	import { PersistedState } from 'runed';
@@ -25,6 +26,7 @@
 		Drawer,
 		Icon,
 		Sheet,
+		Spinner,
 		TAB_LEVEL,
 		Toaster,
 		cn,
@@ -384,6 +386,14 @@
 				submit(load(app, kiosk));
 			};
 			requestLoad(publicApp, kioskRoute);
+			yield* SubscriptionRef.changes(updating).pipe(
+				Stream.runForEach((n) =>
+					Effect.sync(() => {
+						waitingOutUpdate = n > 0;
+					})
+				),
+				Effect.forkScoped
+			);
 			yield* Effect.addFinalizer(() =>
 				Effect.gen(function* () {
 					requestLoad = null;
@@ -478,6 +488,8 @@
 	}
 	// L-BOLT-499: the live link's state; `closed` means a new release closed it, and only a reload continues
 	let sync = $state<SyncStatus>('idle');
+	// a release cutover holds the host closed for seconds: requests wait it out, and one notice says why
+	let waitingOutUpdate = $state(false);
 	// the sidebar on wide screens; on narrow ones ui's Drawer, which closes once its user navigates (owner rule)
 	const expanded = new PersistedState('workspace-shell.sidebar-expanded', true);
 	// the phone's top bar: a drawer expands up to its lower edge (`--shell-header-height`)
@@ -575,6 +587,15 @@
 {/if}
 
 <span hidden {@attach mountLifecycle}></span>
+{#if waitingOutUpdate}
+	<Inline
+		role="status"
+		gap="sm"
+		class="fixed inset-x-0 bottom-4 z-50 mx-auto w-fit rounded-full border bg-background px-3 py-1.5 text-xs shadow-sm"
+	>
+		<Spinner class="size-3.5" />{t('Updating to a new version…')}
+	</Inline>
+{/if}
 
 <svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
 

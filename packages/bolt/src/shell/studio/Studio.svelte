@@ -16,7 +16,15 @@
 <script lang="ts">
 	import { attach, fork } from '@norbital-ai/ui/effect';
 	import { Cause, Effect, Queue, Schema, Stream } from 'effect';
-	import { Button, confirmAction, Icon, Sheet, Tabs } from '@norbital-ai/ui';
+	import {
+		Button,
+		confirmAction,
+		Icon,
+		Sheet,
+		Spinner,
+		Tabs,
+		type ConfirmOptions
+	} from '@norbital-ai/ui';
 	import { Inline, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
 	import BuildLog from './BuildLog.svelte';
@@ -198,32 +206,88 @@
 		if (ok) drafts = settleDrafts(drafts, saved);
 		return ok;
 	});
-	const publish = Effect.fn('Studio.publish')(function* () {
-		if (yield* save()) yield* run({ op: 'publish' });
+	/**
+	 * A change to what live users get (publish, merge, rollback): claimed at the click, so a double click asks once; it
+	 * propagates only after an explicit approval that says what it changes; its progress stays on screen until dismissed.
+	 */
+	let cutover = $state<{ outcome: 'asking' | 'running' | 'done' | 'failed' } | null>(null);
+	const locked = $derived(busy || cutover?.outcome === 'asking' || cutover?.outcome === 'running');
+	const approved = Effect.fn('Studio.approved')(function* (
+		ask: ConfirmOptions,
+		work: Effect.Effect<boolean>
+	) {
+		if (locked) return false;
+		cutover = { outcome: 'asking' };
+		if (!(yield* confirmAction(ask))) return ((cutover = null), false);
+		cutover = { outcome: 'running' };
+		phases = {};
+		const ok = yield* work;
+		cutover = { outcome: ok ? 'done' : 'failed' };
+		return ok;
 	});
+	const publish = Effect.fn('Studio.publish')(function* () {
+		const message = view?.builds?.find((b) => b.commit === view?.commit)?.message;
+		const changed = (view?.changes.length ?? 0) + draftCount;
+		yield* approved(
+			{
+				title: t('Publish your draft to live?'),
+				body: `${message ?? t('Unsaved draft')} · ${changed} ${t('changed files')}. ${t('Everyone using the workspace gets this version once it is built.')}`,
+				confirmLabel: t('Publish'),
+				cancelLabel: t('Cancel')
+			},
+			Effect.gen(function* () {
+				return (yield* save()) && (yield* run({ op: 'publish' }));
+			})
+		);
+	});
+	const merge = (m: StudioMergeRequest) =>
+		approved(
+			{
+				title: `${t('Merge')} !${m.id} ${t('into live?')}`,
+				body: `${m.title}${m.decision?.reason ? ` — ${m.decision.reason}` : ''}. ${t('Everyone using the workspace gets this version once it is switched over.')}`,
+				confirmLabel: t('Merge'),
+				cancelLabel: t('Cancel')
+			},
+			run({ op: 'mr.merge', id: m.id })
+		);
 	/** A source rollback: the deployment's build runs again as a new deployment; a schema change loses later data. */
 	const rollback = Effect.fn('Studio.rollback')(function* (commit: string) {
-		const lost = releases.find((r) => r.commit === commit)?.discards;
-		const asked =
-			lost === undefined
-				? t(
-						'Roll back live to this commit? Its build runs again as a new deployment and live keeps all its data. The workbench keeps its source.'
-					)
-				: `${t('Roll back live to this commit? Its schema differs from live’s, so the data written after')} ${new Date(lost).toLocaleString()} ${t('will be lost. Its build runs again as a new deployment.')}`;
-		if (
-			yield* confirmAction({
-				title: asked,
+		const target = releases.find((r) => r.commit === commit);
+		const lost = target?.discards;
+		const when =
+			target === undefined ? '' : new Date(target.checkpoint ?? target.at).toLocaleString();
+		yield* approved(
+			{
+				title: t('Roll back live to this checkpoint?'),
+				body: `${when} — ${target?.message ?? commit.slice(0, 8)}. ${
+					lost === undefined
+						? t('Its build runs again as a new deployment and live keeps all its data.')
+						: `${t('Its schema differs from live’s, so the data written after')} ${new Date(lost).toLocaleString()} ${t('will be lost.')}`
+				} ${t('Everyone stays signed in.')}`,
 				confirmLabel: t('Roll back'),
 				cancelLabel: t('Cancel'),
 				destructive: lost !== undefined
-			})
-		)
-			yield* run({
+			},
+			run({
 				op: 'rollback',
 				commit,
 				...(lost === undefined ? {} : { discardDataSince: lost })
-			});
+			})
+		);
 	});
+	const progress = $derived(
+		cutover === null || cutover.outcome === 'asking'
+			? null
+			: cutover.outcome === 'done'
+				? t('Done — live runs the new version.')
+				: cutover.outcome === 'failed'
+					? `${t('Failed')}: ${error ?? t('the change was not applied')}`
+					: phases.merge === 'running'
+						? t('Switching over…')
+						: phases.diagnose === 'running' || phases.preview === 'running'
+							? t('Building…')
+							: t('Getting ready…')
+	);
 	let build = $state<{ commit: string; record: StudioBuildRecord | null } | null>(null);
 	let showBuild = $state(false);
 	const openBuild = Effect.fn('Studio.openBuild')(function* (commit: string) {
@@ -423,7 +487,7 @@
 				size="sm"
 				variant="ghost"
 				class="justify-start px-2 text-micro"
-				disabled={busy}
+				disabled={locked}
 				onclick={() => fork(openBuild(built))}
 				><Icon name="lucide:scroll-text" class="size-3.5" />{t('Build log of')}
 				<code class="font-mono">{short(built)}</code></Button
@@ -462,7 +526,7 @@
 			{view}
 			targets={open}
 			{admin}
-			{busy}
+			busy={locked}
 			drafts={draftCount}
 			{phases}
 			{error}
@@ -510,7 +574,7 @@
 							size="sm"
 							variant="outline"
 							class="px-2 text-micro"
-							disabled={busy}
+							disabled={locked}
 							onclick={() => fork(run({ op: 'preview' }))}
 						>
 							<Icon name="lucide:refresh-cw" class="size-3.5" />{t(
@@ -521,7 +585,7 @@
 								size="sm"
 								variant="ghost"
 								class="px-2 text-micro"
-								disabled={busy}
+								disabled={locked}
 								onclick={() => fork(run({ op: 'preview', live: true }))}
 								>{t('Preview on live data')}</Button
 							>{/if}
@@ -529,7 +593,7 @@
 								size="sm"
 								variant="ghost"
 								class="px-2 text-micro"
-								disabled={busy}
+								disabled={locked}
 								onclick={() => fork(run({ op: 'exit' }))}>{t('Exit preview')}</Button
 							>{/if}
 					{/if}
@@ -582,7 +646,7 @@
 				<DiagnosisPane
 					diagnostics={view.diagnostics}
 					stale={draftCount > 0}
-					{busy}
+					busy={locked}
 					onopen={openFile}
 					onrerun={() => fork(run({ op: 'preview' }))}
 					{t}
@@ -599,7 +663,7 @@
 				{view}
 				request={current}
 				{admin}
-				{busy}
+				busy={locked}
 				{mine}
 				onopen={(p) => {
 					openFile(p);
@@ -607,7 +671,11 @@
 				}}
 				onswitch={(x) => fork(switchTo(x))}
 				onopenmr={() => fork(openMr())}
-				{run}
+				run={(op) => {
+					if (op.op !== 'mr.merge') return run(op);
+					const m = mrs.find((x) => x.id === op.id);
+					return m === undefined ? run(op) : merge(m);
+				}}
 				{t}
 			/>
 		{/key}
@@ -621,7 +689,7 @@
 			{view}
 			{release}
 			{admin}
-			{busy}
+			busy={locked}
 			sub={active === 'operations' ? 'operations' : 'runtime'}
 			onsub={go}
 			onrestore={(c) => fork(rollback(c))}
@@ -660,7 +728,27 @@
 			{:else}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 		</Stack>
 	{:else}
-		{#if error !== null && root !== 'workbench'}
+		{#if progress !== null}
+			<Inline
+				role="status"
+				gap="sm"
+				justify="between"
+				class="mx-4 mt-3 shrink-0 rounded-md px-3 py-2 text-xs sm:mx-6 {cutover?.outcome ===
+				'failed'
+					? 'bg-destructive/10 text-destructive'
+					: 'bg-info/10 text-foreground'}"
+			>
+				<Inline gap="sm">
+					{#if cutover?.outcome === 'running'}<Spinner class="size-3.5" />{/if}<span
+						>{progress}</span
+					>
+				</Inline>
+				{#if cutover?.outcome !== 'running'}
+					<Button size="sm" variant="ghost" onclick={() => (cutover = null)}>{t('Dismiss')}</Button>
+				{/if}
+			</Inline>
+		{/if}
+		{#if error !== null && root !== 'workbench' && cutover?.outcome !== 'failed'}
 			<p
 				role="alert"
 				class="mx-4 mt-3 shrink-0 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6"
