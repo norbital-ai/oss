@@ -224,9 +224,22 @@ describe('background work in the session rail', () => {
 });
 
 describe('Studio outcomes outside the folded steps', () => {
+	// a host's Studio tools by the roles they declare
+	const ROLE = {
+		workspace_validate: 'preview',
+		workspace_view: 'view',
+		workspace_logs: 'logs',
+		workspace_publish: 'publish',
+		workspace_rollback: 'rollback'
+	} as const;
 	const tool = (name: string, result?: string, o: Partial<NonNullable<AgentRow['tool']>> = {}) => ({
 		name,
 		failed: false,
+		...Object.fromEntries(
+			Object.entries(ROLE)
+				.filter(([n]) => n === name)
+				.map(([, studio]) => ['studio', studio])
+		),
 		...(result === undefined ? {} : { result }),
 		...o
 	});
@@ -283,12 +296,12 @@ describe('Studio outcomes outside the folded steps', () => {
 		const result = JSON.stringify({
 			records: [
 				{ at: '2026-10-21T15:05:01Z', level: 'error', message: 'boom' },
-				{ level: 'info', message: 'ok' }
+				{ at: '2026-10-21T15:05:02Z', level: 'info', message: 'ok' }
 			]
 		});
 		expect(logsOf(tool('workspace_logs', result))).toEqual([
 			{ at: '2026-10-21T15:05:01Z', level: 'error', message: 'boom' },
-			{ level: 'info', message: 'ok' }
+			{ at: '2026-10-21T15:05:02Z', level: 'info', message: 'ok' }
 		]);
 		expect(logsOf(tool('read', result))).toBeNull();
 	});
@@ -304,8 +317,9 @@ describe('Studio outcomes outside the folded steps', () => {
 				tool('workspace_rollback', '{"restarted":"The workspace restarted during: Switching…"}')
 			)
 		).toEqual(applied);
-		for (const result of ['{"declined":true}', '{"error":"no"}', '{"live":null,"draft":"c"}'])
-			expect(outcomeOf(tool('workspace_publish', result))).toBeNull();
+		expect(outcomeOf(tool('workspace_publish', '{"declined":true}'))).toBeNull();
+		// a step is named by its declared role, never its name: the same tool without one is no Studio outcome
+		expect(outcomeOf({ name: 'workspace_publish', failed: false, result: '{}' })).toBeNull();
 		expect(
 			outcomeOf(tool('workspace_publish', '{"live":{"commit":"c"}}', { failed: true }))
 		).toBeNull();

@@ -7,6 +7,7 @@ import {
 	Context,
 	Deferred,
 	Effect,
+	Exit,
 	FiberHandle,
 	FiberSet,
 	Layer,
@@ -15,7 +16,6 @@ import {
 	PubSub,
 	Random,
 	Redacted,
-	Result,
 	Schema,
 	Semaphore
 } from 'effect';
@@ -220,10 +220,22 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 }
 /** `web_read` in an automation's infer: a public document as plain text, one window per call. */
 const WEB_READ_WINDOW = 20_000;
+/** An infer tool's input as the JSON Schema the model is given, derived from its Schema. */
+const jsonSchemaOf = (input: Schema.Top, tool: string) => {
+	const document = Schema.toJsonSchemaDocument(input);
+	return Schema.decodeUnknownEffect(Schema.Json)({
+		...document.schema,
+		$defs: document.definitions
+	}).pipe(Effect.mapError(Port.failure(tool)));
+};
 const WebReadInput = Schema.Struct({
-	url: Schema.String,
-	from: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-	find: Schema.optionalKey(Schema.String)
+	url: Schema.String.annotate({ description: 'a public http(s) document' }),
+	from: Schema.optionalKey(
+		Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
+			description: 'the character to read from'
+		})
+	),
+	find: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' }))
 });
 const WebReadPage = Schema.Struct({
 	url: Schema.String,
@@ -784,34 +796,12 @@ export const RunsLive = Layer.effect(
 										inApp: false
 									})
 								: undefined;
-						const missing = names.find((name) =>
-							name === 'read'
-								? reader === undefined
-								: !(authority.admin || authority.capabilities.tools.includes(name)) ||
-									(name !== 'web_read' && !hosted.some((tool) => tool.name === name))
-						);
-						if (missing !== undefined)
-							return {
-								ok: false,
-								error: {
-									kind: 'unavailable',
-									facility: `tool ${missing}`,
-									reason:
-										missing === 'read'
-											? "'read' needs runAs policies that grant a read"
-											: `'${missing}' is not a host tool this run's policies name`
-								}
-							} satisfies CrossAnswer;
 						const records: InferTool[] = [];
 						if (reader !== undefined) {
-							const document = Schema.toJsonSchemaDocument(reader.input);
 							records.push({
 								name: reader.name,
 								description: reader.description,
-								input: yield* Schema.decodeUnknownEffect(Schema.Json)({
-									...document.schema,
-									$defs: document.definitions
-								}).pipe(Effect.mapError(Port.failure('tool read'))),
+								input: yield* jsonSchemaOf(reader.input, 'tool read'),
 								call: (input) =>
 									Effect.gen(function* () {
 										const callId = yield* crypto.randomUUIDv4.pipe(
@@ -828,16 +818,7 @@ export const RunsLive = Layer.effect(
 								name: 'web_read',
 								description:
 									'Read a public http(s) document as plain text: a web page, or a PDF, Word or spreadsheet file that the browser shows as empty. Answers up to 20,000 characters from `from` (default 0) and `next` when more remain; `find` answers only the passages around any of its words.',
-								input: {
-									type: 'object',
-									properties: {
-										url: { type: 'string' },
-										from: { type: 'integer', minimum: 0 },
-										find: { type: 'string' }
-									},
-									required: ['url'],
-									additionalProperties: false
-								},
+								input: yield* jsonSchemaOf(WebReadInput, 'tool web_read'),
 								call: (input) =>
 									Effect.gen(function* () {
 										const wanted = Schema.decodeUnknownOption(WebReadInput)(input);
@@ -858,6 +839,24 @@ export const RunsLive = Layer.effect(
 											: webReadWindow(page.value, wanted.value.from, wanted.value.find);
 									})
 							});
+						const missing = names.find((name) =>
+							name === 'read'
+								? reader === undefined
+								: !(authority.admin || authority.capabilities.tools.includes(name)) ||
+									![...records, ...hosted].some((tool) => tool.name === name)
+						);
+						if (missing !== undefined)
+							return {
+								ok: false,
+								error: {
+									kind: 'unavailable',
+									facility: `tool ${missing}`,
+									reason:
+										missing === 'read'
+											? "'read' needs runAs policies that grant a read"
+											: `'${missing}' is not a host tool this run's policies name`
+								}
+							} satisfies CrossAnswer;
 						const tools: InferTool[] = hosted
 							.filter((tool) => names.includes(tool.name))
 							.map((tool) => ({
@@ -889,28 +888,30 @@ export const RunsLive = Layer.effect(
 						const traced = (tool: InferTool): InferTool => ({
 							...tool,
 							call: (input) =>
-								Effect.gen(function* () {
-									const result = yield* Effect.result(tool.call(input));
-									yield* db
-										.write({
-											text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
-											params: [
-												new Date(yield* Clock.currentTimeMillis).toISOString(),
-												Result.isSuccess(result) ? 'info' : 'warn',
-												`${run.id}:${run.attempts}`,
-												run.id,
-												{
-													automation: run.automation,
-													tool: tool.name,
-													input: JSON.stringify(input).slice(0, 500),
-													...(Result.isSuccess(result) ? {} : { error: result.failure.message })
-												}
-											]
-										})
-										.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-									if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
-									return result.success;
-								})
+								tool.call(input).pipe(
+									Effect.onExit((exit) =>
+										Effect.gen(function* () {
+											const failure = Exit.isFailure(exit)
+												? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+												: undefined;
+											yield* db.write({
+												text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
+												params: [
+													new Date(yield* Clock.currentTimeMillis).toISOString(),
+													Exit.isSuccess(exit) ? 'info' : 'warn',
+													`${run.id}:${run.attempts}`,
+													run.id,
+													{
+														automation: run.automation,
+														tool: tool.name,
+														input: JSON.stringify(input).slice(0, 500),
+														...(failure === undefined ? {} : { error: failure.message })
+													}
+												]
+											});
+										}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+									)
+								)
 						});
 						return yield* inferFacility(ai, { load: facilities.fileLoader })(
 							call,

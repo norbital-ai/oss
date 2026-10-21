@@ -51,7 +51,7 @@
 		virtualList,
 		type CommandItem
 	} from '@norbital-ai/ui';
-	import type { FileRef, Json } from '../../decl/values.ts';
+	import type { Json } from '../../decl/values.ts';
 	import type { Attachment } from '../../decl/runtime/integration.ts';
 	import type { AiModel } from '../../engine/contracts.ts';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
@@ -61,6 +61,7 @@
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';
+	import { PHASES, elapsedText, stepLabel, type StudioRole } from '../studio/model.ts';
 	import StudioResult from './StudioResult.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import {
@@ -498,14 +499,14 @@
 		);
 	}
 	/** What a person is asked to approve, in words; the raw input stays one click away. */
-	const confirmTitle = (name: string) =>
-		name === 'workspace_publish'
+	const confirmTitle = (studio: StudioRole | undefined) =>
+		studio === 'publish'
 			? t('Publish these changes to the workspace?')
-			: name === 'workspace_rollback'
+			: studio === 'rollback'
 				? t('Roll the workspace back to an earlier version?')
 				: t('Allow Norbius to do this?');
-	const confirmHint = (name: string) =>
-		name === 'workspace_publish' || name === 'workspace_rollback'
+	const confirmHint = (studio: StudioRole | undefined) =>
+		studio === 'publish' || studio === 'rollback'
 			? t(
 					'The workspace updates for everyone. It can take a few minutes; pages wait while it switches over and nobody is signed out.'
 				)
@@ -846,6 +847,17 @@
 		}
 	);
 	const thinking = $derived(since === null ? 0 : Math.max(0, Math.floor((now - since) / 1000)));
+	// an approved Studio call's card ticks its phase's elapsed time, counted from when this panel first saw it approved
+	const approvals = new Map<string, number>();
+	const approvedSince = (id: string) => approvals.get(id) ?? approvals.set(id, now).get(id) ?? now;
+	watch(
+		() => rows.some((r) => r.state === 'approved'),
+		(running) => {
+			if (!running) return;
+			const timer = setInterval(() => (now = Date.now()), 1_000);
+			return () => clearInterval(timer);
+		}
+	);
 
 	// the transcript follows its tail while the reader is there; a scroll up (only the reader scrolls up) pauses it and
 	// "Jump to latest" returns; reaching the tail again resumes it
@@ -1118,7 +1130,7 @@
 	}
 	const kinds = useKinds();
 	/** A stored file's link (a made file's card, a workspace screenshot). */
-	const fileHref = (id: string) => bolt.fileUrl({ id } as FileRef);
+	const fileHref = (id: string) => bolt.fileUrl({ id });
 	// the Preview tab: the latest preview this conversation built or the agent chose, unless the reader picked an earlier
 	// one since (a newer preview replaces their pick); its frame mounts only while the tab is open
 	let tab = $state<'chat' | 'preview'>('chat'),
@@ -1884,16 +1896,16 @@
 										</li>
 									{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call}
 										{@const call = row.call}
-										{@const hint = confirmHint(call.name)}
+										{@const hint = confirmHint(call.studio)}
 										{@const busy = answering.has(row.id) || row.state === 'approved'}
 										<li
 											{@attach turns.measure(itemKey(at))}
 											class="rounded-xl border border-border/70 bg-background p-3 shadow-sm"
 											data-role="confirm"
 										>
-											<p class="font-medium">{confirmTitle(call.name)}</p>
-											{#if call.name === 'workspace_publish' || call.name === 'workspace_rollback'}
-												<StudioApproval {api} name={call.name} input={call.input} {t} />
+											<p class="font-medium">{confirmTitle(call.studio)}</p>
+											{#if call.studio === 'publish' || call.studio === 'rollback'}
+												<StudioApproval {api} studio={call.studio} input={call.input} {t} />
 											{/if}
 											{#if hint}<p class="mt-1 text-sm text-muted-foreground">{hint}</p>{/if}
 											<details class="mt-1 text-xs text-muted-foreground">
@@ -1918,7 +1930,9 @@
 														onclick={() => confirm(row, false)}>{t('Decline')}</Button
 													>{/if}
 												{#if busy}<span class="text-sm text-muted-foreground" role="status"
-														>{row.progress ?? t('Working on it… you can keep using the app.')}</span
+														>{row.progress === undefined
+															? t('Working on it… you can keep using the app.')
+															: `${t(stepLabel(PHASES.indexOf(row.progress)))} · ${elapsedText(now - approvedSince(row.id))}`}</span
 													>{/if}
 											</Inline>
 											{#if confirmFailed.has(row.id)}<p

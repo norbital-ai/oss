@@ -502,8 +502,6 @@ export type AgentsShape = {
 			{ readonly from: number } | { readonly before: number; readonly limit: number } | undefined
 	) => Effect.Effect<readonly MessageRow[], EngineError>;
 	/** The member's own panel uploads as stored `FileRef`s; a refused set fails with the reason. */
-	/** Opening a conversation resumes an approved call the workspace restarted under, once (no idle polling). */
-	readonly resumeSettled: (conversation: string) => Effect.Effect<void>;
 	readonly attachments: (
 		member: string,
 		refs: readonly Json[]

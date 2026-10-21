@@ -17,6 +17,7 @@ import {
 	FiberSet,
 	Layer,
 	Option,
+	Predicate,
 	Queue,
 	Schedule,
 	Schema,
@@ -46,6 +47,7 @@ import {
 import { Unavailable } from '../../decl/errors.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
+import { PHASES, stepLabel, type StudioPhase } from '../../shell/studio/model.ts';
 import { TurnHandlers } from './turns.ts';
 import { attachmentsFor, fileAttachments } from './attachments.ts';
 import { Chain } from '../write/sql.ts';
@@ -224,6 +226,8 @@ export const NUDGE = {
 	cutTool:
 		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.'
 } as const;
+/** The whole results of this conversation's clipped tool calls, as `read_output` and the scratch files hold them. */
+const Outputs = Schema.Array(Schema.Struct({ call: Schema.String, tool: Schema.String, full: Schema.Json }));
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
 	failed:
@@ -1125,11 +1129,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								id
 							)
 						]);
-						return (r?.rows ?? []).map((row) => ({
-							call: String(row['call']),
-							tool: String(row['tool']),
-							full: row['full'] ?? null
-						}));
+						return yield* Schema.decodeUnknownEffect(Outputs)(r?.rows ?? []).pipe(
+							Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error))
+						);
 					}),
 					history: Effect.fn('Agents.work23')(function* (text, scope, limit) {
 						const a = authority.actor,
@@ -1296,7 +1298,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						task: envoySpec?.task,
 						skills: m.agent.skills,
 						outline: outward(conv, authority) ? undefined : yield* outlineOf(),
-						tools: tools.map((t) => t.name)
+						tools
 					}),
 					messages: history,
 					tools: yield* Effect.forEach(tools, ({ name, description, input }) => {
@@ -1504,7 +1506,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					});
 					const took = (now: number) => now - started;
 					const tool = tools.find((t) => t.name === call.name),
-						key = `${call.name}\u0000${JSON.stringify(call.input)}`;
+						key = `${call.name}\u0000${JSON.stringify(call.input)}`,
+						// what the step is to the shell's Studio surfaces, as the tool declared it
+						role = tool?.studio === undefined ? {} : { studio: tool.studio };
 					// the same call that already failed this often is not run again
 					const skip = tool === undefined || (failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure;
 					const answer =
@@ -1530,6 +1534,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								{
 									id: call.id,
 									name: call.name,
+									...role,
 									args,
 									ms: took(yield* Clock.currentTimeMillis),
 									result: {
@@ -1546,7 +1551,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						yield* wrote(
 							yield* rewrite(
 								step,
-								{ id: call.id, name: call.name, args },
+								{ id: call.id, name: call.name, ...role, args },
 								null,
 								{ tag: 'confirm', call },
 								{ state: 'confirm', as }
@@ -1583,6 +1588,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								{
 									id: call.id,
 									name: call.name,
+									...role,
 									args,
 									ms: took(yield* Clock.currentTimeMillis),
 									result: !clipped
@@ -1713,16 +1719,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	 * marked `resumed` in the same statement), so the agent reports the outcome and finishes its checklist.
 	 */
 	// opened, not polled: an idle workspace issues no statements, and the person sees the reply when they come back
-	const resumeSettled = (conversation: string) =>
-		Effect.gen(function* () {
+	/**
+	 * A generation's start resumes, once, each approved call a switch-over restarted (its card settled by the old generation,
+	 * no reply after it): the new generation runs the turn that reports it. One statement at start, none while idle.
+	 */
+	const resumeSettled = Effect.gen(function* () {
 			const rows = yield* changed(
 				q(
 					`UPDATE sys_message m SET content = content || '{"resumed":true}'::jsonb
-				WHERE m.conversation = $2 AND m.role = 'tool' AND m.state IS NULL AND m.meta->>'tag' = 'confirm' AND NOT m.content ? 'resumed'
+				WHERE m.role = 'tool' AND m.state IS NULL AND m.meta->>'tag' = 'confirm' AND NOT m.content ? 'resumed'
 				AND (m.content->'result' ? 'restarted' OR m.content->'result'->>'error' = $1)
 				AND NOT EXISTS (SELECT 1 FROM sys_message a WHERE a.conversation = m.conversation AND a.seq > m.seq AND a.role = 'assistant')`,
-					FIXED.unreported,
-					conversation
+					FIXED.unreported
 				)
 			);
 			for (const id of new Set(rows.map((r) => r.conversation)))
@@ -1786,7 +1794,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		drain,
 		conversation,
 		transcript,
-		resumeSettled,
 		attachments,
 		stop: Effect.fn('Agents.stop')(function* (id: string) {
 			yield* setConv(id, `status = 'stopped', lease_until = NULL`);
@@ -2054,13 +2061,20 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					q(
 						`UPDATE sys_message m SET state = NULL, content = $2::jsonb WHERE id = $1 AND state = 'approved' `,
 						messageId,
-						j({ id: call.id, name: call.name, result })
+						j({
+							id: call.id,
+							name: call.name,
+							...(Predicate.isObject(r.content) && typeof r.content['studio'] === 'string'
+								? { studio: r.content['studio'] }
+								: {}),
+							result
+						})
 					)
 				);
 			// a host call's steps reach the card live while it runs; the settle replaces them
-			const steps = yield* Queue.unbounded<string>();
-			/** The last step the call reported: what the card says if the workspace restarts mid-call. */
-			let reached: string | null = null;
+			const steps = yield* Queue.unbounded<StudioPhase>();
+			/** The last phase the call reported: what the card says if the workspace restarts mid-call. */
+			let reached: StudioPhase | null = null;
 			const answer = Effect.gen(function* () {
 				let result: Json = { declined: true };
 				if (approve) {
@@ -2121,9 +2135,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 												turn: r.turn ?? r.id,
 												callId: call.id,
 												attach: () => {},
-												progress: (step) => {
-													reached = step;
-													Queue.offerUnsafe(steps, step);
+												progress: (phase) => {
+													reached = phase;
+													Queue.offerUnsafe(steps, phase);
 												}
 											},
 											signal
@@ -2175,7 +2189,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					settle(
 						reached === null
 							? { error: FIXED.unreported }
-							: { restarted: FIXED.restartedDuring(reached) }
+							: { restarted: FIXED.restartedDuring(stepLabel(PHASES.indexOf(reached))) }
 					).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				)
 			);
@@ -2236,6 +2250,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			return out.join('\n') + '\n';
 		})
 	};
+	yield* resumeSettled;
 	return api;
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;

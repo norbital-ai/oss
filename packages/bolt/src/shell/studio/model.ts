@@ -2,6 +2,7 @@
 // answers it. Bolt names no host: one that passes no port serves no Studio; a platform maps these calls onto its own.
 // The agent's authoring tools over it are the host's, never Bolt's; Bolt's own agent only reads (`workspace_search`).
 import { Effect, Schema, SchemaTransformation } from 'effect';
+import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { CheckDiagnostic } from '../../compiler/check/index.ts';
@@ -96,8 +97,6 @@ export type StudioState = {
 	message?: string;
 	/** The live workspace's IANA timezone. */
 	zone?: string;
-	/** Studio opened inside a preview environment: it never previews, publishes or rolls back from there. */
-	nested?: true;
 	files: { readonly [path: string]: string };
 	changes: readonly StudioChange[];
 	manifest: EngineManifest | null;
@@ -184,9 +183,11 @@ export const StudioOp = Schema.Union([
 ]);
 export type StudioOp = typeof StudioOp.Type;
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
-export const PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
+export const PHASES = STUDIO_PHASES;
 export type StudioPhase = (typeof PHASES)[number];
 export type PhaseState = 'running' | 'done' | 'failed';
+export type StudioRole = (typeof STUDIO_ROLES)[number];
+export { STUDIO_ROLES };
 /**
  * A pushed authoring frame: a build log line, the workbench head moved (someone else saved), a merge request changed,
  * or an authoring phase moved.
@@ -309,6 +310,11 @@ export const STEPS = [
 	'Switching over…'
 ] as const;
 export const stepLabel = (step: number): (typeof STEPS)[number] => STEPS[step + 1] ?? STEPS[0];
+/** A running step's elapsed time as `m:ss`. */
+export const elapsedText = (ms: number) => {
+	const seconds = Math.max(0, Math.round(ms / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+};
 
 /** A plain suggestion for a save's description from the drafts (`null`: deleted) over the saved files. */
 export function suggestMessage(

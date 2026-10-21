@@ -204,7 +204,7 @@ export type ViewBolt = {
 	start(automation: string, input: Value | readonly Value[]): RunHandle;
 	/** §3.5 `runs(automation, { where?, limit })`; absent until the client serves it (views then say so). */
 	runs?(automation: string, options: { where?: Json; limit: number }): Live<Page<RunRow>>;
-	fileUrl(ref: FileRef, options?: FileUrlOptions): string;
+	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** §3.5 rule 11a in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
 	decode?(
 		collection: string,

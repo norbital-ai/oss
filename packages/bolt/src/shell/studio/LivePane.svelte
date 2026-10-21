@@ -138,7 +138,7 @@
 					<p class="text-micro text-muted-foreground">{t(unreachable)}</p>
 				{/if}
 			</Stack>
-			{#if admin && view.nested !== true}
+			{#if admin}
 				<Button
 					size="sm"
 					variant="outline"

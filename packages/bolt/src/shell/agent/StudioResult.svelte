@@ -1,6 +1,6 @@
 <!--
-	What a Studio look at the workspace returned, outside its folded step: a `workspace_view` screenshot as an image card
-	with its caption (which environment, bundle, commit, viewport and when) and "Open in Preview tab"; a `workspace_logs`
+	What a Studio look at the workspace returned, outside its folded step: a `view` role's screenshot as an image card
+	with its caption (which environment, release, commit, viewport and when) and "Open in Preview tab"; a `logs` role's
 	result as a folded list of its records, each coloured by level, under the same caption.
 -->
 <script lang="ts">
@@ -25,7 +25,7 @@
 	const tool = $derived(step.tool);
 	const caption = $derived(captionOf(tool?.about, zone));
 	const image = $derived(
-		tool?.name === 'workspace_view' && !tool.failed
+		tool?.studio === 'view' && !tool.failed
 			? step.files?.find((f) => f.id !== undefined && f.mime.startsWith('image/'))?.id
 			: undefined
 	);
@@ -33,9 +33,7 @@
 	const logs = $derived(logsOf(tool));
 	const LEVEL: { readonly [level: string]: string } = {
 		error: 'text-destructive',
-		fatal: 'text-destructive',
-		warn: 'text-warning',
-		warning: 'text-warning'
+		warn: 'text-warning'
 	};
 </script>
 
@@ -64,11 +62,10 @@
 		<ol class="max-h-64 overflow-auto border-t border-border px-3 py-1.5 font-mono">
 			{#each logs as line, i (i)}
 				<li
-					class="flex gap-2 {LEVEL[line.level.toLowerCase()] ?? 'text-foreground'}"
+					class="flex gap-2 {LEVEL[line.level] ?? 'text-foreground'}"
 					data-level={line.level}
 				>
-					{#if line.at !== undefined}<span class="shrink-0 opacity-60">{line.at.slice(11, 19)}</span
-						>{/if}
+					<span class="shrink-0 opacity-60">{line.at.slice(11, 19)}</span>
 					<span class="shrink-0 uppercase">{line.level}</span>
 					<span class="min-w-0 break-words whitespace-pre-wrap">{line.message}</span>
 				</li>

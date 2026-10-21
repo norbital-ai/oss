@@ -195,13 +195,7 @@
 	<Inline gap="xs" shrink={false}>
 		{@render action('lucide:file-plus', t('New file'), onnew, busy)}
 		{@render action('lucide:save', t('Save'), onsave, busy || drafts === 0)}
-		{#if view.nested !== true}{@render action(
-				'lucide:scan-eye',
-				t('Preview'),
-				onpreview,
-				busy,
-				previewing
-			)}{/if}
+		{@render action('lucide:scan-eye', t('Preview'), onpreview, busy, previewing)}
 		{#if target === 'workbench'}
 			{#if view.mergeRequests !== undefined}{@render action(
 					'lucide:git-pull-request',
@@ -216,7 +210,7 @@
 			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onrebase}>
 				<Icon name="lucide:arrow-up-from-line" class="size-3.5" />{t('Update from Live')}
 			</Button>
-		{:else if admin && target === 'workbench' && view.nested !== true}
+		{:else if admin && target === 'workbench'}
 			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onpublish}>
 				<Icon name="lucide:upload" class="size-3.5" />{t('Publish')}
 			</Button>

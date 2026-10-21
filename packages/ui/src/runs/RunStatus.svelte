@@ -10,6 +10,8 @@ The live status of one automation run: queued, running with its progress, or its
 		run: string | { readonly id: string } | RunRow;
 		/** The automation's name; else its catalog label (`automations.<key>.label`), else its name in words (`jobs.send_pdf` → `Send pdf`). */
 		title?: string;
+		/** Download the run's files once when it succeeds: a run the person just started to get a file (a template, an export). */
+		download?: boolean;
 	};
 </script>
 
@@ -21,7 +23,7 @@ The live status of one automation run: queued, running with its progress, or its
 	import { progressOf, runFiles } from './facts.js';
 	import ReadGate from '../read/ReadGate.svelte';
 
-	let { automation, run, title }: RunStatusProps = $props();
+	let { automation, run, title, download = false }: RunStatusProps = $props();
 	const bolt = useBolt();
 	const id = $derived(typeof run === 'string' ? run : run.id);
 	const runs = bolt.runs;
@@ -34,6 +36,18 @@ The live status of one automation run: queued, running with its progress, or its
 			: runs(automation, { where: { id: { eq: id } }, limit: 1 })
 	);
 	const state = $derived(given !== null ? { kind: 'ready' as const, value: given } : live.state);
+	// the browser saves each returned file once, through the same link the status shows (DOM side effect)
+	let saved = false;
+	$effect(() => {
+		const row = state.kind === 'ready' ? state.value.rows[0] : undefined;
+		if (!download || saved || row?.status !== 'succeeded') return;
+		const anchors = document.querySelectorAll<HTMLAnchorElement>(
+			`[data-run="${CSS.escape(row.id)}"] a[download]`
+		);
+		if (anchors.length === 0) return;
+		saved = true;
+		for (const anchor of anchors) anchor.click();
+	});
 </script>
 
 {#if runs === undefined && given === null}

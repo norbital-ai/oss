@@ -186,7 +186,7 @@ export interface PageBolt {
 		field: UploadField
 	): PageCall<FileRef, ActRefused | TransportFailed>;
 	/** The URL a page shows or downloads a stored file from. */
-	fileUrl(ref: FileRef, options?: FileUrlOptions): string;
+	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** A message of `+messages.ts` in the page's locale, `{name}` placeholders filled from `vars`. */
 	t(key: MessageKey, vars?: { readonly [name: string]: string | number }): string;
 	/**

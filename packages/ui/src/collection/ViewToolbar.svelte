@@ -863,6 +863,13 @@
 									Effect.forEach(target, (id) =>
 										actOutcome(bolt.act(`${collection}.delete`, { target: [id] }))
 									).pipe(
+										// some went: the view refreshes (and drops the selection) though the outcome is a refusal
+										Effect.tap((outcomes) =>
+											Effect.sync(() => {
+												const kept = outcomes.filter((o) => !ok(o)).length;
+												if (kept > 0 && kept < outcomes.length) onSettled?.();
+											})
+										),
 										Effect.map((outcomes): Outcome => {
 											const kept = outcomes.filter((o) => !ok(o));
 											const first = kept[0];
@@ -874,8 +881,6 @@
 														records: []
 													}
 												);
-											// some went: the view refreshes (and drops the selection) though the outcome is a refusal
-											if (kept.length < outcomes.length) onSettled?.();
 											return {
 												kind: 'refused',
 												code: 'kept',
@@ -1516,6 +1521,6 @@
 		{#if view?.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>
 				{view.notice}
 			</p>{/if}
-		{#each runs as r (r.id)}<RunStatus automation={r.automation} run={r.id} />{/each}
+		{#each runs as r (r.id)}<RunStatus automation={r.automation} run={r.id} download />{/each}
 	</div>
 {/if}

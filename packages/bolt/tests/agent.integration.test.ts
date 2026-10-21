@@ -644,7 +644,7 @@ describe('in-app turns', () => {
 						// like a publish whose cutover retires the generation running it: it never answers here
 						call: (_input, context, signal) => {
 							calls += 1;
-							context.progress?.('Building the new version…');
+							context.progress?.('diagnose');
 							return new Promise((_resolve, reject) =>
 								signal.addEventListener('abort', () => reject(signal.reason))
 							);
@@ -672,7 +672,7 @@ describe('in-app turns', () => {
 								until: (r) =>
 									r?.state === 'approved' &&
 									Predicate.isObject(r.content) &&
-									r.content['progress'] === 'Building the new version…',
+									r.content['progress'] === 'diagnose',
 								schedule: Schedule.spaced('10 millis'),
 								times: 500
 							})
@@ -687,7 +687,7 @@ describe('in-app turns', () => {
 						expect(settled?.content).toMatchObject({
 							id: 'g1',
 							name: 'go_live',
-							result: { restarted: FIXED.restartedDuring('Building the new version…') }
+							result: { restarted: FIXED.restartedDuring('Building…') }
 						});
 						expect(
 							(yield* Effect.flip(agent.confirm(held.id, true, yield* authority(root)))).message
@@ -699,7 +699,7 @@ describe('in-app turns', () => {
 	);
 
 	it.live(
-		'a confirm settled by the switch-over restart is resumed once when its conversation is opened, which reports the outcome',
+		'a confirm settled by the switch-over restart is resumed once by the next generation, which reports the outcome',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -710,7 +710,7 @@ describe('in-app turns', () => {
 						confirm: true,
 						// its cutover retires the generation running it: it never answers there
 						call: (_input, context, signal) => {
-							context.progress?.('Switching the workspace over…');
+							context.progress?.('merge');
 							return new Promise((_resolve, reject) =>
 								signal.addEventListener('abort', () => reject(signal.reason))
 							);
@@ -737,7 +737,7 @@ describe('in-app turns', () => {
 										(r) =>
 											r.id === held.id &&
 											Predicate.isObject(r.content) &&
-											r.content['progress'] === 'Switching the workspace over…'
+											r.content['progress'] === 'merge'
 									),
 								schedule: Schedule.spaced('10 millis'),
 								times: 500
@@ -762,11 +762,8 @@ describe('in-app turns', () => {
 							Agents
 						);
 					});
+					// the new generation resumes it at its start
 					const next = yield* generation;
-					// a new generation alone issues nothing: opening the conversation resumes it
-					yield* Effect.sleep('100 millis');
-					expect(ai.requests).toHaveLength(1);
-					yield* next.resumeSettled(c);
 					const rows = yield* next.transcript(c).pipe(
 						Effect.repeat({
 							until: (rows) => rows.some((r) => r.role === 'assistant' && r.meta?.tag === 'reply'),
@@ -778,11 +775,11 @@ describe('in-app turns', () => {
 						'Applied: the workspace is on c1.'
 					);
 					expect(toolResults(ai.requests[1]!).at(-1)).toMatchObject({
-						restarted: FIXED.restartedDuring('Switching the workspace over…')
+						restarted: FIXED.restartedDuring('Switching over…')
 					});
 					expect(rows.find((r) => r.id === held.id)?.content).toMatchObject({ resumed: true });
-					// one resume per settled card: opening it again in a later generation finds nothing to resume
-					yield* (yield* generation).resumeSettled(c);
+					// one resume per settled card: a later generation finds nothing to resume
+					yield* generation;
 					yield* Effect.sleep('100 millis');
 					expect(ai.requests).toHaveLength(2);
 				})

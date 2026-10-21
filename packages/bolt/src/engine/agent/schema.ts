@@ -2,6 +2,7 @@
 // `sys_message` rows, the system models `src/system/data/model/+sys_{conversation,message}.model.ts`.
 import { Effect, Predicate, Schema } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
+import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
 import { Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
@@ -264,12 +265,12 @@ export const clip = (v: Json | undefined, max = 600): string => {
 	const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);
 	return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 };
-/** A result the panel lists in full (a runtime log's records): clipped far later than the 600 characters of any other. */
-const LISTED: ReadonlySet<string> = new Set(['workspace_logs']);
-/** What a Studio result says it shows, for the panel's caption: these facts, at its top level or under `metadata`. */
+/** A step's declared Studio role (`HostTool.studio`), as the engine recorded it with the step. */
+const StudioRoleSchema = Schema.Literals(STUDIO_ROLES);
+const isPhase = Schema.is(Schema.Literals(STUDIO_PHASES));
+/** What a Studio result says it shows, for the panel's caption: these facts, at its top level. */
 const ABOUT = [
 	'environment',
-	'bundle',
 	'release',
 	'commit',
 	'message',
@@ -279,10 +280,9 @@ const ABOUT = [
 	'capturedAt'
 ] as const;
 function aboutOf(result: { readonly [k: string]: unknown }): Record<string, string> | undefined {
-	const from = Predicate.isObject(result['metadata']) ? result['metadata'] : result,
-		out: Record<string, string> = {};
+	const out: Record<string, string> = {};
 	for (const k of ABOUT) {
-		const v = from[k];
+		const v = result[k];
 		if (typeof v === 'string' || typeof v === 'number') out[k] = String(v);
 		else if (
 			Predicate.isObject(v) &&
@@ -339,10 +339,8 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 					)
 				]
 			: [];
-	const about =
-		String(step.name).startsWith('workspace_') || step.name === 'preview_show'
-			? aboutOf(result)
-			: undefined;
+	const studio = Schema.is(StudioRoleSchema)(step.studio) ? step.studio : undefined,
+		about = studio !== undefined || step.name === 'preview_show' ? aboutOf(result) : undefined;
 	if ((!thread && ambient(r) && r.as === null) || r.state === 'cancelled') return null;
 	return {
 		id: r.id,
@@ -369,10 +367,16 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		...(staff && meta?.tag === 'failed' && meta.detail !== undefined
 			? { detail: meta.detail }
 			: {}), // hook:agent-ui — rule 59: the reason reaches staff, never a sender
-		...(meta?.tag === 'confirm' ? { call: { name: meta.call.name, input: meta.call.input } } : {}),
-		...(r.state === 'approved' && typeof step.progress === 'string'
-			? { progress: step.progress }
+		...(meta?.tag === 'confirm'
+			? {
+					call: {
+						name: meta.call.name,
+						input: meta.call.input,
+						...(studio === undefined ? {} : { studio })
+					}
+				}
 			: {}),
+		...(r.state === 'approved' && isPhase(step.progress) ? { progress: step.progress } : {}),
 		// a confirmation card once settled (state cleared) is a step like any other: its outcome shows outside the fold
 		...(r.role === 'tool' && (meta?.tag !== 'confirm' || r.state === null)
 			? {
@@ -389,9 +393,10 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 						...(typeof step.args === 'string' ? { args: step.args } : {}),
 						...(step.result === undefined
 							? {}
-							: { result: clip(step.result, LISTED.has(String(step.name)) ? 20000 : 600) }),
+							: { result: clip(step.result, studio === 'logs' ? 20000 : 600) }),
 						...(typeof result['preview'] === 'string' ? { preview: result['preview'] } : {}),
 						...(about === undefined ? {} : { about }),
+						...(studio === undefined ? {} : { studio }),
 						...(typeof step.ms === 'number' ? { ms: step.ms } : {})
 					}
 				}

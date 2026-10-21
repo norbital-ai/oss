@@ -43,6 +43,8 @@ import {
 	type Receipt
 } from './schema.ts';
 import { approvalRoutes } from '../approvals/configuration.ts';
+import type { StudioPhase, StudioRole } from '../../shell/studio/model.ts';
+export type { StudioRole };
 import { feedsOf } from '../integrations/feeds.ts';
 /** What a host tool learns of its call: the person (a Studio draft is theirs), the conversation (its attachments), the key. */
 export type HostToolContext = {
@@ -54,9 +56,10 @@ export type HostToolContext = {
 	question?: string;
 	/** An image the model sees on its next step (a screenshot, a sandbox output). */
 	attach(file: { mime: string; bytes: Uint8Array }): void;
-	/** A confirmed call's latest step in plain words ("Building…"), shown live on its card; absent elsewhere. */
-	progress?(step: string): void;
+	/** A confirmed call's latest Studio phase, shown live on its card in the shell's words; absent elsewhere. */
+	progress?(phase: StudioPhase): void;
 };
+
 /** A host capability (`capabilities.tools`): offered to staff members in the app only; `readOnly` ones also while planning. */
 export type HostTool = {
 	name: string;
@@ -65,6 +68,7 @@ export type HostTool = {
 	readOnly?: boolean;
 	/** The person approves each call on its confirmation card first; it runs on their approval, as them. */
 	confirm?: boolean;
+	studio?: StudioRole;
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
 /** Reads a message's file through the host; PDF and image bytes go to the model as file parts. */
@@ -263,6 +267,7 @@ export type Tool = {
 	name: string;
 	description: string;
 	input: Schema.Top;
+	studio?: StudioRole;
 	run(input: unknown, callId: string): Effect.Effect<ToolAnswer>;
 };
 /** Filter operators supported by period fields (`…_range`). */
@@ -2083,7 +2088,8 @@ export function catalogue(x: ToolContext): Tool[] {
 				(agent || host.readOnly === true) &&
 				(a.admin || a.capabilities.tools.includes(host.name))
 			)
-				add(host.name, host.description, host.input, (input, id) =>
+				tools.push({
+					...tool(host.name, host.description, host.input, (input, id) =>
 					Effect.gen(function* () {
 						if (host.confirm === true) return { confirm: true } as const;
 						const context: HostToolContext = {
@@ -2094,7 +2100,7 @@ export function catalogue(x: ToolContext): Tool[] {
 							...(x.question === undefined ? {} : { question: x.question }),
 							attach: (file) => {
 								attach(x.files, file);
-								if (SHOWN.has(host.name)) shown.push(file);
+								if (host.studio === 'view') shown.push(file);
 							}
 						};
 						const shown: { mime: string; bytes: Uint8Array }[] = [];
@@ -2118,12 +2124,15 @@ export function catalogue(x: ToolContext): Tool[] {
 							);
 						return ok({ ...result, files });
 					})
-				);
+					),
+					...(host.studio === undefined ? {} : { studio: host.studio })
+				});
 	// the panel's Preview tab shows the latest `preview` a result names: this is how the agent picks one explicitly
-	if (tools.some((t) => t.name === 'workspace_validate'))
+	const builds = tools.find((t) => t.studio === 'preview')?.name;
+	if (builds !== undefined)
 		add(
 			'preview_show',
-			"Show a preview in the person's Preview tab beside the chat: url is a preview URL a workspace_validate result gave. It only shows the page; it does not open or check it.",
+			`Show a preview in the person's Preview tab beside the chat: url is a preview URL a ${builds} result gave. It only shows the page; it does not open or check it.`,
 			Schema.Struct({ url: Schema.String.annotate({ description: 'the preview URL' }) }),
 			(i) =>
 				Effect.succeed(
@@ -2155,8 +2164,6 @@ const storeFile = Effect.fn('Agents.storeFile')(function* (
  * held policy's `capabilities.tools` unless admin). Inputs are this conversation's own attachments; outputs are stored
  * as the member's files (a file field or a post takes the reference), and images are shown to the model.
  */
-/** Host tools whose attached images (a workspace screenshot) the person sees on the step, not only the model. */
-const SHOWN: ReadonlySet<string> = new Set(['workspace_view']);
 /** The host tool a workspace may replace with its own same-named MCP tool; every other host name stays the host's. */
 const WORKSPACE_OVERRIDES: ReadonlySet<string> = new Set(['web_search']);
 type InternalHostTool = Omit<HostTool, 'call' | 'input'> & {

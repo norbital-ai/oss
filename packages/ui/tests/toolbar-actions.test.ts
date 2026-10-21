@@ -695,3 +695,68 @@ it.live('a pending toolbar action is interrupted on teardown and releases every 
 		assert.equal(runningFibers(), 0);
 	})
 );
+
+it.live('a template run the toolbar started saves its file once when it succeeds', () =>
+	Effect.gen(function* () {
+		const rows = new Map<string, RunRow>(),
+			subs = new Set<() => void>();
+		const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
+			const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
+			return Stream.callback<Page<RunRow>>((queue) =>
+				Effect.gen(function* () {
+					const notify = () => {
+						const row = rows.get(id);
+						Queue.offerUnsafe(queue, { rows: row === undefined ? [] : [row], next: null });
+					};
+					subs.add(notify);
+					notify();
+					yield* Effect.addFinalizer(() => Effect.sync(() => void subs.delete(notify)));
+				})
+			);
+		};
+		const clicks: string[] = [];
+		vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+			this: HTMLAnchorElement
+		) {
+			clicks.push(this.download);
+		});
+		const { bolt } = yield* browser(() => fakeBolt({ runs }));
+		yield* browser(() =>
+			show({
+				bolt,
+				catalog: {
+					jobs: {
+						label: ['name'],
+						fields: { name: { kind: 'text' } },
+						pipeline: { import: 'Jobs from a sheet' }
+					}
+				},
+				of: 'jobs',
+				upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
+			})
+		);
+		yield* browser(() => open());
+		yield* browser(() => press('template'));
+		const succeed = () => {
+			rows.set('run-1', {
+				id: 'run-1',
+				automation: 'jobs.pipeline',
+				status: 'succeeded',
+				result: {
+					file: {
+						id: 'x1',
+						name: 'jobs-template.xlsx',
+						mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+					}
+				}
+			});
+			for (const notify of subs) notify();
+		};
+		succeed();
+		yield* browser(() => settle());
+		succeed();
+		yield* browser(() => settle());
+		assert.deepEqual(clicks, ['jobs-template.xlsx']);
+		vi.restoreAllMocks();
+	})
+);

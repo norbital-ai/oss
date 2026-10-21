@@ -5,6 +5,20 @@ import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
 
+/** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
+export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
+/**
+ * What a host tool is to the shell's Studio surfaces, declared so Bolt never keys behaviour on a host's tool names:
+ * - `preview`: its result's `preview` is a preview it built; the agent may show that origin (`preview_show`).
+ * - `view`: a look at a rendered page; the images it attaches are shown to the person too, and its result's `url` is a
+ *   preview the panel may show.
+ * - `logs`: its result is `{ records: StudioLogLine[] }`, listed in full on the step.
+ * - `publish` / `rollback`: a confirmed switch-over; its input is `{ summary, commit }`, its card says what changes.
+ * A Studio result's caption facts (`environment`, `release`, `commit`, `message`, `branch`, `url`, `viewport`,
+ * `capturedAt`) are read at its top level.
+ */
+export const STUDIO_ROLES = ['preview', 'view', 'logs', 'publish', 'rollback'] as const;
+
 /** An optional key whose value is dropped, not fatal, when it does not decode: one stray member never hides the rest. */
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
 	Schema.optionalKey(Schema.catchDecoding<S>(() => Effect.succeedNone)(schema));
@@ -261,9 +275,15 @@ export const AgentRow = Schema.Struct({
 	/** When it was written. */
 	at: Schema.optionalKey(Schema.String),
 	tag: Schema.NullOr(Schema.String),
-	call: Schema.optionalKey(Schema.Struct({ name: Schema.String, input: Schema.Json })),
-	/** An `approved` call's latest step, in plain words, as the host reports it. */
-	progress: Schema.optionalKey(Schema.String),
+	call: Schema.optionalKey(
+		Schema.Struct({
+			name: Schema.String,
+			input: Schema.Json,
+			studio: Schema.optionalKey(Schema.Literals(STUDIO_ROLES))
+		})
+	),
+	/** An `approved` call's latest Studio phase, as the host reports it; the card words it. */
+	progress: Schema.optionalKey(Schema.Literals(STUDIO_PHASES)),
 	receipts: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
@@ -300,7 +320,7 @@ export const AgentRow = Schema.Struct({
 			)
 		)
 	),
-	/** A tool step: which tool, whether its result was an error; `child` a spawned sub-agent's conversation; `runs` the automation runs an `act` started or queued; `args` and `result` at most 600 characters each (a `workspace_logs` result 20,000); `preview` a preview URL it names; `ms` how long it ran. */
+	/** A tool step: which tool, whether its result was an error; `child` a spawned sub-agent's conversation; `runs` the automation runs an `act` started or queued; `args` and `result` at most 600 characters each (a `logs` role's result 20,000); `preview` a preview URL it names; `ms` how long it ran. */
 	tool: Schema.optionalKey(
 		Schema.Struct({
 			name: Schema.String,
@@ -310,10 +330,12 @@ export const AgentRow = Schema.Struct({
 			running: Schema.optionalKey(Schema.Literal(true)),
 			args: Schema.optionalKey(Schema.String),
 			result: Schema.optionalKey(Schema.String),
-			/** The preview URL the result names in full (`workspace_validate`, `preview_show`), never clipped. */
+			/** The preview URL the result names in full (a `preview` role's, `preview_show`'s), never clipped. */
 			preview: Schema.optionalKey(Schema.String),
-			/** What a Studio result says it shows (environment, bundle, commit, message, branch, url, viewport, capturedAt), for its caption. */
+			/** What a Studio result says it shows (environment, release, commit, message, branch, url, viewport, capturedAt), for its caption. */
 			about: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+			/** The tool's declared Studio role (`HostTool.studio`). */
+			studio: Schema.optionalKey(Schema.Literals(STUDIO_ROLES)),
 			ms: Schema.optionalKey(Schema.Number)
 		})
 	),

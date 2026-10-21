@@ -49,6 +49,7 @@
 		reviewNextOwner,
 		settleDrafts,
 		stepLabel,
+		elapsedText,
 		suggestMessage,
 		type StudioBuildRecord,
 		type StudioFrame,
@@ -320,10 +321,7 @@
 			return () => clearInterval(timer);
 		}
 	);
-	const elapsed = $derived.by(() => {
-		const seconds = Math.max(0, Math.round((now - since) / 1000));
-		return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-	});
+	const elapsed = $derived(elapsedText(now - since));
 	const running = $derived(`${t(stepLabel(step))} · ${elapsed}`);
 	const progress = $derived(
 		cutover === null || cutover.outcome === 'asking'
@@ -815,11 +813,6 @@
 					<Button size="sm" variant="ghost" onclick={() => (cutover = null)}>{t('Dismiss')}</Button>
 				{/if}
 			</Inline>
-		{/if}
-		{#if view.nested}
-			<p role="note" class="mx-4 mt-3 shrink-0 rounded-md bg-info/10 px-3 py-2 text-xs sm:mx-6">
-				{t('You’re inside a preview — open Studio from the live workspace.')}
-			</p>
 		{/if}
 		{#if error !== null && root !== 'workbench' && cutover?.outcome !== 'failed'}
 			<p

@@ -12,10 +12,15 @@
 
 	let {
 		api,
-		name,
+		studio,
 		input,
 		t
-	}: { api: ShellApi; name: string; input: Json; t: (key: string) => string } = $props();
+	}: {
+		api: ShellApi;
+		studio: 'publish' | 'rollback';
+		input: Json;
+		t: (key: string) => string;
+	} = $props();
 
 	const asked = $derived(
 		Option.getOrNull(
@@ -24,19 +29,19 @@
 			)
 		)
 	);
-	const studio = query(() => api.studio());
+	const held = query(() => api.studio());
 	// the checkpoint's time from Studio's own record, in the workspace's zone: never the agent's wording of it
 	const zone = useKinds().zone;
 	const when = (at: string) =>
 		new Date(at).toLocaleString(undefined, zone === undefined ? {} : { timeZone: zone });
 	const draft = $derived(
-		name === 'workspace_publish' && asked !== null
-			? studio.current?.builds?.find((b) => b.commit.startsWith(asked.commit))?.message
+		studio === 'publish' && asked !== null
+			? held.current?.builds?.find((b) => b.commit.startsWith(asked.commit))?.message
 			: undefined
 	);
 	const checkpoint = $derived(
-		name === 'workspace_rollback' && asked !== null
-			? studio.current?.releases.find((r) => r.commit === asked.commit)
+		studio === 'rollback' && asked !== null
+			? held.current?.releases.find((r) => r.commit === asked.commit)
 			: undefined
 	);
 </script>

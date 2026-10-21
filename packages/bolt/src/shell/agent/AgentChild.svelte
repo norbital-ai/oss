@@ -10,7 +10,6 @@
 	import { live } from '@norbital-ai/ui/effect';
 	import { Option, Schema } from 'effect';
 	import { Button, Icon, ReadonlyMarkdown, Spinner } from '@norbital-ai/ui';
-	import type { FileRef } from '../../decl/values.ts';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import Steps from './Steps.svelte';
@@ -213,7 +212,7 @@
 					<li>
 						<a
 							class="inline-flex max-w-full items-center gap-2 underline-offset-2 hover:underline"
-							href={f.id === undefined ? undefined : bolt.fileUrl({ id: f.id } as FileRef)}
+							href={f.id === undefined ? undefined : bolt.fileUrl({ id: f.id })}
 							target="_blank"
 							rel="noreferrer"
 							download={f.name}

@@ -59,6 +59,7 @@ it.live('a built preview opens in the Preview tab from its Open preview button',
 				name: 'workspace_validate',
 				description: 'Build the preview',
 				input: { type: 'object' },
+				studio: 'preview',
 				call: async () => ({
 					preview: PREVIEW,
 					commit: 'abc1234def',

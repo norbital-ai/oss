@@ -125,7 +125,11 @@
 		<div class="mb-3 flex flex-wrap items-center gap-2" data-run-now>
 			<Combobox
 				class="w-72"
-				options={startable.map((a) => ({ value: a.name, label: a.name, description: a.description }))}
+				options={startable.map((a) => ({
+					value: a.name,
+					label: a.name,
+					description: a.description
+				}))}
 				value={chosen}
 				placeholder={t('Choose an automation')}
 				onChange={(next) => (chosen = next)}

@@ -263,7 +263,9 @@ const attemptPage = (
 						headers: {
 							accept: 'text/html,application/pdf,application/json,text/plain,application/xml',
 							'accept-encoding': 'identity',
-							'user-agent': 'Norbital-Public-Page-Reader/1.0',
+							// the conventional compatible form, still naming the reader: CDN rules refuse a bare product token
+							'user-agent':
+								'Mozilla/5.0 (compatible; Norbital-Public-Page-Reader/1.0; +https://norbital.ai)',
 							...headers
 						}
 					},

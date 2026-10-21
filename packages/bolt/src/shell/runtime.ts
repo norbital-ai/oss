@@ -552,7 +552,19 @@ export function shellBolt(
 										})
 								)
 							);
-							const rows = yield* api.runs({ automation, limit: options.limit });
+							// one run by id is read as itself: the latest `limit` runs need not hold an earlier run (RunStatus)
+							const one = conditions['id']?.eq;
+							const rows =
+								typeof one === 'string'
+									? yield* api.run(one).pipe(
+											Effect.map((row) => [row]),
+											Effect.catch((error) =>
+												error.status === 404 || error.status === 403
+													? Effect.succeed([])
+													: Effect.fail(error)
+											)
+										)
+									: yield* api.runs({ automation, limit: options.limit });
 							return {
 								rows: rows.filter((row) => {
 									const values: Readonly<Record<string, Wired>> = row;

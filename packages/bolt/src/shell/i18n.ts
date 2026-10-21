@@ -519,8 +519,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Preview: '预览',
 	'This is a preview — open it from Studio or Norbius.':
 		'这是预览 — 请从 Studio 或 Norbius 中打开。',
-	'You’re inside a preview — open Studio from the live workspace.':
-		'您正在预览中 — 请从正式工作区打开 Studio。',
 	'Preview as': '预览身份',
 	Output: '输出',
 	'Previewing as a team. Its grants apply; you are recorded as the previewer.':

@@ -8,6 +8,7 @@ import type { Json } from '../../decl/values.ts';
 import type { AiMessage } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { ambient, authorOf, type ConversationRow, type MessageRow } from './schema.ts';
+import type { StudioRole } from './tools.ts';
 
 /** Rule 62: tool results are bounded; clipped cells and dropped rows say so. */
 export const BOUNDS = { resultBytes: 16 * 1024, cellBytes: 1_200 } as const;
@@ -110,7 +111,8 @@ export function bounded(
 
 /** Rule 62: the kernel prompt; how to work, never who the agent is or who may do what. It names only the tools this turn has: a prompt naming a tool the catalogue lacks is a call to nothing. */
 const kernel = (
-	has: (tool: string) => boolean
+	has: (tool: string) => boolean,
+	named: (role: StudioRole) => string | undefined
 ) => `How a workspace works: collections are tables with a write contract; queries and actions are the operations each collection offers; automations run on a schedule, after a change, or when started. Access is automatic: every tool runs with the authority of the person this turn serves, and a refusal is the answer - relay it plainly.
 
 How to work:
@@ -122,7 +124,7 @@ How to work:
 6. ${has('read_attachment') ? 'An attached file is read with read_attachment before you describe or file it; a' : 'A'} file field takes the file reference a message lists ({ id, name, mime }).${has('read_file') ? ' A file already on a record (a scan, a photo) is read with read_file by its id before you state what it shows.' : ''}
 7. Reuse a read from this turn; re-read before a write only if a later action or elapsed time could have changed the relevant row.
 8. Count, total or compare periods with one aggregate read (count or sum, by a field or by { month: dateField }), never by reading rows and tallying them.
-9. Use an exact filter for a known key, a declared query for its specialized search, and small selections and limits. Batch independent reads in one read call. For an optional reference absent after one exact and one focused fallback lookup, use the supplied text without a link if the write permits it; do not scan the whole collection. A committed write already returns its stored rows; read again only for details absent from that result or when the person asks for verification.${has('web_search') ? '\n10. Prefer web_search to find information on the web; open and read pages with the browser tools.' : ''}${has('workspace_validate') ? `\n11. A workspace_validate result with a preview URL is the check that the preview built: do not open or fetch the preview yourself (it needs the person signed in)${has('workspace_view') ? '; to see what it renders, use workspace_view (a screenshot you can look at)' : ''}${has('workspace_logs') ? ', and workspace_logs for its runtime errors' : ''}. Choose what the Preview tab beside the chat shows with preview_show. Never paste a preview URL: tell the person to open it in the Preview tab. Quote a checkpoint by its label exactly as a tool gave it; never convert its time. A confirmed publish or rollback whose result says the workspace restarted was applied: say so and finish your checklist.` : ''}`;
+9. Use an exact filter for a known key, a declared query for its specialized search, and small selections and limits. Batch independent reads in one read call. For an optional reference absent after one exact and one focused fallback lookup, use the supplied text without a link if the write permits it; do not scan the whole collection. A committed write already returns its stored rows; read again only for details absent from that result or when the person asks for verification.${has('web_search') ? '\n10. Prefer web_search to find information on the web; open and read pages with the browser tools.' : ''}${named('preview') === undefined ? '' : `\n11. A ${named('preview')} result with a preview URL is the check that the preview built: do not open or fetch the preview yourself (it needs the person signed in)${named('view') === undefined ? '' : `; to see what it renders, use ${named('view')} (a screenshot you can look at)`}${named('logs') === undefined ? '' : `, and ${named('logs')} for its runtime errors`}. Choose what the Preview tab beside the chat shows with preview_show. Never paste a preview URL: tell the person to open it in the Preview tab. Quote a checkpoint by its label exactly as a tool gave it; never convert its time. A confirmed publish or rollback whose result says the workspace restarted was applied: say so and finish your checklist.`}`;
 
 /** Envoy turns: a chat is read by people, not engineers. */
 /**
@@ -498,15 +500,16 @@ export function system(parts: {
 	task?: string | undefined;
 	skills: { readonly [name: string]: string };
 	outline?: string | undefined;
-	tools?: readonly string[];
+	tools?: readonly { name: string; studio?: StudioRole }[];
 }): string {
-	const has = (tool: string) => parts.tools?.includes(tool) === true,
+	const has = (tool: string) => parts.tools?.some((t) => t.name === tool) === true,
+		named = (role: StudioRole) => parts.tools?.find((t) => t.studio === role)?.name,
 		source = has('workspace_search');
 	const skills = Object.entries(parts.skills).map(
 		([n, t]) => `- ${n}: ${/^---\n[\s\S]*?^description:\s*(.*)$/m.exec(t)?.[1]?.trim() ?? ''}`
 	);
 	return [
-		kernel(has),
+		kernel(has, named),
 		parts.envoy === undefined ? undefined : envoy(parts.envoy),
 		parts.brief,
 		parts.task,

@@ -2,6 +2,7 @@
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
 import { Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
+import type { StudioLogLine } from '../studio/model.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
 export type Orb = 'ready' | 'working' | 'waiting' | 'failed' | 'done' | 'stopped';
@@ -378,12 +379,10 @@ export function outcomeOf(
 	tool: AgentRow['tool']
 ): { text: string; preview?: string; action?: string } | null {
 	if (tool === undefined || tool.running === true || tool.failed) return null;
-	if (tool.name === 'workspace_validate' && tool.preview !== undefined)
+	if (tool.studio === 'preview' && tool.preview !== undefined)
 		return { text: 'The preview is ready.', preview: tool.preview, action: 'Open preview' };
-	if (
-		(tool.name === 'workspace_publish' || tool.name === 'workspace_rollback') &&
-		/^\{"(?:restarted":"|live":\{)/.test(tool.result ?? '')
-	)
+	// the engine's own answer to a declined card is the one non-failed result that changed nothing
+	if ((tool.studio === 'publish' || tool.studio === 'rollback') && tool.result !== '{"declined":true}')
 		return { text: 'Applied — the workspace is now on the new version. Refresh to see it.' };
 	return null;
 }
@@ -408,7 +407,7 @@ export function captionOf(
 	return [
 		about['environment'],
 		about['branch'],
-		about['bundle'] ?? about['release'],
+		about['release'],
 		commit === undefined
 			? undefined
 			: `commit ${commit.slice(0, 7)}${about['message'] === undefined ? '' : ` '${about['message']}'`}`,
@@ -420,9 +419,9 @@ export function captionOf(
 }
 
 /**
- * What the Preview tab may show, oldest first: each preview a host built or captured (`workspace_validate`,
- * `workspace_view`), and each one the agent chose with `preview_show` on one of those previews' origins — the agent picks
- * among built previews, never an arbitrary page.
+ * What the Preview tab may show, oldest first: each preview a host built or captured (a `preview` or `view` role's
+ * step), and each one the agent chose with `preview_show` on one of those previews' origins — the agent picks among built
+ * previews, never an arbitrary page.
  */
 export function previewsOf(
 	rows: readonly AgentRow[]
@@ -430,11 +429,11 @@ export function previewsOf(
 	const built = new Set<string>();
 	return rows.flatMap((r) => {
 		const tool = r.tool,
-			url = tool?.preview ?? (tool?.name === 'workspace_view' ? tool.about?.['url'] : undefined);
+			url = tool?.preview ?? (tool?.studio === 'view' ? tool.about?.['url'] : undefined);
 		if (tool === undefined || tool.failed || url === undefined || !URL.canParse(url)) return [];
 		const origin = new URL(url).origin,
 			shown = { url, ...(tool.about === undefined ? {} : { about: tool.about }) };
-		if (tool.name === 'workspace_validate' || tool.name === 'workspace_view') {
+		if (tool.studio === 'preview' || tool.studio === 'view') {
 			built.add(origin);
 			return [shown];
 		}
@@ -442,24 +441,19 @@ export function previewsOf(
 	});
 }
 
-/** A `workspace_logs` result's records (its `records`, `logs` or `lines`), each a level, a message and when; `null` otherwise. */
-export function logsOf(
-	tool: AgentRow['tool']
-): { level: string; message: string; at?: string }[] | null {
-	if (tool?.name !== 'workspace_logs' || tool.failed || tool.result === undefined) return null;
-	const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(tool.result);
-	if (Option.isNone(parsed) || !Predicate.isObject(parsed.value)) return null;
-	const v = parsed.value,
-		list =
-			[v['records'], v['logs'], v['lines']].find((x): x is readonly unknown[] =>
-				Array.isArray(x)
-			) ?? [];
-	return list.filter(Predicate.isObject).map((x) => {
-		const at = x['at'] ?? x['time'];
-		return {
-			level: typeof x['level'] === 'string' ? x['level'] : 'info',
-			message: typeof x['message'] === 'string' ? x['message'] : JSON.stringify(x),
-			...(typeof at === 'string' ? { at } : {})
-		};
-	});
+/** The records of a `logs` role's result (`{ records: StudioLogLine[] }`); `null` for any other step. */
+const LogResult = Schema.fromJsonString(
+	Schema.Struct({
+		records: Schema.Array(
+			Schema.Struct({
+				at: Schema.String,
+				level: Schema.Literals(['info', 'warn', 'error']),
+				message: Schema.String
+			})
+		)
+	})
+);
+export function logsOf(tool: AgentRow['tool']): readonly StudioLogLine[] | null {
+	if (tool?.studio !== 'logs' || tool.failed || tool.result === undefined) return null;
+	return Option.getOrNull(Schema.decodeUnknownOption(LogResult)(tool.result))?.records ?? null;
 }

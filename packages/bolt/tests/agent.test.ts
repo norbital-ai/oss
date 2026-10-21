@@ -173,7 +173,7 @@ describe('the context projection (rule 60)', () => {
 			/workspace_search|workspace_type/
 		);
 		expect(
-			system({ skills: {}, outline: '# Workspace outline', tools: ['workspace_search'] })
+			system({ skills: {}, outline: '# Workspace outline', tools: [{ name: 'workspace_search' }] })
 		).toMatch(
 			/workspace_search reads the source[\s\S]*Search or read any path with workspace_search/
 		);
