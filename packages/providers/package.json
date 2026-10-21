@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/providers",
-	"version": "0.0.3",
+	"version": "0.0.1",
 	"description": "Providers behind Bolt's driver kinds and host ports (Twilio, Resend, Sinch, WhatsApp Web, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes, Google Calendar), registered by a host.",
 	"type": "module",
 	"sideEffects": false,
