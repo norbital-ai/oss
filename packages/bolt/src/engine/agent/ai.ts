@@ -30,7 +30,24 @@ import {
 import { decodeInput } from '../callables/decode.ts';
 import type { Kind } from '@norbital-ai/std/kind';
 import { RequestOutput } from '../integrations/instances.ts';
-import { bound } from './context.ts';
+import { bound, BOUNDS, size } from './context.ts';
+import {
+	ANY,
+	childKind,
+	diffAt,
+	find,
+	indexOf,
+	isList,
+	isObj,
+	keyedPath,
+	keyOf,
+	keyText,
+	pointer,
+	project,
+	resolve,
+	segments,
+	type JsonChange
+} from './draft.ts';
 import { Validator } from '@cfworker/json-schema';
 import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
@@ -190,16 +207,40 @@ export type InferTool = {
 	input: Json;
 	call(input: Json): Effect.Effect<Json, PortFailure>;
 };
-/** The tools a structured inference builds its answer with: `patch` edits the draft, `submit` hands it in. */
-const PATCH = 'patch',
+/**
+ * The tools a structured inference builds its answer with: `edit` changes the draft, `read`, `find` and `diff` inspect it,
+ * `submit` hands it in.
+ */
+const EDIT = 'edit',
+	FIND = 'find',
+	DIFF = 'diff',
 	SUBMIT = 'submit';
-/** Consecutive empty (reasoning-only) replies, and prose replies that neither patch nor submit, tolerated before `invalid`. */
+/** Consecutive empty (reasoning-only) replies, and prose replies that neither edit nor submit, tolerated before `invalid`. */
 const PAUSES = 3,
 	FAILURES = 3;
 /** The most tool turns an author's `steps` may grant one inference. */
 const MAX_STEPS = 1000;
+/** The most `find` matches and `diff` changes one call returns, and the longest value (JSON characters) a change shows whole. */
+const HITS = 50,
+	CHANGES = 100,
+	SHOWN = 200;
 
-type PatchOp = { op: 'add' | 'replace' | 'remove'; path: string; value?: Json };
+const EditInput = Schema.Struct({ ops: Schema.Array(Schema.Unknown) });
+const ReadInput = Schema.Struct({
+	path: Schema.String,
+	fields: Schema.optionalKey(Schema.Array(Schema.String))
+});
+const FindInput = Schema.Struct({
+	text: Schema.NonEmptyString,
+	path: Schema.optionalKey(Schema.String)
+});
+const DiffInput = Schema.Struct({ path: Schema.optionalKey(Schema.String) });
+const EditOp = Schema.Struct({
+	path: Schema.String,
+	set: Schema.optionalKey(Schema.Json),
+	remove: Schema.optionalKey(Schema.Literal(true)),
+	append: Schema.optionalKey(Schema.Json)
+});
 /** The empty answer a structured inference starts from, by the output's kind. */
 const emptyOf = (k: Kind): Json =>
 	k.kind === 'list'
@@ -208,58 +249,100 @@ const emptyOf = (k: Kind): Json =>
 			? {}
 			: null;
 /**
- * RFC 6902 `add` / `replace` / `remove` at RFC 6901 JSON Pointers, applied to a copy (a batch applies whole or not at
- * all). `add` creates missing parent objects and `-` appends to a list, so a draft grows without first laying out its
- * containers. Throws the first operation that cannot apply, named by its index.
+ * One `edit` operation on `draft` (never changed in place) against the output `kind` (ANY for a JSON Schema output),
+ * returning the new draft. `set` replaces or creates the value at a keyed pointer, creating missing parent objects and
+ * lists; `set` at `/list/KEY` of a keyed list adds or replaces that item and fills its key field. `append` adds to an
+ * unkeyed list; `remove: true` deletes. A set or appended value is checked against its kind (quoted scalars read as the
+ * kind) and a keyed item keeps a distinct key. Throws the operation's problem, led by its path.
  */
-export function applyPatch(doc: Json, ops: readonly PatchOp[]): Json {
-	let root = structuredClone(doc);
-	ops.forEach((o, i) => {
-		const fail = (why: string): never => {
-			throw new Error(`operation ${i} (${o.op} ${o.path}): ${why}`);
-		};
-		if (o.path === '') {
-			if (o.op === 'remove') fail('cannot remove the whole answer');
-			root = structuredClone(o.value ?? null);
-			return;
+export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Json {
+	function fail(why: string): never {
+		throw new Error(`${op.path || '/'}: ${why}`);
+	}
+	if ([op.set, op.remove, op.append].filter((v) => v !== undefined).length !== 1)
+		fail('give exactly one of set, remove and append');
+	const segs = segments(op.path) ?? fail('a path is "" or starts with "/"');
+	const fits = (k: Kind, value: Json, at: readonly string[]): Json => {
+		const v = unquoted(k, value);
+		const problems = decodeInput({ v: k }, { v }).problems;
+		if (problems.length > 0)
+			throw new Error(
+				problems
+					.map(
+						(p) =>
+							`${pointer(at) + keyedPath(v, k, p.path.split('.').slice(1)) || '/'}: ${p.message}`
+					)
+					.join('; ')
+			);
+		return v;
+	};
+	const target = (
+		current: Json | undefined,
+		k: Kind,
+		keyed: string | undefined
+	): Json | undefined => {
+		if (op.remove === true) {
+			if (segs.length === 0) fail('cannot remove the whole answer');
+			if (current === undefined) fail('nothing is there');
+			return undefined;
 		}
-		if (!o.path.startsWith('/')) fail('a path starts with "/"');
-		const keys = o.path
-			.slice(1)
-			.split('/')
-			.map((k) => k.replaceAll('~1', '/').replaceAll('~0', '~'));
-		const last = keys.pop()!;
-		let at: Json = root;
-		for (const k of keys) {
-			const holder = at as { [k: string]: Json } & Json[];
-			if (Array.isArray(at)) {
-				at = holder[Number(k)] ?? fail(`no item ${k}`);
-				continue;
+		if (op.append !== undefined) {
+			const list = current ?? [];
+			if (!isList(list)) fail('append adds to a list, and this is not one');
+			const key = keyOf(k);
+			if (key !== undefined) fail(`a keyed list: add an item with set at ${op.path}/<its ${key}>`);
+			return [
+				...list,
+				fits(childKind(k, '', list) ?? ANY, op.append, [...segs, String(list.length)])
+			];
+		}
+		let value = op.set ?? null;
+		const seg = segs.at(-1);
+		if (keyed !== undefined && seg !== undefined && isObj(value)) {
+			const own = keyText(value, keyed);
+			if (own === undefined) value = { ...value, [keyed]: seg };
+			else if (own !== seg) fail(`the item's ${keyed} is "${own}", not "${seg}"`);
+		}
+		return fits(k, value, segs);
+	};
+	const update = (
+		current: Json | undefined,
+		k: Kind,
+		i: number,
+		keyed?: string
+	): Json | undefined => {
+		const seg = segs[i];
+		if (seg === undefined) return target(current, k, keyed);
+		const here = pointer(segs.slice(0, i)) || '/';
+		const holder =
+			current ?? (op.remove === true ? fail(`nothing is at ${here}`) : k.kind === 'list' ? [] : {});
+		const child =
+			childKind(k, seg, holder) ??
+			fail(`${pointer(segs.slice(0, i + 1))} is not part of the output`);
+		if (isList(holder)) {
+			const key = keyOf(k);
+			const index = indexOf(holder, seg, key);
+			if (index < 0 && !(key !== undefined && i === segs.length - 1 && op.set !== undefined))
+				fail(`${here} has no item "${seg}"`);
+			const next = update(index < 0 ? undefined : holder[index], child, i + 1, key);
+			if (next === undefined) return holder.filter((_, j) => j !== index);
+			if (key !== undefined) {
+				const named = keyText(next, key);
+				if (named === undefined) fail(`the item needs its ${key}`);
+				if (holder.some((x, j) => j !== index && keyText(x, key) === named))
+					fail(`another item of ${here} is keyed "${named}"`);
 			}
-			if (at === null || typeof at !== 'object')
-				fail(`"${k}" is inside a value that is not an object or list`);
-			if (holder[k] === undefined || holder[k] === null) {
-				if (o.op !== 'add') fail(`nothing at "${k}"`);
-				holder[k] = {};
-			}
-			at = holder[k]!;
+			return index < 0 ? [...holder, next] : holder.map((x, j) => (j === index ? next : x));
 		}
-		if (Array.isArray(at)) {
-			const n = last === '-' ? at.length : Number(last);
-			if (!Number.isInteger(n) || n < 0 || n > at.length || (o.op !== 'add' && n === at.length))
-				fail(`no list position ${last}`);
-			if (o.op === 'add') at.splice(n, 0, structuredClone(o.value ?? null));
-			else if (o.op === 'replace') at[n] = structuredClone(o.value ?? null);
-			else at.splice(n, 1);
-			return;
+		if (isObj(holder)) {
+			const next = update(Object.hasOwn(holder, seg) ? holder[seg] : undefined, child, i + 1);
+			return next === undefined
+				? Object.fromEntries(Object.entries(holder).filter(([f]) => f !== seg))
+				: { ...holder, [seg]: next };
 		}
-		if (at === null || typeof at !== 'object') fail('the parent is not an object or list');
-		const obj = at as { [k: string]: Json };
-		if (o.op !== 'add' && !(last in obj)) fail(`nothing at "${last}"`);
-		if (o.op === 'remove') delete obj[last];
-		else obj[last] = structuredClone(o.value ?? null);
-	});
-	return root;
+		return fail(`${here} holds ${JSON.stringify(holder)}, not an object or list`);
+	};
+	return update(draft, kind, 0) ?? fail('cannot remove the whole answer');
 }
 
 /** A declared output kind (§3.3.2) as the JSON Schema the provider constrains its answer by. */
@@ -286,8 +369,18 @@ function jsonSchemaOf(k: Kind): Json {
 			return { type: 'string', format: 'uuid' };
 		case 'vector':
 			return { type: 'array', items: { type: 'number' } };
-		case 'list':
-			return { type: 'array', items: jsonSchemaOf(k.of) };
+		case 'list': {
+			const key = keyOf(k);
+			return {
+				type: 'array',
+				items: jsonSchemaOf(k.of),
+				...(key === undefined
+					? {}
+					: {
+							description: `Keyed by "${key}": an item's path is …/<its ${key}>, never its index.`
+						})
+			};
+		}
 		case 'record':
 			return { type: 'object', additionalProperties: jsonSchemaOf(k.of) };
 		case 'object': {
@@ -333,20 +426,16 @@ export const inferMs = (args: readonly Json[]): number =>
 		Math.ceil(((args[0] as { files?: unknown[] } | null)?.files?.length ?? 0) / MODEL_FILES.count)
 	);
 
-/** A rule the answer must hold beside its JSON Schema: CEL over the schema's top-level properties, and what to say when it fails. */
+/** A rule the answer must hold beside its shape: CEL over the answer's top-level properties, and what to say when it fails. */
 type Rule = { expression: string; message: string };
 /** `output` as a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the logic, instead of a declared kind. */
 type SchemaOutput = { jsonSchema: Json; rules?: readonly Rule[] };
 const isSchemaOutput = (o: unknown): o is SchemaOutput =>
 	o !== null && typeof o === 'object' && 'jsonSchema' in o;
 
+const Rules = Schema.Array(Schema.Struct({ expression: Schema.String, message: Schema.String }));
 const InferOutput = Schema.Union([
-	Schema.Struct({
-		jsonSchema: Schema.Json,
-		rules: Schema.optionalKey(
-			Schema.Array(Schema.Struct({ expression: Schema.String, message: Schema.String }))
-		)
-	}),
+	Schema.Struct({ jsonSchema: Schema.Json, rules: Schema.optionalKey(Rules) }),
 	RequestOutput
 ]);
 const InferArgs = Schema.Struct({
@@ -355,56 +444,64 @@ const InferArgs = Schema.Struct({
 	prompt: Schema.optionalKey(Schema.String),
 	files: Schema.optionalKey(Schema.Array(Schema.Struct({ id: Schema.String }))),
 	output: Schema.optionalKey(InferOutput),
+	rules: Schema.optionalKey(Rules),
 	initial: Schema.optionalKey(Schema.Json),
 	steps: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_STEPS })))
 });
-/**
- * A checker for a schema output: the schema's own violations as JSON Pointers into the answer, then every rule that
- * evaluates to false. A rule that cannot evaluate (it reads a part the answer does not hold) does not apply. A rule that
- * does not compile is the caller's fault, returned as a string before any model call.
- */
-function schemaChecker(output: SchemaOutput): string | ((value: Json) => string[]) {
+/** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
+function schemaChecker(output: SchemaOutput): (value: Json) => string[] {
 	const schema = output.jsonSchema;
 	if (typeof schema !== 'boolean' && !Predicate.isObject(schema))
 		throw new Error('jsonSchema must be an object or boolean');
 	const validator = new Validator(schema, '2020-12', false);
-	const properties = Object.keys(
-		Predicate.isObject(schema) && Predicate.isObject(schema['properties'])
-			? schema['properties']
-			: {}
-	);
+	return (value) => [
+		...new Set(
+			validator
+				.validate(value)
+				// a container's error repeats its children's; the leaves name what to edit
+				.errors.filter(
+					(e) =>
+						![
+							'properties',
+							'items',
+							'prefixItems',
+							'additionalProperties',
+							'allOf',
+							'$ref',
+							'dependentSchemas'
+						].includes(e.keyword)
+				)
+				.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`)
+		)
+	];
+}
+/**
+ * A checker for `rules` over the answer's top-level `properties`: every rule that evaluates to false. A rule that cannot
+ * evaluate (it reads a part the answer does not hold) does not apply. A rule that does not compile is the caller's fault,
+ * returned as a string before any model call.
+ */
+function ruleChecker(
+	properties: readonly string[],
+	rules: readonly Rule[]
+): string | ((value: Json) => string[]) {
 	const scope = context(
 		Object.fromEntries(properties.map((p) => [p, { kind: 'json', optional: true } as const])),
 		{ numbers: 'float' }
 	);
-	const rules: { rule: Rule; program: Exclude<ReturnType<typeof compile>, { error: string }> }[] =
-		[];
-	for (const rule of output.rules ?? []) {
+	const programs: {
+		rule: Rule;
+		program: Exclude<ReturnType<typeof compile>, { error: string }>;
+	}[] = [];
+	for (const rule of rules) {
 		const program = compile(scope, rule.expression, 'bool');
 		if ('error' in program) return `rule "${rule.message}" (${rule.expression}): ${program.error}`;
-		rules.push({ rule, program });
+		programs.push({ rule, program });
 	}
 	return (value) => {
-		// a container's error repeats its children's; the leaves name what to patch
-		const shape = validator
-			.validate(value)
-			.errors.filter(
-				(e) =>
-					![
-						'properties',
-						'items',
-						'prefixItems',
-						'additionalProperties',
-						'allOf',
-						'$ref',
-						'dependentSchemas'
-					].includes(e.keyword)
-			)
-			.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`);
 		const held = Predicate.isObject(value) ? value : {};
-		const broken = rules
-			.filter(({ program }) => {
-				return Result.getOrElse(
+		return programs
+			.filter(({ program }) =>
+				Result.getOrElse(
 					Result.try({
 						try: () =>
 							evaluate(program, Object.fromEntries(properties.map((p) => [p, held[p] ?? null]))) ===
@@ -412,10 +509,9 @@ function schemaChecker(output: SchemaOutput): string | ((value: Json) => string[
 						catch: (cause) => cause
 					}),
 					() => false
-				);
-			})
+				)
+			)
 			.map(({ rule }) => `rule broken: ${rule.message} (${rule.expression})`);
-		return [...new Set(shape), ...broken];
 	};
 }
 
@@ -423,15 +519,16 @@ function schemaChecker(output: SchemaOutput): string | ((value: Json) => string[
  * `ctx.ai.sys_2.infer` for automations (rule 63, L-BOLT-371/372): a prompt, optional files and an `output`, continued
  * across cut steps (INFER_MS per batch bounds the call). Files are FileRefs the host loads. A
  * structured `output` — a declared kind, or `{ jsonSchema, rules }` — is built, not written in one piece: the model edits a
- * draft with `patch` (JSON Patch) as it finds each part, and hands it in with `submit`. A submission is checked against
- * `output`; one that does not match gets every offending field (and broken rule) back and the loop goes on until one
- * matches. More files than one model request carries (MODEL_FILES) are read in batches into the same draft: each batch
- * patches what its files add, and only the last submission is checked. With `tools` (host tools the engine resolved under
- * the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch, and so does 80% of
- * the time ceiling, whichever comes first: once spent, one
- * final turn offers only `patch`/`submit` (none for a text answer) and is told to answer; without a valid answer from it
- * (or already in the draft) the call fails `invalid`, naming the spent budget. An empty (reasoning-only) reply is asked to continue, at most 3 times
- * running.
+ * draft with `edit` (keyed pointers: a keyed list's items by key) as it finds each part, inspects it with `read`, `find`
+ * and `diff`, and hands it in with `submit`. A submission is checked against `output` and every rule (the schema's and
+ * the request's own `rules`); one that does not match gets every offending field (and broken rule) back and the loop goes
+ * on until one matches. More files than one model request carries (MODEL_FILES) are read in batches into the same draft:
+ * each batch edits in what its files add, and only the last submission is checked. With `tools` (host tools the engine
+ * resolved under the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch, and
+ * so does 80% of the time ceiling, whichever comes first: once spent, one final turn offers only the draft tools (none for
+ * a text answer) and is told to answer; without a valid answer from it (or already in the draft) the call fails
+ * `invalid`, naming the spent budget and what the draft still breaks. An empty (reasoning-only) reply is asked to
+ * continue, at most 3 times running.
  */
 const NUMERAL = /^-?\d+(\.\d+)?$/;
 /** A model's quoted scalar (`"true"`, `"95"`) read as the kind's own value; anything else is left for the decode to refuse. */
@@ -523,8 +620,8 @@ export function inferFacility(
 				`a text answer reads at most ${MODEL_FILES.count} files; ask for a structured output to read more`
 			);
 		let check: ((value: Json) => string[]) | undefined;
-		if (schemaOut !== undefined) {
-			const made = yield* Effect.try({
+		if (schemaOut !== undefined)
+			check = yield* Effect.try({
 				try: () => schemaChecker(schemaOut),
 				catch: (error) =>
 					new FacilityFailure({
@@ -532,10 +629,21 @@ export function inferFacility(
 						message: error instanceof Error ? error.message : String(error)
 					})
 			});
-			if (typeof made === 'string') return invalid(made);
-			check = made;
-		}
 		const root = Predicate.isObject(schemaOut?.jsonSchema) ? schemaOut.jsonSchema : {};
+		const rules = [...(schemaOut?.rules ?? []), ...(a.rules ?? [])];
+		const ruled = ruleChecker(
+			Object.keys(
+				out?.kind === 'object'
+					? out.fields
+					: Predicate.isObject(root['properties'])
+						? root['properties']
+						: {}
+			),
+			rules
+		);
+		if (typeof ruled === 'string') return invalid(ruled);
+		/** The output's kind, against which edits resolve keyed pointers and check their values; ANY for a JSON Schema. */
+		const kind = out ?? ANY;
 		let draft: Json =
 			a.initial !== undefined
 				? structuredClone(a.initial)
@@ -548,89 +656,91 @@ export function inferFacility(
 							: root.type === 'object' || root.properties !== undefined
 								? {}
 								: null;
+		/** What `diff` compares against: the draft the call started from. */
+		const original = draft;
 		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.jsonSchema;
 		const rulesText =
-			(schemaOut?.rules ?? []).length === 0
+			rules.length === 0
 				? ''
-				: `\n\nThe answer must also hold these rules (CEL over the top-level properties):\n${schemaOut!.rules!.map((r) => `- ${r.message}: ${r.expression}`).join('\n')}`;
-		const building = !structured
+				: `\n\nThe answer must also hold these rules (CEL over the top-level properties):\n${rules.map((r) => `- ${r.message}: ${r.expression}`).join('\n')}`;
+		// the draft's reader yields its name to a workspace `read` tool
+		const draftRead = tools.some((t) => t.name === 'read') ? 'read_answer' : 'read';
+		const object = (
+			properties: { [name: string]: Json },
+			required: readonly string[] = []
+		): Json => ({
+			type: 'object',
+			additionalProperties: false,
+			required: [...required],
+			properties
+		});
+		const finishing = !structured
 			? []
 			: [
 					{
-						name: PATCH,
-						description: `Edit the answer you are building with JSON Patch operations (RFC 6902 add, replace, remove at RFC 6901 paths). "add" creates missing parent objects; "/list/-" appends to a list. One call carries any number of operations. Take as many turns as the answer needs (tools to check facts, more reading); when it is complete, call ${SUBMIT} in the same reply as your last patch.`,
-						input: {
-							type: 'object',
-							additionalProperties: false,
-							required: ['ops'],
-							properties: {
+						name: EDIT,
+						description: `Change the answer you are building. Each op names a path and exactly one of: set (replace or create the value there; missing parent objects and lists are created), remove: true, or append (add an item to the end of a list that has no key). A path is a JSON Pointer ("/a/b"), except that an item of a keyed list is addressed by its key, never its index ("/items/ANNUAL/days"; set "/items/NEW" adds the item NEW); a list without a key uses indices. Ops apply in order and each is checked on its own: the result counts those applied and names each failed op with its path, and later ops still apply. Send only what changes. Take as many turns as the answer needs (tools to check facts, more reading); when it is complete, call ${SUBMIT} in the same reply as your last ${EDIT}.`,
+						input: object(
+							{
 								ops: {
 									type: 'array',
-									items: {
-										type: 'object',
-										additionalProperties: false,
-										required: ['op', 'path'],
-										properties: {
-											op: { enum: ['add', 'replace', 'remove'] },
-											path: { type: 'string' },
-											value: {}
-										}
-									}
+									items: object(
+										{ path: { type: 'string' }, set: {}, remove: { const: true }, append: {} },
+										['path']
+									)
 								}
-							}
-						} as Json
+							},
+							['ops']
+						)
 					},
 					{
 						name: SUBMIT,
-						description: `Hand in the answer as patched so far, including any ${PATCH} earlier in this same reply (calls apply in order). It is checked against the required shape; anything wrong comes back by path, and you ${PATCH} and ${SUBMIT} again together in one reply.`,
-						input: { type: 'object', additionalProperties: false, properties: {} } as Json
+						description: `Hand in the answer as edited so far, including any ${EDIT} earlier in this same reply (calls apply in order). It is checked against the required shape; anything wrong comes back by path, and you ${EDIT} and ${SUBMIT} again together in one reply.`,
+						input: object({})
+					},
+					{
+						name: draftRead,
+						description: `Read the answer at a path (as in ${EDIT}; "" is the whole answer). fields narrows an object to those fields, and each item of a list to its key and those fields. Reading changes nothing. A value too large to return comes back as its outline: read a child path, or pass fields.`,
+						input: object(
+							{ path: { type: 'string' }, fields: { type: 'array', items: { type: 'string' } } },
+							['path']
+						)
+					},
+					{
+						name: FIND,
+						description: `Search the answer for text, case-insensitively: the values and field names under path (default the whole answer). Returns each matching path (as in ${EDIT}) with a short excerpt, at most ${HITS}.`,
+						input: object({ text: { type: 'string' }, path: { type: 'string' } }, ['text'])
+					},
+					{
+						name: DIFF,
+						description: `What has changed in the answer since it started, under path (default the whole answer): each change's path, whether it was added, removed or changed, and the values before and after (long ones shortened). Items of keyed lists are matched by key. Use it to check your work, and to describe your changes.`,
+						input: object({ path: { type: 'string' } })
 					}
 				];
-		// the draft's reader yields its name to a workspace `read` tool
-		const draftRead = tools.some((t) => t.name === 'read') ? 'read_answer' : 'read';
-		const reading =
-			a.initial === undefined
-				? []
-				: [
-						{
-							name: draftRead,
-							description:
-								'Read the current in-memory answer at an RFC 6901 JSON Pointer. Reading does not change it. Large results are bounded; inspect individual child paths when a result is clipped.',
-							input: {
-								type: 'object',
-								additionalProperties: false,
-								required: ['path'],
-								properties: { path: { type: 'string' } }
-							} as Json
-						}
-					];
-		const finishing = [...building, ...reading];
+		const drafting = new Set(finishing.map((t) => t.name));
+		const inspecting = new Set([draftRead, FIND, DIFF]);
 		const offered = [
 			...tools.map(({ name, description, input }) => ({ name, description, input })),
 			...finishing
 		];
-		/** The draft checked against `output`: every offending field named (rule 23), as JSON Pointers the model patches with. */
+		/** The draft checked against `output` and the rules: every offending field named (rule 23), as keyed pointers. */
 		const decoded = (raw: Json): CrossAnswer => {
 			let problems: string[];
 			let value = raw;
 			if (check !== undefined) problems = check(value);
 			else {
 				if (out === undefined) return invalid('the structured output is not configured');
-				value = unquoted(out, raw);
-				const d = decodeInput({ output: out }, { output: value });
-				const at = (path: string) =>
-					`/${path
-						.replace(/^output\.?/, '')
-						.replaceAll(/\[(\d+)\]/g, '.$1')
-						.split('.')
-						.filter(Boolean)
-						.join('/')}`;
-				problems = d.problems.map((p) => `${at(p.path)}: ${p.message}`);
+				const v = unquoted(out, raw);
+				value = v;
+				problems = decodeInput({ output: out }, { output: v }).problems.map(
+					(p) => `${keyedPath(v, out, p.path.split('.').slice(1)) || '/'}: ${p.message}`
+				);
 			}
+			problems.push(...ruled(value));
 			return problems.length === 0
 				? { ok: true, value }
 				: invalid(
-						`the answer does not match the output: ${problems.join('; ')}. Fix these with ${PATCH} (the paths are JSON Pointers into your draft) and call ${SUBMIT} again in the same reply`
+						`the answer does not match the output: ${problems.join('; ')}. Fix these with ${EDIT} at those paths and call ${SUBMIT} again in the same reply`
 					);
 		};
 
@@ -657,11 +767,12 @@ export function inferFacility(
 				// `steps` spent and the final, tool-less turn answered without a valid answer: a draft that holds one still stands
 				if (finished) {
 					const held = structured ? settle(draft) : undefined;
-					return held?.ok === true
-						? held
-						: invalid(
-								`the tool budget (${a.steps ?? 'no'} steps, ${(INFER_MS * ANSWER_BY) / 60_000} minutes) was spent without a valid answer${last !== undefined && !last.ok && last.error.kind === 'invalid' ? `: ${last.error.message}` : ''}`
-							);
+					if (held?.ok === true) return held;
+					// what the draft still breaks (an unmet rule among it), else the last failed answer
+					const why = held ?? last;
+					return invalid(
+						`the tool budget (${a.steps ?? 'no'} steps, ${(INFER_MS * ANSWER_BY) / 60_000} minutes) was spent without a valid answer${why !== undefined && !why.ok && why.error.kind === 'invalid' ? `: ${why.error.message}` : ''}`
+					);
 				}
 				const tooling = spent ? finishing : offered;
 				const r = yield* modelCall(
@@ -730,51 +841,108 @@ export function inferFacility(
 					});
 					for (const c of r.toolCalls) {
 						let result: Json;
-						if (c.name === PATCH && structured) {
-							const patched = Result.try({
-								try: () => {
-									const input = Schema.decodeUnknownSync(
-										Schema.NullOr(
-											Schema.Struct({
-												ops: Schema.optionalKey(
-													Schema.Array(
-														Schema.Struct({
-															op: Schema.Literals(['add', 'replace', 'remove']),
-															path: Schema.String,
-															value: Schema.optionalKey(Schema.Json)
-														})
-													)
-												)
-											})
-										)
-									)(c.input);
-									return applyPatch(draft, input?.ops ?? []);
-								},
-								catch: (cause) => (cause instanceof Error ? cause.message : String(cause))
-							});
-							if (Result.isSuccess(patched)) {
-								draft = patched.success;
-								result = { patched: true };
-							} else result = { error: patched.failure };
-						} else if (c.name === draftRead && a.initial !== undefined) {
-							const path = (c.input as { path?: Json } | null)?.path;
-							let value: Json | undefined = draft;
-							if (typeof path !== 'string' || (path !== '' && !path.startsWith('/')))
-								value = undefined;
-							else if (path !== '')
-								for (const key of path
-									.slice(1)
-									.split('/')
-									.map((k) => k.replaceAll('~1', '/').replaceAll('~0', '~'))) {
-									value =
-										value !== null && typeof value === 'object' && Object.hasOwn(value, key)
-											? (value as { [key: string]: Json })[key]
-											: undefined;
-									if (value === undefined) break;
+						if (c.name === EDIT && structured) {
+							const ops = Option.getOrUndefined(
+								Schema.decodeUnknownOption(EditInput)(c.input)
+							)?.ops;
+							if (ops === undefined)
+								result = { error: `${EDIT} takes { ops: [{ path, set | remove | append }] }` };
+							else {
+								const errors: Json[] = [];
+								for (const [i, op] of ops.entries()) {
+									const edited = Result.try({
+										try: () => applyEdit(draft, Schema.decodeUnknownSync(EditOp)(op), kind),
+										catch: (cause) => (cause instanceof Error ? cause.message : String(cause))
+									});
+									if (Result.isSuccess(edited)) draft = edited.success;
+									else errors.push({ op: i, error: edited.failure });
 								}
-							result = bound(
-								value === undefined ? { error: 'No value at that JSON Pointer' } : { value }
-							);
+								result = {
+									applied: ops.length - errors.length,
+									...(errors.length === 0 ? {} : { errors })
+								};
+							}
+						} else if (c.name === draftRead && structured) {
+							const input = Option.getOrUndefined(Schema.decodeUnknownOption(ReadInput)(c.input));
+							const at =
+								input === undefined
+									? `${draftRead} takes { path, fields? }`
+									: resolve(draft, input.path, kind);
+							if (typeof at === 'string') result = { error: at };
+							else {
+								const value =
+									input?.fields === undefined ? at.value : project(at.value, at.kind, input.fields);
+								const key = keyOf(at.kind);
+								// too large to return: its outline, so the model reads a narrower path
+								result =
+									size(value) <= BOUNDS.resultBytes - 200
+										? { value }
+										: {
+												clipped: `the value is ${size(value)} bytes, too large to return: read a child path, or pass fields`,
+												...(isList(value)
+													? {
+															items: value.length,
+															...(key === undefined
+																? {}
+																: { keys: value.slice(0, 200).map((x) => keyText(x, key) ?? null) })
+														}
+													: isObj(value)
+														? { fields: Object.keys(value) }
+														: {})
+											};
+							}
+						} else if (c.name === FIND && structured) {
+							const input = Option.getOrUndefined(Schema.decodeUnknownOption(FindInput)(c.input));
+							if (input === undefined) result = { error: `${FIND} takes { text, path? }` };
+							else {
+								const at = resolve(draft, input.path ?? '', kind);
+								const hits =
+									typeof at === 'string'
+										? []
+										: find(at.value, at.kind, input.path ?? '', input.text);
+								result =
+									typeof at === 'string'
+										? { error: at }
+										: {
+												matches: hits.slice(0, HITS),
+												...(hits.length > HITS
+													? {
+															more: `${hits.length - HITS} more: narrow with path or a longer text`
+														}
+													: {})
+											};
+							}
+						} else if (c.name === DIFF && structured) {
+							const path =
+								Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
+							const now = resolve(draft, path, kind),
+								then = resolve(original, path, kind);
+							if (typeof now === 'string' && typeof then === 'string') result = { error: now };
+							else {
+								const changes: JsonChange[] = [];
+								diffAt(
+									typeof then === 'string' ? undefined : then.value,
+									typeof now === 'string' ? undefined : now.value,
+									typeof now !== 'string' ? now.kind : typeof then !== 'string' ? then.kind : ANY,
+									path,
+									changes
+								);
+								const shown = (v: Json): Json => {
+									const t = JSON.stringify(v);
+									return t.length <= SHOWN ? v : `${t.slice(0, SHOWN)}… (shortened: read the path)`;
+								};
+								result = {
+									changes: changes.slice(0, CHANGES).map((change) => ({
+										path: change.path,
+										kind: change.kind,
+										...(change.before === undefined ? {} : { before: shown(change.before) }),
+										...(change.after === undefined ? {} : { after: shown(change.after) })
+									})),
+									...(changes.length > CHANGES
+										? { more: `${changes.length - CHANGES} more: narrow with path` }
+										: {})
+								};
+							}
 						} else if (c.name === SUBMIT && structured) {
 							last = settle(draft);
 							if (last.ok) return last;
@@ -797,14 +965,12 @@ export function inferFacility(
 					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
 					if (
 						structured &&
-						r.toolCalls.every(
-							(c) => c.name === PATCH || c.name === SUBMIT || c.name === draftRead
-						) &&
-						(a.steps === undefined || r.toolCalls.some((c) => c.name !== draftRead)) &&
+						r.toolCalls.every((c) => drafting.has(c.name)) &&
+						(a.steps === undefined || r.toolCalls.some((c) => !inspecting.has(c.name))) &&
 						JSON.stringify(draft) === before
 					) {
-						// a model that re-patches instead of submitting: a draft that already holds is the answer
-						const held = r.toolCalls.some((c) => c.name === PATCH) ? settle(draft) : undefined;
+						// a model that re-edits instead of submitting: a draft that already holds is the answer
+						const held = r.toolCalls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
 						if (held?.ok === true) return held;
 						if (++stalls > FAILURES)
 							return (
@@ -821,7 +987,7 @@ export function inferFacility(
 						messages.push({
 							role: 'user',
 							content: structured
-								? `${budget}: no more tools. Finish the answer now with ${PATCH} from what you have found, and call ${SUBMIT} in this reply.`
+								? `${budget}: no more tools. Finish the answer now with ${EDIT} from what you have found, and call ${SUBMIT} in this reply.`
 								: `${budget}: no more tools. Give your answer now from what you have found.`
 						});
 					}
@@ -849,15 +1015,15 @@ export function inferFacility(
 					draft = parsed;
 				}
 				if (++failures > FAILURES)
-					return last ?? invalid(`the model did not build its answer with ${PATCH} and ${SUBMIT}`);
+					return last ?? invalid(`the model did not build its answer with ${EDIT} and ${SUBMIT}`);
 				messages.push(
 					{ role: 'assistant', content: textOf(whole) },
 					{
 						role: 'user',
 						content:
 							parsed === undefined
-								? `Build the answer with ${PATCH} and hand it in with ${SUBMIT}; do not write it out.`
-								: `${last!.ok ? '' : last!.error.kind === 'invalid' ? last!.error.message : 'That answer does not match the output'}. It is now your draft: fix it with ${PATCH}, then call ${SUBMIT}.`
+								? `Build the answer with ${EDIT} and hand it in with ${SUBMIT}; do not write it out.`
+								: `${last!.ok ? '' : last!.error.kind === 'invalid' ? last!.error.message : 'That answer does not match the output'}. It is now your draft: fix it with ${EDIT}, then call ${SUBMIT}.`
 					}
 				);
 			}
@@ -866,7 +1032,7 @@ export function inferFacility(
 		const ask = (lead: string) =>
 			!structured
 				? (a.prompt ?? '')
-				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${PATCH}. ${a.initial === undefined ? `Build your answer with ${PATCH}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use read to inspect it and ${PATCH} to edit only the necessary paths`}, into this JSON Schema, then call ${SUBMIT}:\n${JSON.stringify(shape)}${rulesText}`;
+				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${EDIT}. ${a.initial === undefined ? `Build your answer with ${EDIT}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use ${draftRead} and ${FIND} to inspect it and ${EDIT} to change only the paths that need it`}, into this JSON Schema, then call ${SUBMIT}:\n${JSON.stringify(shape)}${rulesText}`;
 		if (refs.length === 0) return yield* read([], ask(''), true);
 		// files load a batch at a time, so a thousand scans are never all in memory at once
 		let from = 0;
@@ -888,7 +1054,7 @@ export function inferFacility(
 			const lead =
 				refs.length <= batch.length
 					? ''
-					: `You are reading ${refs.length} source files in batches; these are files ${from + 1}–${to}.${from === 0 ? '' : ` The draft below already holds what files 1–${from} gave: keep it, append to its lists, fill what it lacks, and change a value only where these files show it differently.`} ${final ? `These are the last files: call ${SUBMIT} when the whole answer is complete; it is then checked.` : `Patch in everything these files hold, then call ${SUBMIT} to move on to the next files; the answer is checked after the last batch.`}\n\n`;
+					: `You are reading ${refs.length} source files in batches; these are files ${from + 1}–${to}.${from === 0 ? '' : ` The draft below already holds what files 1–${from} gave: keep it, append to its lists, fill what it lacks, and change a value only where these files show it differently.`} ${final ? `These are the last files: call ${SUBMIT} when the whole answer is complete; it is then checked.` : `Add everything these files hold with ${EDIT}, then call ${SUBMIT} to move on to the next files; the answer is checked after the last batch.`}\n\n`;
 			const answer = yield* read(batch, ask(lead), final);
 			if (!answer.ok || final) return answer;
 			draft = answer.value;

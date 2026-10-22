@@ -75,7 +75,11 @@ type StoredArm =
 	| { kind: 'sum'; of: `${string}.${string}`; where?: { readonly [k: string]: unknown } } // checked by `Verify`
 	| { kind: 'count'; of: string; where?: { readonly [k: string]: unknown } }
 	| { kind: 'json'; shape?: InputKind }
-	| { kind: 'list'; of: InputKind; min?: number; max?: number }
+	/**
+	 * `key`: the field of the list's object items that names each one; keys are distinct and non-empty, and a draft
+	 * pointer addresses an item by its key instead of its index (`/leave/ANNUAL/days`).
+	 */
+	| { kind: 'list'; of: InputKind; min?: number; max?: number; key?: string }
 	| { kind: 'object'; fields: InputFields; rest?: InputKind }
 	| { kind: 'file'; accept: readonly MimePattern[]; max: FileSize; multiple?: true }
 	| { kind: 'point' }

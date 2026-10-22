@@ -224,8 +224,11 @@ export type Convert = { document: Call<[source: ConvertSource, options: ConvertO
 // ── ai, geo ──
 /**
  * The model works in as many calls as it needs (continuing a cut answer, calling tools); each ends only after 60 s without a
- * token. A structured `output` is built by the model with `patch` (JSON Patch on a draft) and handed in with `submit`; a
- * submission that does not match `output` comes back with its problems and the model goes on until one matches.
+ * token. A structured `output` is built by the model on a draft (`initial`, else empty) with `edit` (set, remove or append
+ * at JSON Pointers whose segment for an item of a keyed list, `{ kind: 'list', key }`, is its key, not its index),
+ * inspected with `read`, `find` and `diff` (changes since the start, keyed items matched by key), and handed in with
+ * `submit`; a submission that does not match `output` or `rules` comes back with its problems and the model goes on until
+ * one matches.
  */
 type InferRequest<O, Tools> = {
 	model?: AiModelClass;
@@ -235,14 +238,22 @@ type InferRequest<O, Tools> = {
 	output?: Out<O>;
 	initial?: Json;
 	/**
-	 * The most model turns that may call tools (`patch` and `submit` included), 1–1000, per batch of files. Once spent, or
+	 * CEL over `output`'s top-level fields that every submission must also hold, with what to tell the model when one does
+	 * not; checked at `submit` and again when the budget is spent, where a draft still breaking one fails the call `invalid`
+	 * with its message. This is how an automation makes an unfinished review fail instead of returning its `initial` draft
+	 * unchanged: e.g. a `coverage` list whose items start `status: 'pending'`, with
+	 * `{ expression: "coverage.all(c, c.status != 'pending')", message: 'every coverage item is reviewed' }`.
+	 */
+	rules?: readonly { readonly expression: string; readonly message: string }[];
+	/**
+	 * The most model turns that may call tools (the draft tools included), 1–1000, per batch of files. Once spent, or
 	 * after 24 of the batch's 30 minutes, one final turn offers no host tools and must answer; otherwise the call fails `invalid`. Absent: no step budget.
 	 */
 	steps?: number;
 } & (Tools extends true
 	? {
 			/**
-			 * Tools the model may call between `patch`es: host tools the `runAs` policies name, and `'read'`, workspace
+			 * Tools the model may call between `edit`s: host tools the `runAs` policies name, and `'read'`, workspace
 			 * records read as those policies (grants, masks and row scopes as for `ctx.read`; a bounded page per call; batch up to 8).
 			 * @example Three-way matching: check an invoice against its open PO and goods receipts before answering.
 			 * ```ts
@@ -262,8 +273,9 @@ type InferRequest<O, Tools> = {
 /**
  * An `output` given as data rather than declared: a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the
  * logic between its parts, each read over the schema's top-level properties (`has(a.x) ? !has(a.y) : true`). Every
- * submission must satisfy both; a broken rule comes back to the model with its message. Any number of `files` are read,
- * in batches, into the one answer.
+ * submission must satisfy both (and the request's own `rules`); a broken rule comes back to the model with its message.
+ * There are no keyed lists: draft paths are plain JSON Pointers. Any number of `files` are read, in batches, into the one
+ * answer.
  */
 type InferSchemaOutput = {
 	readonly jsonSchema: Json;

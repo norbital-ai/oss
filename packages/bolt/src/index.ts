@@ -16,6 +16,9 @@ export { pipeline } from './decl/runtime/pipeline.ts';
 export { pageServer } from './decl/runtime/page.ts';
 export type { PageData, PageLoad, PageLoadRequest, PageServer } from './decl/runtime/page.ts';
 export { isMasked } from './decl/names.ts';
+/** Pure: what changed between two JSON values, keyed list items matched by key (a reviewed draft's changes). */
+export { jsonDiff } from './engine/agent/draft.ts';
+export type { JsonChange } from './engine/agent/draft.ts';
 
 export type { Actor, Handle, PlatformAutomation } from './decl/access/actor.ts';
 export type {

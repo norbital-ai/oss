@@ -210,11 +210,11 @@ describe('sys_2.infer host tools', () => {
 					use([
 						{
 							id: 'p',
-							name: 'patch',
+							name: 'edit',
 							input: {
 								ops: [
-									{ op: 'add', path: '/matched', value: false },
-									{ op: 'add', path: '/po', value: '' }
+									{ path: '/matched', set: false },
+									{ path: '/po', set: '' }
 								]
 							}
 						},
@@ -260,11 +260,11 @@ describe('sys_2.infer host tools', () => {
 						use([
 							{
 								id: 'p',
-								name: 'patch',
+								name: 'edit',
 								input: {
 									ops: [
-										{ op: 'add', path: '/matched', value: false },
-										{ op: 'add', path: '/po', value: '' }
+										{ path: '/matched', set: false },
+										{ path: '/po', set: '' }
 									]
 								}
 							},

@@ -9,7 +9,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
-import { applyPatch, inferFacility, modelCall } from '../src/engine/agent/ai.ts';
+import { applyEdit, inferFacility, modelCall } from '../src/engine/agent/ai.ts';
+import { jsonDiff } from '../src/engine/agent/draft.ts';
 import {
 	bound,
 	BOUNDS,
@@ -464,23 +465,42 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		kind: 'object',
 		fields: { n: { kind: 'int' }, note: { kind: 'text', optional: true } }
 	};
+	const DRAFT_TOOLS = ['edit', 'submit', 'read', 'find', 'diff'];
+	const leave = {
+		kind: 'object',
+		fields: {
+			leave: {
+				kind: 'list',
+				key: 'code',
+				of: {
+					kind: 'object',
+					fields: {
+						code: { kind: 'text' },
+						days: { kind: 'int' },
+						note: { kind: 'text', optional: true }
+					}
+				}
+			},
+			tags: { kind: 'list', of: { kind: 'text' } }
+		}
+	} as const;
 
 	it.effect(
-		'sys_2.infer: a structured answer is built with patch and handed in with submit; a failed submit comes back by path and the loop goes on',
+		'sys_2.infer: a structured answer is built with edit and handed in with submit; a refused op and a failed submit come back by path and the loop goes on',
 		() =>
 			Effect.gen(function* () {
 				const { p, requests } = port([
-					tool('patch', { ops: [{ op: 'add', path: '/n', value: 'x' }] }, 'p1'),
+					tool('edit', { ops: [{ path: '/n', set: 'x' }] }, 'e1'),
 					tool('submit', {}, 's1'),
 					tool(
-						'patch',
+						'edit',
 						{
 							ops: [
-								{ op: 'replace', path: '/n', value: 3 },
-								{ op: 'add', path: '/note', value: 'seen' }
+								{ path: '/n', set: 3 },
+								{ path: '/note', set: 'seen' }
 							]
 						},
-						'p2'
+						'e2'
 					),
 					tool('submit', {}, 's2')
 				]);
@@ -488,14 +508,22 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					ok: true,
 					value: { n: 3, note: 'seen' }
 				});
-				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['patch', 'submit']);
+				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
 				expect(requests[0]!.output).toBeUndefined();
 				// the shape to build is in the prompt, as JSON Schema
 				expect(requests[0]!.messages[0]!.content).toContain('"required":["n"]');
 				expect(requests[0]!.messages[0]!.content).toContain('"n":{"type":"integer"}');
+				// each op is checked as it applies: the refused value never reaches the draft
+				expect(requests[1]!.messages.at(-1)).toMatchObject({
+					role: 'tool',
+					content: {
+						id: 'e1',
+						result: { applied: 0, errors: [{ op: 0, error: '/n: expected a number' }] }
+					}
+				});
 				expect(requests[2]!.messages.at(-1)).toMatchObject({
 					role: 'tool',
-					content: { id: 's1', result: { error: expect.stringContaining('/n: expected a number') } }
+					content: { id: 's1', result: { error: expect.stringContaining('/n: is required') } }
 				});
 			})
 	);
@@ -525,31 +553,31 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					parts: [{ n: '3', flags: [' FALSE ', 'true'] }]
 				});
 				const { p, requests } = port([
-					tool(
-						'patch',
-						{ ops: [{ op: 'add', path: '', value: draft('yes', '95 percent') }] },
-						'p1'
-					),
-					tool('submit', {}, 's1'),
-					tool('patch', { ops: [{ op: 'add', path: '', value: draft('True', '95') }] }, 'p2'),
+					tool('edit', { ops: [{ path: '', set: draft('yes', '95 percent') }] }, 'e1'),
+					tool('edit', { ops: [{ path: '', set: draft('True', '95') }] }, 'e2'),
 					tool('submit', {}, 's2')
 				]);
 				expect(yield* inferFacility(p)(at({ prompt: 'q', output: quoted }))).toEqual({
 					ok: true,
 					value: { ok: true, pct: 95, parts: [{ n: 3, flags: [false, true] }] }
 				});
-				expect(requests[2]!.messages.at(-1)).toMatchObject({
+				expect(requests[1]!.messages.at(-1)).toMatchObject({
 					role: 'tool',
 					content: {
-						id: 's1',
+						id: 'e1',
 						result: {
-							error: expect.stringMatching(/\/ok: expected true or false.*\/pct: expected a number/)
+							errors: [
+								{
+									error: expect.stringMatching(
+										/\/ok: expected true or false.*\/pct: expected a number/
+									)
+								}
+							]
 						}
 					}
 				});
-				// the same model re-patched the identical draft and never submitted: an unchanged draft that holds is the answer
-				const repeat = () =>
-					tool('patch', { ops: [{ op: 'add', path: '', value: draft('true', '95') }] }, 'p');
+				// the same model re-edited the identical draft and never submitted: an unchanged draft that holds is the answer
+				const repeat = () => tool('edit', { ops: [{ path: '', set: draft('true', '95') }] }, 'e');
 				expect(
 					yield* inferFacility(port([repeat(), repeat()]).p)(at({ prompt: 'q', output: quoted }))
 				).toEqual({
@@ -627,34 +655,118 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			})
 	);
 
-	it('applyPatch: RFC 6902 add, replace and remove at JSON Pointers, parents created, "-" appends, a batch whole or not at all', () => {
-		const doc = { entries: { a: [{ label: '1' }] } };
-		expect(
-			applyPatch(doc, [
-				{ op: 'add', path: '/entries/a/-', value: { label: '2' } },
-				{ op: 'add', path: '/entries/b/label', value: 'x' },
-				{ op: 'replace', path: '/entries/a/0/label', value: '1A' },
-				{ op: 'remove', path: '/entries/a/1' },
-				{ op: 'add', path: '/items', value: ['1A'] }
-			])
-		).toEqual({ entries: { a: [{ label: '1A' }], b: { label: 'x' } }, items: ['1A'] });
+	it('applyEdit: a keyed list item is addressed by its key, so a removal shifts nothing; each op is checked as it applies', () => {
+		const doc = {
+			leave: [
+				{ code: 'ANNUAL', days: 14 },
+				{ code: 'SICK', days: 10 },
+				{ code: 'UNPAID', days: 0 }
+			],
+			tags: ['a']
+		};
+		const edit = (d: Json, op: Parameters<typeof applyEdit>[1]) => applyEdit(d, op, leave);
+		let d: Json = edit(doc, { path: '/leave/ANNUAL', remove: true });
+		d = edit(d, { path: '/leave/UNPAID/days', set: '2' }); // by index this was item 2, now item 1
+		d = edit(d, { path: '/leave/MATERNITY', set: { days: 98 } }); // a new item, its key filled from the path
+		d = edit(d, { path: '/tags', append: 'b' });
+		expect(d).toEqual({
+			leave: [
+				{ code: 'SICK', days: 10 },
+				{ code: 'UNPAID', days: 2 },
+				{ code: 'MATERNITY', days: 98 }
+			],
+			tags: ['a', 'b']
+		});
+		expect(doc.leave).toHaveLength(3); // the draft is never edited in place
+		expect(() => edit(d, { path: '/leave/SICK/days', set: 'many' })).toThrow(
+			'/leave/SICK/days: expected a number'
+		);
+		expect(() => edit(d, { path: '/leave/SICK/code', set: 'UNPAID' })).toThrow(
+			'another item of /leave is keyed "UNPAID"'
+		);
+		expect(() => edit(d, { path: '/leave/X', set: { code: 'Y', days: 1 } })).toThrow(
+			`the item's code is "Y", not "X"`
+		);
+		expect(() => edit(d, { path: '/leave/NEW', set: { note: 'n' } })).toThrow(
+			'/leave/NEW/days: is required'
+		);
+		expect(() => edit(d, { path: '/leave/GONE', remove: true })).toThrow(
+			'/leave has no item "GONE"'
+		);
+		expect(() => edit(d, { path: '/leave', append: { code: 'Z', days: 1 } })).toThrow(
+			'a keyed list'
+		);
 		expect(() =>
-			applyPatch(doc, [
-				{ op: 'add', path: '/ok', value: 1 },
-				{ op: 'replace', path: '/missing', value: 1 }
-			])
-		).toThrow(/operation 1 \(replace \/missing\)/);
-		expect(doc).toEqual({ entries: { a: [{ label: '1' }] } }); // the draft is never edited in place
+			edit(d, {
+				path: '/leave',
+				set: [
+					{ code: 'A', days: 1 },
+					{ code: 'A', days: 2 }
+				]
+			})
+		).toThrow("/leave/A/code: repeats the key 'A'");
+		expect(() => edit(d, { path: '/tags', set: [], remove: true })).toThrow('exactly one');
+		expect(() => edit(d, { path: '', remove: true })).toThrow('cannot remove the whole answer');
+	});
+
+	it('jsonDiff: leaves added, removed and changed by pointer; keyed items matched by key, other lists by index', () => {
+		const before = {
+			a: 1,
+			list: [
+				{ code: 'X', n: 1 },
+				{ code: 'Y', n: 2 }
+			],
+			tags: ['p', 'q'],
+			gone: true
+		};
+		const after = {
+			a: 2,
+			list: [
+				{ code: 'Y', n: 3 },
+				{ code: 'Z/1', n: 4 }
+			],
+			tags: ['q'],
+			added: { b: null }
+		};
+		const keyed = {
+			kind: 'object',
+			fields: {
+				list: {
+					kind: 'list',
+					key: 'code',
+					of: { kind: 'object', fields: { code: { kind: 'text' }, n: { kind: 'int' } } }
+				}
+			},
+			rest: { kind: 'json' }
+		} as const;
+		expect(jsonDiff(before, after, keyed)).toEqual([
+			{ path: '/a', kind: 'changed', before: 1, after: 2 },
+			{ path: '/list/X', kind: 'removed', before: { code: 'X', n: 1 } },
+			{ path: '/list/Y/n', kind: 'changed', before: 2, after: 3 },
+			{ path: '/list/Z~11', kind: 'added', after: { code: 'Z/1', n: 4 } },
+			{ path: '/tags/0', kind: 'changed', before: 'p', after: 'q' },
+			{ path: '/tags/1', kind: 'removed', before: 'q' },
+			{ path: '/gone', kind: 'removed', before: true },
+			{ path: '/added', kind: 'added', after: { b: null } }
+		]);
+		// without the output every list is compared by index
+		expect(jsonDiff(before.list, after.list).map((c) => c.path)).toEqual([
+			'/0/code',
+			'/0/n',
+			'/1/code',
+			'/1/n'
+		]);
+		expect(jsonDiff(before, before, keyed)).toEqual([]);
 	});
 
 	it.effect(
-		'sys_2.infer: reads and patches an initial complete snapshot without changing the supplied object',
+		'sys_2.infer: reads and edits an initial complete snapshot without changing the supplied object',
 		() =>
 			Effect.gen(function* () {
 				const initial = { n: 2, note: 'keep' };
 				const { p, requests } = port([
 					tool('read', { path: '/note' }, 'r1'),
-					tool('patch', { ops: [{ op: 'replace', path: '/n', value: 3 }] }),
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }),
 					tool('submit', {})
 				]);
 				expect(yield* inferFacility(p)(at({ prompt: 'research', initial, output }))).toEqual({
@@ -662,7 +774,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					value: { n: 3, note: 'keep' }
 				});
 				expect(initial).toEqual({ n: 2, note: 'keep' });
-				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['patch', 'submit', 'read']);
+				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
 				expect(requests[1]!.messages.at(-1)).toMatchObject({
 					role: 'tool',
 					content: { id: 'r1', result: { value: 'keep' } }
@@ -701,9 +813,11 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			expect(seen).toEqual([{ collection: 'purchase_orders' }]);
 			expect(requests[0]!.tools!.map((t) => t.name)).toEqual([
 				'read',
-				'patch',
+				'edit',
 				'submit',
-				'read_answer'
+				'read_answer',
+				'find',
+				'diff'
 			]);
 			expect(requests[2]!.messages.at(-1)).toMatchObject({
 				content: { id: 'r2', result: { value: 'keep' } }
@@ -718,7 +832,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				const fail: Step = () =>
 					Stream.fail(new FacilityFailure({ kind: 'upstream', message: 'fetch failed' }));
 				const { p, requests } = port([
-					tool('patch', { ops: [{ op: 'replace', path: '/n', value: 3 }] }),
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }),
 					fail,
 					tool('submit', {})
 				]);
@@ -785,7 +899,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer: a structured answer written out as text is taken as a submission; prose is asked to patch, at most 3 times running',
+		'sys_2.infer: a structured answer written out as text is taken as a submission; prose is asked to edit, at most 3 times running',
 		() =>
 			Effect.gen(function* () {
 				// one chatty turn used to fail the whole inference, which failed the automation that owned it
@@ -799,7 +913,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				});
 				expect(requests[1]!.messages.at(-1)).toMatchObject({
 					role: 'user',
-					content: expect.stringContaining('Build the answer with patch')
+					content: expect.stringContaining('Build the answer with edit')
 				});
 				expect(
 					yield* inferFacility(
@@ -809,7 +923,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					ok: false,
 					error: {
 						kind: 'invalid',
-						message: 'the model did not build its answer with patch and submit'
+						message: 'the model did not build its answer with edit and submit'
 					}
 				});
 			})
@@ -820,17 +934,18 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		() =>
 			Effect.gen(function* () {
 				// a model rewriting a bool as the string "true" patched the same value for 30 minutes, holding its run
-				const same = () => tool('patch', { ops: [{ op: 'replace', path: '/n', value: 'x' }] }, 'p');
+				const same = () => tool('edit', { ops: [{ path: '/n', set: 'x' }] }, 'e');
 				const { p, requests } = port([
-					tool('patch', { ops: [{ op: 'add', path: '/n', value: 'x' }] }, 'p0'),
 					tool('submit', {}, 's1'),
 					...Array.from({ length: 20 }, same)
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output }))).toMatchObject({
+				expect(
+					yield* inferFacility(p)(at({ prompt: 'q', initial: { n: 'x' }, output }))
+				).toMatchObject({
 					ok: false,
 					error: { kind: 'invalid', message: expect.stringContaining('/n: expected a number') }
 				});
-				expect(requests).toHaveLength(5);
+				expect(requests).toHaveLength(4);
 			})
 	);
 
@@ -882,21 +997,17 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					}
 				];
 				const { p, requests } = port([
-					tool(
-						'patch',
-						{ ops: [{ op: 'add', path: '/test', value: { status: 'unable', reading: -1 } }] },
-						'p1'
-					),
+					tool('edit', { ops: [{ path: '/test', set: { status: 'unable', reading: -1 } }] }, 'e1'),
 					tool('submit', {}, 's1'),
 					tool(
-						'patch',
+						'edit',
 						{
 							ops: [
-								{ op: 'remove', path: '/test/reading' },
-								{ op: 'add', path: '/test/reason', value: 'VTs connected' }
+								{ path: '/test/reading', remove: true },
+								{ path: '/test/reason', set: 'VTs connected' }
 							]
 						},
-						'p2'
+						'e2'
 					),
 					tool('submit', {}, 's2')
 				]);
@@ -924,7 +1035,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer: patch and submit in one reply apply in order, so a clean read is one model turn and a fix is one more',
+		'sys_2.infer: edit and submit in one reply apply in order, so a clean read is one model turn and a fix is one more',
 		() =>
 			Effect.gen(function* () {
 				const both =
@@ -933,13 +1044,13 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						response({
 							content: '',
 							toolCalls: [
-								{ id: `p${id}`, name: 'patch', input: { ops } },
+								{ id: `e${id}`, name: 'edit', input: { ops } },
 								{ id: `s${id}`, name: 'submit', input: {} }
 							],
 							finish: 'tool',
 							usage: { input: 1, output: 1 }
 						});
-				const clean = port([both([{ op: 'add', path: '/n', value: 3 }], '1')]);
+				const clean = port([both([{ path: '/n', set: 3 }], '1')]);
 				expect(yield* inferFacility(clean.p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
 					value: { n: 3 }
@@ -947,8 +1058,8 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				expect(clean.requests).toHaveLength(1);
 				expect(clean.requests[0]!.messages[0]!.content).toContain('in the same reply');
 				const fixed = port([
-					both([{ op: 'add', path: '/n', value: 'x' }], '1'),
-					both([{ op: 'replace', path: '/n', value: 4 }], '2')
+					both([{ path: '/n', set: 'x' }], '1'),
+					both([{ path: '/n', set: 4 }], '2')
 				]);
 				expect(yield* inferFacility(fixed.p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
@@ -956,13 +1067,16 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				});
 				expect(fixed.requests).toHaveLength(2);
 				expect(fixed.requests[1]!.messages.slice(-2)).toMatchObject([
-					{ role: 'tool', content: { id: 'p1', result: { patched: true } } },
 					{
 						role: 'tool',
 						content: {
-							id: 's1',
-							result: { error: expect.stringContaining('/n: expected a number') }
+							id: 'e1',
+							result: { applied: 0, errors: [{ op: 0, error: '/n: expected a number' }] }
 						}
+					},
+					{
+						role: 'tool',
+						content: { id: 's1', result: { error: expect.stringContaining('/n: is required') } }
 					}
 				]);
 			})
@@ -984,9 +1098,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					properties: { rows: { type: 'array', minItems: 2, items: { type: 'string' } } }
 				};
 				const { p, requests } = port([
-					tool('patch', { ops: [{ op: 'add', path: '/rows', value: ['a'] }] }, 'p1'),
+					tool('edit', { ops: [{ path: '/rows', set: ['a'] }] }, 'e1'),
 					tool('submit', {}, 's1'),
-					tool('patch', { ops: [{ op: 'add', path: '/rows/-', value: 'b' }] }, 'p2'),
+					tool('edit', { ops: [{ path: '/rows', append: 'b' }] }, 'e2'),
 					tool('submit', {}, 's2')
 				]);
 				const files = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}` }));
@@ -1002,7 +1116,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer with tools: the model calls them beside patch and submit (L-BOLT-372)',
+		'sys_2.infer with tools: the model calls them beside the draft tools (L-BOLT-372)',
 		() =>
 			Effect.gen(function* () {
 				const seen: Json[] = [];
@@ -1018,14 +1132,14 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				};
 				const { p, requests } = port([
 					tool('browse', { url: 'https://x' }),
-					tool('patch', { ops: [{ op: 'add', path: '/n', value: 3 }] }, 'p1'),
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
 					tool('submit', {}, 's1')
 				]);
 				expect(
 					yield* inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'] }), [browse])
 				).toEqual({ ok: true, value: { n: 3 } });
 				expect(seen).toEqual([{ url: 'https://x' }]);
-				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['browse', 'patch', 'submit']);
+				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(['browse', ...DRAFT_TOOLS]);
 				expect(requests[1]!.messages.at(-1)).toEqual({
 					role: 'tool',
 					content: { id: 'browse', name: 'browse', result: { text: 'rate is 3' } }
@@ -1047,11 +1161,11 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		};
 		return { seen, browse };
 	};
-	const patchAndSubmit = (): Stream.Stream<AiEvent, PortFailure> =>
+	const editAndSubmit = (): Stream.Stream<AiEvent, PortFailure> =>
 		response({
 			content: '',
 			toolCalls: [
-				{ id: 'p', name: 'patch', input: { ops: [{ op: 'add', path: '/n', value: 3 }] } },
+				{ id: 'e', name: 'edit', input: { ops: [{ path: '/n', set: 3 }] } },
 				{ id: 's', name: 'submit', input: {} }
 			],
 			finish: 'tool',
@@ -1059,14 +1173,14 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		});
 
 	it.effect(
-		'sys_2.infer steps: after N tool turns one final turn offers only patch and submit, and its submission is the answer',
+		'sys_2.infer steps: after N tool turns one final turn offers only the draft tools, and its submission is the answer',
 		() =>
 			Effect.gen(function* () {
 				const { seen, browse } = browsing();
 				const { p, requests } = port([
 					tool('browse', { url: 'https://a' }, 'b1'),
 					tool('browse', { url: 'https://b' }, 'b2'),
-					patchAndSubmit
+					editAndSubmit
 				]);
 				expect(
 					yield* inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'], steps: 2 }), [
@@ -1075,8 +1189,8 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				).toEqual({ ok: true, value: { n: 3 } });
 				expect(seen).toHaveLength(2);
 				expect(requests).toHaveLength(3);
-				expect(requests[1]!.tools!.map((t) => t.name)).toEqual(['browse', 'patch', 'submit']);
-				expect(requests[2]!.tools!.map((t) => t.name)).toEqual(['patch', 'submit']);
+				expect(requests[1]!.tools!.map((t) => t.name)).toEqual(['browse', ...DRAFT_TOOLS]);
+				expect(requests[2]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
 				expect(requests[2]!.messages.at(-1)).toMatchObject({
 					role: 'user',
 					content: expect.stringContaining('budget')
@@ -1097,7 +1211,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					read(),
 					read(),
 					tool('browse', { url: 'https://a' }, 'b1'),
-					patchAndSubmit
+					editAndSubmit
 				]);
 				expect(
 					yield* inferFacility(p)(
@@ -1125,14 +1239,14 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 							Effect.as({ text: 'rate is 3' })
 						)
 				};
-				const { p, requests } = port([tool('browse', { url: 'https://a' }, 'b1'), patchAndSubmit]);
+				const { p, requests } = port([tool('browse', { url: 'https://a' }, 'b1'), editAndSubmit]);
 				expect(
 					yield* inferFacility(p)(
 						at({ prompt: 'q', output, initial: {}, tools: ['browse'], steps: 1000 }),
 						[slow]
 					)
 				).toEqual({ ok: true, value: { n: 3 } });
-				// with 999 steps left, the second turn is the final one: only patch and submit are offered
+				// with 999 steps left, the second turn is the final one: only the draft tools are offered
 				expect(seen).toHaveLength(1);
 				expect(requests).toHaveLength(2);
 			})
@@ -1158,7 +1272,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 
 				const held = browsing();
 				const two = port([
-					tool('patch', { ops: [{ op: 'add', path: '/n', value: 3 }] }, 'p1'),
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
 					tool('browse', { url: 'https://a' }, 'b1'),
 					done('')
 				]);
@@ -1173,6 +1287,177 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				expect(
 					yield* Effect.flip(inferFacility(port([]).p)(at({ prompt: 'q', output, steps: 0 })))
 				).toMatchObject({ kind: 'invalid' });
+			})
+	);
+
+	it.effect(
+		'sys_2.infer: keyed edits apply op by op (a refused one reported, later ones applied), and read, diff and find speak keyed paths',
+		() =>
+			Effect.gen(function* () {
+				const initial = {
+					leave: [
+						{ code: 'ANNUAL', days: 14 },
+						{ code: 'SICK', days: 10, note: 'certified' },
+						{ code: 'UNPAID', days: 0 }
+					],
+					tags: []
+				};
+				const { p, requests } = port([
+					tool(
+						'edit',
+						{
+							ops: [
+								{ path: '/leave/SICK/days', set: 'many' },
+								{ path: '/leave/ANNUAL', remove: true },
+								{ path: '/leave/UNPAID/days', set: 1 },
+								{ path: '/leave/MATERNITY', set: { days: 98 } },
+								{ op: 'add', value: 1 }
+							]
+						},
+						'e1'
+					),
+					tool('read', { path: '/leave', fields: ['days'] }, 'r1'),
+					tool('diff', {}, 'd1'),
+					tool('find', { text: 'unp' }, 'f1'),
+					tool('submit', {}, 's1')
+				]);
+				expect(yield* inferFacility(p)(at({ prompt: 'q', initial, output: leave }))).toEqual({
+					ok: true,
+					value: {
+						leave: [
+							{ code: 'SICK', days: 10, note: 'certified' },
+							{ code: 'UNPAID', days: 1 },
+							{ code: 'MATERNITY', days: 98 }
+						],
+						tags: []
+					}
+				});
+				// the output says which lists are keyed, and by what
+				expect(requests[0]!.messages[0]!.content).toContain('Keyed by \\"code\\"');
+				expect(requests[1]!.messages.at(-1)).toMatchObject({
+					content: {
+						id: 'e1',
+						result: {
+							applied: 3,
+							errors: [
+								{ op: 0, error: '/leave/SICK/days: expected a number' },
+								{ op: 4, error: expect.any(String) }
+							]
+						}
+					}
+				});
+				expect(requests[2]!.messages.at(-1)).toMatchObject({
+					content: {
+						id: 'r1',
+						result: {
+							value: [
+								{ code: 'SICK', days: 10 },
+								{ code: 'UNPAID', days: 1 },
+								{ code: 'MATERNITY', days: 98 }
+							]
+						}
+					}
+				});
+				expect(requests[3]!.messages.at(-1)).toMatchObject({
+					content: {
+						id: 'd1',
+						result: {
+							changes: [
+								{ path: '/leave/ANNUAL', kind: 'removed', before: { code: 'ANNUAL', days: 14 } },
+								{ path: '/leave/UNPAID/days', kind: 'changed', before: 0, after: 1 },
+								{ path: '/leave/MATERNITY', kind: 'added', after: { code: 'MATERNITY', days: 98 } }
+							]
+						}
+					}
+				});
+				expect(requests[4]!.messages.at(-1)).toMatchObject({
+					content: {
+						id: 'f1',
+						result: { matches: [{ path: '/leave/UNPAID/code', excerpt: 'UNPAID' }] }
+					}
+				});
+			})
+	);
+
+	it.effect(
+		'sys_2.infer rules on a declared output: an unfinished review is refused at submit, and a spent budget fails invalid with the rule',
+		() =>
+			Effect.gen(function* () {
+				const review = {
+					kind: 'object',
+					fields: {
+						coverage: {
+							kind: 'list',
+							key: 'area',
+							of: {
+								kind: 'object',
+								fields: {
+									area: { kind: 'text' },
+									status: { kind: 'enum', values: ['pending', 'done'] }
+								}
+							}
+						}
+					}
+				};
+				const rules = [
+					{
+						expression: "coverage.all(c, c.status != 'pending')",
+						message: 'every area is reviewed'
+					}
+				];
+				const initial = {
+					coverage: [
+						{ area: 'pay', status: 'pending' },
+						{ area: 'leave', status: 'pending' }
+					]
+				};
+				// submitting the initial draft untouched is refused, and the budget runs out with one area still pending
+				const { p, requests } = port([
+					tool('submit', {}, 's1'),
+					tool('edit', { ops: [{ path: '/coverage/pay/status', set: 'done' }] }, 'e1'),
+					tool('submit', {}, 's2')
+				]);
+				expect(
+					yield* inferFacility(p)(at({ prompt: 'q', initial, output: review, rules, steps: 2 }))
+				).toEqual({
+					ok: false,
+					error: {
+						kind: 'invalid',
+						message: expect.stringMatching(/tool budget.*rule broken: every area is reviewed/)
+					}
+				});
+				expect(requests).toHaveLength(3);
+				expect(requests[0]!.messages[0]!.content).toContain('every area is reviewed');
+				expect(requests[1]!.messages.at(-1)).toMatchObject({
+					content: {
+						id: 's1',
+						result: { error: expect.stringContaining('rule broken: every area is reviewed') }
+					}
+				});
+				const finished = port([
+					tool(
+						'edit',
+						{
+							ops: [
+								{ path: '/coverage/pay/status', set: 'done' },
+								{ path: '/coverage/leave/status', set: 'done' }
+							]
+						},
+						'e'
+					),
+					tool('submit', {}, 's')
+				]);
+				expect(
+					yield* inferFacility(finished.p)(at({ prompt: 'q', initial, output: review, rules }))
+				).toEqual({
+					ok: true,
+					value: {
+						coverage: [
+							{ area: 'pay', status: 'done' },
+							{ area: 'leave', status: 'done' }
+						]
+					}
+				});
 			})
 	);
 });

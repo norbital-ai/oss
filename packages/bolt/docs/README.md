@@ -44,13 +44,22 @@ use `Effect.fnUntraced` or `Effect.fnUntracedEager`; Bolt owns the invocation ru
 
 `ctx.ai.sys_2.infer` has no step budget unless the request sets `steps` (1–1000 model turns that
 call tools, per batch of files). Once spent — or after 24 of the batch's 30-minute ceiling, whichever
-comes first — one final turn offers only `patch`/`submit` and must answer; without a valid answer there or in the draft the call fails `invalid`, naming the budget.
+comes first — one final turn offers only the draft tools and must answer; without a valid answer there or in the draft the call fails `invalid`, naming the budget and what the draft still breaks.
+
+A structured `output` is built on a draft (`initial`, else empty) with draft tools: `edit` (`{ ops: [{ path, set | remove: true | append }] }`,
+each op applied and checked on its own), `read` (`{ path, fields? }`), `find` (`{ text, path? }`), `diff` (`{ path? }`:
+changes since the start) and `submit`. Paths are JSON Pointers, except that an item of a keyed list
+(`{ kind: 'list', of, key: 'code' }`) is addressed by its key (`/leave/ANNUAL/days`), so a removal never shifts another
+item's path; keys are distinct and non-empty. Request `rules` (CEL over the output's top-level fields) must hold at
+`submit` and when the budget is spent, so a review whose items start `pending` fails `invalid` unless the model finishes
+it (`coverage.all(c, c.status != 'pending')`). `jsonDiff(before, after, output?)` from `@norbital-ai/bolt` is the same
+pure comparison, for verifying changed rows and composing a change summary.
 
 With `runAs` policies, `tools` may name `'read'` beside host tools: the model reads workspace
 records as those policies (grants, field masks and row scopes as for `ctx.read`), one bounded
 engine read per call (default 50 rows, at most 200; up to 8 batched), across as many turns as
-`steps` allows. A `runAs: 'trigger'` run cannot offer it. With `initial`, the draft's pointer
-reader is then named `read_answer`.
+`steps` allows. A `runAs: 'trigger'` run cannot offer it. The draft's reader is then named
+`read_answer`.
 
 ```ts
 // three-way match: the invoice against its open PO and goods receipts

@@ -1,5 +1,5 @@
 // `ctx.ai.sys_2.infer({ tools: ['read'] })` in an automation: the model reads workspace records as the run's `runAs`
-// policies over several turns (the agent's `read` tool: grants, masks, bounded pages), then patches and submits; a
+// policies over several turns (the agent's `read` tool: grants, masks, bounded pages), then edits and submits; a
 // collection outside the policies is refused, a masked field never reaches the model, `steps` still caps the tool turns,
 // and a `runAs: 'trigger'` run cannot offer `read`.
 import { describe, expect, it } from '@effect/vitest';
@@ -172,7 +172,7 @@ const toolResults = (request: AiRequest) =>
 
 describe("sys_2.infer tools: ['read']", () => {
 	it.live(
-		'reads over two turns as the runAs policies (refused collection, masked field), then the spent budget leaves patch and submit',
+		'reads over two turns as the runAs policies (refused collection, masked field), then the spent budget leaves the draft tools',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -188,11 +188,11 @@ describe("sys_2.infer tools: ['read']", () => {
 						use([
 							{
 								id: 'p',
-								name: 'patch',
+								name: 'edit',
 								input: {
 									ops: [
-										{ op: 'add', path: '/matched', value: true },
-										{ op: 'add', path: '/po', value: 'PO-1' }
+										{ path: '/matched', set: true },
+										{ path: '/po', set: 'PO-1' }
 									]
 								}
 							},
@@ -221,7 +221,14 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(yield* note(t, route, id)).toBe(JSON.stringify({ matched: true, po: 'PO-1' }));
 					expect(ai.requests).toHaveLength(3);
 					const offered = ai.requests[0]!.tools!;
-					expect(offered.map((tool) => tool.name)).toEqual(['read', 'patch', 'submit']);
+					expect(offered.map((tool) => tool.name)).toEqual([
+						'read',
+						'edit',
+						'submit',
+						'read_answer',
+						'find',
+						'diff'
+					]);
 					expect(offered[0]!.description).toContain('Collections: invoices, purchase_orders.');
 					// one bounded page of the matcher's view: the Acme order only, its margin masked away
 					const [page] = toolResults(ai.requests[1]!);
@@ -233,8 +240,14 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(toolResults(ai.requests[2]!)[1]).toEqual({
 						error: expect.stringContaining("You may not read 'ledgers'")
 					});
-					// steps: 2 spent on the two reads; the final turn offers only patch and submit
-					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual(['patch', 'submit']);
+					// steps: 2 spent on the two reads; the final turn offers only the draft tools
+					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
+						'edit',
+						'submit',
+						'read_answer',
+						'find',
+						'diff'
+					]);
 				})
 			)
 	);

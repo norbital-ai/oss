@@ -384,7 +384,13 @@ export const RequestOutput: Schema.Codec<Kind> = Schema.suspend(() =>
 			of: Schema.String,
 			where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
 		}),
-		Schema.Struct({ ...KindCommon, ...Range, kind: Schema.Literal('list'), of: RequestOutput }),
+		Schema.Struct({
+			...KindCommon,
+			...Range,
+			kind: Schema.Literal('list'),
+			of: RequestOutput,
+			key: Schema.optionalKey(Schema.String)
+		}),
 		Schema.Struct({
 			...KindCommon,
 			kind: Schema.Literal('object'),

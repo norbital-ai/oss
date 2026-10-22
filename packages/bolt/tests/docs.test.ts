@@ -62,6 +62,7 @@ it('the declaration functions and native mask guard are documented, and spec par
 		'group',
 		'integration',
 		'isMasked',
+		'jsonDiff',
 		'kiosk',
 		'mcp',
 		'messages',

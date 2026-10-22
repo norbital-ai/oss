@@ -12,7 +12,7 @@ const original = (body: object | undefined): unknown =>
 		? undefined
 		: Object.getOwnPropertyDescriptor(body, Symbol.for('norbital.bolt.generator'))?.value;
 describe('next declarations', () => {
-	it.live('exports the declaration functions and the native mask guard as values (P29)', () =>
+	it.live('exports the declarations, the mask guard and jsonDiff as values (P29)', () =>
 		Effect.gen(function* () {
 			// the closed list of §3.3.10 and Appendix D.2, exactly
 			const declarations = [
@@ -34,7 +34,8 @@ describe('next declarations', () => {
 				'mcp',
 				'envoy',
 				'automation',
-				'isMasked'
+				'isMasked',
+				'jsonDiff'
 			];
 			expect(Object.keys(bolt).sort()).toEqual([...declarations].sort());
 			for (const value of Object.values(bolt)) expect(typeof value).toBe('function');
