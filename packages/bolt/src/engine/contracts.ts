@@ -461,7 +461,7 @@ export type BrowserStep =
 	| { readonly wait: { readonly text?: string; readonly ms?: number } };
 /**
  * The browsing facility the built-in `browser_*` tools drive. Each `profile` is one browser of its own, its sign-ins and
- * site data kept between calls: a person's id, or `BROWSER_RUN_PROFILE` + run id for an automation run (discarded after).
+ * site data kept between calls: a person's id, or `BROWSER_RUN_PROFILE` + `<run id>:<inference id>` for one inference of a run.
  * Pages answer as text with a ref on every control; a PDF answers its extracted text, page by page.
  */
 export interface BrowserPort {

@@ -764,6 +764,8 @@ export const RunsLive = Layer.effect(
 											: `'${missing}' is not a host tool this run's policies name`
 								}
 							} satisfies CrossAnswer;
+						// one browsing session per inference: inferences side by side in one run never share a page
+						const session = yield* crypto.randomUUIDv4.pipe(Effect.mapError(Port.failure('infer')));
 						const tools: InferTool[] = hosted
 							.filter((tool) => names.includes(tool.name))
 							.map((tool) => ({
@@ -780,7 +782,7 @@ export const RunsLive = Layer.effect(
 												input,
 												{
 													actor: authority.actor,
-													conversation: run.id,
+													conversation: `${run.id}:${session}`,
 													turn: run.id,
 													callId,
 													attach: () => {}
