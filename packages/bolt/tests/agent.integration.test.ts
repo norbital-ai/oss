@@ -148,14 +148,18 @@ const use =
 			finish: 'tool',
 			usage: { input: used, output: 5 }
 		});
-const cassette = (steps: readonly Step[]) => {
+type Catalog = Effect.Success<Ai['Service']['catalog']>;
+const cassette = (
+	steps: readonly Step[],
+	catalog: Catalog = { models: [{ id: 'default', label: 'Default' }], default: 'default' }
+) => {
 	const requests: AiRequest[] = [];
 	let index = 0;
 	const port: Ai['Service'] = {
 		ask: respondSystem1,
 		maxChoices: undefined,
 		models: ['default'],
-		catalog: Effect.succeed({ models: [{ id: 'default', label: 'Default' }], default: 'default' }),
+		catalog: Effect.succeed(catalog),
 		embed: () => Port.unavailable('ai.embed'),
 		infer: (request) =>
 			Stream.unwrap(
@@ -313,11 +317,12 @@ it.live('SDK close aborts an already-running MCP request without a second drain 
 const setup = (
 	steps: readonly Step[],
 	over: Partial<Omit<AgentConfig, 'engine' | 'ai' | 'bindings'>> = {},
-	now?: string
+	now?: string,
+	catalog?: Catalog
 ) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture,
-			ai = cassette(steps);
+			ai = cassette(steps, catalog);
 		const values: Record<string, string> = {
 			HQ_URL: hq.url,
 			HQ_TOKEN: 's3cret',
@@ -810,6 +815,36 @@ describe('in-app turns', () => {
 						expect(after.some((x) => x.includes('context checkpoint'))).toBe(true);
 						expect(after.some((x) => x.includes('d1'))).toBe(false);
 						expect(after.some((x) => x.includes('go'))).toBe(true);
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+
+	it.live(
+		"a conversation on the `default` class compacts against the catalogue's default model's window, not 200k",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup(
+						[
+							use('history', { query: 'x' }, 'd1', 95),
+							say('| Section | Summary |\n|---|---|\n| Goal | g |'),
+							say('Done.')
+						],
+						{},
+						undefined,
+						{
+							models: [{ id: 'vendor/small', label: 'Small', context: 100 }],
+							default: 'vendor/small'
+						}
+					);
+					return yield* Effect.gen(function* () {
+						const { ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
+						yield* agent.drain(c);
+						expect(ai.requests[1]!.system).toBe(COMPACT_FORMAT);
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)

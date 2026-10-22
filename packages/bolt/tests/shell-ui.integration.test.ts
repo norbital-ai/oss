@@ -337,20 +337,22 @@ describe('the shell renders a page (§5.10)', () => {
 			)
 	);
 
-	it.live('a preview opened outside its frame says so; a live workspace does not', () =>
+	it.live("a preview opened outside its frame goes to the live workspace's Studio; framed, it renders", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
+				const replace = vi.spyOn(window.location, 'replace').mockImplementation(() => {});
+				yield* Effect.addFinalizer(() => Effect.sync(() => replace.mockRestore()));
 				const context = yield* workspace({ manifest, host: { live: 'https://h.test/acme' } });
 				const { target } = yield* open(context, '/app/desk/hero', { 'desk/hero': page(Hero) });
-				yield* until(
-					() =>
-						target.textContent?.includes('This is a preview — open it from Studio or Norbius.') ===
-						true
-				);
-				const plain = yield* workspace({ manifest });
-				const { target: other } = yield* open(plain, '/app/desk/hero', { 'desk/hero': page(Hero) });
-				yield* until(() => other.querySelector('[data-body]') !== null);
-				expect(other.textContent).not.toContain('This is a preview');
+				yield* until(() => replace.mock.calls.length > 0);
+				expect(replace).toHaveBeenCalledWith('https://h.test/acme/studio');
+				expect(target.querySelector('[data-body]')).toBeNull();
+				// Norbius's own browser marks its view of a preview: it sees the page itself
+				const { target: framed } = yield* open(context, '/app/desk/hero?frame', {
+					'desk/hero': page(Hero)
+				});
+				yield* until(() => framed.querySelector('[data-body]') !== null);
+				expect(replace).toHaveBeenCalledTimes(1);
 			})
 		)
 	);

@@ -91,16 +91,22 @@
 			since = now = Date.now();
 			failure = null;
 			const timer = setInterval(() => (now = Date.now()), 1_000);
-			// the address itself: an error status is a reason to show; a redirect (the hand-off) or a cross-origin
-			// address answers nothing readable, and the frame decides
+			let retry: ReturnType<typeof setTimeout> | undefined;
+			// the address itself: an error status is a reason to show, except a busy host (503), which is waited out
+			// with the loading card up; a redirect (the hand-off) or a cross-origin address answers nothing readable
 			void fetch(src, { redirect: 'manual', credentials: 'include' }).then(
 				(response) => {
-					if (key === loading && response.status >= 400)
+					if (key !== loading) return;
+					if (response.status === 503) retry = setTimeout(() => reloads++, 5_000);
+					else if (response.status >= 400)
 						failure = `${response.status} ${response.statusText}`.trim();
 				},
 				() => {}
 			);
-			return () => clearInterval(timer);
+			return () => {
+				clearInterval(timer);
+				clearTimeout(retry);
+			};
 		}
 	);
 	const waiting = $derived(loaded !== loading);

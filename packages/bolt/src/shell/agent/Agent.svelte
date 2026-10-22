@@ -1520,6 +1520,10 @@
 							/>
 						</div>
 						<dl class="grid gap-1 tabular-nums">
+							{#if chosenModel !== null}<div class="flex justify-between gap-2">
+									<dt class="text-muted-foreground">{t('Model')}</dt>
+									<dd class="min-w-0 truncate" data-context-model>{modelLabel(chosenModel)}</dd>
+								</div>{/if}
 							<div class="flex justify-between gap-2">
 								<dt class="text-muted-foreground">{t('Input')}</dt>
 								<dd>{k(meter.input)}</dd>

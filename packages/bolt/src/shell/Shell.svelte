@@ -355,6 +355,11 @@
 				...(config.fetch === undefined ? {} : { fetch: config.fetch }),
 				...(config.openStream === undefined ? {} : { openStream: config.openStream })
 			}).pipe(Effect.provideService(Scope.Scope, scope));
+			// a preview shows only in Studio's or Norbius's frame (Norbius's own browser marks its view `?frame`);
+			// opened as a page of its own it goes to the live workspace's Studio, which frames it
+			const live = result.success.workspace.live;
+			if (live !== undefined && window.self === window.top && !url.searchParams.has('frame'))
+				return void location.replace(`${live.replace(/\/$/, '')}/studio`);
 			failure = null;
 			boot = result.success;
 			bolt = client;
@@ -905,17 +910,6 @@
 							>
 							<Button size="sm" variant="outline" onclick={() => location.reload()}
 								>{t('Reload')}</Button
-							>
-						</Inline>
-					{/if}
-					<!-- a preview lives in Studio's or Norbius's frame, which labels it; opened directly, it says what it is -->
-					{#if boot.workspace.live !== undefined && window.self === window.top}
-						<Inline role="status" justify="between" gap="sm" class="bg-info/15 px-4 py-2 text-xs">
-							<span class="min-w-0 whitespace-normal"
-								>{t('This is a preview — open it from Studio or Norbius.')}</span
-							>
-							<Button size="sm" variant="outline" class="shrink-0" href={boot.workspace.live}
-								>{t('Open live workspace')}</Button
 							>
 						</Inline>
 					{/if}

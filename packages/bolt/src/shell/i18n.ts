@@ -507,7 +507,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Open: '打开',
 	'Open a file to edit it.': '打开文件以编辑。',
 	'Open navigation': '打开导航',
-	'Open live workspace': '打开线上工作区',
 	Operations: '运营',
 	Organization: '组织',
 	Pause: '暂停',
@@ -517,8 +516,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Plan first; you approve before it acts': '先制定计划；执行前需您批准',
 	Policy: '策略',
 	Preview: '预览',
-	'This is a preview — open it from Studio or Norbius.':
-		'这是预览 — 请从 Studio 或 Norbius 中打开。',
 	'Preview as': '预览身份',
 	Output: '输出',
 	'Previewing as a team. Its grants apply; you are recorded as the previewer.':

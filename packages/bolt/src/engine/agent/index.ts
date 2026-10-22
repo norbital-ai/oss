@@ -962,9 +962,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								Effect.tapCause(Effect.logWarning),
 								Effect.catch(() => Effect.succeed(undefined))
 							);
+				// a conversation on a class (`default`) runs the catalogue's default model: its window is that model's
+				const concrete = catalog?.models.some((x) => x.id === conv.model)
+					? conv.model
+					: catalog?.default;
 				const window =
 					configuredWindow ??
-					catalog?.models.find((x) => x.id === conv.model)?.context ??
+					catalog?.models.find((x) => x.id === concrete)?.context ??
 					AGENT_LIMITS.window;
 				if (
 					(asked || lastInput > AGENT_LIMITS.compactAt * window) &&
