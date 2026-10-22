@@ -297,7 +297,7 @@ describe('bolt build', () => {
 	);
 
 	it.live(
-		'--preview skips the type index and reuses an unchanged base pack',
+		'a build without types skips the type index and reuses an unchanged base pack',
 		() =>
 			Effect.gen(function* () {
 				const pack = join(root, '.norbital/seed/base/pack.json'),
@@ -305,7 +305,7 @@ describe('bolt build', () => {
 					original = readFileSync(customers, 'utf8');
 				yield* fixtureBuild(root, {});
 				const written = statSync(pack).mtimeMs;
-				const preview = yield* fixtureBuild(root, { preview: true });
+				const preview = yield* fixtureBuild(root, { types: false });
 				expect(statSync(pack).mtimeMs).toBe(written);
 				expect(preview.packs['base']!.rows).toEqual({ customers: 1 });
 				const ws = yield* workspaceFiles(join(root, '.norbital/artifact'));
@@ -318,7 +318,7 @@ describe('bolt build', () => {
 						{ id: '0199a000-0000-4000-8000-000000000002', name: 'Beta' }
 					])
 				);
-				const changed = yield* fixtureBuild(root, { preview: true }).pipe(
+				const changed = yield* fixtureBuild(root, { types: false }).pipe(
 					Effect.ensuring(Effect.sync(() => writeFileSync(customers, original)))
 				);
 				expect(changed.packs['base']!.rows).toEqual({ customers: 2 });

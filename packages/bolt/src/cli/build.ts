@@ -314,19 +314,19 @@ const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema:
 	return hash.digest('hex');
 });
 /**
- * `preview` is the fast build a Studio preview serves: no type stage (svelte-check or tsc, doctor, type index). A
- * published release is always a full build; any build reuses an unchanged base pack and unchanged type results.
+ * Every build is a full build (a Studio preview's is the one its publish reuses); any build reuses an unchanged base
+ * pack and unchanged type results.
  * `checked` is source its own repository's CI already checked (a published template): its type index is built (the
  * agent reads it), the checks are not run again.
  */
 export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 	dir: string,
-	options: { bank?: string; types?: boolean; preview?: boolean; checked?: boolean; log?: Log } = {}
+	options: { bank?: string; types?: boolean; checked?: boolean; log?: Log } = {}
 ) {
 	const fs = yield* FileSystem.FileSystem,
 		path = yield* Path.Path,
 		root = yield* fs.realPath(dir),
-		typed = options.types !== false && options.preview !== true;
+		typed = options.types !== false;
 	const checked = yield* check(root),
 		errors = [...checked.errors];
 	const typing = typed
