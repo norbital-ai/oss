@@ -994,20 +994,13 @@ describe('Studio port boundary', () => {
 			decodeOp([])
 		]).toEqual([null, null, null, null, null, null]);
 	});
-	it('decodes the collaboration ops (L-COL-188, 190): switch, rebase, preview on live data, exit and mr.*', () => {
+	it('decodes the collaboration ops (L-COL-188, 190): switch, rebase, preview, exit and mr.*', () => {
 		expect([
 			decodeOp({ op: 'switch', target: '3' }),
 			decodeOp({ op: 'rebase' }),
-			decodeOp({ op: 'preview', live: true }),
-			decodeOp({ op: 'preview', live: 'yes' }),
+			decodeOp({ op: 'preview' }),
 			decodeOp({ op: 'exit' })
-		]).toEqual([
-			{ op: 'switch', target: '3' },
-			{ op: 'rebase' },
-			{ op: 'preview', live: true },
-			{ op: 'preview' },
-			{ op: 'exit' }
-		]);
+		]).toEqual([{ op: 'switch', target: '3' }, { op: 'rebase' }, { op: 'preview' }, { op: 'exit' }]);
 		expect(decodeOp({ op: 'mr.open', title: 'Leave rules' })).toEqual({
 			op: 'mr.open',
 			title: 'Leave rules'

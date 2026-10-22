@@ -641,7 +641,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Open merge request': '发起合并请求',
 	Review: '审查',
 	'Resolve the conflict markers in': '请解决以下文件中的冲突标记：',
-	'Preview on live data': '用正式数据预览',
 	'Exit preview': '退出预览',
 	'stale: built from': '已过时：构建自',
 	expires: '到期',
@@ -879,10 +878,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Rolled back': '已回滚',
 	'Edit safely, preview the exact result, then ask for review.':
 		'安全编辑、预览准确结果，然后请求审核。',
-	'Preview on sample data': '用示例数据预览',
 	'Rebuild preview': '重新构建预览',
-	'on live data': '使用正式数据',
-	'on sample data': '使用示例数据',
 	'against Live': '对比线上版本',
 	'against MR head': '对比合并请求最新提交',
 	Current: '最新',

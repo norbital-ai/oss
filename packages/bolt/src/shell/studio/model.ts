@@ -1,7 +1,7 @@
 // Workspace Studio's port (§5.10, §7.1): the shell renders Studio and the host that owns source, builds and releases
 // answers it. Bolt names no host: one that passes no port serves no Studio; a platform maps these calls onto its own.
 // The agent's authoring tools over it are the host's, never Bolt's; Bolt's own agent only reads (`workspace_search`).
-import { Effect, Schema, SchemaTransformation } from 'effect';
+import { Schema, SchemaTransformation } from 'effect';
 import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
@@ -75,7 +75,7 @@ export type StudioMergeRequest = {
 	decision: (StudioDecision & { accept?: readonly string[]; artifact?: string }) | null;
 	comments: readonly StudioComment[];
 	destructive?: readonly string[];
-	preview: { url: string; commit: string; live: boolean; expiresAt: string; stale: boolean } | null;
+	preview: { url: string; commit: string; expiresAt: string; stale: boolean } | null;
 	log: readonly StudioLogLine[];
 	createdAt: string;
 	readyAt: string | null;
@@ -108,7 +108,6 @@ export type StudioState = {
 	previewOf?: {
 		commit: string;
 		artifact: string;
-		live: boolean;
 		expiresAt: string;
 		stale: boolean;
 	};
@@ -126,7 +125,7 @@ export type StudioState = {
 /**
  * `save` commits edits to the viewer's target over `expected` (a stale head is refused), `null` deletes a file; `preview`
  * builds the target in its author's sandbox (or reuses the artifact already built for that head) and serves it as a
- * preview (`live`: on a fork of live data, else on the public seed) and `exit` drops it; `switch` moves the viewer
+ * preview on a copy-on-write fork of live's data taken at that moment, and `exit` drops it; `switch` moves the viewer
  * between their own draft (`workbench`) and a merge request; `rebase` replays the target onto live (conflicts land as
  * marked files). `mr.open` opens a merge request over the viewer's own draft; `publish` promotes their draft's artifact.
  * `rollback` deploys a recorded commit's build again as a new deployment on top of live (live's source history stays
@@ -158,13 +157,7 @@ export const StudioOp = Schema.Union([
 			Schema.makeFilter((files) => Object.keys(files).every(Schema.is(safePath)))
 		)
 	}),
-	Schema.Struct({
-		op: Schema.Literal('preview'),
-		live: Schema.optionalKey(
-			Schema.Literal(true).pipe(Schema.catchDecoding(() => Effect.succeedNone))
-		)
-	}),
-	Schema.Struct({ op: Schema.Literals(['exit', 'publish', 'rebase']) }),
+	Schema.Struct({ op: Schema.Literals(['preview', 'exit', 'publish', 'rebase']) }),
 	Schema.Struct({
 		op: Schema.Literal('rollback'),
 		commit: nonempty,

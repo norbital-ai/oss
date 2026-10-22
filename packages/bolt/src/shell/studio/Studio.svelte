@@ -10,8 +10,8 @@
 	build's stored log and diagnostics open from the rail. Under it are the runtime log (`sys_event`, the one place the log is read) and Operations, the environments the host routes. Build log
 	lines, a moved head, a moved merge request and phase frames (diagnose → preview → merge, L-BOLT-530) arrive pushed.
 	Each tab is a deep link (`/studio/<tab>`: `mrs` opens Changes, `runtime` and `operations` open Live's views). Every
-	staff member opens Studio over their own draft; publish, merge, review, rollback, a preview on live data, the runtime log
-	and someone else's merge request are an administrator's (`admin`), and the host refuses them regardless.
+	staff member opens Studio over their own draft and previews it on a fork of live's data; publish, merge, review,
+	rollback, the runtime log and someone else's merge request are an administrator's (`admin`), and the host refuses them regardless.
 -->
 <script lang="ts">
 	import { attach, fork } from '@norbital-ai/ui/effect';
@@ -339,12 +339,12 @@
 					: running
 	);
 	/** A preview build: its progress (the furthest step and the time it took so far) shows in the preview pane. */
-	const buildPreview = (live: boolean) =>
+	const buildPreview = () =>
 		Effect.suspend(() => {
 			step = -1;
 			since = Date.now();
 			building = true;
-			return run(live ? { op: 'preview', live: true } : { op: 'preview' });
+			return run({ op: 'preview' });
 		}).pipe(
 			Effect.ensuring(
 				Effect.sync(() => {
@@ -354,7 +354,7 @@
 		);
 	/** A diagnosis checks what is on screen: unsaved drafts are saved (with their description) first. */
 	const diagnose = Effect.fn('Studio.diagnose')(function* () {
-		if (yield* save()) yield* buildPreview(false);
+		if (yield* save()) yield* buildPreview();
 	});
 	let build = $state<{ commit: string; record: StudioBuildRecord | null } | null>(null);
 	let showBuild = $state(false);
@@ -402,7 +402,7 @@
 	}
 	function togglePreview(): void {
 		showPreview = !showPreview;
-		if (showPreview && view?.preview === null) fork(buildPreview(false));
+		if (showPreview && view?.preview === null) fork(buildPreview());
 	}
 	const files = $derived(
 		view === null ? [] : [...new Set([...Object.keys(view.files), ...Object.keys(drafts)])].sort()
@@ -638,8 +638,8 @@
 							{building ? running : t('No preview yet.')}
 						</p>
 						{#if !building && target === 'workbench'}
-							<Button size="sm" disabled={locked} onclick={() => fork(buildPreview(false))}
-								>{t('Preview on sample data')}</Button
+							<Button size="sm" disabled={locked} onclick={() => fork(buildPreview())}
+								>{t('Preview')}</Button
 							>
 						{/if}
 					</Stack>
@@ -654,10 +654,7 @@
 					>
 						{#snippet details()}
 							{#if p !== undefined}
-								<p>
-									{t(p.live ? 'on live data' : 'on sample data')} ·
-									<code class="font-mono">{short(p.commit)}</code>
-								</p>
+								<p><code class="font-mono">{short(p.commit)}</code></p>
 								{#if p.stale}<p class="text-amber-700 dark:text-amber-300">
 										{t('stale: built from')} <code class="font-mono">{short(p.commit)}</code>
 									</p>{/if}
@@ -671,19 +668,10 @@
 									variant="ghost"
 									class="justify-start"
 									disabled={locked}
-									onclick={() => (close(), fork(buildPreview(false)))}
+									onclick={() => (close(), fork(buildPreview()))}
 								>
 									<Icon name="lucide:refresh-cw" class="size-3.5" />{t('Rebuild preview')}
 								</Button>
-								{#if admin}<Button
-										size="sm"
-										variant="ghost"
-										class="justify-start"
-										disabled={locked}
-										onclick={() => (close(), fork(buildPreview(true)))}
-									>
-										<Icon name="lucide:database" class="size-3.5" />{t('Preview on live data')}
-									</Button>{/if}
 								<Button
 									size="sm"
 									variant="ghost"

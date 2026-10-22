@@ -86,7 +86,6 @@
 {#snippet previewControls(
 	preview: {
 		url?: string;
-		live: boolean;
 		commit: string;
 		expiresAt: string;
 		stale: boolean;
@@ -101,15 +100,9 @@
 			onclick={() => fork(run({ op: 'preview' }))}
 		>
 			<Icon name="lucide:scan-eye" class="size-3.5" />{t(
-				preview === null ? 'Preview on sample data' : 'Rebuild preview'
+				preview === null ? 'Preview' : 'Rebuild preview'
 			)}
 		</Button>
-		{#if admin}<Button
-				size="sm"
-				variant="ghost"
-				disabled={busy}
-				onclick={() => fork(run({ op: 'preview', live: true }))}>{t('Preview on live data')}</Button
-			>{/if}
 		{#if preview !== null}
 			<Button size="sm" variant="ghost" disabled={busy} onclick={() => fork(run({ op: 'exit' }))}
 				>{t('Exit preview')}</Button
@@ -119,8 +112,8 @@
 						class="text-primary hover:underline"
 						href={url}
 						target="_blank"
-						rel="noreferrer">{t(preview.live ? 'on live data' : 'on sample data')}</a
-					>{:else}{t(preview.live ? 'on live data' : 'on sample data')}{/if}
+						rel="noreferrer">{t('Preview')}</a
+					>{:else}{t('Preview')}{/if}
 				{#if preview.stale}
 					· <span class="text-amber-700 dark:text-amber-300"
 						>{t('stale: built from')} <code class="font-mono">{short(preview.commit)}</code></span
@@ -472,12 +465,11 @@
 			</Cluster>
 			{#if m.preview !== null && !(target === m.id && open)}
 				<p class="text-micro text-muted-foreground">
-					{t('Preview')}
 					<a
 						class="text-primary hover:underline"
 						href={m.preview.url}
 						target="_blank"
-						rel="noreferrer">{t(m.preview.live ? 'on live data' : 'on sample data')}</a
+						rel="noreferrer">{t('Preview')}</a
 					>
 					{#if m.preview.stale}
 						· <span class="text-amber-700 dark:text-amber-300"

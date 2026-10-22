@@ -23,8 +23,8 @@ When the draft is built, the chat shows **The preview is ready.** with a **View 
 previewed). The preview runs there at true size — Desktop is 1440 × 900, scaled down to fit — in a device frame on a
 blueprint grid, already signed in as you; Phone and Tablet switch the size, ⓘ shows what it runs ("Draft · Rename title ·
 1440×900 · 23:05"). One preview shows at a time. A preview is never a separate page or tab of its own, and Norbius does
-not paste preview links: it tells you to press View preview. A preview runs on the template's sample data, not your
-live records; anything you enter in it stays in the preview.
+not paste preview links: it tells you to press View preview. A preview runs on a copy of your live records taken when it
+was built (a copy-on-write fork); anything you enter in it stays in the preview.
 
 Norbius picks what the previewer shows: each new preview it builds replaces the last, and it can switch back to an
 earlier preview it built in this conversation (`preview_show`). It never shows any other page there.
