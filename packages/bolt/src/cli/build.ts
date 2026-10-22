@@ -81,11 +81,8 @@ export const doctorFindings = Effect.fn('bolt.doctorFindings')(function* (
 				};
 	});
 });
-/** The type diagnostics, once: svelte-check where a component needs it (it checks every .ts file too), else tsc. */
-const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
-	root: string,
-	program?: TypeProgram
-) {
+/** The checker's diagnostics, once: svelte-check where a component needs it (it checks every .ts file too), else tsc. */
+const toolDiagnostics = Effect.fn('bolt.toolDiagnostics')(function* (root: string) {
 	const fs = yield* FileSystem.FileSystem,
 		path = yield* Path.Path;
 	if (!(yield* fs.exists(path.join(root, 'tsconfig.json')))) return [];
@@ -150,10 +147,9 @@ const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
 								message: `${match[2]}:${match[3]}:${match[4]}: ${match[5]}`
 							};
 				}
-			)),
-			...(yield* doctorFindings(root, program))
+			))
 		];
-	const errors = yield* run(
+	return yield* run(
 		'tsc',
 		bin('@typescript/native', 'tsc', root) ?? bin('typescript', 'tsc', root),
 		[
@@ -178,9 +174,13 @@ const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
 					};
 		}
 	);
-	errors.push(...(yield* doctorFindings(root, program)));
-	return errors;
 });
+/** The type diagnostics: the checker's, then doctor's (type-aware when it is given the type index's program). */
+const typeDiagnostics = (root: string, program?: TypeProgram) =>
+	Effect.map(
+		Effect.all([toolDiagnostics(root), doctorFindings(root, program)]),
+		([tool, doctor]) => [...tool, ...doctor]
+	);
 const TypeCache = Schema.Struct({
 	key: Schema.String,
 	diagnostics: Schema.Array(Diagnostic),
@@ -275,19 +275,26 @@ export const types = Effect.fn('bolt.types')(function* (root: string) {
  */
 const typedBuild = Effect.fn('bolt.typedBuild')(function* (
 	root: string,
-	manifest: Parameters<typeof typeIndex>[1] | undefined
+	manifest: Parameters<typeof typeIndex>[1] | undefined,
+	checks: boolean
 ) {
 	yield* writeTypeSetup(root);
 	const key = yield* typeKey(root),
 		hit = yield* typeCache(root, key);
 	if (Option.isSome(hit) && hit.value.index !== undefined)
 		return { diagnostics: [...hit.value.diagnostics], index: hit.value.index };
+	// the checker runs in its own process before this one builds its program: the two programs never share the memory
+	const tool = !checks || Option.isSome(hit) ? [] : yield* toolDiagnostics(root);
 	const built = manifest === undefined ? undefined : yield* typeIndex(root, manifest);
 	const diagnostics = Option.isSome(hit)
 		? [...hit.value.diagnostics]
-		: yield* typeDiagnostics(root, built?.program);
+		: checks
+			? [...tool, ...(yield* doctorFindings(root, built?.program))]
+			: [];
 	const index: TypeIndex | undefined = built?.index;
-	yield* keepTypes(root, { key, diagnostics, ...(index === undefined ? {} : { index }) });
+	// only checked results are kept: an unchecked build's empty diagnostics must never answer a later check
+	if (checks || Option.isSome(hit))
+		yield* keepTypes(root, { key, diagnostics, ...(index === undefined ? {} : { index }) });
 	return { diagnostics, index };
 });
 /** Everything the base pack is built from: the seed tree, the schema it is written against and the locked toolchain. */
@@ -309,10 +316,12 @@ const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema:
 /**
  * `preview` is the fast build a Studio preview serves: no type stage (svelte-check or tsc, doctor, type index). A
  * published release is always a full build; any build reuses an unchanged base pack and unchanged type results.
+ * `checked` is source its own repository's CI already checked (a published template): its type index is built (the
+ * agent reads it), the checks are not run again.
  */
 export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 	dir: string,
-	options: { bank?: string; types?: boolean; preview?: boolean; log?: Log } = {}
+	options: { bank?: string; types?: boolean; preview?: boolean; checked?: boolean; log?: Log } = {}
 ) {
 	const fs = yield* FileSystem.FileSystem,
 		path = yield* Path.Path,
@@ -320,7 +329,9 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 		typed = options.types !== false && options.preview !== true;
 	const checked = yield* check(root),
 		errors = [...checked.errors];
-	const typing = typed ? yield* typedBuild(root, checked.manifest) : undefined;
+	const typing = typed
+		? yield* typedBuild(root, checked.manifest, options.checked !== true)
+		: undefined;
 	if (typing !== undefined) errors.push(...typing.diagnostics);
 	if (errors.length > 0 || checked.manifest === undefined || checked.guest === undefined)
 		return yield* Effect.fail(new AuthorErrors({ errors, message: `${errors.length} errors` }));

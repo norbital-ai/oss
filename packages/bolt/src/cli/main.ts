@@ -177,12 +177,19 @@ const buildCommand = Command.make(
 		dir,
 		bank,
 		json: Flag.boolean('json').pipe(Flag.withDefault(false)),
-		preview: Flag.boolean('preview').pipe(Flag.withDefault(false))
+		preview: Flag.boolean('preview').pipe(Flag.withDefault(false)),
+		checked: Flag.boolean('checked').pipe(
+			Flag.withDescription(
+				"source its repository's CI already checked: build the type index, skip the checks"
+			),
+			Flag.withDefault(false)
+		)
 	},
-	({ dir, bank, json, preview }) =>
+	({ dir, bank, json, preview, checked }) =>
 		buildWorkspace(resolve(dir), {
 			...(Option.isNone(bank) ? {} : { bank: bank.value }),
 			preview,
+			checked,
 			log
 		}).pipe(
 			Effect.catchTag('AuthorErrors', (error) =>
