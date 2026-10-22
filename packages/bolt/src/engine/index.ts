@@ -274,6 +274,7 @@ export {
 	type AgentConfig,
 	type DrainOptions
 } from './agent/index.ts';
+export { BROWSER_RUN_PROFILE } from './agent/browser.ts'; // hook:wiring — the profile a host discards after a run
 export { fileAttachments } from './agent/attachments.ts'; // hook:wiring — `read_attachment` over the files port
 // ── exports: protocol ──
 export { BoltHost, BoltHostLive, ORDER, type Handler } from '../protocol/host.ts';

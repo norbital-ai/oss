@@ -66,12 +66,14 @@ import {
 	Metering,
 	Speech,
 	Transport,
-	WebRead
+	WebRead,
+	Browser
 } from '../engine/ports.ts';
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { GuestConfig } from '../engine/guest/runner.ts';
 import { AgentHost, type AgentConfig } from '../engine/agent/index.ts';
+import { withBrowser } from '../engine/agent/browser.ts';
 import { HOOKS, OAUTH_CALLBACK, integrationLinks } from '../engine/integrations/links.ts';
 import { credentials } from '../engine/integrations/credentials.ts';
 import type { OAuthClient, OAuthVendor, Provider } from '../engine/integrations/driver.ts';
@@ -215,6 +217,7 @@ export type HostPorts = Pick<
 	| 'speech'
 	| 'geocoder'
 	| 'web'
+	| 'browser'
 	| 'links'
 	| 'metering'
 	| 'membership'
@@ -453,6 +456,7 @@ const portLayers = (ports: HostPorts) =>
 		Convert.fromAbi(ports.convert),
 		Speech.fromAbi(ports.speech),
 		WebRead.fromAbi(ports.web),
+		Browser.fromAbi(ports.browser),
 		Geo.fromAbi(ports.geocoder),
 		Metering.fromAbi(ports.metering),
 		DeadlinePort.fromAbi(ports.deadlines),
@@ -540,7 +544,10 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		activation(ports, artifact),
 		portLayers(ports),
 		transportLayer,
-		Layer.succeed(AgentHost, { ...ports.agent, ...(workspace === undefined ? {} : { workspace }) }),
+		Layer.effect(
+			AgentHost,
+			withBrowser({ ...ports.agent, ...(workspace === undefined ? {} : { workspace }) })
+		).pipe(Layer.provide(Browser.fromAbi(ports.browser))),
 		Layer.succeed(GuestConfig, {
 			...(ports.cpu === undefined ? {} : { cpu: ports.cpu }),
 			...(ports.compute === undefined

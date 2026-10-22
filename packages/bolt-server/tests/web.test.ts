@@ -50,11 +50,26 @@ describe('public web connector', () => {
 		})
 	);
 
-	it.live('refuses blank, corrupt and overlong PDFs instead of returning partial evidence', () =>
+	it.live('keeps a scanned page as a marked gap among the readable pages', () =>
+		Effect.gen(function* () {
+			const binding: Options = {
+				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
+				request: () =>
+					Effect.succeed({
+						status: 200,
+						contentType: 'application/pdf',
+						body: pdfFixture(['Valid first page', ''])
+					})
+			};
+			const page = yield* read(binding, 'https://supplier.example/data.pdf');
+			expect(page._tag === 'Success' ? page.value.output.body : page).toMatch(
+				/\[Page 1\]\nValid first page[\s\S]*\[Page 2\]\n\(no extractable text: a scanned page\)/
+			);
+		})
+	);
+	it.live('refuses corrupt and overlong PDFs', () =>
 		Effect.gen(function* () {
 			for (const body of [
-				pdfFixture(['']),
-				pdfFixture(['Valid first page', '']),
 				new Uint8Array(Buffer.from('%PDF-1.7 broken')),
 				pdfFixture(Array.from({ length: 201 }, () => 'text'))
 			]) {

@@ -218,8 +218,6 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 		? { ...base, error: row.error === null ? null : { code: row.error.code } }
 		: null;
 }
-/** `web_read` in an automation's infer: a public document as plain text, one window per call. */
-const WEB_READ_WINDOW = 20_000;
 /** An infer tool's input as the JSON Schema the model is given, derived from its Schema. */
 const jsonSchemaOf = (input: Schema.Top, tool: string) => {
 	const document = Schema.toJsonSchemaDocument(input);
@@ -227,73 +225,6 @@ const jsonSchemaOf = (input: Schema.Top, tool: string) => {
 		...document.schema,
 		$defs: document.definitions
 	}).pipe(Effect.mapError(Port.failure(tool)));
-};
-const WebReadInput = Schema.Struct({
-	url: Schema.String.annotate({ description: 'a public http(s) document' }),
-	from: Schema.optionalKey(
-		Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
-			description: 'the character to read from'
-		})
-	),
-	find: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' }))
-});
-const WebReadPage = Schema.Struct({
-	url: Schema.String,
-	title: Schema.NullOr(Schema.String),
-	text: Schema.String,
-	pages: Schema.optionalKey(Schema.Number)
-});
-/** The text from `from`, or with `find` the passages around any of its words, at most one window; `next` reads on. */
-export const webReadWindow = (
-	page: typeof WebReadPage.Type,
-	from = 0,
-	find?: string
-): { [key: string]: Json } => {
-	const words = (find ?? '')
-		.toLowerCase()
-		.split(/\s+/)
-		.filter((word) => word !== '');
-	const lower = page.text.toLowerCase();
-	const spans: [number, number][] = [];
-	if (words.length > 0)
-		for (const word of words)
-			for (
-				let at = lower.indexOf(word, from);
-				at !== -1;
-				at = lower.indexOf(word, at + word.length)
-			)
-				spans.push([Math.max(from, at - 400), Math.min(page.text.length, at + word.length + 400)]);
-	spans.sort((a, b) => a[0] - b[0]);
-	const merged = spans.reduce<[number, number][]>((all, span) => {
-		const last = all.at(-1);
-		if (last !== undefined && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
-		else all.push([...span]);
-		return all;
-	}, []);
-	let text = '',
-		next: number | undefined;
-	for (const [start, end] of words.length > 0
-		? merged
-		: [[from, page.text.length] as [number, number]]) {
-		const room = WEB_READ_WINDOW - text.length;
-		if (room <= 0) {
-			next = start;
-			break;
-		}
-		text += (text === '' ? '' : '\n…\n') + page.text.slice(start, Math.min(end, start + room));
-		if (end - start > room) {
-			next = start + room;
-			break;
-		}
-	}
-	return {
-		url: page.url,
-		title: page.title,
-		characters: page.text.length,
-		...(page.pages === undefined ? {} : { pages: page.pages }),
-		text: words.length > 0 && text === '' ? '(no passage has any of those words)' : text,
-		...(next === undefined ? {} : { next })
-	};
 };
 const EVENTS = new Set(['created', 'updated', 'deleted']);
 const MAX_IDS = 10000,
@@ -815,33 +746,6 @@ export const RunsLive = Layer.effect(
 									})
 							});
 						}
-						// `web_read`: the workspace's own web facility (HTML, PDF and office text), for documents a browser cannot show
-						if (names.includes('web_read'))
-							records.push({
-								name: 'web_read',
-								description:
-									'Read a public http(s) document as plain text: a web page, or a PDF, Word or spreadsheet file that the browser shows as empty. Answers up to 20,000 characters from `from` (default 0) and `next` when more remain; `find` answers only the passages around any of its words.',
-								input: yield* jsonSchemaOf(WebReadInput, 'tool web_read'),
-								call: (input) =>
-									Effect.gen(function* () {
-										const wanted = Schema.decodeUnknownOption(WebReadInput)(input);
-										if (Option.isNone(wanted))
-											return { error: 'give url, and optionally from and find' };
-										const answer = yield* facilities.dispatch({
-											_tag: 'web.read',
-											args: [wanted.value.url]
-										});
-										if (!answer.ok)
-											return {
-												error:
-													'message' in answer.error ? answer.error.message : answer.error.reason
-											};
-										const page = Schema.decodeUnknownOption(WebReadPage)(answer.value);
-										return Option.isNone(page)
-											? { error: 'the document did not decode' }
-											: webReadWindow(page.value, wanted.value.from, wanted.value.find);
-									})
-							});
 						const missing = names.find((name) =>
 							name === 'read'
 								? reader === undefined

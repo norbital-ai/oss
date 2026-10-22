@@ -282,11 +282,19 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 						Stream.decodeText(),
 						Stream.splitLines,
 						Stream.map((s) => s.trim()),
-						Stream.filter((s) => s.startsWith('data:') && s.slice(5).trim() !== '[DONE]'),
-						Stream.mapEffect((s) =>
-							decodeChunk(s.slice(5).trim()).pipe(Effect.mapError(Port.failure('ai')))
+						Stream.filter(
+							(s) => s.startsWith(':') || (s.startsWith('data:') && s.slice(5).trim() !== '[DONE]')
 						),
-						Stream.runForEach((chunk) => accept(chunk, false)),
+						// A keep-alive comment is the provider still generating: OpenRouter holds a tool call's arguments
+						// back until they are whole and sends only these meanwhile.
+						Stream.runForEach((s) =>
+							s.startsWith(':')
+								? Queue.offer(queue, { _tag: 'Progress', reasoning: undefined })
+								: decodeChunk(s.slice(5).trim()).pipe(
+										Effect.mapError(Port.failure('ai')),
+										Effect.flatMap((chunk) => accept(chunk, false))
+									)
+						),
 						Effect.mapError(Port.failure('ai'))
 					);
 				}

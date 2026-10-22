@@ -2269,9 +2269,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	return api;
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;
-export const AgentHost = Context.Reference<
-	Omit<AgentConfig, 'engine' | 'ai' | 'bindings' | 'announce'>
->('bolt/AgentHost', { defaultValue: () => ({}) });
+/** What the host adds to every agent (its tools, skills, sandbox, draft source). */
+export type AgentHostConfig = Omit<AgentConfig, 'engine' | 'ai' | 'bindings' | 'announce'>;
+export const AgentHost = Context.Reference<AgentHostConfig>('bolt/AgentHost', {
+	defaultValue: () => ({})
+});
 export const AgentsLive = Layer.effectContext(
 	Effect.gen(function* () {
 		const manifest = yield* Manifest,

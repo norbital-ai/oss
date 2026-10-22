@@ -46,9 +46,11 @@ import {
 	Metering,
 	Speech,
 	Transport,
-	WebRead
+	WebRead,
+	Browser
 } from '../engine/ports.ts';
 import { AgentHost } from '../engine/agent/index.ts';
+import { withBrowser } from '../engine/agent/browser.ts';
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { localFiles, loggedTransport } from '../engine/facilities.ts';
@@ -263,7 +265,9 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 			});
 			const workspace = yield* workspaceFiles(next.dir);
 			const ports = Layer.mergeAll(
-				Layer.succeed(AgentHost, workspace === undefined ? {} : { workspace }),
+				Layer.effect(AgentHost, withBrowser(workspace === undefined ? {} : { workspace })).pipe(
+					Layer.provide(Browser.unavailable)
+				),
 				Layer.succeed(TenantDb, db),
 				Layer.succeed(Files, options.files),
 				Layer.succeed(Transport, mail),

@@ -47,7 +47,6 @@ const HOST_TOOLS = [
 	'browser_screenshot',
 	'browser_snapshot',
 	'sandbox_run',
-	'web_read',
 	'web_search',
 	'workspace_review',
 	'workspace_validate',

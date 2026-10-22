@@ -447,6 +447,39 @@ export interface WebReadPort {
 	/** `raw`: also the markup and its links, for a page that is markup (§5.8; P19: a provider may omit what it lacks). */ // hook:runtime
 	read(url: string, signal: AbortSignal, options?: { raw?: boolean }): Promise<WebPage>;
 }
+/** Where `navigate` goes: a page, or back, forward or a reload of the one open. */
+export type BrowserTarget =
+	{ readonly url: string } | { readonly go: 'back' | 'forward' | 'reload' };
+/** One `browser_act` step, on a control's `ref` from the page text. */
+export type BrowserStep =
+	| { readonly click: string }
+	| { readonly type: { readonly ref: string; readonly text: string; readonly submit?: boolean } }
+	| { readonly select: { readonly ref: string; readonly value: string } }
+	| { readonly press: string }
+	| { readonly hover: string }
+	| { readonly scroll: { readonly ref?: string; readonly y?: number } }
+	| { readonly wait: { readonly text?: string; readonly ms?: number } };
+/**
+ * The browsing facility the built-in `browser_*` tools drive. Each `profile` is one browser of its own, its sign-ins and
+ * site data kept between calls: a person's id, or `BROWSER_RUN_PROFILE` + run id for an automation run (discarded after).
+ * Pages answer as text with a ref on every control; a PDF answers its extracted text, page by page.
+ */
+export interface BrowserPort {
+	navigate(
+		profile: string,
+		to: BrowserTarget,
+		find: string | undefined,
+		signal: AbortSignal
+	): Promise<Json>;
+	snapshot(
+		profile: string,
+		options: { find?: string; from?: number },
+		signal: AbortSignal
+	): Promise<Json>;
+	act(profile: string, steps: readonly BrowserStep[], signal: AbortSignal): Promise<Json>;
+	evaluate(profile: string, expression: string, signal: AbortSignal): Promise<Json>;
+	screenshot(profile: string, signal: AbortSignal): Promise<Uint8Array>;
+}
 /**
  * What an instance's link hands the engine (§4.5, `integrations.receive`): inbound conversation messages (each attachment
  * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's
@@ -549,6 +582,7 @@ export type HostPorts = {
 	speech?: SpeechPort;
 	geocoder?: GeocoderPort;
 	web?: WebReadPort;
+	browser?: BrowserPort;
 	push?: TransportPort;
 	links?: LinksPort;
 	metering?: MeteringPort;

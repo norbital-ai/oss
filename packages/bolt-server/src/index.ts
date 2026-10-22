@@ -7,4 +7,5 @@ export { drivers, type DriversOptions } from './drivers.ts';
 export { toDrivers } from '@norbital-ai/providers';
 export { sqlServerDatabase } from './database.ts';
 export { publicWeb, readPublicPage, type PublicPage } from './web.ts';
+export { extractDocumentText } from './documents.ts';
 export { apns, push } from './push.ts';

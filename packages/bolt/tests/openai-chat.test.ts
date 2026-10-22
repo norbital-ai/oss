@@ -460,6 +460,18 @@ describe('openAiChat', () => {
 				).toMatchObject({ message: expect.stringMatching(/switched call id/) });
 			})
 	);
+	it.effect('a keep-alive comment is progress while the provider holds back a tool call', () =>
+		Effect.gen(function* () {
+			const f: typeof fetch = async () =>
+				stream([
+					': OPENROUTER PROCESSING\n\n',
+					'data: {"id":"c","choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"set","arguments":"{}"}}]}}]}\n\n',
+					'data: [DONE]\n\n'
+				]);
+			const events = yield* Stream.runCollect(openAiChat(config, { fetch: f })(request));
+			expect(events.map((event) => event._tag)).toEqual(['Progress', 'Progress', 'Response']);
+		})
+	);
 	it.effect('interruption stops a stream held open by keep-alives', () =>
 		Effect.gen(function* () {
 			const fetched = Promise.withResolvers<void>();

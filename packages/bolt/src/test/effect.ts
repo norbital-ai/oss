@@ -62,6 +62,7 @@ import type { ModelWhere, OrderBy, Where } from '../decl/where.ts';
 import { compileAuthority, type Holder } from '../engine/access/authority.ts';
 import { parseCallable } from '../engine/callables/index.ts';
 import { AgentHost } from '../engine/agent/index.ts';
+import { withBrowser } from '../engine/agent/browser.ts';
 import { EnvoyConfig } from '../engine/envoys/index.ts';
 import { RateWindows } from '../engine/access/rate.ts';
 import type {
@@ -102,6 +103,7 @@ import {
 	Speech,
 	Transport,
 	WebRead,
+	Browser,
 	type AiEvent,
 	type TransportMessage
 } from '../engine/ports.ts';
@@ -253,7 +255,17 @@ export type Fakes = {
 };
 /** Host port service keys a test may replace with native Layers, including file storage, conversion, speech, web, geography, transport and AI. */
 export type TestPorts =
-	Files | Convert | Speech | WebRead | Geo | Metering | Transport | DeadlinePort | Drivers | Ai;
+	| Files
+	| Convert
+	| Speech
+	| WebRead
+	| Browser
+	| Geo
+	| Metering
+	| Transport
+	| DeadlinePort
+	| Drivers
+	| Ai;
 /** Workspace fixture and host configuration: use a verified release, check authored source, or supply a manifest/guest; choose seed data, control time, and native ports. */
 export type TestOptions<P extends TestPorts = never> = {
 	seed?: 'base' | 'sample' | 'none' | SeedPack;
@@ -331,6 +343,7 @@ export type WorkspaceServices =
 	| Convert
 	| Speech
 	| WebRead
+	| Browser
 	| Geo
 	| Metering
 	| Transport
@@ -1242,6 +1255,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					Convert.unavailable,
 					Speech.unavailable,
 					WebRead.unavailable,
+					Browser.unavailable,
 					Geo.unavailable,
 					Metering.unavailable,
 					Layer.succeed(Transport, {
@@ -1274,7 +1288,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const base = Layer.mergeAll(
 					NodeCrypto.layer,
 					Layer.succeed(EnvoyConfig, envoyConfig ?? {}),
-					Layer.succeed(AgentHost, agentConfig ?? {}),
+					Layer.effect(AgentHost, withBrowser(agentConfig ?? {})).pipe(Layer.provide(hostPorts)),
 					hostPorts,
 					Layer.succeed(TenantDb, db),
 					Layer.succeed(Clock.Clock, clock),

@@ -64,13 +64,8 @@ const parse = Effect.scoped(
 						page.cleanup();
 					})
 			);
-			if (text.length === 0)
-				return yield* Effect.fail(
-					new PdfFailure({
-						message: `PDF page ${number} has no extractable text. OCR is required; no partial evidence was returned.`
-					})
-				);
-			const section = `[Page ${number}]\n${text}`;
+			// a scanned page keeps its place; the readable pages are still evidence
+			const section = `[Page ${number}]\n${text === '' ? '(no extractable text: a scanned page)' : text}`;
 			textBytes += Buffer.byteLength(section, 'utf8') + 2;
 			if (textBytes > 2 * 1024 * 1024)
 				return yield* Effect.fail(

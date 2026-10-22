@@ -19,6 +19,9 @@ import type {
 	AiRequest,
 	AiResponse,
 	Blob,
+	BrowserPort,
+	BrowserStep,
+	BrowserTarget,
 	ConvertPort,
 	DeadlinesPort,
 	DriverPage,
@@ -183,6 +186,48 @@ export class WebRead extends Context.Service<
 			? WebRead.unavailable
 			: Layer.succeed(WebRead, {
 					read: (url, options) => Port.attempt('web', (signal) => port.read(url, signal, options))
+				});
+	}
+}
+/** The browsing facility (`BrowserPort`); a host that supplies none fails each call as unavailable. */
+export class Browser extends Context.Service<
+	Browser,
+	{
+		readonly navigate: (
+			profile: string,
+			to: BrowserTarget,
+			find?: string
+		) => Effect.Effect<Json, PortFailure>;
+		readonly snapshot: (
+			profile: string,
+			options: { readonly find?: string; readonly from?: number }
+		) => Effect.Effect<Json, PortFailure>;
+		readonly act: (
+			profile: string,
+			steps: readonly BrowserStep[]
+		) => Effect.Effect<Json, PortFailure>;
+		readonly evaluate: (profile: string, expression: string) => Effect.Effect<Json, PortFailure>;
+		readonly screenshot: (profile: string) => Effect.Effect<Uint8Array, PortFailure>;
+	}
+>()('bolt/Browser') {
+	static readonly unavailable: Layer.Layer<Browser> = Layer.sync(Browser, () => {
+		const none = () => Port.unavailable('browser', 'the host provides no browser facility');
+		return { navigate: none, snapshot: none, act: none, evaluate: none, screenshot: none };
+	});
+	static fromAbi(port: BrowserPort | undefined): Layer.Layer<Browser> {
+		return port === undefined
+			? Browser.unavailable
+			: Layer.succeed(Browser, {
+					navigate: (profile, to, find) =>
+						Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
+					snapshot: (profile, options) =>
+						Port.attempt('browser', (signal) => port.snapshot(profile, options, signal)),
+					act: (profile, steps) =>
+						Port.attempt('browser', (signal) => port.act(profile, steps, signal)),
+					evaluate: (profile, expression) =>
+						Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
+					screenshot: (profile) =>
+						Port.attempt('browser', (signal) => port.screenshot(profile, signal))
 				});
 	}
 }
