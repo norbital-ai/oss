@@ -797,6 +797,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Nothing here yet': '暂无内容',
 	'Workspace overview': '工作区概览',
 	'Pick an application': '选择一个应用',
+	'Ask Norbius to build your first app': '让 Norbius 构建你的第一个应用',
+	'Build my first app: ': '为我构建第一个应用：',
 	'No applications yet': '暂无应用',
 	'Add an application to this workspace to see it here.': '向此工作区添加应用后，它会显示在这里。',
 	Connected: '已连接',

@@ -18,21 +18,21 @@ preview…") with a spinner, so you can see it is busy without opening anything.
 
 ## 3. Preview
 
-When the draft is built, the chat shows **The preview is ready.** with an **Open preview** button. It opens the panel's
-**Preview** tab, beside **Chat**: the preview runs there in a resizable frame (Phone, Tablet, Desktop), already signed
-in as you, under a caption naming what it shows (environment, commit and message). A preview is never a separate page
-or tab of its own, and Norbius does not paste preview links: it tells you to open the Preview tab. **Chat** returns to
-the conversation; the frame only loads while the tab is open. Try the change there; anything you enter in a preview
-stays in the preview.
+When the draft is built, the chat shows **The preview is ready.** with a **View preview** button. It opens the
+**Preview** card in the conversation's Session sidebar (below Changes; the card is there only once something was
+previewed). The preview runs there at true size — Desktop is 1440 × 900, scaled down to fit — in a device frame on a
+blueprint grid, already signed in as you; Phone and Tablet switch the size, ⓘ shows what it runs ("Draft · Rename title ·
+1440×900 · 23:05"). One preview shows at a time. A preview is never a separate page or tab of its own, and Norbius does
+not paste preview links: it tells you to press View preview. A preview runs on the template's sample data, not your
+live records; anything you enter in it stays in the preview.
 
-Norbius picks what the tab shows: each new preview it builds replaces the last, and it can switch the tab back to an
+Norbius picks what the previewer shows: each new preview it builds replaces the last, and it can switch back to an
 earlier preview it built in this conversation (`preview_show`). It never shows any other page there.
 
-Norbius can look at the preview itself: a screenshot it took appears in the chat as an image card with a caption
-("Preview · draft u/… · commit abc1234 'Rename title' · 390×844 · 23:05") and **Open in Preview tab**; the preview's
-runtime log appears as a folded list, errors in red. Times are the workspace's.
+Norbius can look at the preview itself: a screenshot it took appears in the chat as an image card with the same caption
+and **View preview**; the preview's runtime log appears as a folded list, errors in red. Times are the workspace's.
 
-![The chat's Open preview button](./images/norbius-flow-3.jpg)
+![The chat's View preview button](./images/norbius-flow-3.jpg)
 
 ![The preview with its banner](./images/norbius-flow-4.jpg)
 
@@ -89,8 +89,8 @@ The same path without Norbius is [Workspace Studio](./studio-changes.md).
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
 | `norbius-flow-1.jpg` | The Norbius panel on the live workspace with a plain-language change request typed or just sent.     |
 | `norbius-flow-2.jpg` | A running step group: the shimmering "Building the preview…" line and a spinning step, not expanded. |
-| `norbius-flow-3.jpg` | The finished turn: "The preview is ready." with the Open preview button outside the folded steps.    |
-| `norbius-flow-4.jpg` | The panel's Preview tab opened from that button: the caption over the framed, signed-in preview.     |
+| `norbius-flow-3.jpg` | The finished turn: "The preview is ready." with the View preview button outside the folded steps.    |
+| `norbius-flow-4.jpg` | The Session sidebar's Preview card opened from that button: the framed, signed-in preview.           |
 | `norbius-flow-5.jpg` | The approval card after Approve: buttons gone, a progress line such as "Building the new version…".  |
 | `norbius-flow-6.jpg` | After the switch-over: the "Applied — … Refresh to see it." line, then Norbius's closing reply.      |
 | `norbius-flow-7.jpg` | A publish card before Approve: plain title, the summary below it, then "Draft: <commit message>".    |

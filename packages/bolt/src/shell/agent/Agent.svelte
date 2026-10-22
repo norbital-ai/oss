@@ -1596,10 +1596,6 @@
 									? 'rotate-90'
 									: ''}"
 							/>
-							<span class="flex-1"></span>
-							<span class="min-w-0 truncate text-tiny text-muted-foreground"
-								>{shownPreview.about?.['environment'] ?? ''}</span
-							>
 						</button>
 						{#if previewing}
 							<div
@@ -1611,6 +1607,7 @@
 									src={shownPreview.url}
 									version={shownPreview.key}
 									title={t('Preview')}
+									label={shownPreview.about?.['message']}
 									{t}
 									onClose={() => (previewing = false)}
 								>

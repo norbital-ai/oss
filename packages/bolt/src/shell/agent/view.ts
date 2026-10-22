@@ -395,7 +395,7 @@ export function outcomeOf(
 	return null;
 }
 
-/** What a Studio result shows in one line: "Preview · draft u/… · commit abc1234 'Rename title' · 390×844 · 23:05". */
+/** What a Studio result shows in one line, in a person's words: "Draft · Rename title · 390×844 · 23:05" (never an id). */
 export function captionOf(
 	about: { readonly [k: string]: string } | undefined,
 	zone?: string
@@ -413,12 +413,8 @@ export function captionOf(
 					...(zone === undefined ? {} : { timeZone: zone })
 				});
 	return [
-		about['environment'],
-		about['branch'],
-		about['release'],
-		commit === undefined
-			? undefined
-			: `commit ${commit.slice(0, 7)}${about['message'] === undefined ? '' : ` '${about['message']}'`}`,
+		about['environment']?.toLowerCase() === 'live' ? 'Live' : 'Draft',
+		about['message'] ?? commit?.slice(0, 7),
 		about['viewport'],
 		time
 	]

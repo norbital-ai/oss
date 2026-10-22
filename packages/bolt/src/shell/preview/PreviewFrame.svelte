@@ -29,7 +29,7 @@
 		src: string;
 		title?: string;
 		/** What it previews (a draft, a commit): the header reads "Preview · <label>". */
-		label?: string;
+		label?: string | undefined;
 		/** The build it shows: a new one reloads the frame at the same address. */
 		version?: string | undefined;
 		/** A running build ("Building… · 0:05"): shown beside the label with a spinner. */

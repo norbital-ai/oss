@@ -2156,12 +2156,12 @@ export function catalogue(x: ToolContext): Tool[] {
 					),
 					...(host.studio === undefined ? {} : { studio: host.studio })
 				});
-	// the panel's Preview tab shows the latest `preview` a result names: this is how the agent picks one explicitly
+	// the panel's previewer shows the latest `preview` a result names: this is how the agent picks one explicitly
 	const builds = tools.find((t) => t.studio === 'preview')?.name;
 	if (builds !== undefined)
 		add(
 			'preview_show',
-			`Show a preview in the person's Preview tab beside the chat: url is a preview URL a ${builds} result gave. It only shows the page; it does not open or check it.`,
+			`Show a preview in the person's previewer beside the chat: url is a preview URL a ${builds} result gave. It only shows the page; it does not open or check it.`,
 			Schema.Struct({ url: Schema.String.annotate({ description: 'the preview URL' }) }),
 			(i) =>
 				Effect.succeed(

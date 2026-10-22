@@ -156,7 +156,7 @@ it.live(
 					target.querySelector<HTMLElement>('[aria-label="Details"]')!.click();
 					yield* until(() => document.querySelector('[data-preview-caption]') !== null);
 					expect(document.querySelector('[data-preview-caption]')!.textContent).toContain(
-						"Preview · commit abc1234 'Rename title'"
+						'Draft · Rename title'
 					);
 					// the transcript stays beside it; the section folds the frame away
 					expect(target.querySelector('[data-role="assistant"]')).not.toBeNull();

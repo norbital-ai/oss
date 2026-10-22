@@ -3,7 +3,7 @@
 	banner, else its icon on a brand gradient — with a group's apps under the group's own heading on a brand rule.
 -->
 <script lang="ts">
-	import { Icon, Image } from '@norbital-ai/ui';
+	import { Button, Icon, Image } from '@norbital-ai/ui';
 	import { based } from './nav.ts';
 	import { Center, Frame, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { NavItem, NavModel } from './model.ts';
@@ -11,8 +11,15 @@
 	let {
 		model,
 		t,
-		onNavigate
-	}: { model: NavModel; t: (key: string) => string; onNavigate: (href: string) => void } = $props();
+		onNavigate,
+		onAsk = null
+	}: {
+		model: NavModel;
+		t: (key: string) => string;
+		onNavigate: (href: string) => void;
+		/** Opens Norbius with a starter prompt: an empty workspace offers it as the way to its first app. */
+		onAsk?: ((prompt: string) => void) | null;
+	} = $props();
 
 	const apps = $derived(model.sections.find((s) => s.key === 'applications')?.items ?? []);
 	const standalone = $derived(apps.filter((a) => a.children === undefined));
@@ -86,9 +93,18 @@
 					>
 						<Icon name="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
 						<span class="text-meta">{t('No applications yet')}</span>
-						<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground"
-							>{t('Add an application to this workspace to see it here.')}</span
-						>
+						{#if onAsk === null}<span
+								class="max-w-72 pt-1 text-center text-micro text-muted-foreground"
+								>{t('Add an application to this workspace to see it here.')}</span
+							>{:else}<Button
+								size="sm"
+								class="mt-2"
+								onclick={() => onAsk(t('Build my first app: '))}
+								data-home-ask
+								><Icon name="lucide:sparkles" class="size-3.5" />{t(
+									'Ask Norbius to build your first app'
+								)}</Button
+							>{/if}
 					</Stack>
 				{:else}
 					{#if standalone.length > 0}

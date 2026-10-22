@@ -605,7 +605,12 @@
 
 {#snippet content()}
 	{#if current.kind === 'home' && model !== null}
-		<Home {model} {t} onNavigate={navigate} />
+		<Home
+			{model}
+			{t}
+			onNavigate={navigate}
+			onAsk={boot?.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
+		/>
 	{:else if current.kind === 'page' || current.kind === 'kiosk'}
 		<!-- the open app's banner and its pages as tabs; on a phone the shell's top bar carries the banner, except a visitor's -->
 		{#if hero !== null && (!narrow.current || boot?.visitor !== null)}

@@ -297,7 +297,7 @@ describe('Studio outcomes outside the folded steps', () => {
 				},
 				'Asia/Singapore'
 			)
-		).toBe("Preview · draft u/dion · commit abc1234 'Rename title' · 390×844 · 23:05");
+		).toBe('Draft · Rename title · 390×844 · 23:05');
 	});
 	it('lists a runtime log result by level, and nothing for any other tool', () => {
 		const result = JSON.stringify({
