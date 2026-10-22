@@ -1057,30 +1057,39 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 		})
 	);
 	it.effect(
-		'workspace automations due together run one after the other, never side by side (no revision conflict between them)',
+		'different workspace automations run side by side; one automation’s runs stay one at a time',
 		() =>
 			Effect.gen(function* () {
-				const order: string[] = [];
-				const body = (name: string) => () =>
-					Effect.gen(function* () {
-						order.push(`${name}:start`);
-						yield* Effect.yieldNow;
-						order.push(`${name}:end`);
-						return { done: true };
-					});
-				const w = yield* world(base, { classify: body('a'), flaky: body('b') });
-				yield* queue(w, randomUUID(), 'classify', T0 - 1000);
+				const flakyStarted = yield* Deferred.make<void>();
+				let running = 0,
+					most = 0;
+				/** `classify` holds until `flaky` has started: run one after the other, the tick never ends. */
+				const w = yield* world(base, {
+					classify: () =>
+						Effect.gen(function* () {
+							most = Math.max(most, ++running);
+							yield* Deferred.await(flakyStarted);
+							running -= 1;
+							return { done: true };
+						}),
+					flaky: () => Deferred.succeed(flakyStarted, undefined).pipe(Effect.as({ done: true }))
+				});
+				yield* queue(w, randomUUID(), 'classify', T0 - 3000); // claimed first
+				yield* queue(w, randomUUID(), 'classify', T0 - 2000);
 				yield* queue(w, randomUUID(), 'flaky', T0 - 1000);
 				yield* w.r.tick;
-				expect(order).toEqual(
-					order[0] === 'a:start'
-						? ['a:start', 'a:end', 'b:start', 'b:end']
-						: ['b:start', 'b:end', 'a:start', 'a:end']
-				);
+				expect(
+					yield* w.sql(`SELECT automation, state FROM sys_run ORDER BY due_at`)
+				).toEqual([
+					{ automation: 'classify', state: 'succeeded' },
+					{ automation: 'classify', state: 'succeeded' },
+					{ automation: 'flaky', state: 'succeeded' }
+				]);
+				expect(most).toBe(1);
 			})
 	);
 	it.effect(
-		'only the admitted custom batch starts; queued runs stay stoppable and hand off by due time',
+		'an automation’s admitted batch holds its later runs; queued runs stay stoppable and hand off by due time',
 		() =>
 			Effect.gen(function* () {
 				const entered = yield* Deferred.make<void>(),
@@ -1104,18 +1113,17 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 					['first', 'classify', T0 - 4000],
 					['export', 'flaky', T0 - 3000],
 					['second', 'classify', T0 - 2000],
-					['stop', 'flaky', T0 - 1000]
+					['stop', 'classify', T0 - 1000]
 				] satisfies [string, string, number][])
 					yield* queue(w, id, automation, due);
 				const ticking = yield* Effect.forkChild(w.r.tick);
 				yield* Deferred.await(entered);
 				expect(
 					yield* w.sql(
-						`SELECT id, state, attempts, started_at IS NULL AS unstarted, leases FROM sys_run ORDER BY due_at`
+						`SELECT id, state, attempts, started_at IS NULL AS unstarted, leases FROM sys_run WHERE automation = 'classify' ORDER BY due_at`
 					)
 				).toEqual([
 					{ id: 'first', state: 'running', attempts: 1, unstarted: false, leases: 0 },
-					{ id: 'export', state: 'queued', attempts: 0, unstarted: true, leases: 0 },
 					{ id: 'second', state: 'queued', attempts: 0, unstarted: true, leases: 0 },
 					{ id: 'stop', state: 'queued', attempts: 0, unstarted: true, leases: 0 }
 				]);
@@ -1129,7 +1137,7 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 				});
 				yield* Deferred.succeed(release, undefined);
 				yield* Fiber.join(ticking);
-				expect(order).toEqual(['classify', 'export', 'classify']);
+				expect(order.toSorted()).toEqual(['classify', 'classify', 'export']);
 				expect(yield* w.sql(`SELECT state, attempts FROM sys_run WHERE id = 'stop'`)).toEqual([
 					{ state: 'stopped', attempts: 0 }
 				]);

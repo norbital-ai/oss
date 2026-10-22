@@ -298,7 +298,8 @@ export const webReadWindow = (
 const EVENTS = new Set(['created', 'updated', 'deleted']);
 const MAX_IDS = 10000,
 	DAY = 86400000,
-	LANES = 1;
+	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
+	LANES = 4;
 const PRUNE = 'bolt.prune';
 export class Nudges extends Context.Service<Nudges, PubSub.PubSub<number>>()('bolt/Nudges') {}
 export const WakeLive = Layer.effect(
@@ -428,7 +429,9 @@ export const RunsLive = Layer.effect(
 		const stopping = new Set<string>();
 		/** A running run's stop signal: `stop` completes it, which ends the crossing in flight (an inference can run 30 min). */
 		const halts = new Map<string, Deferred.Deferred<void>>();
+		// A lane's claim commits before the next one reads, so two lanes never claim the same automation.
 		const lanes = yield* Semaphore.make(LANES),
+			claims = yield* Semaphore.make(1),
 			tickPermit = yield* Semaphore.make(1);
 		let prunedDay = -1;
 		yield* registry.register({ [NOTICE_PUSH]: yield* noticePush });
@@ -1562,7 +1565,9 @@ export const RunsLive = Layer.effect(
 							const admitted = yield* lanes.withPermitsIfAvailable(1)(
 								Effect.uninterruptibleMask((restore) =>
 									Effect.gen(function* () {
-										const claimed = yield* claim(yield* Clock.currentTimeMillis, pruned, true);
+										const claimed = yield* claims.withPermit(
+											claim(yield* Clock.currentTimeMillis, pruned, true)
+										);
 										if (claimed.runs.length === 0) return false;
 										yield* restore(run(claimed.runs)).pipe(
 											Effect.onInterrupt(() =>
@@ -1585,7 +1590,13 @@ export const RunsLive = Layer.effect(
 							[...Map.groupBy(batches(claimed), (group) => group[0]?.automation ?? '')],
 							([, groups]) => track(Effect.forEach(groups, run, { discard: true })),
 							{ discard: true }
-						).pipe(Effect.andThen(track(custom)));
+						).pipe(
+							Effect.andThen(
+								Effect.forEach(Array.from({ length: LANES }), () => track(custom), {
+									discard: true
+								})
+							)
+						);
 					};
 					if (Math.floor(now / DAY) !== prunedDay) {
 						prunedDay = Math.floor(now / DAY);
