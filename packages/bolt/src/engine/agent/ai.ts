@@ -418,6 +418,8 @@ function jsonSchemaOf(k: Kind): Json {
 const INFER_MS = 30 * 60_000;
 /** Past this share of INFER_MS a batch's tools end and its final turn answers, as when `steps` is spent. */
 const ANSWER_BY = 0.8;
+/** Turns that may finish the answer once tools end: a submission the output or rules refuse is repaired, not lost. */
+const FINAL_TURNS = 3;
 /** The ceiling on one `sys_2.infer` call: INFER_MS for every batch of files it reads. ponytail: counts batches by file count only; a byte-split batch adds a step under the same ceiling. */
 export const inferMs = (args: readonly Json[]): number =>
 	INFER_MS *
@@ -525,8 +527,9 @@ function ruleChecker(
  * on until one matches. More files than one model request carries (MODEL_FILES) are read in batches into the same draft:
  * each batch edits in what its files add, and only the last submission is checked. With `tools` (host tools the engine
  * resolved under the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch, and
- * so does 80% of the time ceiling, whichever comes first: once spent, one final turn offers only the draft tools (none for
- * a text answer) and is told to answer; without a valid answer from it (or already in the draft) the call fails
+ * so does 80% of the time ceiling, whichever comes first: once spent, up to FINAL_TURNS turns offer only the draft tools
+ * (none for a text answer) and are told to answer, each refused submission coming back to be fixed; without a valid answer
+ * from them (or already in the draft) the call fails
  * `invalid`, naming the spent budget and what the draft still breaks. An empty (reasoning-only) reply is asked to
  * continue, at most 3 times running.
  */
@@ -761,6 +764,7 @@ export function inferFacility(
 				stalls = 0,
 				turns = 0,
 				spent = false,
+				finals = 0,
 				finished = false,
 				last: CrossAnswer | undefined;
 			for (;;) {
@@ -824,7 +828,8 @@ export function inferFacility(
 					messages.splice(cutAt, messages.length - cutAt, { role: 'assistant', content: text });
 					continue;
 				}
-				finished = spent;
+				// once tools end, a reply that still edits or submits may be repaired; one that does neither is the last
+				finished = spent && (r.toolCalls.length === 0 || ++finals >= FINAL_TURNS);
 				const whole: Json = text === '' ? r.content : text + textOf(r.content);
 				if (cutAt !== undefined) messages.splice(cutAt);
 				text = '';

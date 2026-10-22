@@ -1257,7 +1257,12 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		() =>
 			Effect.gen(function* () {
 				const spent = browsing();
-				const one = port([tool('browse', { url: 'https://a' }, 'b1'), tool('browse', {}, 'b2')]);
+				const one = port([
+					tool('browse', { url: 'https://a' }, 'b1'),
+					tool('browse', {}, 'b2'),
+					tool('browse', {}, 'b3'),
+					tool('browse', {}, 'b4')
+				]);
 				expect(
 					yield* inferFacility(one.p)(at({ prompt: 'q', output, tools: ['browse'], steps: 1 }), [
 						spent.browse
@@ -1266,9 +1271,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					ok: false,
 					error: { kind: 'invalid', message: expect.stringContaining('tool budget (1 steps') }
 				});
-				// the final turn's browse is not offered, so it is never run
+				// the finishing turns' browse is not offered, so it is never run
 				expect(spent.seen).toHaveLength(1);
-				expect(one.requests).toHaveLength(2);
+				expect(one.requests).toHaveLength(4);
 
 				const held = browsing();
 				const two = port([
@@ -1411,11 +1416,14 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						{ area: 'leave', status: 'pending' }
 					]
 				};
-				// submitting the initial draft untouched is refused, and the budget runs out with one area still pending
+				// submitting the initial draft untouched is refused, and the budget runs out with one area still pending; the
+				// finishing turns that follow are each refused too
 				const { p, requests } = port([
 					tool('submit', {}, 's1'),
 					tool('edit', { ops: [{ path: '/coverage/pay/status', set: 'done' }] }, 'e1'),
-					tool('submit', {}, 's2')
+					tool('submit', {}, 's2'),
+					tool('submit', {}, 's3'),
+					tool('submit', {}, 's4')
 				]);
 				expect(
 					yield* inferFacility(p)(at({ prompt: 'q', initial, output: review, rules, steps: 2 }))
@@ -1426,7 +1434,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						message: expect.stringMatching(/tool budget.*rule broken: every area is reviewed/)
 					}
 				});
-				expect(requests).toHaveLength(3);
+				expect(requests).toHaveLength(5);
 				expect(requests[0]!.messages[0]!.content).toContain('every area is reviewed');
 				expect(requests[1]!.messages.at(-1)).toMatchObject({
 					content: {
@@ -1434,6 +1442,20 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						result: { error: expect.stringContaining('rule broken: every area is reviewed') }
 					}
 				});
+				// a refused final submission is repaired on the next finishing turn, with the draft tools only
+				const repaired = port([
+					tool('submit', {}, 's1'),
+					tool('edit', { ops: [{ path: '/coverage/pay/status', set: 'done' }] }, 'e1'),
+					tool('submit', {}, 's2'),
+					tool('edit', { ops: [{ path: '/coverage/leave/status', set: 'done' }] }, 'e2'),
+					tool('submit', {}, 's3')
+				]);
+				expect(
+					yield* inferFacility(repaired.p)(
+						at({ prompt: 'q', initial, output: review, rules, steps: 2 })
+					)
+				).toMatchObject({ ok: true });
+				expect(repaired.requests.at(-1)!.tools?.map((t) => t.name)).not.toContain('browse');
 				const finished = port([
 					tool(
 						'edit',
