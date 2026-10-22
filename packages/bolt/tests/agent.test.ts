@@ -529,6 +529,34 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
+		'sys_2.infer: a silent model call is asked again (for smaller calls when it went silent writing one); the answer still comes',
+		() =>
+			Effect.gen(function* () {
+				const writing: Step = () =>
+					Stream.concat(
+						Stream.succeed<AiEvent>({ _tag: 'Progress', reasoning: undefined }),
+						Stream.fromEffect(Effect.never)
+					);
+				const { p, requests } = port([
+					stalls(''),
+					writing,
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
+					tool('submit', {}, 's1')
+				]);
+				expect(
+					yield* elapsed(inferFacility(p, { wallMs: 20 })(at({ prompt: 'q', output })), 41)
+				).toEqual({ ok: true, value: { n: 3 } });
+				expect(requests).toHaveLength(4);
+				// silence alone asks again unchanged; silence while writing a call asks for smaller calls
+				expect(requests[1]!.messages).toEqual(requests[0]!.messages);
+				expect(requests[2]!.messages.at(-1)).toMatchObject({
+					role: 'user',
+					content: expect.stringContaining('Make smaller calls')
+				});
+			})
+	);
+
+	it.effect(
 		'sys_2.infer: quoted scalars ("true", "95") are read as the kind, nested too; other strings are still refused',
 		() =>
 			Effect.gen(function* () {

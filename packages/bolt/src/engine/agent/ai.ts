@@ -762,6 +762,7 @@ export function inferFacility(
 				pauses = 0,
 				failures = 0,
 				stalls = 0,
+				idles = 0,
 				turns = 0,
 				spent = false,
 				finals = 0,
@@ -809,6 +810,20 @@ export function inferFacility(
 									message: 'the inference did not finish within its ceiling'
 								}
 							};
+				// a silent model call stalls one turn, never the whole inference: ask again (for smaller calls when it went
+				// silent writing one); past the last try a draft that already holds is the answer
+				if (r instanceof ModelIdle) {
+					if (++idles <= PAUSES) {
+						if (r.cutTool === true)
+							messages.push({
+								role: 'user',
+								content: `Your last reply went silent while you were still writing a tool call. Make smaller calls: one row, or a few fields, per ${EDIT}.`
+							});
+						continue;
+					}
+					const held = structured ? settle(draft) : undefined;
+					if (held?.ok === true) return held;
+				}
 				if (isFacilityError(r))
 					return {
 						ok: false,
@@ -821,6 +836,7 @@ export function inferFacility(
 										...(r.status === undefined ? {} : { status: r.status })
 									}
 					};
+				idles = 0;
 				if (r.finish === 'cut') {
 					cutAt ??= messages.length;
 					text += textOf(r.content);
