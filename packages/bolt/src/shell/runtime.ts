@@ -460,6 +460,16 @@ export type CustomFieldView<
 			onChange(next: V | null): void;
 	  });
 
+/**
+ * An engine whose responses never stream (an agent's light browser) installs `window.boltLivePoll`, milliseconds: its
+ * current reads are read again on that interval instead of streamed, or no live read would ever show.
+ */
+const livePoll = () => {
+	if (typeof window === 'undefined') return undefined;
+	const value: unknown = Object.getOwnPropertyDescriptor(window, 'boltLivePoll')?.value;
+	return typeof value === 'number' && value > 0 ? (`${value} millis` as const) : undefined;
+};
+
 /** `$bolt` (§3.5): the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
 export function shellBolt(
 	boot: ShellBoot,
@@ -499,6 +509,7 @@ export function shellBolt(
 						visitor.siteKey === undefined ? null : (options.challenge ?? null),
 						scoped
 					);
+		const poll = livePoll();
 		const client = yield* createBolt({
 			onNotice: (notice) => {
 				if (typeof notice['title'] === 'string')
@@ -518,6 +529,7 @@ export function shellBolt(
 				: { messages: options.messages }),
 			...(f === undefined ? {} : { fetch: f }),
 			...(openStream === undefined ? {} : { openStream }),
+			...(poll === undefined ? {} : { poll }),
 			...(boot.contract === undefined ? {} : { contract: boot.contract })
 		});
 		const agent = options.agent ?? agentPanel();

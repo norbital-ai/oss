@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-// A built preview is a "View preview" button, never a link: it opens the session rail's one previewer, which shows that preview in
-// the shared web view (mounted only while the tab is open) under its caption; Chat returns to the transcript. Staging's
-// Norbius handed the person a long raw URL instead.
+// A built preview is the panel header's one Preview button, never a link nor a card per step: it opens the session rail's
+// one previewer, which shows the latest preview in the shared web view (mounted only while open) under its caption; a dot
+// marks a preview not yet seen. Staging's Norbius handed the person a long raw URL instead.
 import './setup-happy-dom.js';
 import { randomUUID } from 'node:crypto';
 import { flushSync, mount, unmount } from 'svelte';
@@ -53,7 +53,7 @@ const use = (name: string, input: import('../src/decl/values.ts').Json): AiRespo
 const PREVIEW = 'https://acme--u-ann.preview.test/';
 
 it.live(
-	'a built preview opens in the previewer from its View preview button; the header toggle closes it',
+	'a built preview opens in the previewer from the header Preview button, which closes it again',
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -142,8 +142,12 @@ it.live(
 					// a button for the tab, not a link to a page of its own
 					expect(open.closest('a')).toBeNull();
 					expect(open.getAttribute('href')).toBeNull();
-					expect(open.textContent).toBe('View preview');
-					// no frame, and no rail, until a View button opens it
+					expect(open.getAttribute('aria-label')).toBe('New preview');
+					expect(open.querySelector('[data-preview-unseen]')).not.toBeNull();
+					// one button in the header, no card per step
+					expect(target.querySelectorAll('[data-open-preview]')).toHaveLength(1);
+					expect(target.querySelector('[data-outcome]')).toBeNull();
+					// no frame, and no rail, until the button opens it
 					expect(target.querySelector('iframe')).toBeNull();
 					expect(target.querySelector('[data-rail="preview"]')).toBeNull();
 					open.click();
@@ -152,17 +156,20 @@ it.live(
 						'true'
 					);
 					expect(target.querySelector('iframe')?.getAttribute('src')).toBe(PREVIEW);
+					// seen: the dot clears
+					yield* until(() => open.querySelector('[data-preview-unseen]') === null);
+					expect(open.getAttribute('aria-label')).toBe('Preview');
 					// what it shows is one tap away, behind the frame's details (ⓘ)
 					target.querySelector<HTMLElement>('[aria-label="Details"]')!.click();
 					yield* until(() => document.querySelector('[data-preview-caption]') !== null);
 					expect(document.querySelector('[data-preview-caption]')!.textContent).toContain(
 						'Draft · Rename title'
 					);
-					// the transcript stays beside it; the section folds the frame away
+					// the transcript stays beside it; the same button folds the frame away
 					expect(target.querySelector('[data-role="assistant"]')).not.toBeNull();
-					target.querySelector<HTMLElement>('[data-rail-preview-toggle]')!.click();
+					open.click();
 					yield* until(() => target.querySelector('iframe') === null);
-					expect(target.querySelector('[data-rail="preview"]')).not.toBeNull();
+					expect(target.querySelector('[data-rail="preview"]')).toBeNull();
 				} finally {
 					yield* Effect.tryPromise({
 						try: () => unmount(v),

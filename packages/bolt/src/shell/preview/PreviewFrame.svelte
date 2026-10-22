@@ -167,8 +167,9 @@
 	}
 	// the room's padding and the bezel around the page: what the scaled page cannot use
 	const BEZEL = 32 + 14;
+	// Svelte Flow's dotted canvas: a 1px dot every 20px on the page's own background
 	const GRID =
-		'linear-gradient(to right, var(--color-border) 1px, transparent 1px), linear-gradient(to bottom, var(--color-border) 1px, transparent 1px)';
+		'radial-gradient(circle, color-mix(in oklab, var(--color-muted-foreground) 45%, transparent) 1px, transparent 1px)';
 	const HANDLE = 'absolute touch-none bg-border/0 transition-colors hover:bg-primary/30';
 </script>
 
@@ -259,9 +260,9 @@
 			</Button>
 		{/if}
 	</Inline>
-	<!-- a blueprint: the page is a device on a drafting grid, never part of the app around it -->
+	<!-- a canvas: the page is a device on a dotted canvas, never part of the app around it -->
 	<div
-		class="relative min-h-0 flex-1 overflow-hidden bg-muted/50 p-4"
+		class="relative min-h-0 flex-1 overflow-hidden bg-background p-4"
 		style:background-image={GRID}
 		style:background-size="20px 20px"
 		bind:clientWidth={null, (w) => (roomWidth = Math.max(0, (w ?? 0) - BEZEL))}
@@ -290,9 +291,9 @@
 					></iframe>
 				{/key}
 				{#if waiting || failure !== null}
-					<!-- never a blank frame: a calm card over the grid says what is happening, or why it failed -->
+					<!-- never a blank frame: a calm card over the canvas says what is happening, or why it failed -->
 					<div
-						class="absolute inset-0 grid place-items-center bg-muted/50 p-4"
+						class="absolute inset-0 grid place-items-center bg-background p-4"
 						style:background-image={GRID}
 						style:background-size="20px 20px"
 						role="status"

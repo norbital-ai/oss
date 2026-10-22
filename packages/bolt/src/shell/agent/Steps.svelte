@@ -1,14 +1,15 @@
 <!--
 	A run of tool steps (§5.9), the agent panel's and each sub-agent's: one quiet line per step (its own icon, what it did in
 	words, on what, how long), opening to tabs — the code it carried (highlighted), its input and its output, each compacted
-	and formatted — and a one-line result above them (the failure, or a row count). A piece of reasoning opens to its text.
+	and formatted — and a one-line result above them (the failure, or a row count). A failed step is red and says why in one
+	line under it (the whole reason on hover, and in full when opened). A piece of reasoning opens to its text.
 -->
 <script lang="ts">
 	import { Option, Schema } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { CodeEditor, Icon } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
-	import { resultLine, stepView, type StepView } from './view.ts';
+	import { failureOf, resultLine, stepView, type StepView } from './view.ts';
 
 	let { steps, t }: { steps: readonly AgentRow[]; t: (key: string) => string } = $props();
 
@@ -36,6 +37,7 @@
 		{@const v = viewOf(s)}
 		{@const tool = s.tool}
 		{@const failed = tool?.failed === true}
+		{@const reason = failureOf(tool)}
 		<li
 			class="animate-in fade-in-0 slide-in-from-bottom-1 animation-duration-150 ease-out motion-reduce:animate-none"
 			data-step
@@ -48,8 +50,9 @@
 				ontoggle={(e) => (e.currentTarget.open ? opened.add(s.id) : opened.delete(s.id))}
 			>
 				<summary
-					class="flex cursor-pointer list-none items-center gap-2 rounded py-0.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
-					class:text-destructive={failed}
+					class="flex cursor-pointer list-none items-center gap-2 rounded py-0.5 text-xs [&::-webkit-details-marker]:hidden {failed
+						? 'text-destructive'
+						: 'text-muted-foreground hover:text-foreground'}"
 				>
 					<Icon
 						name={failed ? 'lucide:circle-alert' : active(s) ? 'lucide:loader-circle' : v.icon}
@@ -135,6 +138,13 @@
 					</div>
 				{/if}
 			</details>
+			{#if reason !== ''}<p
+					class="truncate pb-0.5 pl-5.5 text-xs text-destructive/80"
+					title={reason}
+					data-step-failure
+				>
+					{reason}
+				</p>{/if}
 		</li>
 	{/each}
 </ol>

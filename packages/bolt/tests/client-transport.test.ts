@@ -40,6 +40,49 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 	})
 );
 
+it.effect(
+	'with poll set, a current read is read again each interval over plain requests; an unchanged answer is not repeated',
+	() =>
+		Effect.gen(function* () {
+			let reads = 0,
+				opened = 0;
+			const counts = [1, 1, 2];
+			const httpClient = HttpClient.make((request) => {
+				reads++;
+				return Effect.succeed(
+					HttpClientResponse.fromWeb(
+						request,
+						Response.json({ answers: [{ count: counts[Math.min(reads, counts.length) - 1] }] })
+					)
+				);
+			});
+			const bolt = yield* createBolt({
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				httpClient,
+				poll: '2 seconds',
+				openStream: () => {
+					opened++;
+					return { onmessage: null, onerror: null, close() {} };
+				}
+			});
+			const seen: unknown[] = [];
+			yield* bolt.live(bolt.read('jobs', { limit: 1 })).pipe(
+				Stream.runForEach((value) => Effect.sync(() => seen.push(value))),
+				Effect.forkScoped
+			);
+			yield* Effect.yieldNow;
+			yield* TestClock.adjust('2 seconds');
+			yield* TestClock.adjust('2 seconds');
+			expect({ reads, opened, seen }).toEqual({
+				reads: 3,
+				opened: 0,
+				seen: [{ count: 1 }, { count: 2 }]
+			});
+		})
+);
+
 it.effect('every reconnect is bounded by thirty seconds and closing interrupts its wait', () =>
 	Effect.gen(function* () {
 		const sources: EventSourceLike[] = [];

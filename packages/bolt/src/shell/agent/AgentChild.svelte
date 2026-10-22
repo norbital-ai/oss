@@ -13,6 +13,7 @@
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import Steps from './Steps.svelte';
+	import MadeFiles from './MadeFiles.svelte';
 	import { callableWords, childStatus } from './view.ts';
 
 	let {
@@ -193,8 +194,8 @@
 			</ol>
 		{/if}
 		{#if steps.length > 0}<Steps {steps} {t} />{/if}
-		{#if changes.length > 0 || made.length > 0}
-			<!-- what it changed in the workspace and the files it made -->
+		{#if changes.length > 0}
+			<!-- what it changed in the workspace -->
 			<ul class="grid gap-1" data-subagent-changes>
 				{#each changes as c, i (i)}
 					<li class="flex min-w-0 items-center gap-2" data-change={c.outcome}>
@@ -208,22 +209,10 @@
 							>{/if}
 					</li>
 				{/each}
-				{#each made as f, i (i)}
-					<li>
-						<a
-							class="inline-flex max-w-full items-center gap-2 underline-offset-2 hover:underline"
-							href={f.id === undefined ? undefined : bolt.fileUrl({ id: f.id })}
-							target="_blank"
-							rel="noreferrer"
-							download={f.name}
-							><Icon name="lucide:download" class="size-3.5 shrink-0 text-muted-foreground" /><span
-								class="truncate">{f.name}</span
-							></a
-						>
-					</li>
-				{/each}
 			</ul>
 		{/if}
+		<!-- the files it made -->
+		{#if made.length > 0}<MadeFiles files={made} fileHref={(id) => bolt.fileUrl({ id })} {t} />{/if}
 		<!-- its exchange with the delegating agent: a question it stopped on, the answer it got, then its own answer -->
 		{#each thread as r (r.id)}
 			{#if r.role === 'user'}

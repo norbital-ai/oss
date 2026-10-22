@@ -63,6 +63,7 @@
 	import StudioApproval from './StudioApproval.svelte';
 	import { PHASES, elapsedText, stepLabel, type StudioRole } from '../studio/model.ts';
 	import StudioResult from './StudioResult.svelte';
+	import MadeFiles from './MadeFiles.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import {
 		background,
@@ -70,6 +71,7 @@
 		checkpointSections,
 		contextView,
 		doingOf,
+		failedVerbs,
 		modelDividers,
 		ORB,
 		orbState,
@@ -1137,23 +1139,21 @@
 	const kinds = useKinds();
 	/** A stored file's link (a made file's card, a workspace screenshot). */
 	const fileHref = (id: string) => bolt.fileUrl({ id });
-	// the previewer: one bundle at a time — the one a "View" button last chose, or the latest built — in the session rail's
-	// Preview section (there only once something was previewed); its frame mounts only while that section is open
+	// the previewer: the latest bundle built (or chosen by the agent with `preview_show`), in the session rail's Preview
+	// section; the header's Preview button is the one way to open it (a dot while it shows a bundle not yet seen), and its
+	// frame mounts only while open
 	let previewing = $state(false),
-		pickedPreview = $state<{ key: string; over: string | null } | null>(null);
-	const previews = $derived(previewsOf(rows));
-	const newest = $derived(previews.at(-1) ?? null);
-	const shownPreview = $derived.by(() => {
-		const p = pickedPreview;
-		return (
-			(p !== null && p.over === (newest?.key ?? null)
-				? previews.findLast((x) => x.key === p.key)
-				: undefined) ?? newest
-		);
-	});
-	function openPreview(url: string): void {
-		const chosen = previews.findLast((x) => x.url === url);
-		if (chosen !== undefined) pickedPreview = { key: chosen.key, over: newest?.key ?? null };
+		seenPreview = $state<string | null>(null);
+	const shownPreview = $derived(previewsOf(rows).at(-1) ?? null);
+	const showingPreview = $derived(rail && previewing && shownPreview !== null && !thread);
+	watch(
+		() => (showingPreview ? (shownPreview?.key ?? null) : null),
+		(key) => {
+			if (key !== null) seenPreview = key;
+		}
+	);
+	function togglePreview(): void {
+		if (showingPreview) return void (previewing = false);
 		previewing = true;
 		focus = null;
 		wide = true;
@@ -1322,6 +1322,20 @@
 			aria-label={t('Conversations')}
 			onChange={(id) => (id === null ? fresh() : select(id))}
 		/>
+		{#if shownPreview !== null && !thread}<Button
+				size="icon-sm"
+				variant="ghost"
+				class="relative shrink-0"
+				aria-label={t(shownPreview.key === seenPreview ? 'Preview' : 'New preview')}
+				title={t(shownPreview.key === seenPreview ? 'Preview' : 'New preview')}
+				aria-pressed={showingPreview}
+				onclick={togglePreview}
+				data-open-preview
+				><Icon name="lucide:eye" class="size-4" />{#if shownPreview.key !== seenPreview}<span
+						class="absolute top-1 right-1 size-1.5 rounded-full bg-primary"
+						data-preview-unseen
+					></span>{/if}</Button
+			>{/if}
 		<Button
 			size="icon-sm"
 			variant="ghost"
@@ -1333,6 +1347,7 @@
 				if (rail) rail = false;
 				else {
 					focus = null;
+					previewing = false;
 					rail = true;
 				}
 			}}
@@ -1577,52 +1592,29 @@
 						changesBody
 					)}
 				</div>
-				{#if shownPreview !== null && !thread}
-					<!-- the one previewer: the bundle a "View" button chose, or the latest; open, it fills the widened rail -->
+				{#if previewing && shownPreview !== null && !thread}
+					<!-- the one previewer: the latest bundle; open (the header's Preview button), it fills the widened rail -->
 					<section
 						class="overflow-hidden rounded-xl border border-border bg-background shadow-xs"
 						data-rail="preview"
 					>
-						<button
-							type="button"
-							class="flex w-full cursor-pointer items-center gap-1.5 px-4 py-3 text-left text-sm hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-							aria-expanded={previewing}
-							onclick={() => {
-								previewing = !previewing;
-								if (previewing) wide = true;
-							}}
-							data-rail-preview-toggle
-						>
-							<span class="font-medium">{t('Preview')}</span>
-							<Icon
-								name="lucide:chevron-right"
-								class="size-3.5 text-muted-foreground transition-transform {previewing
-									? 'rotate-90'
-									: ''}"
-							/>
-						</button>
-						{#if previewing}
-							<div
-								class="flex h-[70vh] min-h-80 flex-col border-t border-border"
-								data-agent-preview={shownPreview.url}
+						<div class="flex h-[70vh] min-h-80 flex-col" data-agent-preview={shownPreview.url}>
+							<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
+							<PreviewFrame
+								src={shownPreview.url}
+								version={shownPreview.key}
+								title={t('Preview')}
+								label={shownPreview.about?.['message']}
+								{t}
+								onClose={() => (previewing = false)}
 							>
-								<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
-								<PreviewFrame
-									src={shownPreview.url}
-									version={shownPreview.key}
-									title={t('Preview')}
-									label={shownPreview.about?.['message']}
-									{t}
-									onClose={() => (previewing = false)}
-								>
-									{#snippet details()}
-										{#if shownPreview.about !== undefined}<p data-preview-caption>
-												{captionOf(shownPreview.about, kinds.zone)}
-											</p>{:else}<p>{shownPreview.url}</p>{/if}
-									{/snippet}
-								</PreviewFrame>
-							</div>
-						{/if}
+								{#snippet details()}
+									{#if shownPreview.about !== undefined}<p data-preview-caption>
+											{captionOf(shownPreview.about, kinds.zone)}
+										</p>{:else}<p>{shownPreview.url}</p>{/if}
+								{/snippet}
+							</PreviewFrame>
+						</div>
 					</section>
 				{/if}
 				{#if connectors.length > 0}
@@ -1757,11 +1749,12 @@
 									{@const working =
 										status === 'running' && (at === items.length - 1 || item.steps.some(active))}
 									{@const secs = worked(item.steps)}
+									{@const failures = failedVerbs(item.steps)}
 									<li
 										{@attach turns.measure(itemKey(at))}
 										data-role="steps"
 										data-outside-context={item.steps.every(outside) || undefined}
-										data-failed={item.steps.some((s) => s.tool?.failed) || undefined}
+										data-failed={failures.length > 0 || undefined}
 									>
 										<details class="group/work" open={working}>
 											<summary
@@ -1774,10 +1767,13 @@
 												<span
 													>· {`${item.steps.length} ${t(item.steps.length === 1 ? 'step' : 'steps')}`}</span
 												>
-												{#if item.steps.some((s) => s.tool?.failed)}<Icon
-														name="lucide:circle-alert"
-														class="size-3 text-destructive"
-													/>{/if}
+												{#if failures.length > 0}{@const named = `${failures.length} ${t(failures.length === 1 ? 'step failed' : 'steps failed')}: ${failures.map(t).join(', ')}`}<span
+														role="img"
+														aria-label={named}
+														title={named}
+														data-failed-steps
+														><Icon name="lucide:circle-alert" class="size-3 text-destructive" /></span
+													>{/if}
 												<Icon
 													name="lucide:chevron-right"
 													class="size-3 transition-transform group-open/work:rotate-90"
@@ -1786,7 +1782,7 @@
 											<Steps steps={item.steps} {t} />
 										</details>
 										{#each item.steps.flatMap((st) => outcomeOf(st.tool) ?? []) as outcome, i (i)}
-											<!-- what a Studio call achieved (a preview to open, a version applied): outside the fold -->
+											<!-- what a Studio call achieved (a version applied): outside the fold -->
 											<Inline
 												gap="sm"
 												align="center"
@@ -1796,60 +1792,25 @@
 											>
 												<Icon name="lucide:circle-check" class="size-4 shrink-0 text-success" />
 												<span class="min-w-0 whitespace-normal">{t(outcome.text)}</span>
-												{#if outcome.preview !== undefined}{@const url = outcome.preview}<Button
-														size="sm"
-														variant="outline"
-														class="shrink-0"
-														onclick={() => openPreview(url)}
-														data-open-preview>{t(outcome.action ?? '')}</Button
-													>{:else if outcome.reload}<Button
-														size="sm"
-														variant="outline"
-														class="shrink-0"
-														onclick={() => location.reload()}
-														data-view-live>{t(outcome.action ?? '')}</Button
-													>{/if}
+												<Button
+													size="sm"
+													variant="outline"
+													class="shrink-0"
+													onclick={() => location.reload()}
+													data-view-live>{t(outcome.action)}</Button
+												>
 											</Inline>
 										{/each}
 										{#each item.steps as st (st.id)}
-											<StudioResult
-												step={st}
-												{t}
-												zone={kinds.zone}
-												{fileHref}
-												onPreview={openPreview}
-											/>
+											<StudioResult step={st} {t} zone={kinds.zone} />
 										{/each}
 										{#if item.steps.some((st) => (st.files?.length ?? 0) > 0)}
-											<!-- what the work made (a document, a sandbox output): offered outside the fold, one card per file -->
-											<div class="mt-2 flex flex-wrap gap-2" data-made-files>
-												{#each item.steps.flatMap((st) => st.files ?? []) as f, i (i)}
-													<a
-														href={f.id === undefined ? undefined : fileHref(f.id)}
-														target="_blank"
-														rel="noreferrer"
-														download={f.name}
-														class="inline-flex max-w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-														data-made-file={f.name}
-													>
-														<Icon
-															name={f.mime.startsWith('image/')
-																? 'lucide:image'
-																: f.mime.includes('presentation')
-																	? 'lucide:presentation'
-																	: f.mime.includes('sheet') || f.mime.includes('csv')
-																		? 'lucide:sheet'
-																		: 'lucide:file-text'}
-															class="size-4 shrink-0 text-muted-foreground"
-														/>
-														<span class="min-w-0 truncate font-medium">{f.name}</span>
-														<Icon
-															name="lucide:download"
-															class="size-3.5 shrink-0 text-muted-foreground"
-														/>
-													</a>
-												{/each}
-											</div>
+											<!-- what the work made (a screenshot, a document, a sandbox output): outside the fold -->
+											<MadeFiles
+												files={item.steps.flatMap((st) => st.files ?? [])}
+												{fileHref}
+												{t}
+											/>
 										{/if}
 									</li>
 								{:else if 'ignored' in item}

@@ -2,10 +2,12 @@
 import {
 	Clock,
 	Deferred,
+	type Duration,
 	Effect,
 	FiberMap,
 	Option,
 	Queue,
+	Schedule,
 	Schema,
 	Stream,
 	SubscriptionRef
@@ -57,6 +59,8 @@ export type BoltConfig = {
 	fetch?: typeof fetch;
 	httpClient?: HttpClient.HttpClient;
 	openStream?: (url: string) => EventSourceLike;
+	/** Current reads are read again on this interval instead of streamed: an engine whose responses never stream. */
+	poll?: Duration.Input;
 	signals?: Signals;
 	uuid?: () => string;
 	now?: () => string;
@@ -485,27 +489,33 @@ export const createBolt = (config: BoltConfig) =>
 				);
 				yield* visible(initiatingFiber);
 			});
+		const answer = (read: WireRead) =>
+			Effect.gen(function* () {
+				const response = yield* transport.request('POST', PATHS.q, { reads: [read] });
+				const refusal = errorOf(response.body);
+				if (Option.isSome(refusal)) return yield* Effect.fail(new ReadFailed(refusal.value.error));
+				const body = yield* decode(QReply, response.body).pipe(
+					Effect.mapError((error) => new ReadFailed({ code: 'protocol', message: error.message }))
+				);
+				const first = body.answers[0];
+				if (first === undefined)
+					return yield* Effect.fail(
+						new ReadFailed({ code: 'protocol', message: 'The host returned no read answer.' })
+					);
+				return typed(first);
+			});
 		const q = <T>(method: WireRead['m'], args: readonly Wired[]): Read<T> => {
 			const read: WireRead = { m: method, a: args.map(encodeWire) };
 			return Object.assign(
-				Effect.gen(function* () {
-					const response = yield* transport.request('POST', PATHS.q, { reads: [read] });
-					const refusal = errorOf(response.body);
-					if (Option.isSome(refusal))
-						return yield* Effect.fail(new ReadFailed(refusal.value.error));
-					const body = yield* decode(QReply, response.body).pipe(
-						Effect.mapError((error) => new ReadFailed({ code: 'protocol', message: error.message }))
-					);
-					const answer = body.answers[0];
-					if (answer === undefined)
-						return yield* Effect.fail(
-							new ReadFailed({ code: 'protocol', message: 'The host returned no read answer.' })
-						);
-					const value = typed(answer);
-					if (!(method === 'get' && isRow(args[2]) && args[2]['revision'] !== undefined))
-						track(value);
-					return value as T;
-				}),
+				answer(read).pipe(
+					Effect.tap((value) =>
+						Effect.sync(() => {
+							if (!(method === 'get' && isRow(args[2]) && args[2]['revision'] !== undefined))
+								track(value);
+						})
+					),
+					Effect.map((value) => value as T)
+				),
 				{ read }
 			);
 		};
@@ -513,6 +523,21 @@ export const createBolt = (config: BoltConfig) =>
 			query: { readonly read: WireRead },
 			options: { every?: string; on?: readonly string[] } = {}
 		): LiveRead<T> {
+			if (config.poll !== undefined)
+				// a dropped request is asked again on the next tick, as a stream reconnects
+				return Stream.fromEffectSchedule(
+					answer(query.read).pipe(
+						Effect.tap((value) => Effect.sync(() => track(value))),
+						Effect.map(Option.some),
+						Effect.catchTag('TransportFailed', () => Effect.succeed(Option.none<Json>()))
+					),
+					Schedule.spaced(config.poll)
+				).pipe(
+					Stream.filter(Option.isSome),
+					Stream.map((some) => some.value),
+					Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+					Stream.map((value) => value as T)
+				);
 			const key = JSON.stringify([query.read, options.every ?? null, options.on ?? null]);
 			return Stream.unwrap(
 				Effect.gen(function* () {

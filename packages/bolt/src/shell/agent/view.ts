@@ -361,6 +361,20 @@ export function resultLine(result: unknown): string {
 	return rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`;
 }
 
+const parsed = (text: string | undefined): unknown =>
+	Option.getOrNull(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text ?? ''));
+/** Why a failed step failed: its error, else its result as it came (a clipped one does not parse); '' for any other step. */
+export function failureOf(tool: AgentRow['tool']): string {
+	if (tool?.failed !== true) return '';
+	const error = obj(parsed(tool.result))['error'];
+	return typeof error === 'string' ? error : (tool.result ?? '');
+}
+/** What each failed step did, in words (`stepView`'s verb): the run's failure mark names them. */
+export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
+	steps.flatMap((s) =>
+		s.tool?.failed === true ? [stepView(s.tool.name, parsed(s.tool.args)).verb] : []
+	);
+
 /** What a running Studio step is doing, in the person's words: the group's line while it runs. */
 const DOING: { readonly [tool: string]: string } = {
 	workspace_write: 'Editing the source…',
@@ -371,16 +385,14 @@ export const doingOf = (steps: readonly AgentRow[]): string =>
 	DOING[steps.findLast((s) => s.tool?.running === true)?.tool?.name ?? ''] ?? 'Working…';
 
 /**
- * A Studio call's outcome, shown outside its folded steps: a built preview ("View preview" opens the panel's previewer, never a
- * page of its own), or a publish or rollback that switched the workspace over ("View live" loads it here; its answer, or the restart its
- * switch-over caused, settled on its card). The preview is the engine's `tool.preview`, read from the whole result.
+ * A Studio call's outcome, shown outside its folded steps: a publish or rollback that switched the workspace over ("View
+ * live" loads it here; its answer, or the restart its switch-over caused, settled on its card). A built preview is no
+ * outcome: the panel header's one Preview button opens the latest.
  */
 export function outcomeOf(
 	tool: AgentRow['tool']
-): { text: string; preview?: string; action?: string; reload?: true } | null {
+): { text: string; action: string; reload: true } | null {
 	if (tool === undefined || tool.running === true || tool.failed) return null;
-	if (tool.studio === 'preview' && tool.preview !== undefined)
-		return { text: 'The preview is ready.', preview: tool.preview, action: 'View preview' };
 	// the engine's own answer to a declined card is the one non-failed result that changed nothing; live is this very page,
 	// so viewing it is loading the new version here
 	if (

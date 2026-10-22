@@ -7,6 +7,8 @@ import {
 	childStatus,
 	contextView,
 	doingOf,
+	failedVerbs,
+	failureOf,
 	modelDividers,
 	ORB,
 	orbState,
@@ -251,20 +253,28 @@ describe('Studio outcomes outside the folded steps', () => {
 		);
 		expect(doingOf([step(1, 'read', true)])).toBe('Working…');
 	});
-	it('offers a built preview as View preview for the previewer, from the whole result however it was clipped', () => {
+	it('a built preview is no outcome of its own: the header opens the latest', () => {
 		expect(
 			outcomeOf(
 				tool('workspace_validate', '{"commit":"ab","log":["…', { preview: 'https://h/acme--u-a' })
 			)
-		).toEqual({
-			text: 'The preview is ready.',
-			preview: 'https://h/acme--u-a',
-			action: 'View preview'
-		});
-		expect(outcomeOf(tool('workspace_validate', '{"error":"build failed"}'))).toBeNull();
-		expect(
-			outcomeOf(tool('workspace_validate', '{}', { preview: 'https://h/x', running: true }))
 		).toBeNull();
+	});
+	it('a failed step says why, and the run names what failed', () => {
+		const failed = (name: string, args: string, result: string) =>
+			row(1, { role: 'tool', tool: { ...tool(name, result), failed: true, args } });
+		expect(failureOf(tool('read', '{"error":"No month field"}', { failed: true }))).toBe(
+			'No month field'
+		);
+		// a clipped result does not parse: shown as it came
+		expect(failureOf(tool('read', '{"error":"No mon', { failed: true }))).toBe('{"error":"No mon');
+		expect(failureOf(tool('read', '{"error":"x"}'))).toBe('');
+		expect(
+			failedVerbs([
+				row(1, { role: 'tool', tool: tool('read', '{}') }),
+				failed('sandbox_run', '{"command":"ls"}', '{"error":"exit 1"}')
+			])
+		).toEqual(['Ran a command']);
 	});
 	it('the previewer shows built previews and the ones the agent chose among them, never another page', () => {
 		const step = (seq: number, name: string, o: Partial<NonNullable<AgentRow['tool']>>) =>
