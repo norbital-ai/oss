@@ -95,7 +95,6 @@ export type Config = {
 	/** `BOLT_APNS_KEYS`: each Apple team's provider-token key (its id and `.p8` PEM), by team id; `{}` sends no APNs. */
 	apns: { readonly [teamId: string]: { readonly keyId: string; readonly key: string } };
 	turnstile: { siteKey: string; secret: string } | null;
-	telemetryRetainHours: number;
 	/** `BOLT_ENVIRONMENT` (`production`, `staging`, `development`, …): every other than production shows the shell's badge. */
 	environment: string | null;
 	/** `--trust-proxy`, `--accept`, `--founder`, `--seed`. */
@@ -156,7 +155,6 @@ const KNOWN = new Set([
 	'BOLT_APNS_KEYS',
 	'BOLT_TURNSTILE_SITE_KEY',
 	'BOLT_TURNSTILE_SECRET',
-	'BOLT_TELEMETRY_RETAIN_HOURS',
 	'BOLT_ENVIRONMENT',
 	'BOLT_DEV'
 ]);
@@ -513,9 +511,6 @@ function decodeValues(
 		throw new ConfigError({
 			message: 'set both BOLT_TURNSTILE_SITE_KEY and BOLT_TURNSTILE_SECRET, or neither'
 		});
-	const retain = Number(get('BOLT_TELEMETRY_RETAIN_HOURS') ?? 72);
-	if (!Number.isInteger(retain) || retain < 1)
-		throw new ConfigError({ message: 'BOLT_TELEMETRY_RETAIN_HOURS is a positive integer' });
 
 	return {
 		artifact,
@@ -556,7 +551,6 @@ function decodeValues(
 		vapid: vpub === undefined ? null : { publicKey: vpub, privateKey: vpriv ?? '' },
 		apns,
 		turnstile: tsite === undefined ? null : { siteKey: tsite, secret: tsecret ?? '' },
-		telemetryRetainHours: retain,
 		environment: get('BOLT_ENVIRONMENT') ?? null,
 		trustProxy: flags.trustProxy,
 		accept: flags.accept,

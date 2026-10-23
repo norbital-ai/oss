@@ -273,19 +273,6 @@ const EXPECTED: { [table: string]: Shape } = {
 		unique: ['(once)'],
 		indexes: ['(member, at) where (member is not null)']
 	},
-	sys_event: {
-		key: 'id bigint generated always as identity primary key',
-		columns: {
-			at: 'timestamptz not null',
-			severity: 'text not null',
-			event: 'text not null',
-			invocation: 'text not null',
-			run: 'text',
-			conversation: 'text',
-			turn: 'text',
-			attributes: 'jsonb not null'
-		}
-	},
 	sys_file: {
 		key: 'id text primary key',
 		columns: {

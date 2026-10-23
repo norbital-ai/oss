@@ -13,7 +13,7 @@ import type { AgentRow, PushBody } from '../protocol/wire.ts';
 import type { integrationClient, integrationOffers } from '../page/integrations.ts';
 import type { Inbox } from './inbox/data.ts';
 import type { InstanceMessage } from './integration/messages.ts';
-import type { LogQuery, LogRow } from './logs/data.ts';
+import type { LogQuery, LogRow } from '../engine/contracts.ts';
 import type { RunRow } from './runs/data.ts';
 import type { Settings } from './settings/data.ts';
 import type { SignInMethods } from './host.ts';

@@ -249,9 +249,6 @@ export const WakeLive = Layer.effect(
 		};
 	})
 ).pipe(Layer.provideMerge(Layer.effect(Nudges, PubSub.unbounded<number>())));
-export const EventRetention = Context.Reference<number>('bolt/EventRetention', {
-	defaultValue: () => 72
-});
 export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 	const handlers = new Map<string, RunHandler>(),
 		retries = new Map<string, RetrySpec>();
@@ -358,8 +355,7 @@ export const RunsLive = Layer.effect(
 				trigger.key !== `feed:${feed.run}:${feed.spec.cron}@${m.workspace.tz}`
 			);
 		});
-		const retention = yield* EventRetention,
-			tenant = yield* ConfigProvider.ConfigProvider;
+		const tenant = yield* ConfigProvider.ConfigProvider;
 		const stopping = new Set<string>();
 		/** A running run's stop signal: `stop` completes it, which ends the crossing in flight (an inference can run 30 min). */
 		const halts = new Map<string, Deferred.Deferred<void>>();
@@ -488,7 +484,6 @@ export const RunsLive = Layer.effect(
 				// a pruned run's journal goes with it, in this pass or (past the cap) as an orphan in a later one
 				bolt_idem: `(run IS NOT NULL AND (run IN (SELECT id FROM sel_sys_run) OR NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.id = bolt_idem.run)))
 				OR (run IS NULL AND issued_at < $1::timestamptz - interval '24 hours')`,
-				sys_event: `at < $1::timestamptz - make_interval(hours => $2::int)`,
 				bolt_rate: `window_start < $1::timestamptz - interval '1 day'`,
 				sys_notification: `(read_at < $1::timestamptz - interval '90 days') OR at < $1::timestamptz - interval '365 days'`, // L-BOLT-354
 				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`
@@ -507,7 +502,7 @@ export const RunsLive = Layer.effect(
 			);
 			const [r] = (yield* db.write({
 				text: `WITH ${ctes.join(',\n')} SELECT ${counts.join(', ')}`,
-				params: [iso(now), retention]
+				params: [iso(now)]
 			})).rows;
 			const selected = tables.reduce((n, t) => n + Number(r?.[`sel_${t}`] ?? 0), 0),
 				deleted = tables.reduce((n, t) => n + Number(r?.[`del_${t}`] ?? 0), 0);
@@ -799,23 +794,21 @@ export const RunsLive = Layer.effect(
 						// `decision.made` traces a sys_1 call: the run's own record of the research it did
 						const recorded = (name: string, input: Json, error?: string) =>
 							Effect.gen(function* () {
-								yield* db.write(
-									yield* logged({
-										at: new Date(yield* Clock.currentTimeMillis).toISOString(),
-										severity: error === undefined ? 'info' : 'warn',
-										event: 'infer.tool',
-										invocation: `${run.id}:${run.attempts}`,
-										run: run.id,
-										conversation: null,
-										turn: null,
-										attributes: {
-											automation: run.automation,
-											tool: name,
-											input: JSON.stringify(input).slice(0, 500),
-											...(error === undefined ? {} : { error })
-										}
-									})
-								);
+								yield* logged({
+									at: new Date(yield* Clock.currentTimeMillis).toISOString(),
+									severity: error === undefined ? 'info' : 'warn',
+									event: 'infer.tool',
+									invocation: `${run.id}:${run.attempts}`,
+									run: run.id,
+									conversation: null,
+									turn: null,
+									attributes: {
+										automation: run.automation,
+										tool: name,
+										input: JSON.stringify(input).slice(0, 500),
+										...(error === undefined ? {} : { error })
+									}
+								});
 							}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 						const traced = (tool: InferTool): InferTool => ({
 							...tool,
@@ -1601,10 +1594,7 @@ export const RunsLive = Layer.effect(
 											conversation: null,
 											turn: null,
 											attributes: { code: error.code, message: error.message }
-										}).pipe(
-											Effect.flatMap((statement) => db.write(statement)),
-											Effect.as(undefined)
-										)
+										}).pipe(Effect.as(undefined))
 							)
 						);
 						pruned = pass !== undefined;

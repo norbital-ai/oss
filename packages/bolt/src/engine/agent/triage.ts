@@ -31,7 +31,7 @@ import { TurnHandlers } from './turns.ts';
 import { decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
 import { messageCommit, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
-import { EventSink } from '../guest/telemetry.ts';
+import { logged } from '../guest/telemetry.ts';
 const TRIAGE_RUN = 'agent.triage';
 /** Engine constants (rule 72's budget row), never authoring options. */
 export const TRIAGE_DEBOUNCE = 2000;
@@ -382,10 +382,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			pending: pending.length,
 			waits
 		};
-		const log = `INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES ($2::timestamptz, $3, 'decision.made', $4, $1, $5::jsonb) RETURNING 1`;
-		const base: Json[] = [conversation, now, bad ? 'warn' : 'info', call, JSON.stringify(event)];
-		// the row's own statement is a piece of the decision's chain below; the log store gets it here
-		yield* (yield* EventSink)({
+		yield* logged({
 			at: now,
 			severity: bad ? 'warn' : 'info',
 			event: 'decision.made',
@@ -401,9 +398,8 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			const seconds = Math.min(WAIT_MS / 1000, Math.max(0, w?.type === 'score' ? w.score : 0));
 			const at = new Date(Date.parse(now) + Math.round(seconds * 1000)).toISOString();
 			const chain = new Chain();
-			chain.params.push(...base, at, waits + 1);
-			chain.cte('logged', log);
-			recheck(chain, '$1', '$6', '$7');
+			chain.params.push(conversation, at, waits + 1);
+			recheck(chain, '$1', '$2', '$3');
 			const [wake] = yield* db.returning(
 				Schema.Struct({ due: Schema.NullOr(Schema.String) }),
 				chain.sql(`least((SELECT min(due_at) FROM held), ${nextDue(chain)})::text AS due`)
@@ -423,11 +419,10 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				.map((r) => String(r['id']));
 			if (left.length > 0) {
 				const chain = new Chain();
-				chain.params.push(...base, JSON.stringify(left));
-				chain.cte('logged', log);
+				chain.params.push(conversation, JSON.stringify(left));
 				const source = messagePiece(
 					chain,
-					"UPDATE sys_message m SET state = NULL, addressed = false WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($6::jsonb))"
+					"UPDATE sys_message m SET state = NULL, addressed = false WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($2::jsonb))"
 				);
 				const [result] = yield* db.returning(
 					Schema.Struct({ written: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }),
@@ -440,7 +435,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 						BoltError.make('corrupt', 'commit', 'triage decision returned no result')
 					);
 				yield* published(result.written);
-			} else yield* db.write({ text: `WITH logged AS (${log}) SELECT 1`, params: base });
+			}
 		}
 		yield* meter(cfg.metering, d, call);
 		if (action === 'respond') yield* admit(conversation, envoy);

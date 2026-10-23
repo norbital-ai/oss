@@ -37,7 +37,6 @@ import type { ApprovalView, DecideInput, Decision } from './approvals/approvals.
 import type { DeliveryReport, SendRefused } from './conversations/status.ts';
 import type { DecisionRequest, DecisionResult } from './decisions/index.ts';
 import type { GuestProgram } from './guest/runner.ts';
-import type { SysEvent } from './guest/telemetry.ts';
 import type { RunView } from './runs/index.ts';
 import type { WebhookRequest, WebhookResponse } from './runs/webhook.ts';
 import type { Commit, RateCharge } from './write/commit.ts';
@@ -739,12 +738,9 @@ export type InvocationEvents = {
 		event: string,
 		attributes: { readonly [key: string]: Json }
 	) => Effect.Effect<void>;
-	/** The buffered rows, taken as an act statement's piece. */
-	readonly take: Effect.Effect<readonly SysEvent[]>;
-	readonly slice?: Effect.Effect<void> | undefined;
 };
 export type TelemetryShape = {
-	/** One invocation's `sys_event` log (§5.12): sliced between crossings, its rest written when the scope closes. */
+	/** One invocation's events (§5.12), each written to the host's runtime log as it happens. */
 	readonly open: (ids: EventIds) => Effect.Effect<InvocationEvents, never, Scope.Scope>;
 };
 export class Telemetry extends Context.Service<Telemetry, TelemetryShape>()('bolt/Telemetry') {}

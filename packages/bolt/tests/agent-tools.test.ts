@@ -6,7 +6,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Clock, Context, Deferred, Effect, Fiber, Layer, Predicate, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, Sql } from '../src/engine/contracts.ts';
+import type { Authority, LogRow, Sql } from '../src/engine/contracts.ts';
 import { DbError } from '../src/engine/errors.ts';
 import type { AgentEngine } from '../src/engine/agent/index.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
@@ -22,7 +22,7 @@ import {
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
-import { Files } from '../src/engine/ports.ts';
+import { Files, Logs, type LogsShape } from '../src/engine/ports.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
 import { actorRef } from '../src/engine/write/commit.ts';
@@ -79,6 +79,8 @@ type EngineOverrides = Omit<Partial<AgentEngine>, 'db' | 'calls' | 'approvals' |
 	approvals?: Partial<AgentEngine['approvals']>;
 	files?: Partial<Files['Service']>;
 };
+/** Each context's kit host runtime log: its rows (oldest first) and the port its tools read. */
+const kitLogs = new WeakMap<ToolContext, { rows: LogRow[]; port: LogsShape }>();
 const ctx = (
 	over: Partial<Omit<ToolContext, 'engine' | 'jobs'>> = {},
 	engine: EngineOverrides = {}
@@ -151,16 +153,34 @@ const ctx = (
 			},
 			...over
 		};
+		kitLogs.set(x, {
+			rows: Context.get(native, TestWorkspace).fakes.logs,
+			port: Context.get(native, Logs)
+		});
 		return x;
 	});
+/** Rows pushed into a context's runtime log, `id` their position. */
+const logRows = (
+	x: ToolContext,
+	rows: readonly (Pick<LogRow, 'at' | 'severity' | 'event' | 'invocation' | 'attributes'> &
+		Partial<Pick<LogRow, 'run'>>)[]
+) => {
+	const log = kitLogs.get(x)?.rows;
+	if (log === undefined) throw new Error('no kit log for this context');
+	for (const row of rows)
+		log.push({ run: null, conversation: null, turn: null, ...row, id: String(log.length + 1) });
+};
 const tool = (x: ToolContext, name: string) => catalogue(x).find((t) => t.name === name);
 const requiredTool = (x: ToolContext, name: string) => {
 	const t = tool(x, name);
 	if (t === undefined) throw new Error(`missing tool ${name}`);
 	return t;
 };
-const result = (x: ToolContext, name: string, input: Json) =>
-	requiredTool(x, name).run(input, 'call');
+const result = (x: ToolContext, name: string, input: Json) => {
+	const port = kitLogs.get(x)?.port;
+	const run = requiredTool(x, name).run(input, 'call');
+	return port === undefined ? run : run.pipe(Effect.provideService(Logs, port));
+};
 const first = <A>(items: readonly A[]): A => {
 	const item = items[0];
 	if (item === undefined) throw new Error('fixture produced no item');
@@ -1037,11 +1057,25 @@ describe('runs and logs', () => {
 						]
 					}
 				});
-				// one run in detail: input, result, every attempt and its log lines, in one statement
-				yield* x.engine.db.write({
-					text: `INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES (now(), 'error', 'console', 'r2:2', 'r2', '{"automation":"billing.invoice","level":"error","line":"boom"}'), (now(), 'info', 'console', 'r1:1', 'r1', '{}')`,
-					params: []
-				});
+				// one run in detail: input, result, every attempt and its log lines from the host's log
+				logRows(x, [
+					{
+						at: '2026-09-21T01:00:00.000Z',
+						severity: 'error',
+						event: 'console',
+						invocation: 'r2:2',
+						run: 'r2',
+						attributes: { automation: 'billing.invoice', level: 'error', line: 'boom' }
+					},
+					{
+						at: '2026-09-21T01:00:00.000Z',
+						severity: 'info',
+						event: 'console',
+						invocation: 'r1:1',
+						run: 'r1',
+						attributes: {}
+					}
+				]);
 				expect(yield* result(x, 'runs', { id: 'r2' })).toMatchObject({
 					result: {
 						id: 'r2',
@@ -1080,14 +1114,39 @@ describe('runs and logs', () => {
 			Effect.gen(function* () {
 				const x = yield* ctx();
 				yield* runs(x);
-				yield* x.engine.db.write({
-					text: `INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES
-				('2026-09-21T01:00:01Z', 'info', 'console', 'r2:1', 'r2', '{"automation":"billing.invoice","line":"starting"}'),
-				('2026-09-21T01:00:02Z', 'warn', 'facility.failed', 'r2:1', 'r2', '{"facility":"http"}'),
-				('2026-09-21T01:00:03Z', 'error', 'console', 'r2:2', 'r2', '{"automation":"billing.invoice","line":"${'y'.repeat(3000)}"}'),
-				('2026-09-22T01:00:00Z', 'info', 'act.settled', 'a1', NULL, '{}')`,
-					params: []
-				});
+				logRows(x, [
+					{
+						at: '2026-09-21T01:00:01.000Z',
+						severity: 'info',
+						event: 'console',
+						invocation: 'r2:1',
+						run: 'r2',
+						attributes: { automation: 'billing.invoice', line: 'starting' }
+					},
+					{
+						at: '2026-09-21T01:00:02.000Z',
+						severity: 'warn',
+						event: 'facility.failed',
+						invocation: 'r2:1',
+						run: 'r2',
+						attributes: { facility: 'http', automation: 'billing.invoice' }
+					},
+					{
+						at: '2026-09-21T01:00:03.000Z',
+						severity: 'error',
+						event: 'console',
+						invocation: 'r2:2',
+						run: 'r2',
+						attributes: { automation: 'billing.invoice', line: 'y'.repeat(3000) }
+					},
+					{
+						at: '2026-09-22T01:00:00.000Z',
+						severity: 'info',
+						event: 'act.settled',
+						invocation: 'a1',
+						attributes: {}
+					}
+				]);
 				const events = (input: Json) =>
 					Effect.map(
 						result(x, 'logs', input),

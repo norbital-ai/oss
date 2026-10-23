@@ -17,9 +17,11 @@ import {
 	Effect,
 	FiberSet,
 	Layer,
+	Logger,
 	ManagedRuntime,
 	Option,
 	Redacted,
+	References,
 	Result,
 	Schema
 } from 'effect';
@@ -53,7 +55,6 @@ import type {
 import { PostgresDb, type PgPool } from '../engine/db/postgres.ts';
 import { PgliteDb, type PgliteClient } from '../engine/db/pglite.ts';
 export type { PgliteClient } from '../engine/db/pglite.ts';
-export type { SysEvent } from '../engine/guest/telemetry.ts';
 import { TenantDb, TenantTx, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
 import { Activation, Conversations, Feeds, Manifest, Runs } from '../engine/services.ts';
@@ -64,6 +65,8 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	Logs,
+	logsFromAbi,
 	Metering,
 	Speech,
 	Transport,
@@ -73,7 +76,6 @@ import {
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { GuestConfig } from '../engine/guest/runner.ts';
-import { EventSink, type SysEvent } from '../engine/guest/telemetry.ts';
 import { AgentHost, type AgentConfig } from '../engine/agent/index.ts';
 import { withBrowser } from '../engine/agent/browser.ts';
 import { HOOKS, OAUTH_CALLBACK, integrationLinks } from '../engine/integrations/links.ts';
@@ -206,7 +208,6 @@ export type ShellPorts = Pick<
 	| 'workspaces'
 	| 'organization'
 	| 'ai'
-	| 'logs'
 >;
 /** The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. */
 export type AgentPorts = Pick<AgentConfig, 'draft' | 'sandbox' | 'hostTools' | 'skills'>;
@@ -223,12 +224,11 @@ export type HostPorts = Pick<
 	| 'browser'
 	| 'links'
 	| 'metering'
+	| 'logs'
 	| 'membership'
 > & {
 	/** Rule 61: this environment's epoch (a fork's rows are never sent). */
 	readonly epoch?: string;
-	/** The runtime log as it is written: each `sys_event` row, for the host's log store (never awaited; a throw is dropped). */
-	readonly events?: (row: SysEvent) => void;
 	/** Each guest invocation's CPU, once it settles, with its crossings and statements (the host bills compute). */
 	readonly cpu?: (
 		invocation: Invocation,
@@ -433,8 +433,10 @@ const database = (db: HostDatabase): TenantDbShape =>
 		: db._tag === 'Pglite'
 			? PgliteDb.make(db.client)
 			: db.db;
+/** This release's own diagnostics, in every runtime: one JSON event per line on stdout, for the host's collector. */
+const logging = Logger.layer([Logger.consoleJson]);
 /** Artifact inspection has no tenant services; activation owns its own runtime below. */
-const inspection = ManagedRuntime.make(NodeServices.layer);
+const inspection = ManagedRuntime.make(NodeServices.layer.pipe(Layer.provideMerge(logging)));
 const artifactOf = (release: Release, options: Signal) =>
 	inspection.runPromise(Effect.result(readArtifact(release.dir)), options).then(Result.getOrThrow);
 const activeRuns = new WeakMap<
@@ -454,10 +456,6 @@ const activation = (ports: HostPorts, artifact: Artifact) =>
 		secretsKey:
 			ports.secretsKey === undefined ? Option.none() : Option.some(Redacted.make(ports.secretsKey))
 	});
-const eventSink = (events: NonNullable<HostPorts['events']>) =>
-	Layer.succeed(EventSink, (row: SysEvent) =>
-		Effect.try({ try: () => events(row), catch: (error) => error }).pipe(Effect.ignore)
-	);
 /** Host-provided records cross only this explicit Promise ABI adapter. */
 const portLayers = (ports: HostPorts) =>
 	Layer.mergeAll(
@@ -553,7 +551,7 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		activation(ports, artifact),
 		portLayers(ports),
 		transportLayer,
-		...(ports.events === undefined ? [] : [eventSink(ports.events)]),
+		...(ports.logs === undefined ? [] : [Layer.succeed(Logs, logsFromAbi(ports.logs))]),
 		Layer.effect(
 			AgentHost,
 			withBrowser({ ...ports.agent, ...(workspace === undefined ? {} : { workspace }) })
@@ -591,7 +589,11 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 	const runtime = ManagedRuntime.make(
 		Layer.merge(BoltHostLive, publicPages(artifact)).pipe(
 			Layer.provideMerge(shell),
-			Layer.provideMerge(NodeServices.layer)
+			Layer.provideMerge(NodeServices.layer),
+			Layer.provideMerge(logging),
+			Layer.provideMerge(
+				Layer.succeed(References.CurrentLogAnnotations, { workspace: ports.scope })
+			)
 		)
 	);
 	const ready = await runtime
@@ -869,7 +871,9 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 			});
 		})
 	).pipe(Layer.provideMerge(secretsLayer));
-	const runtime = ManagedRuntime.make(managerLayer.pipe(Layer.provideMerge(NodeServices.layer)));
+	const runtime = ManagedRuntime.make(
+		managerLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(logging))
+	);
 	const ready = await runtime
 		.context()
 		.then(Result.succeed, (error: unknown) => Result.fail(error));

@@ -507,15 +507,11 @@ describe('the deadlines port and the idle workspace (rule 52a)', () => {
 				});
 				const old = iso(T0 - 4 * DAY);
 				for (const text of [
-					`INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES ('${old}', 'info', 'old', 'i', '{}'), ('${iso(T0)}', 'info', 'new', 'i', '{}')`,
 					`INSERT INTO bolt_rate VALUES ('act', 'b', '${old}', 1), ('act', 'b', '${iso(T0)}', 1)`,
 					`INSERT INTO bolt_host_nonce VALUES ('nonce:a', '${iso(T0 - 3600000)}'), ('run:a', '${iso(T0 - 3600000)}'), ('run:b', '${iso(T0 - 31 * DAY)}')`
 				])
 					yield* w.db.write({ text, params: [] });
 				yield* w.until(T0 + DAY);
-				expect(yield* w.sql(`SELECT event FROM sys_event WHERE event IN ('old', 'new')`)).toEqual([
-					{ event: 'new' }
-				]);
 				expect(yield* w.sql(`SELECT count(*)::int AS n FROM bolt_rate`)).toEqual([{ n: 1 }]);
 				expect(yield* w.sql(`SELECT key FROM bolt_host_nonce`)).toEqual([{ key: 'run:a' }]);
 			})

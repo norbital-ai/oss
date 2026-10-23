@@ -9,7 +9,6 @@ import type { EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
 import { toPred } from '../access/pred.ts';
 import { q, type Catalog } from '../../protocol/catalog.ts';
-import { eventsPiece, type SysEvent } from '../guest/telemetry.ts';
 import { enqueue, nextDue, queueTriggered } from '../runs/queue.ts'; // hook:automations
 import { feedConfigurationPiece } from '../integrations/feeds.ts'; // hook:integrations
 import { outboundPiece } from '../integrations/outbound.ts'; // hook:integrations
@@ -76,8 +75,6 @@ export type Commit = {
 	pieces?: (c: Chain) => void;
 	/** Rule 26: the transform's reads, re-digested under the table lock and asserted before the statement commits. */
 	fingerprints?: readonly Fingerprint[];
-	/** §5.12: the invocation's buffered `sys_event` rows, a piece of this statement. */
-	events?: readonly SysEvent[];
 	/**
 	 * Rule 38e: the direct pieces are `erased` revisions. Remove drops every revision of every deleted row; anonymise
 	 * drops `purge` fields from the targets' earlier revisions (a revision left empty goes). Both drop notices linking
@@ -484,7 +481,6 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 	if (x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
 	if (x.notices.length > 0)
 		noticeInsert(c, 'notices', x.notices, x.now, GATED, m.teams, m.workspace.signup?.policies);
-	events(c, x.events);
 	x.pieces?.(c); // hook:integrations
 
 	// in the act's own order (the input's; `records[0]` is what was written), anything else after by collection and id
@@ -530,13 +526,12 @@ function numericText(cat: Catalog, tables: readonly string[], x: string): string
  * rate increment so a replay answers it without re-running guest code, and so refused attempts count.
  */
 export function compileOutcomeRecord(
-	x: Pick<Commit, 'key' | 'digest' | 'issuedAt' | 'rate' | 'events'>,
+	x: Pick<Commit, 'key' | 'digest' | 'issuedAt' | 'rate'>,
 	outcome: Json
 ): Sql {
 	const c = new Chain();
 	gate(c, x.key, x.digest, x.issuedAt);
 	rate(c, x.rate);
-	events(c, x.events);
 	return c.sql(
 		`${answer(c, x.key, x.digest, `${c.p(JSON.stringify(outcome))}::jsonb`)}, '[]'::jsonb AS captured, NULL::timestamptz AS next_due, '[]'::jsonb AS changed_instances`
 	);
@@ -544,12 +539,6 @@ export function compileOutcomeRecord(
 
 /** Columns history never keeps: the generated search document and the platform embedding. */
 const UNHISTORIED = `ARRAY['bolt_search', 'bolt_embedding']`;
-/** §5.12: the buffered events as one gated piece (written only when the statement writes at all). */
-function events(c: Chain, rows: readonly SysEvent[] | undefined): void {
-	if (rows === undefined || rows.length === 0) return;
-	const p = c.p(rows);
-	c.cte('events', `${eventsPiece(Number(p.slice(1)))} WHERE ${GATED}`);
-}
 /** Rule 38e(a–c): the history purge and the notices of removed rows. The `erased` revision is this statement's own
  * insert, which no other piece sees, so it survives both purges. */
 function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]): void {

@@ -679,28 +679,24 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const { cost, call } = r.usage,
 				over = cost !== undefined && cost > AI_GAUGE_USD,
 				incomplete = cost === undefined || call === undefined;
-			yield* db
-				.write(
-					yield* logged({
-						at: (yield* config.bindings).now,
-						severity: incomplete || over ? 'warn' : 'info',
-						event: 'ai.call',
-						invocation: turn,
-						run: null,
-						conversation: id,
-						turn,
-						attributes: {
-							call: call ?? null,
-							model: modelOf,
-							input: r.usage.input,
-							output: r.usage.output,
-							cost: cost ?? null,
-							settlement: incomplete ? 'attention' : 'pending',
-							...(over ? { gauge: AI_GAUGE_USD } : {})
-						}
-					})
-				)
-				.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+			yield* logged({
+				at: (yield* config.bindings).now,
+				severity: incomplete || over ? 'warn' : 'info',
+				event: 'ai.call',
+				invocation: turn,
+				run: null,
+				conversation: id,
+				turn,
+				attributes: {
+					call: call ?? null,
+					model: modelOf,
+					input: r.usage.input,
+					output: r.usage.output,
+					cost: cost ?? null,
+					settlement: incomplete ? 'attention' : 'pending',
+					...(over ? { gauge: AI_GAUGE_USD } : {})
+				}
+			});
 		});
 		let modelOf = '';
 		let steps = 0,
@@ -837,20 +833,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				code === 'unavailable' && detail === NO_AI
 					? 'AI provider not configured'
 					: (detail ?? code);
-			yield* db
-				.write(
-					yield* logged({
-						at: (yield* config.bindings).now,
-						severity: code === 'unavailable' ? 'warn' : 'error',
-						event: 'agent.failed',
-						invocation: turn,
-						run: null,
-						conversation: id,
-						turn,
-						attributes: { code, message }
-					})
-				)
-				.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+			yield* logged({
+				at: (yield* config.bindings).now,
+				severity: code === 'unavailable' ? 'warn' : 'error',
+				event: 'agent.failed',
+				invocation: turn,
+				run: null,
+				conversation: id,
+				turn,
+				attributes: { code, message }
+			});
 		});
 		/** L-BOLT-425: the four-row table; an empty summary is asked for once more before the checkpoint is skipped. */
 		/** L-BOLT-546: `origin` says who asked (`/compact`, the agent's own `compact` tool, or the window); input still waiting stays after the boundary. */

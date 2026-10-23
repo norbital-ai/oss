@@ -177,14 +177,9 @@ const get = (t: Kit, route: FixtureRoute, id: string) =>
 		Effect.map((reply) => reply.answers[0])
 	);
 const events = (t: Kit) =>
-	t.db
-		.read([{ text: `SELECT attributes FROM sys_event WHERE event = 'decision.made'`, params: [] }])
-		.pipe(
-			Effect.map(([rows]) => {
-				if (rows === undefined) throw new Error('Missing decision events');
-				return rows.rows.map((row) => row['attributes']);
-			})
-		);
+	Effect.sync(() =>
+		t.fakes.logs.filter((r) => r.event === 'decision.made').map((r) => r.attributes)
+	);
 const upload = (
 	route: FixtureRoute,
 	authority: ReturnType<typeof desk>,

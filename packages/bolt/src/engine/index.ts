@@ -36,7 +36,7 @@ export {
 	type GuestOptions,
 	type GuestProgram
 } from './guest/runner.ts';
-export { TelemetryLive, EventSink, eventsPiece, type SysEvent } from './guest/telemetry.ts';
+export { TelemetryLive, logged } from './guest/telemetry.ts';
 // ── exports: writes ──
 export { WritesLive, act, recordCapabilities, mayUpdate, type WriteEngine } from './write/act.ts';
 export {
@@ -158,7 +158,6 @@ export {
 	RunHandlersLive,
 	WakeLive,
 	Nudges,
-	EventRetention,
 	RUN_VIEW_COLUMNS,
 	RunViewRow,
 	runView,

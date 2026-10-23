@@ -227,16 +227,9 @@ const open = (port?: System1, m: EngineManifest = manifest) =>
 				}
 			});
 		const events = () =>
-			t.db
-				.read([
-					{ text: `SELECT attributes FROM sys_event WHERE event = 'decision.made'`, params: [] }
-				])
-				.pipe(
-					Effect.map(([result]) => {
-						if (result === undefined) throw new Error('Missing decision events');
-						return result.rows.map((row) => row['attributes']);
-					})
-				);
+			Effect.sync(() =>
+				t.fakes.logs.filter((r) => r.event === 'decision.made').map((r) => r.attributes)
+			);
 		return { t, context, filters, route, bob, caller, metered, describeAs, events };
 	});
 const titles = (route: FixtureRoute, caller: Authority, where?: object, orderBy?: object) =>

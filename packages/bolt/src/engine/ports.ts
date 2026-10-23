@@ -31,6 +31,10 @@ import type {
 	FilesPort,
 	GeocoderPort,
 	LinksPort,
+	LogEvent,
+	LogPort,
+	LogQuery,
+	LogRow,
 	MeteringPort,
 	SpeechPort,
 	TransportPort,
@@ -262,6 +266,25 @@ export class Geo extends Context.Service<
 				});
 	}
 }
+/**
+ * The runtime log (§5.12), held by the host: `write` never waits or fails. Without a host port each event is one line
+ * through this runtime's logger and there is nothing to read.
+ */
+export type LogsShape = {
+	readonly write: (event: LogEvent) => Effect.Effect<void>;
+	readonly read: (query: LogQuery) => Effect.Effect<readonly LogRow[], PortFailure>;
+};
+export const Logs = Context.Reference<LogsShape>('bolt/Logs', {
+	defaultValue: () => ({
+		write: (event) => Effect.logInfo(JSON.stringify(event)),
+		read: () => Port.unavailable('logs')
+	})
+});
+export const logsFromAbi = (port: LogPort): LogsShape => ({
+	write: (event) =>
+		Effect.try({ try: () => port.write(event), catch: (error) => error }).pipe(Effect.ignore),
+	read: (query) => Port.attempt('logs', (signal) => port.read(query, signal))
+});
 /** Usage the host bills: `quantity` of `meter`, once per `key`. */
 export class Metering extends Context.Service<
 	Metering,

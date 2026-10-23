@@ -518,16 +518,11 @@ describe('groups (rule 60)', () => {
 						invocation: 'ambient',
 						mentions: ['113377445566:4@lid']
 					});
-					const [logged] = present(
-						(yield* t.db.read([
-							{
-								text: `SELECT attributes FROM sys_event WHERE event = 'conversation.unaddressed' ORDER BY at DESC LIMIT 1`,
-								params: []
-							}
-						]))[0]
-					).rows;
+					const unaddressed = () =>
+						t.fakes.logs.filter((r) => r.event === 'conversation.unaddressed');
+					const logged = unaddressed().at(-1);
 					expect(logged).toBeDefined();
-					expect(present(logged)['attributes']).toMatchObject({
+					expect(present(logged).attributes).toMatchObject({
 						instance: 'field_wa',
 						mentions: ['113377445566:4@lid']
 					});
@@ -537,15 +532,7 @@ describe('groups (rule 60)', () => {
 						invocation: 'ambient',
 						mentions: []
 					});
-					const [after] = present(
-						(yield* t.db.read([
-							{
-								text: `SELECT count(*)::int AS n FROM sys_event WHERE event = 'conversation.unaddressed'`,
-								params: []
-							}
-						]))[0]
-					).rows;
-					expect(present(after)['n']).toBe(1);
+					expect(unaddressed()).toHaveLength(1);
 				})
 			)
 	);

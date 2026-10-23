@@ -43,7 +43,7 @@ import type { Handler } from '../protocol/host.ts';
 import { requestKiosk, kioskAuthority, kioskBoot } from './public/kiosk.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import type { Json } from '../decl/values.ts';
-import type { Authority, EngineActor } from '../engine/contracts.ts';
+import type { Authority, EngineActor, LogQuery } from '../engine/contracts.ts';
 import { type EngineError } from '../engine/errors.ts';
 import { BoltError, CODES, PHASES } from '../protocol/errors.ts';
 import { addressBucket, chargesFor, macKey, type RateKind } from '../engine/access/rate.ts';
@@ -66,7 +66,6 @@ import {
 } from '../engine/identity/session.ts';
 import { BOLT, HEADERS, PATHS, SW, basePath, under } from '../protocol/wire.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
-import { events, type LogLevel, type LogQuery, type LogRow } from './logs/data.ts';
 import { inbox } from './inbox/data.ts';
 import { instanceMessages } from './integration/messages.ts';
 import { runList } from './runs/data.ts';
@@ -92,6 +91,7 @@ import {
 	type ShellNotice,
 	type WorkspaceLink
 } from './nav.ts';
+import { readLog } from '../engine/guest/telemetry.ts';
 
 const SESSION_S = 7 * 86_400,
 	VISITOR_S = 30 * 86_400;
@@ -188,8 +188,6 @@ export type ShellHostConfig = {
 	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
 	readonly live?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
-	/** The workspace log from the host's log store (the runtime log), asked only for an administrator; unset, `sys_event` answers. */
-	readonly logs?: (query: LogQuery) => Promise<readonly LogRow[]>;
 };
 export class ShellConfig extends Context.Service<ShellConfig, ShellHostConfig>()(
 	'bolt/ShellConfig'
@@ -1021,22 +1019,27 @@ const makeShell = Effect.gen(function* () {
 						const v = p.get(key);
 						return v === null ? {} : { [key]: v };
 					};
-				const query: LogQuery = {
-						...given('before'),
-						...given('after'),
-						...given('run'),
-						...given('automation'),
-						...given('since'),
-						...given('until'),
-						...(level === 'info' || level === 'warn' || level === 'error' ? { level } : {}),
-						...(text === null ? {} : { text }),
-						...(conversation === null ? {} : { conversation })
-					},
-					logs = c.logs;
-				if (logs === undefined) return json({ value: yield* events(h.db, auth, query) });
+				const bad = ['since', 'until']
+					.map((key) => p.get(key))
+					.find((v) => v !== null && v !== '' && Number.isNaN(Date.parse(v)));
+				if (bad !== undefined)
+					return yield* Effect.fail(
+						BoltError.make('invalidInput', 'decode', `'${bad}' is not an instant`)
+					);
 				const refusal = requireAdmin(auth);
 				if (refusal !== null) return yield* Effect.fail(refusal);
-				return json({ value: yield* hostCall(() => logs(query)) });
+				const query: LogQuery = {
+					...given('before'),
+					...given('after'),
+					...given('run'),
+					...given('automation'),
+					...given('since'),
+					...given('until'),
+					...(level === 'info' || level === 'warn' || level === 'error' ? { level } : {}),
+					...(text === null ? {} : { text }),
+					...(conversation === null ? {} : { conversation })
+				};
+				return json({ value: yield* readLog(query) });
 			}
 			case 'GET /studio':
 			case 'POST /studio': {

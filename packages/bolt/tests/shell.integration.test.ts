@@ -11,6 +11,7 @@ import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { HostIdentity } from '../src/shell/host.ts';
 import type { StudioOp, StudioPort, StudioState } from '../src/shell/studio/model.ts';
 import { BoltError } from '../src/protocol/errors.ts';
+import type { LogRow } from '../src/engine/contracts.ts';
 import { SW } from '../src/protocol/wire.ts';
 import { KitInvalid, TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
 
@@ -636,25 +637,34 @@ layer(workspace)('shell routes', (it) => {
 		);
 
 		it.effect(
-			'the workspace log pages sys_event newest first by cursor, filters, follows the tail, and is admin-only',
+			'the workspace log pages the host log newest first by cursor, filters, follows the tail, and is admin-only',
 			() =>
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace;
 					const at = (i: number) =>
 						new Date(Date.parse('2026-09-25T00:00:00Z') + i * 1000).toISOString();
-					const rows = Array.from({ length: 250 }, (_, i) => ({
-						at: at(i),
-						severity: i % 50 === 0 ? 'error' : 'info',
-						event: i % 50 === 0 ? 'act.failed' : 'act.settled',
-						invocation: `i${i}`,
-						attributes: { n: i }
-					}));
-					yield* t.db.write({ text: 'DELETE FROM sys_event', params: [] });
-					yield* t.db.write({
-						text: `INSERT INTO sys_event (at, severity, event, invocation, attributes) SELECT e.at, e.severity, e.event, e.invocation, e.attributes
-			FROM jsonb_to_recordset($1::jsonb) AS e(at timestamptz, severity text, event text, invocation text, attributes jsonb) ORDER BY e.at`,
-						params: [JSON.stringify(rows)]
-					});
+					// the kit host's runtime log, as a host's store holds it
+					const log = t.fakes.logs;
+					const push = (
+						event: Pick<LogRow, 'at' | 'severity' | 'event' | 'invocation' | 'attributes'> &
+							Partial<Pick<LogRow, 'run' | 'conversation'>>
+					) =>
+						log.push({
+							run: null,
+							conversation: null,
+							turn: null,
+							...event,
+							id: String(log.length + 1)
+						});
+					log.splice(0);
+					for (let i = 0; i < 250; i++)
+						push({
+							at: at(i),
+							severity: i % 50 === 0 ? 'error' : 'info',
+							event: i % 50 === 0 ? 'act.failed' : 'act.settled',
+							invocation: `i${i}`,
+							attributes: { n: i }
+						});
 					const Log = Schema.Array(
 						Schema.Struct({
 							id: Schema.String,
@@ -687,32 +697,54 @@ layer(workspace)('shell routes', (it) => {
 					]);
 					expect((yield* logs('?q=FAILED&level=error')).length).toBe(5);
 					expect(yield* logs(`?after=${first.id}`)).toEqual([]);
-					yield* t.db.write({
-						text: `INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES (now(), 'warn', 'act.refused', 'late', '{"n":250}')`,
-						params: []
+					const now = new Date().toISOString();
+					push({
+						at: now,
+						severity: 'warn',
+						event: 'act.refused',
+						invocation: 'late',
+						attributes: { n: 250 }
 					});
 					expect((yield* logs(`?after=${first.id}`)).map((r) => r.event)).toEqual(['act.refused']);
 					// one conversation's events alone (the panel's raw-context tab)
-					yield* t.db.write({
-						text: `INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES
-			(now(), 'info', 'decision.made', 'd1', 'c1', '{"state":{"directive":"go"}}'::jsonb),
-			(now(), 'info', 'decision.made', 'd2', 'c2', '{"state":{"directive":"stop"}}'::jsonb)`,
-						params: []
-					});
+					for (const [invocation, conversation, directive] of [
+						['d1', 'c1', 'go'],
+						['d2', 'c2', 'stop']
+					] as const)
+						push({
+							at: now,
+							severity: 'info',
+							event: 'decision.made',
+							invocation,
+							conversation,
+							attributes: { state: { directive } }
+						});
 					const scoped = yield* logs('?conversation=c1');
 					expect(scoped.map((r) => r.conversation)).toEqual(['c1']);
 					expect(scoped[0]?.attributes).toMatchObject({ state: { directive: 'go' } });
-					// one run's events, an automation's (through its runs or a console line's tag) and an at window
-					yield* t.db.write({
-						text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('r-log', 'nightly', '{}', now(), 'schedule', 0)`,
-						params: []
+					// one run's events, an automation's (each event names it) and an at window
+					push({
+						at: '2026-09-20T10:00:00.000Z',
+						severity: 'info',
+						event: 'console',
+						invocation: 'r-log:1',
+						run: 'r-log',
+						attributes: { n: 1001, line: 'hello', automation: 'nightly' }
 					});
-					yield* t.db.write({
-						text: `INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES
-			('2026-09-20T10:00:00Z', 'info', 'console', 'r-log:1', 'r-log', '{"n":1001,"line":"hello"}'::jsonb),
-			('2026-09-20T11:00:00Z', 'warn', 'facility.failed', 'r-log:1', 'r-log', '{"n":1002}'::jsonb),
-			('2026-09-20T12:00:00Z', 'info', 'console', 'x:1', NULL, '{"n":1003,"automation":"nightly"}'::jsonb)`,
-						params: []
+					push({
+						at: '2026-09-20T11:00:00.000Z',
+						severity: 'warn',
+						event: 'facility.failed',
+						invocation: 'r-log:1',
+						run: 'r-log',
+						attributes: { n: 1002, automation: 'nightly' }
+					});
+					push({
+						at: '2026-09-20T12:00:00.000Z',
+						severity: 'info',
+						event: 'console',
+						invocation: 'x:1',
+						attributes: { n: 1003, automation: 'nightly' }
 					});
 					const ns = (q: string) => Effect.map(logs(q), (rows) => rows.map((r) => r.attributes.n));
 					expect(yield* ns('?run=r-log')).toEqual([1002, 1001]);

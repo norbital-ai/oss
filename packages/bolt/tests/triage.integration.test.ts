@@ -300,6 +300,13 @@ const say = (from: string, body: string, over: { [k: string]: Json } = {}) =>
 	});
 const q = (sql: string, ...params: Json[]) =>
 	t.db.rows(Schema.Record(Schema.String, Schema.Json), { text: sql, params });
+/** The decisions the kit host's runtime log holds, oldest first. */
+const decisions = () =>
+	Effect.sync(() =>
+		t.fakes.logs
+			.filter((r) => r.event === 'decision.made')
+			.map(({ severity, attributes }) => ({ severity, attributes }))
+	);
 const row = (body: string) =>
 	q(`SELECT state, addressed, delivered_turn, "as" FROM sys_message WHERE text = $1`, body).pipe(
 		Effect.map((rows) => {
@@ -404,8 +411,8 @@ describe('envoy triage (G12 (10))', () => {
 					yield* photo('and another one');
 					expect(states).toHaveLength(2);
 					expect((yield* row('and another one'))['delivered_turn']).not.toBeNull(); // the failure outcome: respond
-					const events = yield* q(
-						`SELECT severity, attributes FROM sys_event WHERE event = 'decision.made' ORDER BY severity`
+					const events = (yield* decisions()).toSorted((a, b) =>
+						a.severity.localeCompare(b.severity)
 					);
 					expect(
 						events.map((e) => [
@@ -463,7 +470,7 @@ describe('envoy triage (G12 (10))', () => {
 					expect([...turns][0]).not.toBeNull();
 					expect(yield* queued()).toHaveLength(0); // an idle conversation queues no decision
 					yield* neverTwice();
-					const events = yield* q(`SELECT attributes FROM sys_event WHERE event = 'decision.made'`);
+					const events = yield* decisions();
 					expect(events).toHaveLength(4);
 					expect(
 						events.every(
@@ -667,9 +674,7 @@ describe('envoy triage (G12 (10))', () => {
 					yield* debounce();
 					expect((yield* row('hello'))['delivered_turn']).not.toBeNull();
 					expect(yield* row('chatter')).toMatchObject({ delivered_turn: null, addressed: false });
-					const events = yield* q(
-						`SELECT severity, attributes FROM sys_event WHERE event = 'decision.made'`
-					);
+					const events = yield* decisions();
 					expect(events.length).toBeGreaterThan(0);
 					expect(
 						events.every(

@@ -31,7 +31,6 @@ import {
 	Convert,
 	Drivers,
 	EngineLive,
-	EventRetention,
 	Files,
 	Geo,
 	HostIdentity,
@@ -362,8 +361,7 @@ export const activate = Effect.fn('server.activate')(function* (
 			start: pack?.meta.start ?? [],
 			secretsKey:
 				config.masterKey === null ? Option.none() : Option.some(Redacted.make(config.masterKey))
-		}),
-		Layer.succeed(EventRetention, config.telemetryRetainHours)
+		})
 	);
 	const engineContext = yield* Layer.build(EngineLive(manifest).pipe(Layer.provideMerge(ports)));
 	yield* Deferred.succeed(contextReady, engineContext);
@@ -437,9 +435,7 @@ export const activate = Effect.fn('server.activate')(function* (
 			| EngineServices
 			| PublicPages
 			| EngineHost
-			| Context.Service.Identifier<
-					typeof AgentHost | typeof IntegrationManager | typeof EventRetention
-			  >
+			| Context.Service.Identifier<typeof AgentHost | typeof IntegrationManager>
 			| Layer.Success<typeof BoltHostLive>
 			| Layer.Services<typeof BoltHostLive>
 			| Layer.Success<typeof ShellRoutes>

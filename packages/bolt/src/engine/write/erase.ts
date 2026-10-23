@@ -150,9 +150,9 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		runs: [],
 		notices: [],
 		output: null,
-		erase: spec,
-		events: yield* take('info', 'act.settled', { erased: writes.length })
+		erase: spec
 	};
+	yield* take('info', 'act.settled', { erased: writes.length });
 	if (r.mode._tag === 'Record') {
 		const { key: _key, digest: _digest, issuedAt: _issuedAt, rate: _rate, ...planned } = commit;
 		r.mode.sink({ commit: planned });
@@ -190,7 +190,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 							: BoltError.make('bug', 'commit', String(error), error)
 				});
 				if (!d.record) return none(d.outcome);
-				const events = yield* take(
+				yield* take(
 					'warn',
 					'act.refused',
 					d.outcome.kind === 'refused'
@@ -202,7 +202,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 				);
 				const res = yield* e.db.returning(
 					Schema.Struct({ outcome: Schema.NullOr(OutcomeSchema) }),
-					compileOutcomeRecord({ ...common, events }, value)
+					compileOutcomeRecord(common, value)
 				);
 				return none(res[0]?.outcome ?? d.outcome);
 			})

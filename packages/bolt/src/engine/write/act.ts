@@ -210,7 +210,7 @@ export type Taker = (
 	attributes: {
 		readonly [key: string]: Json;
 	}
-) => Effect.Effect<readonly import('../guest/telemetry.ts').SysEvent[]>;
+) => Effect.Effect<void>;
 /**
  * Runs one act (a generated verb) to its outcome. §5.12: the statement that writes (the commit or the outcome record)
  * takes the event buffer as a piece; a refusal decided before guest code writes no row, so its event is stdout only.
@@ -220,9 +220,8 @@ export const act = Effect.fn('Bolt.act')(function* (e: WriteEngine, r: ActReques
 	const take: Taker = (severity, event, attributes) =>
 		Effect.gen(function* () {
 			took = true;
-			if (e.log === undefined) return [];
+			if (e.log === undefined) return;
 			yield* e.log.emit(severity, event, { callable: `${r.collection}.${r.verb}`, ...attributes });
-			return yield* e.log.take;
 		});
 	const res = yield* r.verb === 'erase' ? erase(e, r, take) : pipeline(e, r, take);
 	const o = res.outcome;
@@ -231,7 +230,6 @@ export const act = Effect.fn('Bolt.act')(function* (e: WriteEngine, r: ActReques
 			callable: `${r.collection}.${r.verb}`,
 			code: o.kind === 'refused' ? o.code : 'conflict'
 		});
-		yield* e.log.take;
 	}
 	return res;
 });
@@ -732,7 +730,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		...(r.restored === undefined ? {} : { restored: [{ collection: r.collection, ...r.restored }] })
 	};
 	const record = Effect.fnUntraced(function* (outcome: Outcome) {
-		const events = yield* take(
+		yield* take(
 			'warn',
 			'act.refused',
 			outcome.kind === 'refused'
@@ -744,7 +742,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		);
 		const res = yield* e.db.returning(
 			Schema.Struct({ outcome: Schema.NullOr(OutcomeSchema) }),
-			compileOutcomeRecord({ ...common, events }, value)
+			compileOutcomeRecord(common, value)
 		);
 		return none(res[0]?.outcome ?? (yield* stored()) ?? outcome);
 	});
@@ -794,10 +792,10 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					)
 				);
 			return yield* Effect.gen(function* () {
-				const events = yield* take('info', 'act.settled', { writes: planned.commit.writes.length });
+				yield* take('info', 'act.settled', { writes: planned.commit.writes.length });
 				const rows = yield* e.db.returning(
 					CommitAnswer,
-					compileCommit(m, cat, { ...planned.commit, ...common, events }),
+					compileCommit(m, cat, { ...planned.commit, ...common }),
 					planned.lock
 				);
 				const row = rows[0];

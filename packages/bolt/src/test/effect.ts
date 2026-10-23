@@ -79,6 +79,8 @@ import type {
 	Authority,
 	DriverPage,
 	EngineActor,
+	LogQuery,
+	LogRow,
 	Sql
 } from '../engine/contracts.ts';
 import { PgliteDb, Pristine } from '../engine/db/pglite.ts';
@@ -107,6 +109,7 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	Logs,
 	Metering,
 	Speech,
 	Transport,
@@ -256,10 +259,36 @@ export type Fakes = {
 	readonly deadlines: { readonly announced: { scope: string; at: string }[] };
 	readonly sent: TransportMessage[];
 	readonly links: FakeLinks;
+	/** The runtime log the kit's host holds: every event written, oldest first, `id` its position. */
+	readonly logs: LogRow[];
 	readonly ai?: {
 		readonly requests: readonly AiRequest[];
 		remaining(): { readonly [modelClass: string]: number };
 	};
+};
+const RANK = { info: 0, warn: 1, error: 2 } as const;
+/** The kit host's runtime log reader: a host store's page over `rows`, newest first (the tail reads forward). */
+export const readLogRows = (rows: readonly LogRow[], x: LogQuery): readonly LogRow[] => {
+	const text = x.text?.toLowerCase();
+	const kept = rows.filter(
+		(r) =>
+			(x.before === undefined || Number(r.id) < Number(x.before)) &&
+			(x.after === undefined || Number(r.id) > Number(x.after)) &&
+			(x.level === undefined || r.severity === x.level) &&
+			(x.min === undefined || RANK[r.severity] >= RANK[x.min]) &&
+			(text === undefined ||
+				`${r.event} ${JSON.stringify(r.attributes)}`.toLowerCase().includes(text)) &&
+			(x.conversation === undefined || r.conversation === x.conversation) &&
+			(x.run === undefined || r.run === x.run) &&
+			(x.automation === undefined ||
+				JSON.stringify(r.attributes).includes(`"automation":${JSON.stringify(x.automation)}`)) &&
+			(x.since === undefined || Date.parse(r.at) >= Date.parse(x.since)) &&
+			(x.until === undefined || Date.parse(r.at) < Date.parse(x.until))
+	);
+	const limit = Math.min(Math.max(1, x.limit ?? 200), 200);
+	return x.after === undefined
+		? kept.toReversed().slice(0, limit)
+		: kept.slice(0, limit).toReversed();
 };
 /** Host port service keys a test may replace with native Layers, including file storage, conversion, speech, web, geography, transport and AI. */
 export type TestPorts =
@@ -1190,7 +1219,8 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						typed: [],
 						answer: (instance) => Port.unavailable('link', `'${instance}' has no link`),
 						page: (instance) => Port.unavailable('link', `'${instance}' has no link`)
-					}
+					},
+					logs: []
 				};
 				const overrides =
 					options.ports === undefined ? undefined : yield* Layer.build(options.ports);
@@ -1261,6 +1291,13 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const ports = Layer.mergeAll(
 					files,
 					links,
+					Layer.succeed(Logs, {
+						write: (event) =>
+							Effect.sync(() => {
+								f.logs.push({ ...event, id: String(f.logs.length + 1) });
+							}),
+						read: (query) => Effect.sync(() => readLogRows(f.logs, query))
+					}),
 					Convert.unavailable,
 					Speech.unavailable,
 					WebRead.unavailable,

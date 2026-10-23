@@ -178,18 +178,16 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			conv = def === undefined ? undefined : conversationOf(def);
 		if (spec === undefined || def === undefined || conv === undefined) {
 			// fail closed: an instance deployed to an envoy this release no longer declares answers nobody
-			yield* db.write(
-				yield* logged({
-					at: yield* clock,
-					severity: 'warn',
-					event: 'envoy.unknown',
-					invocation: id,
-					run: null,
-					conversation: String(r['conversation']),
-					turn: null,
-					attributes: { instance: r['integration'] ?? null, envoy }
-				})
-			);
+			yield* logged({
+				at: yield* clock,
+				severity: 'warn',
+				event: 'envoy.unknown',
+				invocation: id,
+				run: null,
+				conversation: String(r['conversation']),
+				turn: null,
+				attributes: { instance: r['integration'] ?? null, envoy }
+			});
 			return { admission: 'ignored' };
 		}
 		return {
@@ -223,23 +221,21 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			// A group message that named ids and was still not taken is the one case nobody can explain from outside: record
 			// what the provider actually sent, so `Studio → Runtime` answers why a mention did not reach the envoy.
 			if (a.group && a.mentions.length > 0)
-				yield* db.write(
-					yield* logged({
-						at: yield* clock,
-						severity: 'info',
-						event: 'conversation.unaddressed',
-						invocation: a.row,
-						run: null,
-						conversation: a.conversation,
-						turn: null,
-						attributes: {
-							instance: a.instance,
-							sender: a.sender,
-							mentions: a.mentions,
-							text: preview(a.text)
-						}
-					})
-				);
+				yield* logged({
+					at: yield* clock,
+					severity: 'info',
+					event: 'conversation.unaddressed',
+					invocation: a.row,
+					run: null,
+					conversation: a.conversation,
+					turn: null,
+					attributes: {
+						instance: a.instance,
+						sender: a.sender,
+						mentions: a.mentions,
+						text: preview(a.text)
+					}
+				});
 			return 'ambient';
 		}
 		const as = yield* subject(envoy, spec, a);

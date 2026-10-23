@@ -1277,11 +1277,9 @@ describe('envoy conversations', () => {
 						const { reply } = yield* agent.drain(c);
 						expect(reply?.text).toBe(FIXED.failed);
 						expect(JSON.stringify(reply)).not.toContain('sk-123');
-						expect(
-							(yield* t.db.read([
-								{ text: `SELECT severity FROM sys_event WHERE conversation = $1`, params: [c] }
-							]))[0]!.rows
-						).toEqual([{ severity: 'error' }]);
+						expect(t.fakes.logs.filter((r) => r.conversation === c).map((r) => r.severity)).toEqual(
+							['error']
+						);
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -2223,10 +2221,11 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 
 describe('reasoning and metering (L-BOLT-412, L-BOLT-432, L-BOLT-547)', () => {
 	const events = (t: Kit) =>
-		t.db.rows(Schema.Struct({ severity: Schema.String, attributes: Schema.Json }), {
-			text: `SELECT severity, attributes FROM sys_event WHERE event = 'ai.call' ORDER BY id`,
-			params: []
-		});
+		Effect.sync(() =>
+			t.fakes.logs
+				.filter((r) => r.event === 'ai.call')
+				.map(({ severity, attributes }) => ({ severity, attributes }))
+		);
 	it.live(
 		'reasoning is stored verbatim beside the text (the literal "None." too) and goes back to the model; a reasoning-only reply is kept and continued once',
 		() =>

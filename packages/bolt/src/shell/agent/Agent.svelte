@@ -57,7 +57,7 @@
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
-	import type { LogRow } from '../logs/data.ts';
+	import type { LogRow } from '../../engine/contracts.ts';
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';

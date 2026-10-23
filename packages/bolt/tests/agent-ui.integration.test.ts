@@ -156,13 +156,10 @@ describe('the agent UI actions', () => {
 					expect((yield* agent.conversation(c)).model).toBe('fast');
 					yield* act('ann', 'sys_message.post', { conversation: c, text: 'hi', now: true });
 					yield* route.settled;
-					const [event] = (yield* t.db.read([
-						{
-							text: `SELECT attributes FROM sys_event WHERE event = 'agent.failed' AND conversation = $1`,
-							params: [c]
-						}
-					]))[0]!.rows;
-					expect(event!['attributes']).toMatchObject({
+					const event = t.fakes.logs.find(
+						(r) => r.event === 'agent.failed' && r.conversation === c
+					);
+					expect(event?.attributes).toMatchObject({
 						code: 'unavailable',
 						message: "no model is mapped to the class 'fast'"
 					});

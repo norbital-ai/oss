@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { Effect, Layer, Schema } from 'effect';
+import { Effect, Layer } from 'effect';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,18 +14,12 @@ import {
 } from '../src/engine/decisions/index.ts';
 import { Facilities, Manifest, Decisions } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Ai, Convert, Files, Geo, Metering, Speech, WebRead } from '../src/engine/ports.ts';
-import type { Sql } from '../src/engine/contracts.ts';
+import { Ai, Convert, Files, Geo, Logs, Metering, Speech, WebRead } from '../src/engine/ports.ts';
+import type { LogEvent } from '../src/engine/contracts.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
-
-/** The one `sys_event` row a statement writes (`eventsPiece`'s recordset). */
-const eventOf = (statement: Sql | undefined) =>
-	Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.Json)))(
-		statement?.params[0]
-	)[0];
 
 it.effect('web.read keeps raw options across the facility dispatch boundary', () => {
 	const calls: unknown[] = [];
@@ -100,7 +94,7 @@ it.effect(
 			tokens: { input: 120, output: 40 }
 		};
 		const requests: DecisionRequest[] = [];
-		const writes: Sql[] = [];
+		const written: LogEvent[] = [];
 		const metered: { meter: string; quantity: number; key: string }[] = [];
 		let mode: 'ok' | 'refused' | 'offlist' = 'ok';
 		const ai = Layer.effect(
@@ -148,11 +142,7 @@ it.effect(
 				TenantDb,
 				TenantDb.typed({
 					read: () => Effect.fail(DbError.make('XX000', 'Decisions read no database rows')),
-					write: (statement) =>
-						Effect.sync(() => {
-							writes.push(statement);
-							return { rows: [], affected: 1 };
-						}),
+					write: () => Effect.fail(DbError.make('XX000', 'Decisions write no database rows')),
 					transaction: () => Effect.fail(DbError.make('XX000', 'Decisions open no transaction'))
 				})
 			),
@@ -194,14 +184,14 @@ it.effect(
 					}
 				});
 			expect(result.answers.evidence).toMatchObject({ level: 2 });
-			expect(eventOf(writes[0])).toMatchObject({
+			expect(written[0]).toMatchObject({
 				severity: 'info',
 				invocation: expect.any(String),
 				run: null,
 				attributes: { use: 'filter', answers: result.answers }
 			});
-			for (const statement of writes.slice(1))
-				expect(eventOf(statement)).toMatchObject({
+			for (const event of written.slice(1))
+				expect(event).toMatchObject({
 					severity: 'info',
 					invocation: 'run-1:1',
 					run: 'run-1',
@@ -220,7 +210,7 @@ it.effect(
 				ok: false,
 				error: { kind: 'tooLarge', message: 'State exceeds context', status: 413 }
 			});
-			expect(eventOf(writes[3])).toMatchObject({
+			expect(written[3]).toMatchObject({
 				severity: 'warn',
 				invocation: 'run-1:1',
 				run: 'run-1',
@@ -234,7 +224,7 @@ it.effect(
 			});
 			mode = 'offlist';
 			expect(yield* dispatch).toMatchObject({ ok: false, error: { kind: 'invalid' } });
-			expect(eventOf(writes[4])).toMatchObject({
+			expect(written[4]).toMatchObject({
 				severity: 'warn',
 				invocation: 'run-1:1',
 				run: 'run-1',
@@ -247,9 +237,18 @@ it.effect(
 				})
 			).toMatchObject({ ok: false, error: { kind: 'invalid' } });
 			expect(requests).toEqual([request, request, request, request, request]);
-			expect(writes).toHaveLength(5);
+			expect(written).toHaveLength(5);
 			expect(metered).toHaveLength(3);
-		}).pipe(Effect.provide(FacilitiesLive.pipe(Layer.provideMerge(services))));
+		}).pipe(
+			Effect.provide(FacilitiesLive.pipe(Layer.provideMerge(services))),
+			Effect.provideService(Logs, {
+				write: (event) =>
+					Effect.sync(() => {
+						written.push(event);
+					}),
+				read: () => Port.unavailable('logs')
+			})
+		);
 	}
 );
 

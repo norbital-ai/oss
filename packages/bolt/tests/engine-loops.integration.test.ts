@@ -14,8 +14,9 @@ const sql = (t: Pick<Kit, 'db'>, text: string) =>
 			return result.rows;
 		})
 	);
-const events = (n: number) =>
-	`INSERT INTO sys_event (at, severity, event, invocation, attributes) SELECT '${OLD}', 'info', 'aged', 'i', '{}' FROM generate_series(1, ${n})`;
+/** Rate windows older than a day are what the prune deletes. */
+const aged = (n: number) =>
+	`INSERT INTO bolt_rate SELECT 'act', 'k' || n, '${OLD}', 1 FROM generate_series(1, ${n}) n`;
 
 describe('rule 25a: engine loops', () => {
 	it.live(
@@ -27,17 +28,17 @@ describe('rule 25a: engine loops', () => {
 						yield* Layer.build(TestWorkspace.layer({ manifest, now: NOW })),
 						TestWorkspace
 					);
-					yield* t.db.write({ text: events(10_001), params: [] });
+					yield* t.db.write({ text: aged(10_001), params: [] });
 					yield* t.runDue();
 					expect(
-						yield* sql(t, `SELECT count(*)::int AS n FROM sys_event WHERE event = 'aged'`)
+						yield* sql(t, `SELECT count(*)::int AS n FROM bolt_rate WHERE bucket LIKE 'k%'`)
 					).toEqual([{ n: 1 }]);
 					expect(
 						yield* sql(t, `SELECT state FROM sys_run WHERE automation = 'bolt.prune'`)
 					).toEqual([{ state: 'queued' }]);
 					yield* t.runDue();
 					expect(
-						yield* sql(t, `SELECT count(*)::int AS n FROM sys_event WHERE event = 'aged'`)
+						yield* sql(t, `SELECT count(*)::int AS n FROM bolt_rate WHERE bucket LIKE 'k%'`)
 					).toEqual([{ n: 0 }]);
 					expect(
 						yield* sql(t, `SELECT state FROM sys_run WHERE automation = 'bolt.prune'`)
@@ -55,13 +56,13 @@ describe('rule 25a: engine loops', () => {
 						yield* Layer.build(TestWorkspace.layer({ manifest, now: NOW })),
 						TestWorkspace
 					);
-					yield* t.db.write({ text: events(1), params: [] });
+					yield* t.db.write({ text: aged(1), params: [] });
 					yield* t.db.write({
 						text: `CREATE FUNCTION keep() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$`,
 						params: []
 					});
 					yield* t.db.write({
-						text: `CREATE TRIGGER keep BEFORE DELETE ON sys_event FOR EACH ROW EXECUTE FUNCTION keep()`,
+						text: `CREATE TRIGGER keep BEFORE DELETE ON bolt_rate FOR EACH ROW EXECUTE FUNCTION keep()`,
 						params: []
 					});
 					yield* t.db.write({
@@ -75,12 +76,7 @@ describe('rule 25a: engine loops', () => {
 							`SELECT state, error->>'code' AS code FROM sys_run WHERE automation = 'bolt.prune'`
 						)
 					).toEqual([{ state: 'failed', code: 'noProgress' }]);
-					expect(
-						yield* sql(
-							t,
-							`SELECT count(*)::int AS n FROM sys_event WHERE event = 'prune.noProgress'`
-						)
-					).toEqual([{ n: 1 }]); // the daily pass, inline
+					expect(t.fakes.logs.filter((r) => r.event === 'prune.noProgress')).toHaveLength(1); // the daily pass, inline
 				})
 			)
 	);

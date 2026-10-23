@@ -93,7 +93,7 @@ export type TargetName = ModelName | SystemName;
 /** Every surface addresses collections (P9): authored ones, plus the system collections. */
 export type CollectionName = (keyof Colls & string) | SystemName;
 /** Ledgers (X-18): an `Id<>` target, never granted, read by server code, written or triggered on. */
-export type Ledger = 'sys_run' | 'sys_event';
+export type Ledger = 'sys_run';
 /** A collection a trigger or a read may name: every collection but the ledgers. */
 export type ReadableName = Exclude<CollectionName, Ledger>;
 /** Every custom field: the built-ins (`money`, `file`, `point`, `phone`) and the workspace's (`src/data/custom_field/<f>/`), one namespace. */

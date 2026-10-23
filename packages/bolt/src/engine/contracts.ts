@@ -512,6 +512,50 @@ export interface TransportPort {
 	/** `kind` names what it sends (`email`, `sms`, `inbox` for push); the address is the message's. Any throw is a failed send. */
 	send(kind: string, message: Json, signal: AbortSignal): Promise<{ providerId: string }>;
 }
+// ── the runtime log (§5.12) ──
+export type LogLevel = 'info' | 'warn' | 'error';
+/** One runtime event as it happens: the host writes it to its log pipe, never to the workspace's database. */
+export type LogEvent = {
+	readonly at: string;
+	readonly severity: LogLevel;
+	readonly event: string;
+	readonly invocation: string;
+	readonly run: string | null;
+	readonly conversation: string | null;
+	readonly turn: string | null;
+	readonly attributes: { readonly [key: string]: Json };
+};
+/** A stored event as the host's log store answers it; `id` is the store's own cursor. */
+export type LogRow = Omit<LogEvent, 'attributes'> & {
+	readonly id: string;
+	readonly attributes: Json;
+};
+export type LogQuery = {
+	/** rows older than this id */
+	readonly before?: string;
+	/** rows newer than this id (the tail) */
+	readonly after?: string;
+	/** exactly this severity */
+	readonly level?: LogLevel;
+	/** this severity or worse */
+	readonly min?: LogLevel;
+	/** the event name or its attributes */
+	readonly text?: string;
+	readonly conversation?: string;
+	readonly run?: string;
+	/** events naming this automation */
+	readonly automation?: string;
+	/** instants bounding `at`: `since` inclusive, `until` exclusive */
+	readonly since?: string;
+	readonly until?: string;
+	/** rows per page, 1 to 200 (default 200) */
+	readonly limit?: number;
+};
+/** The workspace's runtime log, held by the host: each event written as it happens, and pages read back, newest first. */
+export interface LogPort {
+	write(event: LogEvent): void;
+	read(query: LogQuery, signal: AbortSignal): Promise<readonly LogRow[]>;
+}
 export interface MeteringPort {
 	record(meter: string, quantity: number, key: string): Promise<void>;
 }
@@ -589,6 +633,7 @@ export type HostPorts = {
 	push?: TransportPort;
 	links?: LinksPort;
 	metering?: MeteringPort;
+	logs?: LogPort;
 	tenancy?: TenancyPort;
 	membership?: MembershipPort;
 };

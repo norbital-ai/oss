@@ -324,27 +324,19 @@ export const DecisionsLive = Layer.effect(
 						(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
 					)
 				);
-				yield* db
-					.write(
-						yield* logged({
-							at: now,
-							severity: Result.isSuccess(result) ? 'info' : 'warn',
-							event: 'decision.made',
-							invocation: trace?.invocation ?? call,
-							run: trace?.run ?? null,
-							conversation: null,
-							turn: null,
-							attributes: {
-								...decisionEvent(use, request, event),
-								...(trace === undefined ? {} : { automation: trace.automation, run: trace.run })
-							}
-						})
-					)
-					.pipe(
-						Effect.mapError(
-							(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
-						)
-					);
+				yield* logged({
+					at: now,
+					severity: Result.isSuccess(result) ? 'info' : 'warn',
+					event: 'decision.made',
+					invocation: trace?.invocation ?? call,
+					run: trace?.run ?? null,
+					conversation: null,
+					turn: null,
+					attributes: {
+						...decisionEvent(use, request, event),
+						...(trace === undefined ? {} : { automation: trace.automation, run: trace.run })
+					}
+				});
 				yield* meter(metering, event, call);
 				if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
 				return result.success;
@@ -695,22 +687,20 @@ export const authorDecide = Effect.fn('Decisions.authorDecide')(function* (
 	);
 	const result = yield* Effect.result(ask(config.ai, request));
 	const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
-	yield* config.db.write(
-		yield* logged({
-			at: yield* config.clock,
-			severity: Result.isSuccess(result) ? 'info' : 'warn',
-			event: 'decision.made',
-			invocation: run.id,
-			run: null,
-			conversation: null,
-			turn: null,
-			attributes: {
-				...decisionEvent('author', request, event),
-				automation: run.automation,
-				run: run.id
-			}
-		})
-	);
+	yield* logged({
+		at: yield* config.clock,
+		severity: Result.isSuccess(result) ? 'info' : 'warn',
+		event: 'decision.made',
+		invocation: run.id,
+		run: null,
+		conversation: null,
+		turn: null,
+		attributes: {
+			...decisionEvent('author', request, event),
+			automation: run.automation,
+			run: run.id
+		}
+	});
 	yield* meter(config.metering, event, run.id);
 	if (Result.isFailure(result)) return { ok: false, error: wireFailure(result.failure) };
 	const answers = Object.fromEntries(

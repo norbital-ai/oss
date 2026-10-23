@@ -227,18 +227,16 @@ export function conversations(cfg: ConversationsConfig) {
 				: normalizeInbound(inst.kind, decoded, message, history, now);
 		if (inbound === null) {
 			// the link's bug, never a row: recorded, and acknowledged so the message does not hold the instance's inbound
-			yield* db.write(
-				yield* logged({
-					at: now,
-					severity: 'warn',
-					event: 'conversation.malformed',
-					invocation: inst.id,
-					run: null,
-					conversation: null,
-					turn: null,
-					attributes: { instance: inst.id, message: preview(JSON.stringify(message)) }
-				})
-			);
+			yield* logged({
+				at: now,
+				severity: 'warn',
+				event: 'conversation.malformed',
+				invocation: inst.id,
+				run: null,
+				conversation: null,
+				turn: null,
+				attributes: { instance: inst.id, message: preview(JSON.stringify(message)) }
+			});
 			return null;
 		}
 		if (!permitsImport(inst.importStart, inbound.sourceAt ?? undefined)) {

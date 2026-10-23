@@ -834,8 +834,8 @@ const run = (
 		warm.bind.say = say;
 		warm.bind.random = randomStream(invocation.ctx.seed);
 		for (const [level, line] of warm.early) say(level, line);
-		// tenant console lines join the invocation's sys_event buffer (batched with its other events), bounded per
-		// invocation and per line; a line past the bound still reaches stdout
+		// tenant console lines are the invocation's events, bounded per invocation and per line; a line past the bound
+		// is only this runtime's own log line
 		const kept = { lines: 0, bytes: 0, dropped: false };
 		const tag =
 			invocation.kind === 'automation'
@@ -968,7 +968,6 @@ const run = (
 							'tooLarge',
 							`a ctx call's arguments are over ${limits.argsBytes} bytes at ${where(big[2])}`
 						);
-					yield* events.slice ?? Effect.void;
 					crossings += calls.length;
 					const lowered = yield* Effect.forEach(calls, ([member, json, , id], i) =>
 						Effect.gen(function* () {

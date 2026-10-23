@@ -6,7 +6,7 @@ import { mountEdge } from '@norbital-ai/ui/effect';
 import { shellApi } from '../src/shell/runtime.ts';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
-import type { LogQuery, LogRow } from '../src/shell/logs/data.ts';
+import type { LogQuery, LogRow } from '../src/engine/contracts.ts';
 import type { ShellApi } from '../src/shell/api-types.ts';
 import type { StudioMergeRequest, StudioOp, StudioView } from '../src/shell/studio/model.ts';
 import type { StudioTab } from '../src/shell/nav.ts';
@@ -50,7 +50,7 @@ const settle = async () => {
 	flushSync();
 };
 
-/** Studio's runtime log reads `sys_event` through the logs port; an empty page is enough here. */
+/** Studio's runtime log reads the host's log store through the logs port; an empty page is enough here. */
 const logs = () => Effect.succeed<LogRow[]>([]);
 /** Answers the open in-app confirmation (never `window.confirm`, which WebViews suppress); its text is returned. */
 const answer = async (accept: boolean) => {

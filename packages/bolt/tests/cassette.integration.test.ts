@@ -102,13 +102,8 @@ describe('Fakes.ai.cassette', () => {
 					const c = yield* agent.start({ owner: 'ann', model: 'fast' });
 					yield* agent.post({ conversation: c, as: { member: 'ann' }, text: 'hi' });
 					yield* agent.drain(c);
-					const [row] = (yield* t.db.read([
-						{
-							text: `SELECT attributes FROM sys_event WHERE event = 'agent.failed' AND conversation = $1`,
-							params: [c]
-						}
-					]))[0]!.rows;
-					expect(row!['attributes']).toMatchObject({
+					const row = t.fakes.logs.find((r) => r.event === 'agent.failed' && r.conversation === c);
+					expect(row?.attributes).toMatchObject({
 						code: 'unavailable',
 						message: "no model is mapped to the class 'fast'"
 					});

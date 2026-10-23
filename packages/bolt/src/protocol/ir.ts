@@ -723,8 +723,7 @@ export function declaredQuery(
 	if (Result.isFailure(decoded)) throw invalid(decoded.failure.message);
 	const query = decoded.success;
 	const info = collectionOf(cat, collection);
-	if (collection === 'sys_run' || collection === 'sys_event')
-		throw invalid(`'${collection}' is not readable`);
+	if (collection === 'sys_run') throw invalid(`'${collection}' is not readable`);
 	for (const name of query.select ?? []) {
 		const field = info.model.fields.get(name);
 		// The catalog lowers a native sequence to derived int/text; other derived fields are roll-ups.

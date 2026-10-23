@@ -12,7 +12,7 @@ import { Port, type PortFailure } from '../port.ts';
 import type { EngineError } from '../errors.ts';
 import { RUN_VIEW_COLUMNS, RunViewRow, runView } from '../runs/index.ts';
 import { actorRef } from '../write/commit.ts';
-import { events } from '../../shell/logs/data.ts';
+import { readLog } from '../guest/telemetry.ts';
 import { readableFile } from '../decisions/index.ts';
 import { csvOf, xlsxCells, xlsxSheets } from '../files/xlsx.ts';
 import type { Json } from '../../decl/values.ts';
@@ -1908,8 +1908,7 @@ export function catalogue(x: ToolContext): Tool[] {
 		// built here, not at module load: runs/index.ts reaches this module through the agent before RunViewRow exists
 		const RunList = Schema.Struct({
 			...RunViewRow.fields,
-			finished: Schema.NullOr(Schema.String),
-			logs: Schema.Json
+			finished: Schema.NullOr(Schema.String)
 		});
 		add(
 			'runs',
@@ -1953,10 +1952,9 @@ export function catalogue(x: ToolContext): Tool[] {
 					const limit = Math.min(Math.max(1, i.limit ?? 20), 100),
 						detail = i.id !== undefined;
 					const name = i.automation;
-					// one statement: the visible runs (rule 56), and for one run its log lines alongside
+					// the visible runs (rule 56); one run in detail also reads its log lines from the host's log store
 					const rows = yield* e.db.rows(RunList, {
-						text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished,
-				${detail ? `(SELECT coalesce(jsonb_agg(l ORDER BY l.id), '[]'::jsonb) FROM (SELECT id, at::text AS at, severity, event, attributes FROM sys_event WHERE run = sys_run.id ORDER BY id DESC LIMIT ${RUN_LOG_LINES}) l)` : `'[]'::jsonb`} AS logs
+						text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished
 			FROM sys_run
 			WHERE ($1 OR actor = $2 OR automation IN (SELECT jsonb_array_elements_text($3::jsonb)))
 				AND ($4::text IS NULL OR id = $4)
@@ -1988,6 +1986,20 @@ export function catalogue(x: ToolContext): Tool[] {
 						const one = shown[0];
 						if (one === undefined) return err(`No automation run ${i.id} you may read.`);
 						const { row, view } = one;
+						// a store that cannot answer says so in place of the lines, never as an empty log
+						const logs =
+							view.input === undefined
+								? []
+								: yield* readLog({ run: view.id, limit: RUN_LOG_LINES }).pipe(
+										Effect.map((lines) =>
+											lines
+												.toReversed()
+												.map(({ id, at, severity, event, attributes }) =>
+													clipJson({ id, at, severity, event, attributes }, 1024)
+												)
+										),
+										Effect.catch((error) => Effect.succeed(error.message))
+									);
 						return ok(
 							encodeWire({
 								id: view.id,
@@ -2008,9 +2020,7 @@ export function catalogue(x: ToolContext): Tool[] {
 											attempts: Array.isArray(view.attempts)
 												? view.attempts.map((attempt) => clipJson(attempt, 1024))
 												: clipJson(view.attempts ?? null, 4096),
-											logs: Array.isArray(row.logs)
-												? row.logs.map((line) => clipJson(line, 1024))
-												: []
+											logs
 										})
 							})
 						);
@@ -2070,7 +2080,7 @@ export function catalogue(x: ToolContext): Tool[] {
 				Effect.gen(function* () {
 					const limit = Math.min(Math.max(1, i.limit ?? 50), 200);
 					const { level, cursor, limit: _limit, ...rest } = i;
-					const rows = yield* events(e.db, a, {
+					const rows = yield* readLog({
 						...rest,
 						...(level === undefined ? {} : { min: level }),
 						...(cursor === undefined ? {} : { before: cursor }),

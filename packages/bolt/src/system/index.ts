@@ -10,7 +10,6 @@ import m_sys_api_key from './data/model/+sys_api_key.model.ts';
 import m_sys_challenge from './data/model/+sys_challenge.model.ts';
 import m_sys_config from './data/model/+sys_config.model.ts';
 import m_sys_conversation from './data/model/+sys_conversation.model.ts';
-import m_sys_event from './data/model/+sys_event.model.ts';
 import m_sys_file from './data/model/+sys_file.model.ts';
 import m_sys_integration from './data/model/+sys_integration.model.ts';
 import m_sys_invitation from './data/model/+sys_invitation.model.ts';
@@ -24,7 +23,6 @@ import c_approval_request from './data/collection/approval_request/+collection.t
 import c_requestor from './data/collection/requestor/+collection.ts';
 import c_sys_api_key from './data/collection/sys_api_key/+collection.ts';
 import c_sys_conversation from './data/collection/sys_conversation/+collection.ts';
-import c_sys_event from './data/collection/sys_event/+collection.ts';
 import c_sys_file from './data/collection/sys_file/+collection.ts';
 import c_sys_integration from './data/collection/sys_integration/+collection.ts';
 import c_sys_invitation from './data/collection/sys_invitation/+collection.ts';
@@ -48,7 +46,6 @@ export type SystemNames = {
 		sys_challenge: typeof m_sys_challenge;
 		sys_config: typeof m_sys_config;
 		sys_conversation: typeof m_sys_conversation;
-		sys_event: typeof m_sys_event;
 		sys_file: typeof m_sys_file;
 		sys_integration: typeof m_sys_integration;
 		sys_invitation: typeof m_sys_invitation;
@@ -64,7 +61,6 @@ export type SystemNames = {
 		requestor: typeof c_requestor;
 		sys_api_key: typeof c_sys_api_key;
 		sys_conversation: typeof c_sys_conversation;
-		sys_event: typeof c_sys_event;
 		sys_file: typeof c_sys_file;
 		sys_integration: typeof c_sys_integration;
 		sys_invitation: typeof c_sys_invitation;
@@ -96,7 +92,6 @@ export const SYSTEM: {
 		sys_challenge: m_sys_challenge,
 		sys_config: m_sys_config,
 		sys_conversation: m_sys_conversation,
-		sys_event: m_sys_event,
 		sys_file: m_sys_file,
 		sys_integration: m_sys_integration,
 		sys_invitation: m_sys_invitation,
@@ -112,7 +107,6 @@ export const SYSTEM: {
 		requestor: c_requestor.spec,
 		sys_api_key: c_sys_api_key.spec,
 		sys_conversation: c_sys_conversation.spec,
-		sys_event: c_sys_event.spec,
 		sys_file: c_sys_file.spec,
 		sys_integration: c_sys_integration.spec,
 		sys_invitation: c_sys_invitation.spec,

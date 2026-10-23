@@ -7,7 +7,10 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority, GuestOutcome, Invocation, Outcome } from '../src/engine/contracts.ts';
 import { type EngineError } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
-import { EventSink, TelemetryLive } from '../src/engine/guest/telemetry.ts';
+import { TelemetryLive } from '../src/engine/guest/telemetry.ts';
+import type { LogEvent } from '../src/engine/contracts.ts';
+import { Logs } from '../src/engine/ports.ts';
+import { Port } from '../src/engine/port.ts';
 import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { PgliteDb } from '../src/engine/db/pglite.ts';
@@ -122,16 +125,6 @@ const ImportReport = Schema.Struct({
 			action: Schema.Literals(['created', 'updated', 'kept', 'skipped', 'deleted'])
 		})
 	)
-});
-const Event = Schema.Struct({
-	at: Schema.String,
-	severity: Schema.Literals(['info', 'warn', 'error']),
-	event: Schema.String,
-	invocation: Schema.String,
-	run: Schema.NullOr(Schema.String),
-	conversation: Schema.NullOr(Schema.String),
-	turn: Schema.NullOr(Schema.String),
-	attributes: Changes
 });
 const FALSE: Pred = { t: 'const', value: false };
 const REQUEST = '0199a000-0000-7000-8000-0000000000aa';
@@ -1181,22 +1174,20 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 
 describe('engine/write: telemetry (§5.12)', () => {
 	it.effect(
-		'an act writes its events as a piece of its one statement; a refusal before guest code writes none',
+		"an act writes each outcome's event to the host's log, its commit only when it writes",
 		() =>
 			Effect.gen(function* () {
-				const { db } = yield* P2Fixture,
-					lines: string[] = [];
+				const written: LogEvent[] = [];
 				const context = yield* Layer.build(
 					TelemetryLive.pipe(
 						Layer.provide(
-							Layer.mergeAll(
-								Layer.succeed(TenantDb, db),
-								Layer.succeed(EventSink, (row) =>
+							Layer.succeed(Logs, {
+								write: (event) =>
 									Effect.sync(() => {
-										lines.push(JSON.stringify(row));
-									})
-								)
-							)
+										written.push(event);
+									}),
+								read: () => Port.unavailable('logs')
+							})
 						)
 					)
 				);
@@ -1217,21 +1208,16 @@ describe('engine/write: telemetry (§5.12)', () => {
 				).toMatchObject({ code: 'refused' });
 				expect(count.writes).toBe(2);
 				expect(
-					yield* rows(
-						Schema.Struct({
-							severity: Schema.Literals(['info', 'warn', 'error']),
-							event: Schema.String,
-							c: Schema.NullOr(Schema.String)
-						}),
-						`select severity, event, attributes->>'callable' c from sys_event order by id`
-					)
+					written.map((e) => ({
+						severity: e.severity,
+						event: e.event,
+						c: e.attributes['callable']
+					}))
 				).toEqual([
 					{ severity: 'info', event: 'act.settled', c: 'orders.create' },
+					{ severity: 'warn', event: 'act.refused', c: 'orders.create' },
 					{ severity: 'warn', event: 'act.refused', c: 'orders.create' }
 				]);
-				expect(
-					lines.map((line) => Schema.decodeUnknownSync(Schema.fromJsonString(Event))(line).event)
-				).toEqual(['act.settled', 'act.refused', 'act.refused']);
 			}).pipe(Effect.provide(P2FixtureLive), Effect.scoped)
 	);
 });

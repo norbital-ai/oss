@@ -65,8 +65,9 @@ and the server's fork test workers supply the flag.
   Provider selections also need their models: `BOLT_AI_SYS_1_MODEL` accompanies `BOLT_AI_SYS_1_PROVIDER`;
   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` map every model class the workspace declares, or
   activation fails; `BOLT_AI_TRANSCRIBE_MODEL` / `BOLT_AI_SPEAK_MODEL` enable speech. An app declaring a
-  Turnstile challenge needs `BOLT_TURNSTILE_SITE_KEY` and `BOLT_TURNSTILE_SECRET`. `BOLT_TELEMETRY_RETAIN_HOURS`
-  sets the `sys_event` retention window (default 72).
+  Turnstile challenge needs `BOLT_TURNSTILE_SITE_KEY` and `BOLT_TURNSTILE_SECRET`. Runtime events
+  (§5.12) are log lines carrying each event's JSON, for whatever collects this process's output; nothing here stores
+  them, so Studio's runtime log answers unavailable.
 
 The public page reader (`src/web.ts`) reads HTTPS only, pins every checked DNS answer, refuses private
 and reserved networks before a socket opens and follows at most five checked redirects.

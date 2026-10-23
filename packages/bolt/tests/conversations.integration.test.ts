@@ -1420,13 +1420,11 @@ describe('inbound (§4.3)', () => {
 					expect(f.blobs.size).toBe(1);
 					expect(new Set(rows.map((r) => r['conversation'])).size).toBe(1);
 					yield* t.receive('desk_wa', { id: 'bad' });
-					const [logged] = (yield* t.db.read([
-						{
-							text: `SELECT invocation FROM sys_event WHERE event = 'conversation.malformed'`,
-							params: []
-						}
-					]))[0]!.rows;
-					expect(logged).toEqual({ invocation: 'desk_wa' });
+					expect(
+						t.fakes.logs
+							.filter((r) => r.event === 'conversation.malformed')
+							.map((r) => r.invocation)
+					).toEqual(['desk_wa']);
 					expect(yield* f.history()).toHaveLength(2);
 				})
 			)

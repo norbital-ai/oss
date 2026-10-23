@@ -1,5 +1,5 @@
 <!--
-	The workspace's runtime log (§5.12, `sys_event`) in Studio — the one place the log is read. A toolbar narrows it by level
+	The workspace's runtime log (§5.12, held by the host's log store) in Studio. A toolbar narrows it by level
 	and text and follows the tail; `since` / `until` scope it to a window (a deployment's live span), and a run id to one run's
 	events; each line is its time, level, source (the event) and a summary, and opens to its detail
 	(run, conversation, turn, invocation and attributes). Older pages load by cursor; the tail is read every two seconds
@@ -12,7 +12,7 @@
 	import { watch } from 'runed';
 	import { Button, Icon } from '@norbital-ai/ui';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import type { LogLevel, LogRow } from '../logs/data.ts';
+	import type { LogLevel, LogRow } from '../../engine/contracts.ts';
 	import type { ShellApi } from '../api-types.ts';
 
 	let {

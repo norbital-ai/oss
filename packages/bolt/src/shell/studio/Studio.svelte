@@ -7,7 +7,7 @@
 	(L-BOLT-528), manifest, conversation and logs. Live lists the deployments (a rollback is one too) and rolls live back
 	to one: its build deployed again as a new deployment, keeping the data unless its schema differs (the confirm then
 	names what is lost). That is a source rollback, neither the operator's database restore nor a record's restore. Each
-	build's stored log and diagnostics open from the rail. Under it are the runtime log (`sys_event`, the one place the log is read) and Operations, the environments the host routes. Build log
+	build's stored log and diagnostics open from the rail. Under it are the runtime log (held by the host's log store) and Operations, the environments the host routes. Build log
 	lines, a moved head, a moved merge request and phase frames (diagnose → preview → merge, L-BOLT-530) arrive pushed.
 	Each tab is a deep link (`/studio/<tab>`: `mrs` opens Changes, `runtime`, `operations` and `usage` open Live's views). Every
 	staff member opens Studio over their own draft and previews it on a fork of live's data; publish, merge, review,

@@ -523,7 +523,6 @@ describe('next guest runner', () => {
 			}));
 			const lines: { event: string; severity: string }[] = [];
 			const events: InvocationEvents = {
-				take: Effect.succeed([]),
 				emit: (severity, event) =>
 					Effect.sync(() => {
 						lines.push({ severity, event });

@@ -204,8 +204,8 @@ export function shellApi(
 					before === undefined ? { instance } : { instance, before }
 				)}`
 			),
-		logs: (x: import('./logs/data.ts').LogQuery) =>
-			call<import('./logs/data.ts').LogRow[]>(
+		logs: (x: import('../engine/contracts.ts').LogQuery) =>
+			call<import('../engine/contracts.ts').LogRow[]>(
 				'GET',
 				`${SHELL}/logs?${new URLSearchParams(
 					Object.entries({

@@ -213,10 +213,9 @@ describe('sys_2.infer host tools', () => {
 						amount: 1
 					});
 					yield* t.runDue();
-					const { rows } = yield* t.db.write({
-						text: "SELECT severity, attributes FROM sys_event WHERE event = 'infer.tool' ORDER BY id",
-						params: []
-					});
+					const rows = t.fakes.logs
+						.filter((r) => r.event === 'infer.tool')
+						.map(({ severity, attributes }) => ({ severity, attributes }));
 					const step = (tool: string, input: Json) => ({
 						severity: 'info',
 						attributes: { automation: 'match', tool, input: JSON.stringify(input) }

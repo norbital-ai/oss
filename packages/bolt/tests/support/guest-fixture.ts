@@ -194,8 +194,7 @@ export const guestLayer = (
 					secretsKey: Option.none()
 				}),
 				Layer.succeed(Telemetry, {
-					open:
-						events ?? (() => Effect.succeed({ emit: () => Effect.void, take: Effect.succeed([]) }))
+					open: events ?? (() => Effect.succeed({ emit: () => Effect.void }))
 				})
 			)
 		)

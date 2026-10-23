@@ -84,7 +84,6 @@ describe('bolt start configuration (§5.11.6)', () => {
 				trustProxy: ['10.0.0.0/8', '::1'],
 				founder: 'a@b.example',
 				seed: './pack',
-				telemetryRetainHours: 72,
 				environment: null,
 				apns: {}
 			});
