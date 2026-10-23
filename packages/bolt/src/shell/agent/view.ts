@@ -169,14 +169,40 @@ export const callableWords = (callable: string) => {
 			? `Run the ${scope.replace(/_/g, ' ')} pipeline`
 			: `${words(act || scope)} ${act ? scope.replace(/_/g, ' ') : ''}`.trim();
 };
+/** A draft path in words: `/snapshot/rule_set/EPF_MONTHLY` → `rule_set/EPF_MONTHLY`. */
+const draftPath = (path: string) => path.replace(/^\/snapshot\//, '').replace(/^\//, '');
 const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
-	read: (a) => ({
-		icon: 'lucide:database',
-		verb: a['aggregate'] === undefined ? 'Read' : 'Counted',
-		target: Array.isArray(a['reads'])
-			? a['reads'].map((r: unknown) => str(obj(r)['collection']).replace(/_/g, ' ')).join(', ')
-			: str(a['collection']).replace(/_/g, ' ') || str(a['query'])
+	// an inference's draft read names a path (`{ path, fields }`); the agent's record read names collections
+	read: (a) =>
+		typeof a['path'] === 'string'
+			? { icon: 'lucide:file-search', verb: 'Read the draft', target: draftPath(a['path']) }
+			: {
+					icon: 'lucide:database',
+					verb: a['aggregate'] === undefined ? 'Read' : 'Counted',
+					target: Array.isArray(a['reads'])
+						? a['reads']
+								.map((r: unknown) => str(obj(r)['collection']).replace(/_/g, ' '))
+								.join(', ')
+						: str(a['collection']).replace(/_/g, ' ') || str(a['query'])
+				},
+	// an inference's answer, built on its draft
+	find: (a) => ({ icon: 'lucide:text-search', verb: 'Searched the draft', target: str(a['text']) }),
+	edit: (a) => {
+		const paths = Array.isArray(a['ops'])
+			? a['ops'].map((op: unknown) => str(obj(op)['path']))
+			: [];
+		return {
+			icon: 'lucide:pencil',
+			verb: 'Edited the draft',
+			target: paths.length === 1 ? draftPath(paths[0] ?? '') : `${paths.length} changes`
+		};
+	},
+	diff: (a) => ({
+		icon: 'lucide:git-compare',
+		verb: 'Checked the changes',
+		target: draftPath(str(a['path']))
 	}),
+	submit: () => ({ icon: 'lucide:send', verb: 'Submitted the answer', target: '' }),
 	// a write reads as what it did: "Update holiday", "Run the roster entry pipeline"
 	act: (a) => ({
 		icon: 'lucide:square-pen',

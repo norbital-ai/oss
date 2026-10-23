@@ -13,16 +13,22 @@
 
 	let { steps, t }: { steps: readonly AgentRow[]; t: (key: string) => string } = $props();
 
+	const PageRead = Schema.Struct({ url: Schema.optionalKey(Schema.String), page: Schema.String });
 	const json = (text: string | undefined) =>
 		Option.getOrNull(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text ?? ''));
 	const viewOf = (s: AgentRow): StepView =>
 		s.tool === undefined
 			? { icon: 'lucide:brain', verb: 'Thought', target: '' }
 			: stepView(s.tool.name, json(s.tool.args));
-	/** Pretty JSON when it parses (a clipped result does not), else the text as it came. */
+	/** A page read as its text, pretty JSON when it parses, else a clipped result with its escapes undone. */
 	const pretty = (text: string) => {
 		const v = json(text);
-		return v === null ? text : JSON.stringify(v, null, 2);
+		// a clipped result does not parse: its escapes undone, it reads as written
+		if (v === null) return text.replaceAll('\\n', '\n').replaceAll('\\"', '"');
+		// a page read is its text: the address, then the page as it reads
+		const read = Option.getOrNull(Schema.decodeUnknownOption(PageRead)(v));
+		if (read !== null) return [read.url ?? '', read.page].filter(Boolean).join('\n\n');
+		return JSON.stringify(v, null, 2);
 	};
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
 	const seconds = (ms: number) =>

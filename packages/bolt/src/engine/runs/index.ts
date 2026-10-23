@@ -851,8 +851,24 @@ export const RunsLive = Layer.effect(
 								]
 							})
 							.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+						// a tool row carries the call's input as the panel shows a step (its query, address or path), as an
+						// agent's does; the model's own messages keep it once, in its call
+						const asked = new Map<string, string>();
+						const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 						const transcribe = (message: AiMessage) => {
-							const content = message.content;
+							const call = isRecord(message.content) ? message.content : undefined;
+							const calls = call?.['toolCalls'];
+							if (message.role === 'assistant' && Array.isArray(calls))
+								for (const c of calls)
+									if (isRecord(c) && typeof c['id'] === 'string')
+										asked.set(c['id'], JSON.stringify(c['input'] ?? null));
+							const id =
+								message.role === 'tool' && typeof call?.['id'] === 'string'
+									? call['id']
+									: undefined;
+							const args = id === undefined ? undefined : asked.get(id);
+							const content: Json =
+								call !== undefined && args !== undefined ? { ...call, args } : message.content;
 							const text =
 								typeof content === 'string'
 									? content
