@@ -775,7 +775,9 @@ export function inferFacility(
 			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
-			const answerBy = (yield* Clock.currentTimeMillis) + INFER_MS * ANSWER_BY;
+			const started = yield* Clock.currentTimeMillis,
+				answerBy = started + INFER_MS * ANSWER_BY,
+				halfway = started + (INFER_MS * ANSWER_BY) / 2;
 			let text = '',
 				continuation: string | undefined,
 				cutAt: number | undefined,
@@ -784,6 +786,8 @@ export function inferFacility(
 				stalls = 0,
 				idles = 0,
 				turns = 0,
+				edited = false,
+				nudged = false,
 				spent = false,
 				finals = 0,
 				finished = false,
@@ -1028,8 +1032,19 @@ export function inferFacility(
 							);
 					} else stalls = 0;
 					// the step budget, or the time the ceiling leaves for one more answer, ends the tools: one final turn answers
+					if (r.toolCalls.some((c) => c.name === EDIT)) edited = true;
+					const now = yield* Clock.currentTimeMillis;
+					// half the tool time gone with nothing written: research that keeps its findings to the end loses them
+					// when the time runs out, so it is asked once to write what it has verified so far
+					if (structured && !edited && !nudged && !spent && now >= halfway) {
+						nudged = true;
+						messages.push({
+							role: 'user',
+							content: `Half your time for tools is gone and your answer is unchanged. Write every correction you have verified so far with ${EDIT} now, then go on; ${EDIT} each further one as you verify it.`
+						});
+					}
 					const outOfSteps = a.steps !== undefined && ++turns >= a.steps;
-					if (!spent && (outOfSteps || (yield* Clock.currentTimeMillis) >= answerBy)) {
+					if (!spent && (outOfSteps || now >= answerBy)) {
 						spent = true;
 						const budget = outOfSteps
 							? `Your tool budget of ${a.steps} steps is spent`

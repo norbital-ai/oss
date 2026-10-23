@@ -529,6 +529,47 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
+		'sys_2.infer: half its tool time gone with nothing written, the model is asked once to write what it has verified',
+		() =>
+			Effect.gen(function* () {
+				// a turn that only reads the draft, after 13 of the 24 minutes for tools
+				const late: Step = () =>
+					Stream.fromEffect(Effect.sleep('13 minutes')).pipe(
+						Stream.flatMap(() =>
+							response({
+								content: '',
+								toolCalls: [{ id: 'r', name: 'read', input: { path: '' } }],
+								finish: 'tool',
+								usage: { input: 1, output: 1 }
+							})
+						)
+					);
+				const { p, requests } = port([
+					late,
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
+					tool('submit', {}, 's1')
+				]);
+				expect(
+					yield* elapsed(
+						inferFacility(p, { wallMs: 30 * 60_000 })(at({ prompt: 'q', output })),
+						14 * 60_000
+					)
+				).toEqual({ ok: true, value: { n: 3 } });
+				expect(requests[1]!.messages.at(-1)).toMatchObject({
+					role: 'user',
+					content: expect.stringContaining('Half your time for tools is gone')
+				});
+				// once only: the next request carries no second nudge
+				expect(
+					requests[2]!.messages.filter(
+						(message) =>
+							typeof message.content === 'string' && message.content.startsWith('Half your time')
+					)
+				).toHaveLength(1);
+			})
+	);
+
+	it.effect(
 		'sys_2.infer: a silent model call is asked again (for smaller calls when it went silent writing one); the answer still comes',
 		() =>
 			Effect.gen(function* () {
