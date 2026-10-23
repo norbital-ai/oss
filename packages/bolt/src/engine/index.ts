@@ -325,6 +325,7 @@ export {
 	studioView,
 	type StudioBuild,
 	type StudioBuildRecord,
+	type StudioUsage,
 	type StudioMergeRequest,
 	type StudioPort,
 	type StudioState

@@ -1053,6 +1053,12 @@ const makeShell = Effect.gen(function* () {
 				if (commit === null || commit === '') return refused('check', 'Give commit.', 422);
 				return json({ value: yield* hostCall(() => read(auth, commit)) });
 			}
+			case 'GET /studio/usage': {
+				const read = c.studio?.usage?.bind(c.studio);
+				if (!s.studio || read === undefined || !auth.admin)
+					return refused('forbidden', 'Usage is for administrators on a host that meters it.', 403);
+				return json({ value: yield* hostCall(() => read(auth)) });
+			}
 			case 'GET /studio/events': {
 				// pushed authoring frames (build log lines, a moved head); nothing is polled
 				const watch = c.studio?.watch?.bind(c.studio);

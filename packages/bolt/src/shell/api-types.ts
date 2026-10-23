@@ -18,7 +18,7 @@ import type { RunRow } from './runs/data.ts';
 import type { Settings } from './settings/data.ts';
 import type { SignInMethods } from './host.ts';
 import type { ShellBoot } from './nav.ts';
-import type { StudioBuildRecord, StudioOp, StudioView } from './studio/model.ts';
+import type { StudioBuildRecord, StudioOp, StudioUsage, StudioView } from './studio/model.ts';
 
 const Optional = Schema.optionalKey(Schema.String);
 /** A workspace as the access pages show it (`ShellBoot['workspace']`): name, locale, zone, logo, environment, handle. */
@@ -85,6 +85,7 @@ export type ShellApi = {
 	studio(): Call<StudioView>;
 	studioRun(op: StudioOp): Call<StudioView>;
 	studioBuild(commit: string): Call<StudioBuildRecord | null>;
+	studioUsage(): Call<StudioUsage>;
 	/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
 	preview(target: string | { team: string } | null): Call<void>;
 	/** `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's. */

@@ -9,7 +9,7 @@
 	names what is lost). That is a source rollback, neither the operator's database restore nor a record's restore. Each
 	build's stored log and diagnostics open from the rail. Under it are the runtime log (`sys_event`, the one place the log is read) and Operations, the environments the host routes. Build log
 	lines, a moved head, a moved merge request and phase frames (diagnose → preview → merge, L-BOLT-530) arrive pushed.
-	Each tab is a deep link (`/studio/<tab>`: `mrs` opens Changes, `runtime` and `operations` open Live's views). Every
+	Each tab is a deep link (`/studio/<tab>`: `mrs` opens Changes, `runtime`, `operations` and `usage` open Live's views). Every
 	staff member opens Studio over their own draft and previews it on a fork of live's data; publish, merge, review,
 	rollback, the runtime log and someone else's merge request are an administrator's (`admin`), and the host refuses them regardless.
 -->
@@ -91,7 +91,7 @@
 	const root = $derived(
 		active === 'changes' || active === 'mrs'
 			? 'changes'
-			: active === 'live' || active === 'runtime' || active === 'operations'
+			: active === 'live' || active === 'runtime' || active === 'operations' || active === 'usage'
 				? 'live'
 				: 'workbench'
 	);
@@ -751,7 +751,7 @@
 			{release}
 			{admin}
 			busy={locked}
-			sub={active === 'operations' ? 'operations' : 'runtime'}
+			sub={active === 'operations' || active === 'usage' ? active : 'runtime'}
 			onsub={go}
 			onrestore={(c) => fork(rollback(c))}
 			{t}

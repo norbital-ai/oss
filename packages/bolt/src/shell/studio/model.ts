@@ -198,6 +198,19 @@ export type StudioPort = {
 	build?(auth: Authority, commit: string): Promise<StudioBuildRecord | null>;
 	/** This workspace's frames as they happen, never another's; answers the unsubscribe. Absent → no live stream. */
 	watch?(auth: Authority, send: (frame: StudioFrame) => void): () => void;
+	/** This workspace's own resource use over time (an administrator's). Absent → no Usage view. */
+	usage?(auth: Authority): Promise<StudioUsage>;
+};
+/**
+ * The host's metering of this workspace: one chart per measure, each point a time (epoch milliseconds) and the peak or
+ * total of its interval. `unit` is `bytes`, `MiB`, `seconds`, `micro-SGD` or a plain count noun.
+ */
+export type StudioUsage = {
+	charts: readonly {
+		title: string;
+		unit: string;
+		points: readonly { at: number; value: number }[];
+	}[];
 };
 
 export const SECTIONS = [

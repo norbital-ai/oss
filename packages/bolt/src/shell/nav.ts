@@ -381,7 +381,15 @@ const SETTINGS_TABS = [
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 /** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
-const STUDIO_TABS = ['workbench', 'changes', 'live', 'mrs', 'runtime', 'operations'] as const;
+const STUDIO_TABS = [
+	'workbench',
+	'changes',
+	'live',
+	'mrs',
+	'runtime',
+	'operations',
+	'usage'
+] as const;
 export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);

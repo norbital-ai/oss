@@ -1,10 +1,11 @@
 <!--
 	Live's main pane : the selected recorded commit — its id, message, when, whether it serves now and
-	its restore point — with Roll back (a source rollback: an administrator's, to a commit with a restore point), over the runtime log and
-	Operations (the environments the host routes, live first).
+	its restore point — with Roll back (a source rollback: an administrator's, to a commit with a restore point), over the runtime log,
+	Operations (the environments the host routes, live first) and Usage (the host's metering of this workspace, an administrator's).
 -->
 <script lang="ts">
-	import { Button, Icon, Tabs } from '@norbital-ai/ui';
+	import { Button, Chart, Icon, Tabs } from '@norbital-ai/ui';
+	import { query } from '@norbital-ai/ui/effect';
 	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import RuntimeLog from './RuntimeLog.svelte';
 	import { routedEnvironment, type StudioRelease, type StudioView } from './model.ts';
@@ -26,8 +27,8 @@
 		release: StudioRelease | undefined;
 		admin: boolean;
 		busy: boolean;
-		sub: 'runtime' | 'operations';
-		onsub: (sub: 'runtime' | 'operations') => void;
+		sub: 'runtime' | 'operations' | 'usage';
+		onsub: (sub: 'runtime' | 'operations' | 'usage') => void;
 		onrestore: (commit: string) => void;
 		t: (key: string) => string;
 	} = $props();
@@ -49,6 +50,23 @@
 				? 'Before the last reset — can’t roll back to this'
 				: 'This version has no checkpoint to roll back to'
 	);
+	// read when the Usage view is open; a chart's values are shown in a readable unit
+	const usage = query(() => (sub === 'usage' && admin ? api.studioUsage() : null));
+	const SCALE: { readonly [unit: string]: readonly [string, number] } = {
+		bytes: ['MiB', 1024 * 1024],
+		'micro-SGD': ['SGD', 1_000_000],
+		seconds: ['seconds', 1]
+	};
+	const rows = (unit: string, points: readonly { at: number; value: number }[]) => {
+		const [label, divisor] = SCALE[unit] ?? [unit, 1];
+		return {
+			label,
+			rows: points.map((p) => ({
+				time: new Date(p.at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }),
+				[label]: p.value / divisor
+			}))
+		};
+	};
 	const PANE = 'min-h-0 flex-1 gap-0 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6';
 </script>
 
@@ -107,6 +125,32 @@
 	</Scroll>
 {/snippet}
 
+{#snippet usageView()}
+	<Scroll name={t('Usage')} class="h-full">
+		<Stack gap="md" class="p-4 sm:p-6">
+			{#if !admin}
+				<p class="text-meta">{t('Usage is an administrator’s.')}</p>
+			{:else if usage.error !== undefined}
+				<p class="text-meta">{t('Usage could not be read.')}</p>
+			{:else if usage.current === undefined}
+				<p class="text-meta">{t('Reading usage…')}</p>
+			{:else}
+				<p class="text-meta">
+					{t(
+						'The last seven days: each point is the peak, or for compute and AI the total, of its hour.'
+					)}
+				</p>
+				<div class="grid gap-6 lg:grid-cols-2">
+					{#each usage.current.charts as chart (chart.title)}
+						{@const data = rows(chart.unit, chart.points)}
+						<Chart of={data.rows} x="time" y={data.label} kind="line" title={chart.title} />
+					{/each}
+				</div>
+			{/if}
+		</Stack>
+	</Scroll>
+{/snippet}
+
 <Stack gap="none" fill class="min-h-0">
 	{#if release !== undefined}
 		<Cluster
@@ -156,11 +200,12 @@
 	{/if}
 	<Tabs
 		value={sub}
-		onValueChange={(v) => onsub(v === 'operations' ? 'operations' : 'runtime')}
+		onValueChange={(v) => onsub(v === 'operations' || v === 'usage' ? v : 'runtime')}
 		class={PANE}
 		tabs={[
 			{ name: 'runtime', title: t('Runtime log'), body: runtime },
-			{ name: 'operations', title: t('Operations'), body: operations }
+			{ name: 'operations', title: t('Operations'), body: operations },
+			{ name: 'usage', title: t('Usage'), body: usageView }
 		]}
 	/>
 </Stack>

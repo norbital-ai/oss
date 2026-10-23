@@ -163,7 +163,10 @@ const studio: StudioPort = {
 	watch: (_auth, send) => {
 		send({ kind: 'log', line: { at: 't', level: 'info', message: 'build started' } });
 		return () => {};
-	}
+	},
+	usage: async () => ({
+		charts: [{ title: 'Memory held', unit: 'MiB', points: [{ at: 0, value: 512 }] }]
+	})
 };
 const ORIGIN = 'https://acme.example';
 type Jar = Map<string, string>;
@@ -756,6 +759,11 @@ layer(workspace)('shell routes', (it) => {
 					expect([stale.status, stale.body?.error?.code]).toEqual([409, 'conflict']);
 					// a staff member who is not an administrator opens Studio too; the host port decides what they may do
 					expect((yield* call(rep, 'GET', '/__bolt/shell/studio')).status).toBe(200);
+					// the host's metering of this workspace is an administrator's
+					expect((yield* call(admin, 'GET', '/__bolt/shell/studio/usage')).body?.value).toEqual({
+						charts: [{ title: 'Memory held', unit: 'MiB', points: [{ at: 0, value: 512 }] }]
+					});
+					expect((yield* call(rep, 'GET', '/__bolt/shell/studio/usage')).status).toBe(403);
 					// an administrator's authoring stream: the host's pushed frames as server-sent events
 					const events = yield* handle(
 						new Request(`${ORIGIN}/__bolt/shell/studio/events`, {

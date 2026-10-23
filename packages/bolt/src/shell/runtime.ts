@@ -229,6 +229,8 @@ export function shellApi(
 				'GET',
 				`${SHELL}/studio/build?${new URLSearchParams({ commit })}`
 			),
+		studioUsage: () =>
+			call<import('./studio/model.ts').StudioUsage>('GET', `${SHELL}/studio/usage`),
 		/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
 		preview: (target: string | { team: string } | null) =>
 			call<void>(
