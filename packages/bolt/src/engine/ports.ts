@@ -272,18 +272,18 @@ export class Geo extends Context.Service<
  */
 export type LogsShape = {
 	readonly write: (event: LogEvent) => Effect.Effect<void>;
-	readonly read: (query: LogQuery) => Effect.Effect<readonly LogRow[], PortFailure>;
+	readonly query: (query: LogQuery) => Effect.Effect<readonly LogRow[], PortFailure>;
 };
 export const Logs = Context.Reference<LogsShape>('bolt/Logs', {
 	defaultValue: () => ({
 		write: (event) => Effect.logInfo(JSON.stringify(event)),
-		read: () => Port.unavailable('logs')
+		query: () => Port.unavailable('logs')
 	})
 });
 export const logsFromAbi = (port: LogPort): LogsShape => ({
 	write: (event) =>
 		Effect.try({ try: () => port.write(event), catch: (error) => error }).pipe(Effect.ignore),
-	read: (query) => Port.attempt('logs', (signal) => port.read(query, signal))
+	query: (query) => Port.attempt('logs', (signal) => port.query(query, signal))
 });
 /** Usage the host bills: `quantity` of `meter`, once per `key`. */
 export class Metering extends Context.Service<

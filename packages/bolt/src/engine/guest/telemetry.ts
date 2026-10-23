@@ -13,7 +13,7 @@ export const logged = (event: LogEvent): Effect.Effect<void> =>
 export const readLog = (query: LogQuery) =>
 	Effect.gen(function* () {
 		return yield* (yield* Logs)
-			.read(query)
+			.query(query)
 			.pipe(
 				Effect.mapError((error) =>
 					BoltError.make(

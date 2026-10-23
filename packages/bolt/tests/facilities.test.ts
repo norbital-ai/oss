@@ -246,7 +246,7 @@ it.effect(
 					Effect.sync(() => {
 						written.push(event);
 					}),
-				read: () => Port.unavailable('logs')
+				query: () => Port.unavailable('logs')
 			})
 		);
 	}

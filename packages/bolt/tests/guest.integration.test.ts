@@ -41,7 +41,7 @@ const eventLog = (ids: Parameters<Telemetry['Service']['open']>[0]) =>
 							Effect.sync(() => {
 								written.push(event);
 							}),
-						read: () => Port.unavailable('logs')
+						query: () => Port.unavailable('logs')
 					})
 				)
 			)

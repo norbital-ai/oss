@@ -551,10 +551,13 @@ export type LogQuery = {
 	/** rows per page, 1 to 200 (default 200) */
 	readonly limit?: number;
 };
-/** The workspace's runtime log, held by the host: each event written as it happens, and pages read back, newest first. */
+/**
+ * The workspace's log facility, held by the host: each event written as it happens, and pages queried back newest first.
+ * The host owns identity, time, caps and scope: an event names no tenant, and a query reads only this workspace's log.
+ */
 export interface LogPort {
 	write(event: LogEvent): void;
-	read(query: LogQuery, signal: AbortSignal): Promise<readonly LogRow[]>;
+	query(query: LogQuery, signal: AbortSignal): Promise<readonly LogRow[]>;
 }
 export interface MeteringPort {
 	record(meter: string, quantity: number, key: string): Promise<void>;

@@ -1186,7 +1186,7 @@ describe('engine/write: telemetry (§5.12)', () => {
 									Effect.sync(() => {
 										written.push(event);
 									}),
-								read: () => Port.unavailable('logs')
+								query: () => Port.unavailable('logs')
 							})
 						)
 					)

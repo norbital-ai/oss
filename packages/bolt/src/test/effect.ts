@@ -1296,7 +1296,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							Effect.sync(() => {
 								f.logs.push({ ...event, id: String(f.logs.length + 1) });
 							}),
-						read: (query) => Effect.sync(() => readLogRows(f.logs, query))
+						query: (query) => Effect.sync(() => readLogRows(f.logs, query))
 					}),
 					Convert.unavailable,
 					Speech.unavailable,
