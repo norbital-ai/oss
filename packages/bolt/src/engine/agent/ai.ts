@@ -581,6 +581,8 @@ export function inferFacility(
 	options: {
 		load?: (fileId: string) => Effect.Effect<{ mime: string; bytes: Uint8Array }, PortFailure>;
 		wallMs?: number;
+		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
+		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
 	} = {}
 ) {
 	return Effect.fn('Ai.inferFacility')(function* (
@@ -862,6 +864,12 @@ export function inferFacility(
 					});
 					for (const c of r.toolCalls) {
 						let result: Json;
+						if (
+							(c.name === EDIT || c.name === SUBMIT) &&
+							structured &&
+							options.onDraft !== undefined
+						)
+							yield* options.onDraft(c.name, c.input);
 						if (c.name === EDIT && structured) {
 							const ops = Option.getOrUndefined(
 								Schema.decodeUnknownOption(EditInput)(c.input)

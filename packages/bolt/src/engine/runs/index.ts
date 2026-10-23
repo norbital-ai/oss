@@ -792,37 +792,44 @@ export const RunsLive = Layer.effect(
 										);
 									})
 							}));
-						// each tool step is one `infer.tool` event on the run (what it read, searched or opened), as `decision.made`
-						// traces a sys_1 call: the run's own record of the research it did
+						// each tool step is one `infer.tool` event on the run (what it read, searched, opened or edited), as
+						// `decision.made` traces a sys_1 call: the run's own record of the research it did
+						const recorded = (name: string, input: Json, error?: string) =>
+							Effect.gen(function* () {
+								yield* db.write({
+									text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
+									params: [
+										new Date(yield* Clock.currentTimeMillis).toISOString(),
+										error === undefined ? 'info' : 'warn',
+										`${run.id}:${run.attempts}`,
+										run.id,
+										{
+											automation: run.automation,
+											tool: name,
+											input: JSON.stringify(input).slice(0, 500),
+											...(error === undefined ? {} : { error })
+										}
+									]
+								});
+							}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 						const traced = (tool: InferTool): InferTool => ({
 							...tool,
 							call: (input) =>
-								tool.call(input).pipe(
-									Effect.onExit((exit) =>
-										Effect.gen(function* () {
-											const failure = Exit.isFailure(exit)
-												? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
-												: undefined;
-											yield* db.write({
-												text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
-												params: [
-													new Date(yield* Clock.currentTimeMillis).toISOString(),
-													Exit.isSuccess(exit) ? 'info' : 'warn',
-													`${run.id}:${run.attempts}`,
-													run.id,
-													{
-														automation: run.automation,
-														tool: tool.name,
-														input: JSON.stringify(input).slice(0, 500),
-														...(failure === undefined ? {} : { error: failure.message })
-													}
-												]
-											});
-										}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+								tool
+									.call(input)
+									.pipe(
+										Effect.onExit((exit) =>
+											recorded(
+												tool.name,
+												input,
+												Exit.isFailure(exit)
+													? Option.getOrUndefined(Cause.findErrorOption(exit.cause))?.message
+													: undefined
+											)
+										)
 									)
-								)
 						});
-						return yield* inferFacility(ai, { load: facilities.fileLoader })(
+						return yield* inferFacility(ai, { load: facilities.fileLoader, onDraft: recorded })(
 							call,
 							[...records, ...tools].map(traced)
 						);

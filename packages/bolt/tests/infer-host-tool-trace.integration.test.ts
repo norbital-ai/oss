@@ -186,46 +186,52 @@ const toolResults = (request: AiRequest) =>
 		);
 
 describe('sys_2.infer host tools', () => {
-	it.live('each host tool step is one infer.tool event on the run, with what it searched', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { t, route } = yield* open([
-					use([{ id: 'w1', name: 'web_search', input: { query: 'employment act overtime' } }]),
-					use([
-						{
-							id: 'p',
-							name: 'edit',
-							input: {
-								ops: [
-									{ path: '/matched', set: false },
-									{ path: '/po', set: '' }
-								]
-							}
-						},
-						{ id: 's', name: 'submit', input: {} }
-					])
-				]);
-				yield* create(t, route, 'invoices.create', {
-					number: 'INV-1',
-					supplier: 'Acme',
-					amount: 1
-				});
-				yield* t.runDue();
-				const { rows } = yield* t.db.write({
-					text: "SELECT severity, attributes FROM sys_event WHERE event = 'infer.tool'",
-					params: []
-				});
-				expect(rows).toEqual([
-					{
+	it.live(
+		'each host tool step and each edit or submit is one infer.tool event on the run, with its input',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, route } = yield* open([
+						use([{ id: 'w1', name: 'web_search', input: { query: 'employment act overtime' } }]),
+						use([
+							{
+								id: 'p',
+								name: 'edit',
+								input: {
+									ops: [
+										{ path: '/matched', set: false },
+										{ path: '/po', set: '' }
+									]
+								}
+							},
+							{ id: 's', name: 'submit', input: {} }
+						])
+					]);
+					yield* create(t, route, 'invoices.create', {
+						number: 'INV-1',
+						supplier: 'Acme',
+						amount: 1
+					});
+					yield* t.runDue();
+					const { rows } = yield* t.db.write({
+						text: "SELECT severity, attributes FROM sys_event WHERE event = 'infer.tool' ORDER BY id",
+						params: []
+					});
+					const step = (tool: string, input: Json) => ({
 						severity: 'info',
-						attributes: {
-							automation: 'match',
-							tool: 'web_search',
-							input: JSON.stringify({ query: 'employment act overtime' })
-						}
-					}
-				]);
-			})
-		)
+						attributes: { automation: 'match', tool, input: JSON.stringify(input) }
+					});
+					expect(rows).toEqual([
+						step('web_search', { query: 'employment act overtime' }),
+						step('edit', {
+							ops: [
+								{ path: '/matched', set: false },
+								{ path: '/po', set: '' }
+							]
+						}),
+						step('submit', {})
+					]);
+				})
+			)
 	);
 });
