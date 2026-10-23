@@ -867,16 +867,17 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				expect(
 					yield* elapsed(
 						inferFacility(p)(at({ prompt: 'research', initial: { n: 2, note: 'keep' }, output })),
-						501
+						1_001
 					)
 				).toEqual({ ok: true, value: { n: 3, note: 'keep' } });
 				expect(requests).toHaveLength(3);
 				expect(requests[2]!.messages).toEqual(requests[1]!.messages);
-				const exhausted = port([fail, fail, fail]);
+				// six retries backing off from 1 s (1 + 2 + … + 32 = 63 s) before the failure ends the inference
+				const exhausted = port(Array.from({ length: 7 }, () => fail));
 				expect(
-					yield* elapsed(inferFacility(exhausted.p)(at({ prompt: 'research', output })), 501)
+					yield* elapsed(inferFacility(exhausted.p)(at({ prompt: 'research', output })), 63_001)
 				).toMatchObject({ ok: false, error: { kind: 'upstream' } });
-				expect(exhausted.requests).toHaveLength(3);
+				expect(exhausted.requests).toHaveLength(7);
 			})
 	);
 

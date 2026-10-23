@@ -216,6 +216,8 @@ const EDIT = 'edit',
 	DIFF = 'diff',
 	SUBMIT = 'submit';
 /** Consecutive empty (reasoning-only) replies, and prose replies that neither edit nor submit, tolerated before `invalid`. */
+/** Retries of a transient provider failure, backing off from 1 s: about a minute in all. */
+const TRANSIENT_RETRIES = 6;
 const PAUSES = 3,
 	FAILURES = 3;
 /** The most tool turns an author's `steps` may grant one inference. */
@@ -794,9 +796,11 @@ export function inferFacility(
 					},
 					{ ...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }) }
 				).pipe(
+					// a provider or network blip (a dropped connection, a 5xx, a rate limit) is waited out for about a minute,
+					// backing off, before it ends an inference that may have browsed for half an hour
 					Effect.retry({
-						schedule: Schedule.spaced('250 millis'),
-						times: 2,
+						schedule: Schedule.exponential('1 second'),
+						times: TRANSIENT_RETRIES,
 						while: isTransientUpstream
 					}),
 					Effect.catch((e) => Effect.succeed(e))
