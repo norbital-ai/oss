@@ -130,6 +130,10 @@
 	let thread = $state(false);
 	/** The open conversation is an automation's inference transcript: read-only, like a thread. */
 	let automation = $state(false);
+	/** The conversation's files (`sys_conversation.inputs` / `outputs`): what came in, and what its work made. */
+	type ConversationFiles = NonNullable<AgentRow['files']>;
+	let inputs = $state<ConversationFiles>([]);
+	let outputs = $state<ConversationFiles>([]);
 	let from = $state<number | null>(null),
 		edge = $state<{ first: number; more: boolean } | null>(null),
 		loadingOlder = $state(false);
@@ -329,7 +333,14 @@
 	const transcript = liveEdge(() =>
 		conversation === null
 			? null
-			: bolt.live<{ rows: AgentRow[]; from?: number; thread?: true; automation?: true }>({
+			: bolt.live<{
+					rows: AgentRow[];
+					from?: number;
+					thread?: true;
+					automation?: true;
+					inputs?: ConversationFiles;
+					outputs?: ConversationFiles;
+				}>({
 					read: { m: 'transcript', a: [conversation, { tail: WINDOW }] }
 				})
 	);
@@ -350,6 +361,8 @@
 			from = value.from ?? null;
 			thread = value.thread === true;
 			automation = value.automation === true;
+			inputs = value.inputs ?? [];
+			outputs = value.outputs ?? [];
 			if (
 				outbox.some(
 					(item) => item.stored !== undefined && value.rows.some((row) => row.id === item.stored)
@@ -1598,6 +1611,16 @@
 						changesBody
 					)}
 				</div>
+				<!-- the conversation's files, each list its own card: posted and received files, then what the work made -->
+				{#each [['Inputs', inputs], ['Outputs', outputs]] as const as [title, files] (title)}
+					{#snippet filesBody()}
+						{#if files.length === 0}<p class="text-muted-foreground">{t('None yet.')}</p>
+						{:else}<MadeFiles {files} {fileHref} {t} />{/if}
+					{/snippet}
+					<div data-rail={title.toLowerCase()}>
+						{@render card(t(title), files.length === 0 ? '' : String(files.length), filesBody)}
+					</div>
+				{/each}
 				{#if previewing && shownPreview !== null && !thread}
 					<!-- the one previewer: the latest bundle; open (the header's Preview button), it fills the widened rail -->
 					<section
@@ -1920,7 +1943,19 @@
 											data-outside-context={outside(row) || undefined}
 											data-pending={row.state === 'pending' || undefined}
 										>
-											<span data-text>{row.text}</span>{@render attachments(row)}
+											<!-- an automation's prompt is authored Markdown (its sources and index fenced): rendered, code blocks and all -->
+											{#if automation}<div
+													{@attach copyable}
+													class="agent-reply whitespace-normal"
+													data-text
+												>
+													<ReadonlyMarkdown
+														value={row.text ?? ''}
+														class="prose-pre:bg-background prose-pre:text-foreground"
+													/>
+												</div>{:else}<span data-text>{row.text}</span>{/if}{@render attachments(
+												row
+											)}
 											{#if !thread && row.state === 'consumed' && revisable(row)}<Button
 													size="sm"
 													variant="ghost"

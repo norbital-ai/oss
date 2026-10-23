@@ -24,12 +24,22 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					text: `SELECT ${MSG} FROM sys_message m WHERE conversation = $1${read.from === undefined ? '' : ' AND seq >= $2'} ORDER BY seq`,
 					params: read.from === undefined ? [read.conversation] : [read.conversation, read.from]
 				},
-				{ text: 'SELECT status FROM sys_conversation WHERE id = $1', params: [read.conversation] }
+				{
+					text: 'SELECT status, inputs, outputs FROM sys_conversation WHERE id = $1',
+					params: [read.conversation]
+				}
 			]);
 			const rows = yield* rowsOf(result?.rows ?? []);
 			const staff = reader.as === 'workspace' || isStaff(reader.authority);
 			const status = conv?.rows[0]?.['status'];
+			// the conversation's files, for the session rail: what came in and what its work made
+			const files = (key: 'inputs' | 'outputs') => {
+				const refs = conv?.rows[0]?.[key];
+				return Array.isArray(refs) && refs.length > 0 ? { [key]: refs } : {};
+			};
 			return {
+				...files('inputs'),
+				...files('outputs'),
 				// the conversation's own status: a stop between steps leaves no row that says so
 				...(status === 'idle' || status === 'running' || status === 'stopped' ? { status } : {}),
 				rows: rows.flatMap((row) => transcriptRow(row, staff, read.thread) ?? []),

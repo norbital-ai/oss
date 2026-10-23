@@ -606,7 +606,7 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		if (a.kind !== 'member') return yield* filed();
 		const r = yield* o.db.one(Schema.Struct({ found: Schema.Boolean }), {
 			text: `SELECT true AS found FROM sys_file WHERE id = $1 AND field = 'sys_message.files' AND created_by = $2
-			UNION ALL SELECT true AS found FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation WHERE m.files @> $3::jsonb
+			UNION ALL SELECT true AS found FROM sys_conversation c WHERE (c.inputs @> $3::jsonb OR c.outputs @> $3::jsonb)
 				AND (c.owner = $2 OR ($6 AND c.integration IS NULL) OR ($4 AND c.integration IS NOT NULL AND c.envoy IN (SELECT jsonb_array_elements_text($5::jsonb))) OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id
 					AND ($2 IN (p."as"->>'member', p."as"->'envoy'->>'member'))))
 			LIMIT 1`,

@@ -220,6 +220,11 @@ describe('in-app attachments', () => {
 				]);
 				expect([...requests[1]!.files![0]!.bytes]).toEqual([...PNG]);
 				expect(requests[1]!.files![0]!.mime).toBe('image/png');
+				// the posted file is one of the conversation's inputs
+				const [held] = (yield* t.db.read([
+					{ text: `SELECT inputs, outputs FROM sys_conversation WHERE id = $1`, params: [c] }
+				]))[0]!.rows;
+				expect(held).toEqual({ inputs: row!['files'], outputs: [] });
 			})
 		)
 	);

@@ -45,6 +45,12 @@ export function post(
 	message: MessageInsert & { readonly addressed?: false | undefined }
 ): string {
 	const text = message.text ?? null;
+	// a posted file is one of the conversation's inputs
+	if (Array.isArray(message.files) && message.files.length > 0)
+		c.cte(
+			`inputs${names.get(c) ?? 0}`,
+			`UPDATE sys_conversation SET inputs = inputs || ${c.p(message.files)}::jsonb WHERE id = ${c.p(message.conversation)} RETURNING id`
+		);
 	return msg(
 		c,
 		`INSERT INTO sys_message AS m (id, conversation, role, content, text, preview, state, mode, "as", author, meta, files, turn, supersedes, addressed)

@@ -18,6 +18,10 @@ export default model({
 		parent: { kind: 'text', optional: true },
 		/** An automation run's inference (`ctx.ai.sys_2.infer`): its transcript, read-only, for administrators. */
 		run: { kind: 'text', optional: true },
+		/** What came in: the files posted or received in it (stored files, `sys_file`), oldest first. */
+		inputs: { kind: 'json', default: [] },
+		/** What its work made: downloads, screenshots, generated and sandbox files, oldest first. */
+		outputs: { kind: 'json', default: [] },
 		status: { kind: 'text', default: 'idle' },
 		lease_until: { kind: 'instant', optional: true },
 		model: { kind: 'text', default: 'default' },

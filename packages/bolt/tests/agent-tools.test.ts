@@ -845,7 +845,11 @@ describe('sandbox_run', () => {
 					'k-out',
 					'h',
 					'2026-09-26T00:00:00.000Z',
-					'ann'
+					'ann',
+					JSON.stringify([
+						{ id: first(got.result.files).id, name: 'chart.png', mime: 'image/png', size: 2 }
+					]),
+					'c1'
 				]);
 				expect(x.files).toHaveLength(1);
 				expect(yield* result(x, 'sandbox_run', { command: 'node', files: [{ seq: 9 }] })).toEqual({

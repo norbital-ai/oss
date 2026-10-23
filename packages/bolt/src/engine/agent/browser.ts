@@ -118,6 +118,21 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 				Effect.tap((bytes) => Effect.sync(() => context.attach({ mime: 'image/png', bytes }))),
 				Effect.as({ attached: 'the screenshot is attached to your next step' })
 			)
+	}),
+	tool({
+		name: 'browser_download',
+		description:
+			"Save a file (an image, a video, a document) at an http(s) URL, fetched in your own browser (its sign-ins), as the person's file: it is offered on this step and a file field or a post takes its reference. At most 20 MiB.",
+		input: Schema.Struct({ url: Schema.String }),
+		call: ({ url }, profile, context) =>
+			context.keep === undefined
+				? Effect.succeed({ error: 'files are kept only in a conversation with a person' })
+				: browser.download(profile, url).pipe(
+						Effect.map((file) => {
+							context.keep?.(file);
+							return { saved: file.name, mime: file.mime, bytes: file.bytes.byteLength };
+						})
+					)
 	})
 ];
 

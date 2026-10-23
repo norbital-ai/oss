@@ -479,7 +479,10 @@ export interface BrowserPort {
 	act(profile: string, steps: readonly BrowserStep[], signal: AbortSignal): Promise<Json>;
 	evaluate(profile: string, expression: string, signal: AbortSignal): Promise<Json>;
 	screenshot(profile: string, signal: AbortSignal): Promise<Uint8Array>;
+	/** A file at `url` (an image, a video, a document) fetched in the profile's session: its name, type and bytes. */
+	download(profile: string, url: string, signal: AbortSignal): Promise<BrowserFile>;
 }
+export type BrowserFile = { name: string; mime: string; bytes: Uint8Array };
 /**
  * What an instance's link hands the engine (§4.5, `integrations.receive`): inbound conversation messages (each attachment
  * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's

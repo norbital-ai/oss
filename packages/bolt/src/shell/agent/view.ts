@@ -336,6 +336,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		code: { text: str(a['expression']), language: 'javascript' }
 	}),
 	browser_screenshot: () => ({ icon: 'lucide:camera', verb: 'Took a screenshot', target: '' }),
+	browser_download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
 	web_search: (a) => ({ icon: 'lucide:search', verb: 'Searched the web', target: str(a['query']) }),
 	sandbox_run: (a) => {
 		const line = [

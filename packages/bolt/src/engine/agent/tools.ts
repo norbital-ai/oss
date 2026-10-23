@@ -57,6 +57,8 @@ export type HostToolContext = {
 	question?: string;
 	/** An image the model sees on its next step (a screenshot, a sandbox output). */
 	attach(file: { mime: string; bytes: Uint8Array }): void;
+	/** A file the person keeps (a download): stored as theirs and offered on the step; the model sees only its reference. */
+	keep?(file: { name: string; mime: string; bytes: Uint8Array }): void;
 	/** A confirmed call's latest Studio phase, shown live on its card in the shell's words; absent elsewhere. */
 	progress?(phase: StudioPhase): void;
 };
@@ -2129,10 +2131,15 @@ export function catalogue(x: ToolContext): Tool[] {
 								...(x.question === undefined ? {} : { question: x.question }),
 								attach: (file) => {
 									attach(x.files, file);
-									if (host.studio === 'view') shown.push(file);
-								}
+									if (host.studio === 'view')
+										shown.push({
+											name: `${host.name}-${shown.length + 1}.${file.mime.split('/')[1] ?? 'png'}`,
+											...file
+										});
+								},
+								keep: (file) => shown.push(file)
 							};
-							const shown: { mime: string; bytes: Uint8Array }[] = [];
+							const shown: { name: string; mime: string; bytes: Uint8Array }[] = [];
 							const job = yield* x.jobs.add(
 								host.name,
 								host.call(input, context).pipe(Port.call(host.name, JOBS.hostMs))
@@ -2140,17 +2147,12 @@ export function catalogue(x: ToolContext): Tool[] {
 							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
 							if (inline === null) return ok({ job, note: 'still running; collect it with wait' });
 							const result = inline.result;
-							// a screenshot the person sees too: stored as their file, offered on the step like a sandbox output
+							// a screenshot the person sees too, or a download: stored as their file, offered on the step like a
+							// sandbox output
 							if (shown.length === 0 || e.files === undefined || !Predicate.isObject(result))
 								return ok(result);
 							const files: Json[] = [];
-							for (const [n, f] of shown.entries())
-								files.push(
-									yield* storeFile(x, e.files, {
-										name: `${host.name}-${n + 1}.${f.mime.split('/')[1] ?? 'png'}`,
-										...f
-									})
-								);
+							for (const f of shown) files.push(yield* storeFile(x, e.files, f));
 							return ok({ ...result, files });
 						})
 					),
@@ -2181,12 +2183,26 @@ const storeFile = Effect.fn('Agents.storeFile')(function* (
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null;
 	const blob = yield* files.put(f.bytes, { name: f.name, mime: f.mime }),
 		id = randomUUID();
+	const ref = { id, name: f.name, mime: f.mime, size: blob.bytes };
+	// one statement: the file and its place among the conversation's outputs
 	yield* x.engine.db.write({
-		text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, 'sys_message.files', $7::timestamptz, $8)`,
-		params: [id, f.name, f.mime, blob.bytes, blob.key, blob.sha256, x.bindings.now, member]
+		text: `WITH f AS (INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, 'sys_message.files', $7::timestamptz, $8))
+		UPDATE sys_conversation SET outputs = outputs || $9::jsonb WHERE id = $10`,
+		params: [
+			id,
+			f.name,
+			f.mime,
+			blob.bytes,
+			blob.key,
+			blob.sha256,
+			x.bindings.now,
+			member,
+			JSON.stringify([ref]),
+			x.conv.id
+		]
 	});
-	return { id, name: f.name, mime: f.mime, size: blob.bytes };
+	return ref;
 });
 /**
  * `sandbox_run` as a host tool, so it is offered, gated and backgrounded like one (in-app staff turns; `sandbox_run` in a

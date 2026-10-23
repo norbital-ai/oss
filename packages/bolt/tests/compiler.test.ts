@@ -524,7 +524,7 @@ describe('next compiler: names index', () => {
 				expect(text).toContain('groups: { "hr": "kiosk" };');
 				expect(text).toContain('skills: { "triage": true };');
 				expect(text).toContain(
-					'hostTools: { "browser_act": true; "browser_evaluate": true; "browser_navigate": true; "browser_screenshot": true; "browser_snapshot": true; '
+					'hostTools: { "browser_act": true; "browser_download": true; "browser_evaluate": true; "browser_navigate": true; "browser_screenshot": true; "browser_snapshot": true; '
 				);
 				expect(text).toContain('export const __verify: Check<Verify> = true;');
 				const parts = [...text.matchAll(/^\t\t(\w+):/gm)].map((m) => m[1]);

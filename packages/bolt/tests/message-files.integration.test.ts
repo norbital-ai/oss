@@ -79,6 +79,30 @@ it.live(
 				{ id, name: 'form.pdf', mime: 'application/pdf' },
 				{ name: 'site.mp4', mime: 'video/mp4' }
 			]);
+			// the stored file is the conversation's input, once: a redelivery adds none
+			const inputs = Effect.map(
+				t.db.read([
+					{ text: `SELECT inputs FROM sys_conversation WHERE id = $1`, params: [row.conversation] }
+				]),
+				([read]) => read?.rows[0]?.['inputs']
+			);
+			const stored = [{ id, name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength }];
+			expect(yield* inputs).toEqual(stored);
+			yield* t.receive(
+				'desk_wa',
+				{
+					id: 'W1',
+					thread: '6591234567@s.whatsapp.net',
+					sentAt: '2026-09-25T10:00:00.000Z',
+					from: { handle: '6591234567@s.whatsapp.net', name: 'Ben' },
+					text: 'the form',
+					attachments: [
+						{ name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength, bin: 0 }
+					]
+				},
+				{ bins: [pdf] }
+			);
+			expect(yield* inputs).toEqual(stored);
 			const [message] = messages([row]);
 			if (message === undefined) throw new Error('model context message missing');
 			const content = String(message.content);

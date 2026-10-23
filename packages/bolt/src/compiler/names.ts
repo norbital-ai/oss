@@ -42,6 +42,7 @@ const record = (entries: [string, string][]) =>
  */
 const HOST_TOOLS = [
 	'browser_act',
+	'browser_download',
 	'browser_evaluate',
 	'browser_navigate',
 	'browser_screenshot',

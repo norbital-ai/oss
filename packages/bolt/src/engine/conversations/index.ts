@@ -312,14 +312,18 @@ export function conversations(cfg: ConversationsConfig) {
 					inbound.deleted || !content ? [] : yield* files(inst.id, inbound, bins, c, now);
 				// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it;
 				// `envoy` is the instance's at this message (display: admission reads the instance as it is then)
+				// a received stored file is one of the conversation's inputs, once (a redelivery adds none)
+				const inputs = stored.filter((ref) => Predicate.isObject(ref) && ref['id'] !== undefined);
 				c.cte(
 					'conv',
-					`INSERT INTO sys_conversation (id, integration, thread, kind, envoy, title, participants) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
+					`INSERT INTO sys_conversation (id, integration, thread, kind, envoy, title, participants, inputs) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
 			${c.p(inbound.group ? 'group' : 'dm')}, (SELECT i.envoy FROM sys_integration i WHERE i.id = ${c.p(inst.id)} AND i.owner IS NULL), ${c.p(inbound.title)},
-			${c.p(personal ? (inbound.participants ?? null) : null)}::jsonb WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO UPDATE SET
-			envoy = excluded.envoy, title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants)
+			${c.p(personal ? (inbound.participants ?? null) : null)}::jsonb, ${c.p(inputs)}::jsonb WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO UPDATE SET
+			envoy = excluded.envoy, title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants),
+			inputs = sys_conversation.inputs || (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(excluded.inputs) e
+				WHERE NOT sys_conversation.inputs @> jsonb_build_array(jsonb_build_object('id', e->'id')))
 			WHERE sys_conversation.envoy IS DISTINCT FROM excluded.envoy OR (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
-			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) RETURNING id`
+			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) OR excluded.inputs <> '[]'::jsonb RETURNING id`
 				);
 				const text = inbound.deleted ? '' : inbound.text;
 				// a personal account's own sent message is imported as outbound; it is history, never a send

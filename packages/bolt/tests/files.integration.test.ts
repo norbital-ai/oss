@@ -196,8 +196,11 @@ it.live(
 				// an instance's thread of no public envoy: only a participant reads it (a staff member too is refused), an external member as its linked sender
 				const inbound = yield* up('root');
 				yield* t.db.write({
-					text: `INSERT INTO sys_conversation (id, integration) VALUES ('wa-1', 'whatsapp')`,
-					params: []
+					// as an ingest stores it: on the message and among the conversation's inputs
+					text: `INSERT INTO sys_conversation (id, integration, inputs) VALUES ('wa-1', 'whatsapp', $1::jsonb)`,
+					params: [
+						JSON.stringify([{ id: inbound.id, name: 'pump.png', mime: 'image/png', bytes: 3 }])
+					]
 				});
 				yield* t.db.write({
 					text: `INSERT INTO sys_message (id, conversation, integration, text, files) VALUES ('m-1', 'wa-1', 'whatsapp', 'photo', $1::jsonb)`,

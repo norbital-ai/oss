@@ -143,7 +143,13 @@ screen from its header.
 			{ opacity: 1, transform: 'translate3d(0, 0, 0)' },
 			{ opacity: 0, transform: `translate3d(${x}px, ${y}px, 0)` }
 		];
-		const options = { duration: still.current ? 0 : 160, easing: 'cubic-bezier(0.4, 0, 1, 1)' };
+		// both hold their last frame until the sheet is removed: an ended animation snaps back to its start, and the scrim
+		// (ending first) flashed back to full dim behind the leaving panel
+		const options = {
+			duration: still.current ? 0 : 160,
+			easing: 'cubic-bezier(0.4, 0, 1, 1)',
+			fill: 'forwards' as const
+		};
 		const moves =
 			panel !== null && typeof panel.animate === 'function' ? panel.animate(frames, options) : null;
 		const fades =

@@ -314,6 +314,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			participants: 'jsonb',
 			parent: 'text',
 			run: 'text',
+			inputs: 'jsonb not null default []',
+			outputs: 'jsonb not null default []',
 			status: 'text not null default idle',
 			lease_until: 'timestamptz',
 			model: 'text not null default default',

@@ -40,7 +40,8 @@ describe('built-in browser tools', () => {
 				snapshot: () => Effect.succeed(null),
 				act: () => Effect.succeed(null),
 				evaluate: () => Effect.succeed(null),
-				screenshot: () => Effect.succeed(new Uint8Array())
+				screenshot: () => Effect.succeed(new Uint8Array()),
+				download: () => Effect.succeed({ name: '', mime: '', bytes: new Uint8Array() })
 			});
 			const [navigate] = browserTools(yield* Browser.pipe(Effect.provide(browser)));
 			yield* call(navigate, { url: 'https://law.example' }, run);
@@ -52,6 +53,49 @@ describe('built-in browser tools', () => {
 					{ kind: 'visitor', app: 'a', visitor: 'v' }
 				)
 			).toEqual({ error: 'only a person or an automation run can browse' });
+		})
+	);
+	it.effect("keep a download as the person's file, and answer that a run keeps none", () =>
+		Effect.gen(function* () {
+			const none = () => Effect.succeed(null);
+			const browser = Layer.succeed(Browser, {
+				navigate: none,
+				snapshot: none,
+				act: none,
+				evaluate: none,
+				screenshot: () => Effect.succeed(new Uint8Array()),
+				download: (_profile, url) =>
+					Effect.succeed({
+						name: url.split('/').at(-1) ?? '',
+						mime: 'image/png',
+						bytes: new Uint8Array(3)
+					})
+			});
+			const download = browserTools(yield* Browser.pipe(Effect.provide(browser))).find(
+				(tool) => tool.name === 'browser_download'
+			);
+			const kept: { name: string; mime: string; bytes: Uint8Array }[] = [];
+			const answer = yield* Effect.promise((signal) =>
+				download === undefined
+					? Promise.reject(new Error('no such tool'))
+					: download.call(
+							{ url: 'https://law.example/seal.png' },
+							{
+								actor: run,
+								conversation: 'c1',
+								turn: 't1',
+								callId: 'c1',
+								attach: () => {},
+								keep: (file) => kept.push(file)
+							},
+							signal
+						)
+			);
+			expect(answer).toEqual({ saved: 'seal.png', mime: 'image/png', bytes: 3 });
+			expect(kept.map((file) => file.name)).toEqual(['seal.png']);
+			expect(yield* call(download, { url: 'https://law.example/seal.png' }, run)).toEqual({
+				error: 'files are kept only in a conversation with a person'
+			});
 		})
 	);
 });

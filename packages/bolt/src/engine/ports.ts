@@ -20,6 +20,7 @@ import type {
 	AiResponse,
 	Blob,
 	BrowserPort,
+	BrowserFile,
 	BrowserStep,
 	BrowserTarget,
 	ConvertPort,
@@ -208,11 +209,19 @@ export class Browser extends Context.Service<
 		) => Effect.Effect<Json, PortFailure>;
 		readonly evaluate: (profile: string, expression: string) => Effect.Effect<Json, PortFailure>;
 		readonly screenshot: (profile: string) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly download: (profile: string, url: string) => Effect.Effect<BrowserFile, PortFailure>;
 	}
 >()('bolt/Browser') {
 	static readonly unavailable: Layer.Layer<Browser> = Layer.sync(Browser, () => {
 		const none = () => Port.unavailable('browser', 'the host provides no browser facility');
-		return { navigate: none, snapshot: none, act: none, evaluate: none, screenshot: none };
+		return {
+			navigate: none,
+			snapshot: none,
+			act: none,
+			evaluate: none,
+			screenshot: none,
+			download: none
+		};
 	});
 	static fromAbi(port: BrowserPort | undefined): Layer.Layer<Browser> {
 		return port === undefined
@@ -227,7 +236,9 @@ export class Browser extends Context.Service<
 					evaluate: (profile, expression) =>
 						Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
 					screenshot: (profile) =>
-						Port.attempt('browser', (signal) => port.screenshot(profile, signal))
+						Port.attempt('browser', (signal) => port.screenshot(profile, signal)),
+					download: (profile, url) =>
+						Port.attempt('browser', (signal) => port.download(profile, url, signal))
 				});
 	}
 }
