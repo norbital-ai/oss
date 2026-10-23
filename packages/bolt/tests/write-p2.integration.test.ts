@@ -7,7 +7,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority, GuestOutcome, Invocation, Outcome } from '../src/engine/contracts.ts';
 import { type EngineError } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
-import { EventLine, TelemetryLive } from '../src/engine/guest/telemetry.ts';
+import { EventSink, TelemetryLive } from '../src/engine/guest/telemetry.ts';
 import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { PgliteDb } from '../src/engine/db/pglite.ts';
@@ -1191,9 +1191,9 @@ describe('engine/write: telemetry (§5.12)', () => {
 						Layer.provide(
 							Layer.mergeAll(
 								Layer.succeed(TenantDb, db),
-								Layer.succeed(EventLine, (line) =>
+								Layer.succeed(EventSink, (row) =>
 									Effect.sync(() => {
-										lines.push(line);
+										lines.push(JSON.stringify(row));
 									})
 								)
 							)

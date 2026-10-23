@@ -31,6 +31,7 @@ import { TurnHandlers } from './turns.ts';
 import { decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
 import { messageCommit, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
+import { EventSink } from '../guest/telemetry.ts';
 const TRIAGE_RUN = 'agent.triage';
 /** Engine constants (rule 72's budget row), never authoring options. */
 export const TRIAGE_DEBOUNCE = 2000;
@@ -383,6 +384,17 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		};
 		const log = `INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES ($2::timestamptz, $3, 'decision.made', $4, $1, $5::jsonb) RETURNING 1`;
 		const base: Json[] = [conversation, now, bad ? 'warn' : 'info', call, JSON.stringify(event)];
+		// the row's own statement is a piece of the decision's chain below; the log store gets it here
+		yield* (yield* EventSink)({
+			at: now,
+			severity: bad ? 'warn' : 'info',
+			event: 'decision.made',
+			invocation: call,
+			run: null,
+			conversation,
+			turn: null,
+			attributes: event
+		});
 		if (action === 'wait') {
 			const w = bad ? undefined : d.answers['wait'];
 			// the continuous score is the wait in seconds (1.4 → 1.4 s), clipped to WAIT_MS

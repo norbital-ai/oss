@@ -4,7 +4,13 @@ import { Clock, Context, Effect, Exit, Layer, Scope } from 'effect';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
 import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { EventLine, eventsPiece, SLICE, TelemetryLive } from '../src/engine/guest/telemetry.ts';
+import {
+	EventSink,
+	eventsPiece,
+	SLICE,
+	TelemetryLive,
+	type SysEvent
+} from '../src/engine/guest/telemetry.ts';
 import { RANK, schemaObjects } from '../src/engine/schema/ddl.ts';
 import { Guest, Telemetry, type Bridge, type InvocationEvents } from '../src/engine/services.ts';
 import { SYSTEM } from '../src/system/index.ts';
@@ -63,12 +69,12 @@ const database = Effect.gen(function* () {
 const eventLog = (
 	db: TenantDb['Service'],
 	ids: Parameters<Telemetry['Service']['open']>[0],
-	line: (text: string) => Effect.Effect<void> = () => Effect.void
+	sink: (row: SysEvent) => Effect.Effect<void> = () => Effect.void
 ) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			TelemetryLive.pipe(
-				Layer.provide(Layer.mergeAll(Layer.succeed(TenantDb, db), Layer.succeed(EventLine, line)))
+				Layer.provide(Layer.mergeAll(Layer.succeed(TenantDb, db), Layer.succeed(EventSink, sink)))
 			)
 		);
 		const scope = yield* Scope.make();
@@ -146,9 +152,9 @@ describe('next guest telemetry (§5.12)', () => {
 		Effect.gen(function* () {
 			const t = yield* database,
 				lines: string[] = [];
-			const log = yield* eventLog(t.db, { invocation: 'act-1' }, (line) =>
+			const log = yield* eventLog(t.db, { invocation: 'act-1' }, (row) =>
 				Effect.sync(() => {
-					lines.push(line);
+					lines.push(JSON.stringify(row));
 				})
 			);
 			yield* log.events.emit('warn', 'act.refused', { message: 'no leave left' });
@@ -182,9 +188,9 @@ describe('next guest telemetry (§5.12)', () => {
 						Layer.provide(
 							Layer.mergeAll(
 								Layer.succeed(TenantDb, t.db),
-								Layer.succeed(EventLine, (line: string) =>
+								Layer.succeed(EventSink, (row: SysEvent) =>
 									Effect.sync(() => {
-										stdout.push(line);
+										stdout.push(JSON.stringify(row));
 									})
 								)
 							)

@@ -82,6 +82,7 @@ import { nextSlot } from './cron.ts';
 import { enqueue, nextDue, triggersOf } from './queue.ts';
 import { BUCKET_MS, backoffMs, dueAt, iso, offsetMs } from './time.ts';
 import { NOTICE_PUSH, noticePush } from './push.ts';
+import { logged } from '../guest/telemetry.ts';
 const Member = Schema.Struct({
 	kind: Schema.Literal('member'),
 	id: Schema.String,
@@ -798,21 +799,23 @@ export const RunsLive = Layer.effect(
 						// `decision.made` traces a sys_1 call: the run's own record of the research it did
 						const recorded = (name: string, input: Json, error?: string) =>
 							Effect.gen(function* () {
-								yield* db.write({
-									text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'infer.tool', $3, $4, $5::jsonb)",
-									params: [
-										new Date(yield* Clock.currentTimeMillis).toISOString(),
-										error === undefined ? 'info' : 'warn',
-										`${run.id}:${run.attempts}`,
-										run.id,
-										{
+								yield* db.write(
+									yield* logged({
+										at: new Date(yield* Clock.currentTimeMillis).toISOString(),
+										severity: error === undefined ? 'info' : 'warn',
+										event: 'infer.tool',
+										invocation: `${run.id}:${run.attempts}`,
+										run: run.id,
+										conversation: null,
+										turn: null,
+										attributes: {
 											automation: run.automation,
 											tool: name,
 											input: JSON.stringify(input).slice(0, 500),
 											...(error === undefined ? {} : { error })
 										}
-									]
-								});
+									})
+								);
 							}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 						const traced = (tool: InferTool): InferTool => ({
 							...tool,
@@ -1589,16 +1592,19 @@ export const RunsLive = Layer.effect(
 							Effect.catchTag('BoltError', (error): Effect.Effect<undefined, EngineError> =>
 								error.code !== 'noProgress'
 									? Effect.fail(error)
-									: db
-											.write({
-												text: `INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES ($1::timestamptz, 'warn', 'prune.noProgress', $2, $3::jsonb)`,
-												params: [
-													iso(now),
-													PRUNE,
-													JSON.stringify({ code: error.code, message: error.message })
-												]
-											})
-											.pipe(Effect.as(undefined))
+									: logged({
+											at: iso(now),
+											severity: 'warn',
+											event: 'prune.noProgress',
+											invocation: PRUNE,
+											run: null,
+											conversation: null,
+											turn: null,
+											attributes: { code: error.code, message: error.message }
+										}).pipe(
+											Effect.flatMap((statement) => db.write(statement)),
+											Effect.as(undefined)
+										)
 							)
 						);
 						pruned = pass !== undefined;

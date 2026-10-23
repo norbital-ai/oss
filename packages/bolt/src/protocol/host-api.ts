@@ -53,6 +53,7 @@ import type {
 import { PostgresDb, type PgPool } from '../engine/db/postgres.ts';
 import { PgliteDb, type PgliteClient } from '../engine/db/pglite.ts';
 export type { PgliteClient } from '../engine/db/pglite.ts';
+export type { SysEvent } from '../engine/guest/telemetry.ts';
 import { TenantDb, TenantTx, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
 import { Activation, Conversations, Feeds, Manifest, Runs } from '../engine/services.ts';
@@ -72,6 +73,7 @@ import {
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { GuestConfig } from '../engine/guest/runner.ts';
+import { EventSink, type SysEvent } from '../engine/guest/telemetry.ts';
 import { AgentHost, type AgentConfig } from '../engine/agent/index.ts';
 import { withBrowser } from '../engine/agent/browser.ts';
 import { HOOKS, OAUTH_CALLBACK, integrationLinks } from '../engine/integrations/links.ts';
@@ -204,6 +206,7 @@ export type ShellPorts = Pick<
 	| 'workspaces'
 	| 'organization'
 	| 'ai'
+	| 'logs'
 >;
 /** The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. */
 export type AgentPorts = Pick<AgentConfig, 'draft' | 'sandbox' | 'hostTools' | 'skills'>;
@@ -224,6 +227,8 @@ export type HostPorts = Pick<
 > & {
 	/** Rule 61: this environment's epoch (a fork's rows are never sent). */
 	readonly epoch?: string;
+	/** The runtime log as it is written: each `sys_event` row, for the host's log store (never awaited; a throw is dropped). */
+	readonly events?: (row: SysEvent) => void;
 	/** Each guest invocation's CPU, once it settles, with its crossings and statements (the host bills compute). */
 	readonly cpu?: (
 		invocation: Invocation,
@@ -449,6 +454,10 @@ const activation = (ports: HostPorts, artifact: Artifact) =>
 		secretsKey:
 			ports.secretsKey === undefined ? Option.none() : Option.some(Redacted.make(ports.secretsKey))
 	});
+const eventSink = (events: NonNullable<HostPorts['events']>) =>
+	Layer.succeed(EventSink, (row: SysEvent) =>
+		Effect.try({ try: () => events(row), catch: (error) => error }).pipe(Effect.ignore)
+	);
 /** Host-provided records cross only this explicit Promise ABI adapter. */
 const portLayers = (ports: HostPorts) =>
 	Layer.mergeAll(
@@ -544,6 +553,7 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		activation(ports, artifact),
 		portLayers(ports),
 		transportLayer,
+		...(ports.events === undefined ? [] : [eventSink(ports.events)]),
 		Layer.effect(
 			AgentHost,
 			withBrowser({ ...ports.agent, ...(workspace === undefined ? {} : { workspace }) })

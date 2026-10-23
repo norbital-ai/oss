@@ -130,6 +130,7 @@ export type {
 	SandboxPort,
 	WorkspacePort
 } from './tools.ts';
+import { logged } from '../guest/telemetry.ts';
 export type AgentEngine = {
 	manifest: EngineManifest;
 	db: TenantDbShape;
@@ -680,13 +681,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				incomplete = cost === undefined || call === undefined;
 			yield* db
 				.write(
-					q(
-						`INSERT INTO sys_event (at, severity, event, invocation, conversation, turn, attributes) VALUES ($1::timestamptz, $2, 'ai.call', $3, $4, $3, $5::jsonb)`,
-						(yield* config.bindings).now,
-						incomplete || over ? 'warn' : 'info',
+					yield* logged({
+						at: (yield* config.bindings).now,
+						severity: incomplete || over ? 'warn' : 'info',
+						event: 'ai.call',
+						invocation: turn,
+						run: null,
+						conversation: id,
 						turn,
-						id,
-						j({
+						attributes: {
 							call: call ?? null,
 							model: modelOf,
 							input: r.usage.input,
@@ -694,8 +697,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							cost: cost ?? null,
 							settlement: incomplete ? 'attention' : 'pending',
 							...(over ? { gauge: AI_GAUGE_USD } : {})
-						})
-					)
+						}
+					})
 				)
 				.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		});
@@ -836,14 +839,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					: (detail ?? code);
 			yield* db
 				.write(
-					q(
-						`INSERT INTO sys_event (at, severity, event, invocation, conversation, turn, attributes) VALUES ($1::timestamptz, $2, 'agent.failed', $3, $4, $3, $5::jsonb)`,
-						(yield* config.bindings).now,
-						code === 'unavailable' ? 'warn' : 'error',
+					yield* logged({
+						at: (yield* config.bindings).now,
+						severity: code === 'unavailable' ? 'warn' : 'error',
+						event: 'agent.failed',
+						invocation: turn,
+						run: null,
+						conversation: id,
 						turn,
-						id,
-						j({ code, message })
-					)
+						attributes: { code, message }
+					})
 				)
 				.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		});

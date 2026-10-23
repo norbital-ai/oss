@@ -40,6 +40,7 @@ import { DELIVER, EPOCH } from '../integrations/outbound.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import { canonicalHandle, memberByHandle } from './senders.ts';
+import { logged } from '../guest/telemetry.ts';
 export type EnvoysConfig = {
 	engine: Pick<AgentEngine, 'manifest' | 'db'>;
 	conversations: Pick<ConversationsShape, 'send'>;
@@ -178,13 +179,16 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		if (spec === undefined || def === undefined || conv === undefined) {
 			// fail closed: an instance deployed to an envoy this release no longer declares answers nobody
 			yield* db.write(
-				sql(
-					`INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES ($1::timestamptz, 'warn', 'envoy.unknown', $2, $3, $4::jsonb)`,
-					yield* clock,
-					id,
-					r['conversation']!,
-					JSON.stringify({ instance: r['integration'], envoy })
-				)
+				yield* logged({
+					at: yield* clock,
+					severity: 'warn',
+					event: 'envoy.unknown',
+					invocation: id,
+					run: null,
+					conversation: String(r['conversation']),
+					turn: null,
+					attributes: { instance: r['integration'] ?? null, envoy }
+				})
 			);
 			return { admission: 'ignored' };
 		}
@@ -220,18 +224,21 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			// what the provider actually sent, so `Studio → Runtime` answers why a mention did not reach the envoy.
 			if (a.group && a.mentions.length > 0)
 				yield* db.write(
-					sql(
-						`INSERT INTO sys_event (at, severity, event, invocation, conversation, attributes) VALUES ($1::timestamptz, 'info', 'conversation.unaddressed', $2, $3, $4::jsonb)`,
-						yield* clock,
-						a.row,
-						a.conversation,
-						JSON.stringify({
+					yield* logged({
+						at: yield* clock,
+						severity: 'info',
+						event: 'conversation.unaddressed',
+						invocation: a.row,
+						run: null,
+						conversation: a.conversation,
+						turn: null,
+						attributes: {
 							instance: a.instance,
 							sender: a.sender,
 							mentions: a.mentions,
 							text: preview(a.text)
-						})
-					)
+						}
+					})
 				);
 			return 'ambient';
 		}

@@ -57,6 +57,7 @@ import {
 import {
 	authenticate,
 	forget,
+	requireAdmin,
 	sendCode,
 	sha256,
 	SIGNUP_KEY,
@@ -65,7 +66,7 @@ import {
 } from '../engine/identity/session.ts';
 import { BOLT, HEADERS, PATHS, SW, basePath, under } from '../protocol/wire.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
-import { events, type LogLevel } from './logs/data.ts';
+import { events, type LogLevel, type LogQuery, type LogRow } from './logs/data.ts';
 import { inbox } from './inbox/data.ts';
 import { instanceMessages } from './integration/messages.ts';
 import { runList } from './runs/data.ts';
@@ -187,6 +188,8 @@ export type ShellHostConfig = {
 	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
 	readonly live?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
+	/** The workspace log from the host's log store (the runtime log), asked only for an administrator; unset, `sys_event` answers. */
+	readonly logs?: (query: LogQuery) => Promise<readonly LogRow[]>;
 };
 export class ShellConfig extends Context.Service<ShellConfig, ShellHostConfig>()(
 	'bolt/ShellConfig'
@@ -1018,8 +1021,7 @@ const makeShell = Effect.gen(function* () {
 						const v = p.get(key);
 						return v === null ? {} : { [key]: v };
 					};
-				return json({
-					value: yield* events(h.db, auth, {
+				const query: LogQuery = {
 						...given('before'),
 						...given('after'),
 						...given('run'),
@@ -1029,8 +1031,12 @@ const makeShell = Effect.gen(function* () {
 						...(level === 'info' || level === 'warn' || level === 'error' ? { level } : {}),
 						...(text === null ? {} : { text }),
 						...(conversation === null ? {} : { conversation })
-					})
-				});
+					},
+					logs = c.logs;
+				if (logs === undefined) return json({ value: yield* events(h.db, auth, query) });
+				const refusal = requireAdmin(auth);
+				if (refusal !== null) return yield* Effect.fail(refusal);
+				return json({ value: yield* hostCall(() => logs(query)) });
 			}
 			case 'GET /studio':
 			case 'POST /studio': {

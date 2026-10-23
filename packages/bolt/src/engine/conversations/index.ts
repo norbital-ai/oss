@@ -52,6 +52,7 @@ import {
 	stableId,
 	msg as messagePiece
 } from './store.ts';
+import { logged } from '../guest/telemetry.ts';
 type ConversationsConfig = {
 	crypto: Crypto.Crypto;
 	engine: Pick<AgentEngine, 'manifest' | 'db' | 'read'> & { bindings: (now: string) => Bindings };
@@ -227,12 +228,16 @@ export function conversations(cfg: ConversationsConfig) {
 		if (inbound === null) {
 			// the link's bug, never a row: recorded, and acknowledged so the message does not hold the instance's inbound
 			yield* db.write(
-				sql(
-					`INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES ($1::timestamptz, 'warn', 'conversation.malformed', $2, $3::jsonb)`,
-					now,
-					inst.id,
-					JSON.stringify({ instance: inst.id, message: preview(JSON.stringify(message)) })
-				)
+				yield* logged({
+					at: now,
+					severity: 'warn',
+					event: 'conversation.malformed',
+					invocation: inst.id,
+					run: null,
+					conversation: null,
+					turn: null,
+					attributes: { instance: inst.id, message: preview(JSON.stringify(message)) }
+				})
 			);
 			return null;
 		}

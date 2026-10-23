@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Schema } from 'effect';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +20,12 @@ import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
+
+/** The one `sys_event` row a statement writes (`eventsPiece`'s recordset). */
+const eventOf = (statement: Sql | undefined) =>
+	Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.Json)))(
+		statement?.params[0]
+	)[0];
 
 it.effect('web.read keeps raw options across the facility dispatch boundary', () => {
 	const calls: unknown[] = [];
@@ -188,21 +194,19 @@ it.effect(
 					}
 				});
 			expect(result.answers.evidence).toMatchObject({ level: 2 });
-			expect(writes[0]?.params).toMatchObject([
-				expect.any(String),
-				'info',
-				expect.any(String),
-				null,
-				{ use: 'filter', answers: result.answers }
-			]);
+			expect(eventOf(writes[0])).toMatchObject({
+				severity: 'info',
+				invocation: expect.any(String),
+				run: null,
+				attributes: { use: 'filter', answers: result.answers }
+			});
 			for (const statement of writes.slice(1))
-				expect(statement.params).toMatchObject([
-					expect.any(String),
-					'info',
-					'run-1:1',
-					'run-1',
-					{ use: 'author', automation: 'route', run: 'run-1', answers: result.answers }
-				]);
+				expect(eventOf(statement)).toMatchObject({
+					severity: 'info',
+					invocation: 'run-1:1',
+					run: 'run-1',
+					attributes: { use: 'author', automation: 'route', run: 'run-1', answers: result.answers }
+				});
 			expect(metered).toHaveLength(3);
 			expect(new Set(metered.map(({ key }) => key)).size).toBe(3);
 			expect(
@@ -216,22 +220,26 @@ it.effect(
 				ok: false,
 				error: { kind: 'tooLarge', message: 'State exceeds context', status: 413 }
 			});
-			expect(writes[3]?.params).toMatchObject([
-				expect.any(String),
-				'warn',
-				'run-1:1',
-				'run-1',
-				{ use: 'author', automation: 'route', run: 'run-1', error: 'tooLarge', status: 413 }
-			]);
+			expect(eventOf(writes[3])).toMatchObject({
+				severity: 'warn',
+				invocation: 'run-1:1',
+				run: 'run-1',
+				attributes: {
+					use: 'author',
+					automation: 'route',
+					run: 'run-1',
+					error: 'tooLarge',
+					status: 413
+				}
+			});
 			mode = 'offlist';
 			expect(yield* dispatch).toMatchObject({ ok: false, error: { kind: 'invalid' } });
-			expect(writes[4]?.params).toMatchObject([
-				expect.any(String),
-				'warn',
-				'run-1:1',
-				'run-1',
-				{ error: 'invalid', automation: 'route' }
-			]);
+			expect(eventOf(writes[4])).toMatchObject({
+				severity: 'warn',
+				invocation: 'run-1:1',
+				run: 'run-1',
+				attributes: { error: 'invalid', automation: 'route' }
+			});
 			expect(
 				yield* facilities.dispatch({
 					_tag: 'ai.sys_1.decide',

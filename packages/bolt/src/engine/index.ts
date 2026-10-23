@@ -36,7 +36,7 @@ export {
 	type GuestOptions,
 	type GuestProgram
 } from './guest/runner.ts';
-export { TelemetryLive, EventLine, eventsPiece, type SysEvent } from './guest/telemetry.ts';
+export { TelemetryLive, EventSink, eventsPiece, type SysEvent } from './guest/telemetry.ts';
 // ── exports: writes ──
 export { WritesLive, act, recordCapabilities, mayUpdate, type WriteEngine } from './write/act.ts';
 export {

@@ -23,15 +23,22 @@ const insertEvents = (events: readonly SysEvent[]): Sql => ({
 	text: eventsPiece(1),
 	params: [JSON.stringify(events)]
 });
-export const EventLine = Context.Reference<(line: string) => Effect.Effect<void>>(
-	'bolt/EventLine',
-	{ defaultValue: () => Effect.logInfo }
+/** The host's log store (`HostPorts.events`): each `sys_event` row as it is written; unset, one log line per row. */
+export const EventSink = Context.Reference<(row: SysEvent) => Effect.Effect<void>>(
+	'bolt/EventSink',
+	{ defaultValue: () => (row) => Effect.logInfo(JSON.stringify(row)) }
 );
+/** One `sys_event` row written on its own: handed to the host's log store, and its insert statement. */
+export const logged = (row: SysEvent): Effect.Effect<Sql> =>
+	Effect.gen(function* () {
+		yield* (yield* EventSink)(row);
+		return insertEvents([row]);
+	});
 export const TelemetryLive = Layer.effect(
 	Telemetry,
 	Effect.gen(function* () {
 		const db = yield* TenantDb,
-			line = yield* EventLine;
+			sink = yield* EventSink;
 		const open = (ids: EventIds): Effect.Effect<InvocationEvents, never, Scope.Scope> =>
 			Effect.gen(function* () {
 				const buffer = yield* Ref.make<readonly SysEvent[]>([]),
@@ -71,7 +78,7 @@ export const TelemetryLive = Layer.effect(
 								turn: ids.turn ?? null,
 								attributes
 							};
-							yield* line(JSON.stringify(row));
+							yield* sink(row);
 							yield* Ref.update(buffer, (rows) => [...rows, row]);
 						})
 				};

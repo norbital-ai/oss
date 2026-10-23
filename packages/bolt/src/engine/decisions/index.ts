@@ -36,6 +36,7 @@ import { Port } from '../port.ts';
 import { RunOutputRow, readsRunResult } from '../runs/index.ts';
 import { outputFiles } from '../runs/output-files.ts';
 import * as ir from '../../protocol/ir.ts';
+import { logged } from '../guest/telemetry.ts';
 
 export type { DecisionQuestion, DecisionState };
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
@@ -324,19 +325,21 @@ export const DecisionsLive = Layer.effect(
 					)
 				);
 				yield* db
-					.write({
-						text: "INSERT INTO sys_event (at, severity, event, invocation, run, attributes) VALUES ($1::timestamptz, $2, 'decision.made', $3, $4, $5::jsonb)",
-						params: [
-							now,
-							Result.isSuccess(result) ? 'info' : 'warn',
-							trace?.invocation ?? call,
-							trace?.run ?? null,
-							{
+					.write(
+						yield* logged({
+							at: now,
+							severity: Result.isSuccess(result) ? 'info' : 'warn',
+							event: 'decision.made',
+							invocation: trace?.invocation ?? call,
+							run: trace?.run ?? null,
+							conversation: null,
+							turn: null,
+							attributes: {
 								...decisionEvent(use, request, event),
 								...(trace === undefined ? {} : { automation: trace.automation, run: trace.run })
 							}
-						]
-					})
+						})
+					)
 					.pipe(
 						Effect.mapError(
 							(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
@@ -692,15 +695,22 @@ export const authorDecide = Effect.fn('Decisions.authorDecide')(function* (
 	);
 	const result = yield* Effect.result(ask(config.ai, request));
 	const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
-	yield* config.db.write({
-		text: "INSERT INTO sys_event (at, severity, event, invocation, attributes) VALUES ($1::timestamptz, $2, 'decision.made', $3, $4::jsonb)",
-		params: [
-			yield* config.clock,
-			Result.isSuccess(result) ? 'info' : 'warn',
-			run.id,
-			{ ...decisionEvent('author', request, event), automation: run.automation, run: run.id }
-		]
-	});
+	yield* config.db.write(
+		yield* logged({
+			at: yield* config.clock,
+			severity: Result.isSuccess(result) ? 'info' : 'warn',
+			event: 'decision.made',
+			invocation: run.id,
+			run: null,
+			conversation: null,
+			turn: null,
+			attributes: {
+				...decisionEvent('author', request, event),
+				automation: run.automation,
+				run: run.id
+			}
+		})
+	);
 	yield* meter(config.metering, event, run.id);
 	if (Result.isFailure(result)) return { ok: false, error: wireFailure(result.failure) };
 	const answers = Object.fromEntries(
