@@ -90,6 +90,17 @@ requests an image preview; `preview` is typed as `64 | 512 | 1024`, naming its m
 Previews remain subject to the file's current record or conversation authorization. Public file
 URLs retain their app or kiosk scope; an image URL grants no additional read authority.
 
+A conversation holds its files; a message row carries none. `sys_conversation.inputs` holds every
+upload (posted in the agent panel, which uploads to `/__bolt/files/sys_conversation.inputs`, or
+received from an integration), each entry naming its `message`; a message's `files` are read back
+from those inputs (`filesOf`, `src/engine/conversations/store.ts`). `sys_conversation.outputs` holds
+files tools made: `browser_download` (a file fetched in the browser session, at most 20 MiB, through
+the `Browser` port's `download`), screenshots and sandbox outputs. The panel's session rail shows them
+as the Inputs and Outputs cards. Reading one follows the conversation (`readableFile`,
+`src/engine/decisions/index.ts`): its uploader, the conversation's owner, a member who posted in it,
+administrators for an in-app conversation, staff for a `public` envoy's thread, and whoever reads a
+record it was filed into.
+
 The document's CSP allows framing for `portal: true` app pages and all kiosk pages through
 `frame-ancestors *`; other pages use `frame-ancestors 'self'`. Portal presentation and framing
 do not change audience, SSR eligibility or data authority. An embedding site remains responsible
