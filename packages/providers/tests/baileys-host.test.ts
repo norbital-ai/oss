@@ -8,6 +8,9 @@ import { engineHost } from './engine-host.ts';
 import { EngineManifestSchema } from '@norbital-ai/bolt/engine';
 import { fake, raw } from './baileys-fake.ts';
 import { until } from './kit.ts';
+/** A message's files: its conversation's inputs that name it (Bolt keeps no files column on the message). */
+const FILES = `(SELECT coalesce(jsonb_agg(f.e - 'message' ORDER BY f.at), '[]'::jsonb) FROM sys_conversation fc,
+	jsonb_array_elements(fc.inputs) WITH ORDINALITY AS f(e, at) WHERE fc.id = m.conversation AND f.e->>'message' = m.id)`;
 
 class SdkRejected extends Schema.TaggedError<SdkRejected>()('SdkRejected', {
 	cause: Schema.Defect()
@@ -42,7 +45,7 @@ describe('the WhatsApp Web link on a host', { timeout: 15_000 }, () => {
 				Effect.gen(function* () {
 					const rows = (id: string) =>
 						t.db.rows(Schema.Struct({ provider_id: Schema.String, files: Schema.Json }), {
-							text: `SELECT provider_id, files FROM sys_message WHERE integration = 'wa' AND provider_id = $1`,
+							text: `SELECT provider_id, ${FILES} AS files FROM sys_message m WHERE integration = 'wa' AND provider_id = $1`,
 							params: [id]
 						});
 					const first = fake(),
@@ -77,7 +80,7 @@ describe('the WhatsApp Web link on a host', { timeout: 15_000 }, () => {
 			Effect.gen(function* () {
 				const rows = (id: string) =>
 					t.db.rows(Schema.Struct({ provider_id: Schema.String, files: Schema.Json }), {
-						text: `SELECT provider_id, files FROM sys_message WHERE integration = 'wa' AND provider_id = $1`,
+						text: `SELECT provider_id, ${FILES} AS files FROM sys_message m WHERE integration = 'wa' AND provider_id = $1`,
 						params: [id]
 					});
 				const f = fake(),
@@ -120,7 +123,7 @@ describe('the WhatsApp Web link on a host', { timeout: 15_000 }, () => {
 				Effect.gen(function* () {
 					const rows = (id: string) =>
 						t.db.rows(Schema.Struct({ provider_id: Schema.String, files: Schema.Json }), {
-							text: `SELECT provider_id, files FROM sys_message WHERE integration = 'wa' AND provider_id = $1`,
+							text: `SELECT provider_id, ${FILES} AS files FROM sys_message m WHERE integration = 'wa' AND provider_id = $1`,
 							params: [id]
 						});
 					const first = fake(),
