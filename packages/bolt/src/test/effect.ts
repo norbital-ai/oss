@@ -25,6 +25,7 @@ import {
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
 import type { PlatformError } from 'effect/PlatformError';
 import { createHash, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileRef } from '../page/file-ref.ts';
 import { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
@@ -863,7 +864,8 @@ type SchemaImageFailure = BoltError | DbError | KitInvalid;
 /** The schema image's key: its slice, and the workspace whose `.norbital/cache` keeps it across test processes. */
 const ImageKey = Schema.Struct({ dir: Schema.NullOr(Schema.String), slice: SchemaSliceSchema });
 /** The PGlite build (its versioned store path): an image from another build is another key. */
-const PGLITE = import.meta.resolve('@electric-sql/pglite');
+// `createRequire`, not `import.meta.resolve`: a template's vitest module runner supports only the former
+const PGLITE = createRequire(import.meta.url).resolve('@electric-sql/pglite');
 const KEPT_IMAGES = 4;
 /** initdb (~2 s, ~0.8 GB) and the plan (~1 s) for one schema; each test file runs in a fresh process. */
 const freshImage = (slice: typeof SchemaSliceSchema.Type) =>
