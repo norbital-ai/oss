@@ -97,7 +97,9 @@ export const publicWeb = (
 					.replace(/<[^>]+>/g, ' ')
 					.replace(/\s+/g, ' ')
 					.trim()
-					.slice(0, 200_000);
+					// a whole statute's text (an Act runs past 300,000 characters) fits in one guest crossing; a quote in its
+					// last part must still be found
+					.slice(0, 1_000_000);
 				const html =
 					options.raw === true && /html|xml/i.test(page.contentType ?? 'text/html')
 						? page.body
