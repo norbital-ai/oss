@@ -277,10 +277,10 @@ export function shellApi(
 					...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
 					...(mode === undefined ? {} : { mode })
 				}),
-			/** hook:attachments — one panel attachment to `/__bolt/files/sys_message.files`: its `FileRef`, or the refusal. */
+			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport
-					.upload(based(`${PATHS.files}sys_message.files`), file, {
+					.upload(based(`${PATHS.files}sys_conversation.inputs`), file, {
 						[HEADERS.key]: uuidv7(),
 						'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`
 					})

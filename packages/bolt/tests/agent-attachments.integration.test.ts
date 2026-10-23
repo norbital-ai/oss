@@ -1,4 +1,4 @@
-// In-app Norbius attachments (§5.9, rule 58): a panel upload to `sys_message.files` rides `sys_message.post` as a
+// In-app Norbius attachments (§5.9, rule 58): a panel upload to `sys_conversation.inputs` rides `sys_message.post` as a
 // stored FileRef on the row; the agent reads it with `read_attachment`; triage's state carries it (P37); only the
 // member's own uploads attach, 8 files / 20 MiB, the envoy's media types.
 import { randomUUID } from 'node:crypto';
@@ -16,6 +16,7 @@ import { upload } from '../src/engine/callables/upload.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
+import { filesOf } from '../src/engine/conversations/store.ts';
 
 const manifest = (triage: boolean) =>
 	Result.getOrThrow(
@@ -164,8 +165,8 @@ const setup = (triage: boolean) =>
 		const put = (authority: Authority, name: string, mime: string, bytes: Uint8Array) =>
 			upload({
 				id: randomUUID(),
-				collection: 'sys_message',
-				field: 'files',
+				collection: 'sys_conversation',
+				field: 'inputs',
 				name,
 				mime,
 				bytes,
@@ -206,7 +207,7 @@ describe('in-app attachments', () => {
 				yield* t.settled();
 				const [row] = (yield* t.db.read([
 					{
-						text: `SELECT files FROM sys_message WHERE conversation = $1 AND role = 'user'`,
+						text: `SELECT ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND role = 'user'`,
 						params: [c]
 					}
 				]))[0]!.rows;
@@ -224,7 +225,10 @@ describe('in-app attachments', () => {
 				const [held] = (yield* t.db.read([
 					{ text: `SELECT inputs, outputs FROM sys_conversation WHERE id = $1`, params: [c] }
 				]))[0]!.rows;
-				expect(held).toEqual({ inputs: row!['files'], outputs: [] });
+				expect(held).toMatchObject({ inputs: row!['files'], outputs: [] });
+				expect(held!['inputs']).toEqual([
+					expect.objectContaining({ name: 'pump.png', message: expect.any(String) })
+				]);
 			})
 		)
 	);

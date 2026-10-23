@@ -65,8 +65,8 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const manifest = yield* Manifest;
 	const db = yield* TenantDb;
 	const files = yield* Files;
-	// hook:attachments — the agent panel's own field: any member stores a message attachment; `sys_message.post` checks the message's 8 files / 20 MiB
-	const panel = u.collection === 'sys_message' && u.field === 'files';
+	// hook:attachments — the agent panel's own field: any member stores a conversation input; `sys_message.post` checks the message's 8 files / 20 MiB
+	const panel = u.collection === 'sys_conversation' && u.field === 'inputs';
 	// a pipeline import's file (`<c>.$import`, read back by its `<c>.pipeline` run): a member who may create in `c`
 	const upload = u.field === '$import' && manifest.pipelines[u.collection]?.import !== undefined;
 	const kind = panel

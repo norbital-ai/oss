@@ -1078,9 +1078,7 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 				yield* queue(w, randomUUID(), 'classify', T0 - 2000);
 				yield* queue(w, randomUUID(), 'flaky', T0 - 1000);
 				yield* w.r.tick;
-				expect(
-					yield* w.sql(`SELECT automation, state FROM sys_run ORDER BY due_at`)
-				).toEqual([
+				expect(yield* w.sql(`SELECT automation, state FROM sys_run ORDER BY due_at`)).toEqual([
 					{ automation: 'classify', state: 'succeeded' },
 					{ automation: 'classify', state: 'succeeded' },
 					{ automation: 'flaky', state: 'succeeded' }

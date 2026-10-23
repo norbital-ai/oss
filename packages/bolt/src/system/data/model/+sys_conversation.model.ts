@@ -18,7 +18,10 @@ export default model({
 		parent: { kind: 'text', optional: true },
 		/** An automation run's inference (`ctx.ai.sys_2.infer`): its transcript, read-only, for administrators. */
 		run: { kind: 'text', optional: true },
-		/** What came in: the files posted or received in it (stored files, `sys_file`), oldest first. */
+		/**
+		 * Every upload: the files posted or received in it, oldest first, each naming its `message` (a stored file has its
+		 * `sys_file` id; a received one too large to store has none). A message's files are these; its row holds none.
+		 */
 		inputs: { kind: 'json', default: [] },
 		/** What its work made: downloads, screenshots, generated and sandbox files, oldest first. */
 		outputs: { kind: 'json', default: [] },

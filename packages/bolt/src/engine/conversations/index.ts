@@ -79,7 +79,7 @@ const KEEP = (col: string) =>
 	`CASE WHEN sys_message.role IS NULL AND excluded.version > sys_message.version THEN excluded.${col} ELSE sys_message.${col} END`;
 /** A revoke, a delete for me or a cleared chat stamps `deleted_at` on every row; it erases content only where no agent saw it. */
 const TOMBSTONE = `text = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.text END, preview = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.preview END,
-	files = CASE WHEN sys_message.role IS NULL THEN '[]'::jsonb ELSE sys_message.files END, email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
+	email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
 export function conversations(cfg: ConversationsConfig) {
 	const { manifest: m, db } = cfg.engine;
 	const uuid = cfg.crypto.randomUUIDv4.pipe(
@@ -157,7 +157,7 @@ export function conversations(cfg: ConversationsConfig) {
 			c.cte(
 				`f${i}`,
 				`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) SELECT ${c.p(id)}, ${c.p(a.name)}, ${c.p(a.mime)},
-				${c.p(data.byteLength)}, ${c.p(blob.key)}, ${c.p(blob.sha256)}, 'sys_message.files', ${c.p(now)}::timestamptz WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO NOTHING RETURNING id`
+				${c.p(data.byteLength)}, ${c.p(blob.key)}, ${c.p(blob.sha256)}, 'sys_conversation.inputs', ${c.p(now)}::timestamptz WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO NOTHING RETURNING id`
 			);
 			out.push({ id, ...named });
 		}
@@ -312,8 +312,10 @@ export function conversations(cfg: ConversationsConfig) {
 					inbound.deleted || !content ? [] : yield* files(inst.id, inbound, bins, c, now);
 				// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it;
 				// `envoy` is the instance's at this message (display: admission reads the instance as it is then)
-				// a received stored file is one of the conversation's inputs, once (a redelivery adds none)
-				const inputs = stored.filter((ref) => Predicate.isObject(ref) && ref['id'] !== undefined);
+				// a received file is one of the conversation's inputs, naming its message, once: a redelivery or an edit adds none
+				const inputs = stored.map((ref) =>
+					Predicate.isObject(ref) ? { ...ref, message: id } : ref
+				);
 				c.cte(
 					'conv',
 					`INSERT INTO sys_conversation (id, integration, thread, kind, envoy, title, participants, inputs) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
@@ -321,7 +323,7 @@ export function conversations(cfg: ConversationsConfig) {
 			${c.p(personal ? (inbound.participants ?? null) : null)}::jsonb, ${c.p(inputs)}::jsonb WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO UPDATE SET
 			envoy = excluded.envoy, title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants),
 			inputs = sys_conversation.inputs || (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(excluded.inputs) e
-				WHERE NOT sys_conversation.inputs @> jsonb_build_array(jsonb_build_object('id', e->'id')))
+				WHERE NOT sys_conversation.inputs @> jsonb_build_array(jsonb_build_object('message', e->'message')))
 			WHERE sys_conversation.envoy IS DISTINCT FROM excluded.envoy OR (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
 			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) OR excluded.inputs <> '[]'::jsonb RETURNING id`
 				);
@@ -336,15 +338,15 @@ export function conversations(cfg: ConversationsConfig) {
 					`SELECT * FROM ${messagePiece(
 						c,
 						`INSERT INTO sys_message (id, conversation, integration, direction, origin, provider_id, version, sender, sender_name, sent_at, source_at, invocation,
-			preview, text, email, files, reply_to, deleted_at, created_at)
+			preview, text, email, reply_to, deleted_at, created_at)
 		SELECT ${c.p(id)}, ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(direction)}, ${c.p(origin)}, ${c.p(inbound.id)}, ${c.p(inbound.version)},
 			${c.p(inbound.sender)}, ${c.p(inbound.senderName)}, ${c.p(inbound.sentAt)}::timestamptz, ${c.p(inbound.sourceAt)}::timestamptz, ${c.p(inbound.invocation)}, ${c.p(preview(text))}, ${c.p(text)},
-			${c.p(inbound.email)}::jsonb, ${c.p(stored)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'}, ${c.p(now)}::timestamptz WHERE EXISTS (SELECT 1 FROM source)
+			${c.p(inbound.email)}::jsonb, ${c.p(inbound.replyTo)}, ${inbound.deleted ? `${c.p(now)}::timestamptz` : 'NULL'}, ${c.p(now)}::timestamptz WHERE EXISTS (SELECT 1 FROM source)
 		ON CONFLICT (id) DO UPDATE SET ${
 			inbound.deleted
 				? `deleted_at = excluded.deleted_at, ${TOMBSTONE} WHERE sys_message.deleted_at IS NULL`
 				: // an admitted row is the agent's transcript: an edit never rewrites what the model already saw
-					`text = ${KEEP('text')}, preview = ${KEEP('preview')}, email = ${KEEP('email')}, files = ${KEEP('files')}, source_at = coalesce(sys_message.source_at, excluded.source_at), version = greatest(sys_message.version, excluded.version),
+					`text = ${KEEP('text')}, preview = ${KEEP('preview')}, email = ${KEEP('email')}, source_at = coalesce(sys_message.source_at, excluded.source_at), version = greatest(sys_message.version, excluded.version),
 				sender_name = CASE WHEN excluded.version > sys_message.version THEN coalesce(excluded.sender_name, sys_message.sender_name) ELSE sys_message.sender_name END, edited_at = CASE WHEN excluded.version > sys_message.version THEN ${c.p(now)}::timestamptz ELSE sys_message.edited_at END
 			WHERE sys_message.deleted_at IS NULL AND (excluded.version > sys_message.version OR (sys_message.source_at IS NULL AND excluded.source_at IS NOT NULL))`
 		}

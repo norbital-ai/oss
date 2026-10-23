@@ -26,6 +26,7 @@ import { SendRefused } from '../src/engine/conversations/status.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { settings } from '../src/shell/settings/data.ts';
 import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
+import { filesOf } from '../src/engine/conversations/store.ts';
 
 const manifest = Result.getOrThrow(
 	decodeManifest({
@@ -311,7 +312,7 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			);
 		const history = () =>
 			rows(
-				`SELECT integration, provider_id, text, deleted_at IS NOT NULL AS deleted, files, conversation, origin FROM sys_message WHERE direction = 'inbound' ORDER BY seq`
+				`SELECT integration, provider_id, text, deleted_at IS NOT NULL AS deleted, ${filesOf('m')} AS files, conversation, origin FROM sys_message m WHERE direction = 'inbound' ORDER BY seq`
 			);
 		const personal = () =>
 			Effect.gen(function* () {
@@ -1259,7 +1260,7 @@ describe('inbound (§4.3)', () => {
 						})
 					);
 					const messageSql = `SELECT id, seq, conversation, text, version, sender, sender_name, sent_at,
-					email, files, edited_at, created_at FROM sys_message WHERE integration = 'supplier_inbox'`,
+					email, ${filesOf('m')} AS files, edited_at, created_at FROM sys_message m WHERE integration = 'supplier_inbox'`,
 						runsSql = `SELECT id, automation, state, input, key FROM sys_run
 						WHERE automation = 'mail_import.supplier_mail' ORDER BY id`,
 						before = yield* f.rows(messageSql),

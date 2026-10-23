@@ -560,7 +560,7 @@ export const storedFiles = Effect.fn('Decisions.storedFiles')(function* (
 /**
  * Whether `authority` may read a stored file, as `GET /__bolt/files/<id>` checks: an administrator, or a row holding it in
  * its collection's file field that the caller reads with that field unmasked.
- * A message attachment (`sys_message.files`) is its uploader's, and then the conversation's: its owner, a member who
+ * A conversation's file (`sys_conversation.inputs` / `outputs`) is its uploader's, and then the conversation's: its owner, a member who
  * posted in it (in the app or as a linked envoy sender), and staff for an instance's conversation. Filed into a record (an
  * envoy's photo, a sandbox output), it is also that record's: whoever reads it there, as for any file field.
  */
@@ -594,7 +594,7 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		}
 		return false;
 	});
-	if (owner === 'sys_message.files') {
+	if (owner === 'sys_conversation.inputs' || owner === 'sys_conversation.outputs') {
 		const a = o.authority.actor;
 		// ponytail: every file field is scanned for a holder; a file-field index if this read gets hot
 		const filed = Effect.fn('Decisions.body')(function* () {
@@ -605,7 +605,7 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		});
 		if (a.kind !== 'member') return yield* filed();
 		const r = yield* o.db.one(Schema.Struct({ found: Schema.Boolean }), {
-			text: `SELECT true AS found FROM sys_file WHERE id = $1 AND field = 'sys_message.files' AND created_by = $2
+			text: `SELECT true AS found FROM sys_file WHERE id = $1 AND field = $7 AND created_by = $2
 			UNION ALL SELECT true AS found FROM sys_conversation c WHERE (c.inputs @> $3::jsonb OR c.outputs @> $3::jsonb)
 				AND (c.owner = $2 OR ($6 AND c.integration IS NULL) OR ($4 AND c.integration IS NOT NULL AND c.envoy IN (SELECT jsonb_array_elements_text($5::jsonb))) OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id
 					AND ($2 IN (p."as"->>'member', p."as"->'envoy'->>'member'))))
@@ -622,7 +622,8 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 						.map(([name]) => name)
 				),
 				// admins read in-app files; an envoy thread's only through the rule above (owner 2026-09-26)
-				o.authority.admin
+				o.authority.admin,
+				owner
 			]
 		});
 		return Option.isSome(r) || (yield* filed());

@@ -16,6 +16,7 @@ import { filesRoutes } from '../src/protocol/files.ts';
 import { ImagePreviewsLive } from '../src/protocol/image-previews.ts';
 import { RateLimits } from '../src/protocol/http.ts';
 import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
+import { filesOf } from '../src/engine/conversations/store.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -88,7 +89,7 @@ it.live(
 					bytes: Schema.Number
 				});
 				const up = (as: string) =>
-					call(as, 'PUT', 'sys_message.files', new Uint8Array([1, 2, 3])).pipe(
+					call(as, 'PUT', 'sys_conversation.inputs', new Uint8Array([1, 2, 3])).pipe(
 						Effect.flatMap(json),
 						Effect.flatMap(Schema.decodeUnknownEffect(File))
 					);
@@ -123,7 +124,7 @@ it.live(
 						yield* call(
 							'ann',
 							'PUT',
-							'sys_message.files',
+							'sys_conversation.inputs',
 							new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url))),
 							'image/heic',
 							'photo.heic'
@@ -177,7 +178,7 @@ it.live(
 				const [row] = present(
 					(yield* t.db.read([
 						{
-							text: `SELECT content, files FROM sys_message WHERE conversation = $1`,
+							text: `SELECT content, ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1`,
 							params: [conversation]
 						}
 					]))[0]
@@ -196,17 +197,17 @@ it.live(
 				// an instance's thread of no public envoy: only a participant reads it (a staff member too is refused), an external member as its linked sender
 				const inbound = yield* up('root');
 				yield* t.db.write({
-					// as an ingest stores it: on the message and among the conversation's inputs
+					// as an ingest stores it: among the conversation's inputs, naming its message
 					text: `INSERT INTO sys_conversation (id, integration, inputs) VALUES ('wa-1', 'whatsapp', $1::jsonb)`,
 					params: [
-						JSON.stringify([{ id: inbound.id, name: 'pump.png', mime: 'image/png', bytes: 3 }])
+						JSON.stringify([
+							{ id: inbound.id, name: 'pump.png', mime: 'image/png', bytes: 3, message: 'm-1' }
+						])
 					]
 				});
 				yield* t.db.write({
-					text: `INSERT INTO sys_message (id, conversation, integration, text, files) VALUES ('m-1', 'wa-1', 'whatsapp', 'photo', $1::jsonb)`,
-					params: [
-						JSON.stringify([{ id: inbound.id, name: 'pump.png', mime: 'image/png', bytes: 3 }])
-					]
+					text: `INSERT INTO sys_message (id, conversation, integration, text) VALUES ('m-1', 'wa-1', 'whatsapp', 'photo')`,
+					params: []
 				});
 				expect(yield* status('ann', inbound.id)).toBe(404);
 				expect(yield* status('eve', inbound.id)).toBe(404);
@@ -275,7 +276,11 @@ it.live(
 					);
 				const photo = yield* Schema.decodeUnknownEffect(
 					Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String })
-				)(yield* json(yield* call('ann', 'PUT', 'sys_message.files', new Uint8Array([1, 2, 3]))));
+				)(
+					yield* json(
+						yield* call('ann', 'PUT', 'sys_conversation.inputs', new Uint8Array([1, 2, 3]))
+					)
+				);
 				expect((yield* call('root', 'GET', photo.id)).status).toBe(404); // Ann's, in no conversation the administrator reads
 				const o = (yield* actReply(route, t.as(t.admin).authority, {
 					callable: 'photos.create',

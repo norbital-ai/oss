@@ -39,7 +39,6 @@ export default model({
 		addressed: { kind: 'bool', optional: true },
 		refused: { kind: 'text', optional: true },
 		email: { kind: 'json', optional: true },
-		files: { kind: 'json', default: [] },
 		reply_to: { kind: 'text', optional: true },
 		deleted_at: { kind: 'instant', optional: true },
 		edited_at: { kind: 'instant', optional: true },

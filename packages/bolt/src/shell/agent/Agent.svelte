@@ -7,7 +7,7 @@
 	new line, Cmd/Ctrl+Enter sends now. With triage (rule 60a, P41) each triaged row carries its state: "waiting for
 	more…" while pending (with respond-now), "responding" once admitted and its turn runs; messages not for the agent fold into one
 	quiet "Not for the assistant" block. Files are attached with the paperclip, by paste
-	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_message.files` when the message is sent.
+	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
 	The selector switches between the member's own conversations and the envoy conversation threads they may read, segmented by
 	source (newest first); each delegated sub-agent is one read-only card (its task, its steps as they land, its answer),
 	several working at once, one level deep; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the

@@ -113,7 +113,7 @@ export type ShellApi = {
 			attachments?: readonly Attachment[],
 			mode?: 'plan' | 'compact'
 		): AgentAct;
-		/** One panel attachment stored to `/__bolt/files/sys_message.files`. */
+		/** One panel attachment stored to `/__bolt/files/sys_conversation.inputs`. */
 		upload(file: File): Call<Required<Attachment>>;
 		respondNow(conversation: string): AgentAct;
 		confirm(message: string, approve: boolean): AgentAct;

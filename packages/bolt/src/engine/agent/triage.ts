@@ -13,7 +13,12 @@ import { Clock, Context, Effect, FiberMap, Layer, Predicate, Schema } from 'effe
 import { randomUUID } from 'node:crypto';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
-import { msg as messagePiece, post as postMessage, preview } from '../conversations/store.ts';
+import {
+	filesOf,
+	msg as messagePiece,
+	post as postMessage,
+	preview
+} from '../conversations/store.ts';
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
@@ -161,7 +166,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			},
 			{
 				text: `SELECT id, coalesce(author, sender_name, sender) AS sender, coalesce(text, '') AS text, (extract(epoch FROM coalesce(sent_at, created_at)) * 1000)::float8 AS at,
-				invocation, files FROM sys_message WHERE conversation = $1 AND state = 'pending' ORDER BY seq`,
+				invocation, ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND state = 'pending' ORDER BY seq`,
 				params: [conversation]
 			},
 			{

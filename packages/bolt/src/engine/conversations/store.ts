@@ -33,7 +33,14 @@ export function preview(text: string): string {
 		? text
 		: new TextDecoder().decode(bytes.slice(0, 2045)).replace(/\uFFFD+$/, '') + '...';
 }
-export const MSG = `(to_jsonb(m) - 'preview') AS r`;
+/**
+ * A message's files: its conversation's inputs that name it (`message`), in their order. A file is held once, by the
+ * conversation (`sys_conversation.inputs`); a message row carries none.
+ */
+export const filesOf = (m: string): string =>
+	`(SELECT coalesce(jsonb_agg(f.e - 'message' ORDER BY f.at), '[]'::jsonb) FROM sys_conversation fc, jsonb_array_elements(fc.inputs) WITH ORDINALITY AS f(e, at)
+	WHERE fc.id = ${m}.conversation AND f.e->>'message' = ${m}.id)`;
+export const MSG = `((to_jsonb(m) - 'preview') || jsonb_build_object('files', ${filesOf('m')})) AS r`;
 const names = new WeakMap<Chain, number>();
 export function msg(c: Chain, statement: string, returning: string = MSG): string {
 	const n = names.get(c) ?? 0;
@@ -44,20 +51,25 @@ export function post(
 	c: Chain,
 	message: MessageInsert & { readonly addressed?: false | undefined }
 ): string {
-	const text = message.text ?? null;
-	// a posted file is one of the conversation's inputs
-	if (Array.isArray(message.files) && message.files.length > 0)
-		c.cte(
-			`inputs${names.get(c) ?? 0}`,
-			`UPDATE sys_conversation SET inputs = inputs || ${c.p(message.files)}::jsonb WHERE id = ${c.p(message.conversation)} RETURNING id`
-		);
-	return msg(
+	const text = message.text ?? null,
+		files = Array.isArray(message.files) ? message.files : [];
+	const row = msg(
 		c,
-		`INSERT INTO sys_message AS m (id, conversation, role, content, text, preview, state, mode, "as", author, meta, files, turn, supersedes, addressed)
+		`INSERT INTO sys_message AS m (id, conversation, role, content, text, preview, state, mode, "as", author, meta, turn, supersedes, addressed)
 	VALUES (gen_random_uuid()::text, ${c.p(message.conversation)}, ${c.p(message.role)}, ${c.p(message.content)}::jsonb, ${c.p(text)}, ${c.p(preview(text ?? ''))},
 		${c.p(message.state === undefined ? 'queued' : message.state)}, ${c.p(message.mode === undefined ? 'agent' : message.mode)}, ${c.p(message.as ?? null)}::jsonb, ${c.p(message.author ?? null)},
-		${c.p(message.meta === undefined ? null : message.meta)}::jsonb, ${c.p(message.files === undefined ? [] : message.files)}::jsonb, ${c.p(message.turn ?? null)}, ${c.p(message.supersedes ?? null)}, ${c.p(message.addressed ?? true)})`
+		${c.p(message.meta === undefined ? null : message.meta)}::jsonb, ${c.p(message.turn ?? null)}, ${c.p(message.supersedes ?? null)}, ${c.p(message.addressed ?? true)})`,
+		// the row it returns carries its files already: a sibling statement's update is not visible to its RETURNING
+		`((to_jsonb(m) - 'preview') || jsonb_build_object('files', ${c.p(files)}::jsonb)) AS r`
 	);
+	// a posted file is one of the conversation's inputs, naming its message
+	if (files.length > 0)
+		c.cte(
+			`${row}_inputs`,
+			`UPDATE sys_conversation SET inputs = inputs || (SELECT jsonb_agg(f || jsonb_build_object('message', (SELECT r->>'id' FROM ${row})))
+			FROM jsonb_array_elements(${c.p(files)}::jsonb) f) WHERE id = ${c.p(message.conversation)} RETURNING id`
+		);
+	return row;
 }
 export function claim(c: Chain, conversation: string, turn: string): string {
 	return msg(

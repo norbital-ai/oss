@@ -4,6 +4,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { TenantDbShape } from '../../engine/db/tenant-db.ts';
 import type { DeliveryEntry } from '../../engine/conversations/status.ts';
+import { filesOf } from '../../engine/conversations/store.ts';
 import { requireAdmin } from '../../engine/identity/session.ts';
 import type { Json } from '../../decl/values.ts';
 
@@ -89,7 +90,7 @@ export const instanceMessages = Effect.fn('shell.instanceMessages')(function* (
 		q('SELECT 1 FROM sys_integration WHERE id = $1', instance),
 		q(
 			`SELECT m.id, m.seq::text AS seq, m.direction, coalesce(m.sent_at, m.created_at)::text AS at, c.thread, c.kind, c.title,
-			m.sender, m.sender_name, m.text, jsonb_array_length(coalesce(m.files, '[]'::jsonb)) AS files, m.status, m.error,
+			m.sender, m.sender_name, m.text, jsonb_array_length(${filesOf('m')}) AS files, m.status, m.error,
 			CASE WHEN m.direction = 'outbound' AND jsonb_typeof(m.delivery) = 'array' THEN m.delivery ELSE '[]'::jsonb END AS delivery
 		FROM sys_message m LEFT JOIN sys_conversation c ON c.id = m.conversation
 		WHERE m.integration = $1 AND m.direction IN ('inbound', 'outbound') AND ($2::bigint IS NULL OR m.seq < $2::bigint)

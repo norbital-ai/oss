@@ -79,14 +79,17 @@ it.live(
 				{ id, name: 'form.pdf', mime: 'application/pdf' },
 				{ name: 'site.mp4', mime: 'video/mp4' }
 			]);
-			// the stored file is the conversation's input, once: a redelivery adds none
+			// every received file is the conversation's input, naming its message, once: a redelivery adds none
 			const inputs = Effect.map(
 				t.db.read([
 					{ text: `SELECT inputs FROM sys_conversation WHERE id = $1`, params: [row.conversation] }
 				]),
 				([read]) => read?.rows[0]?.['inputs']
 			);
-			const stored = [{ id, name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength }];
+			const stored = [
+				{ id, name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength, message: row.id },
+				{ name: 'site.mp4', mime: 'video/mp4', bytes: 9, message: row.id }
+			];
 			expect(yield* inputs).toEqual(stored);
 			yield* t.receive(
 				'desk_wa',

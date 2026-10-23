@@ -361,7 +361,6 @@ const EXPECTED: { [table: string]: Shape } = {
 			addressed: 'boolean',
 			refused: 'text',
 			email: 'jsonb',
-			files: 'jsonb not null default []',
 			reply_to: 'text',
 			deleted_at: 'timestamptz',
 			edited_at: 'timestamptz',

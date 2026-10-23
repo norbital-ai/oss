@@ -33,7 +33,7 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 		return yield* refused(`Attach at most ${MODEL_FILES.count} files.`);
 	const ids = decoded.map((ref) => ref.id);
 	const rows = yield* db.rows(Stored, {
-		text: `SELECT id, name, mime, size FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)) AND field = 'sys_message.files' AND created_by = $2`,
+		text: `SELECT id, name, mime, size FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)) AND field IN ('sys_conversation.inputs', 'sys_conversation.outputs') AND created_by = $2`,
 		params: [JSON.stringify(ids), member]
 	});
 	const byId = new Map(rows.map((file) => [file.id, file]));

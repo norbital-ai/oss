@@ -1446,7 +1446,7 @@ export function catalogue(x: ToolContext): Tool[] {
 					if (
 						typeof field !== 'string' ||
 						!field.includes('.') ||
-						field === 'sys_message.files' ||
+						field.startsWith('sys_conversation.') ||
 						!(yield* readableFile(
 							{
 								manifest: x.engine.manifest,
@@ -2174,7 +2174,7 @@ export function catalogue(x: ToolContext): Tool[] {
 		);
 	return tools;
 }
-/** A file a tool made, stored as the member's (`sys_message.files`): the reference a file field takes and the panel offers. */
+/** A file a tool made, stored as the member's (`sys_conversation.outputs`): the reference a file field takes and the panel offers. */
 const storeFile = Effect.fn('Agents.storeFile')(function* (
 	x: ToolContext,
 	files: NonNullable<Engine['files']>,
@@ -2187,7 +2187,7 @@ const storeFile = Effect.fn('Agents.storeFile')(function* (
 	// one statement: the file and its place among the conversation's outputs
 	yield* x.engine.db.write({
 		text: `WITH f AS (INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, 'sys_message.files', $7::timestamptz, $8))
+		VALUES ($1, $2, $3, $4, $5, $6, 'sys_conversation.outputs', $7::timestamptz, $8))
 		UPDATE sys_conversation SET outputs = outputs || $9::jsonb WHERE id = $10`,
 		params: [
 			id,

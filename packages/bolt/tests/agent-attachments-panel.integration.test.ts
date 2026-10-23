@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// The agent panel's file control: a picked file uploads to `/__bolt/files/sys_message.files` on send and the posted
+// The agent panel's file control: a picked file uploads to `/__bolt/files/sys_conversation.inputs` on send and the posted
 // row carries it, shown by name in the transcript.
 import './setup-happy-dom.js';
 import { flushSync, mount, unmount } from 'svelte';
@@ -11,6 +11,7 @@ import Agent from '../src/shell/agent/Agent.svelte';
 import { liveBolt } from './support/live-bolt.ts';
 import { shellApi } from '../src/shell/runtime.ts';
 import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
+import { filesOf } from '../src/engine/conversations/store.ts';
 
 const manifest = Result.getOrThrow(
 	decodeManifest({
@@ -120,7 +121,10 @@ it.live('a picked file uploads on send and the posted row carries it', () =>
 				);
 				yield* t.settled();
 				const [row] = (yield* t.db.read([
-					{ text: `SELECT files FROM sys_message WHERE role = 'user'`, params: [] }
+					{
+						text: `SELECT ${filesOf('m')} AS files FROM sys_message m WHERE role = 'user'`,
+						params: []
+					}
 				]))[0]!.rows;
 				expect(row!['files']).toMatchObject([{ name: 'pump.png', mime: 'image/png', bytes: 3 }]);
 				expect(target.querySelector('[data-attached]')).toBeNull();

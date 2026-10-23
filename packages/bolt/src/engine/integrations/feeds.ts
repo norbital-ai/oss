@@ -13,6 +13,7 @@ import { Clock, Crypto, Effect, Layer, Predicate, Schema } from 'effect';
 import { localOf } from '@norbital-ai/std/zone';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Drivers } from '../ports.ts';
+import { filesOf } from '../conversations/store.ts';
 import {
 	Feeds,
 	Guest,
@@ -614,7 +615,7 @@ function makeFeeds(cfg: FeedsConfig) {
 				: 'chat');
 		const [res] = yield* db.read([
 			{
-				text: `SELECT m.provider_id, m.version, m.sender, m.sender_name, m.sent_at::text AS sent_at, m.text, m.email, m.files, m.reply_to,
+				text: `SELECT m.provider_id, m.version, m.sender, m.sender_name, m.sent_at::text AS sent_at, m.text, m.email, ${filesOf('m')} AS files, m.reply_to,
 				m.deleted_at IS NOT NULL AS deleted, c.thread, c.kind, c.participants FROM sys_message m LEFT JOIN sys_conversation c ON c.id = m.conversation
 			WHERE m.integration = $1 AND m.direction = 'inbound' AND m.id IN (SELECT jsonb_array_elements_text($2::jsonb)) ORDER BY m.seq`,
 				params: [s.inst.id, JSON.stringify(ids)]
