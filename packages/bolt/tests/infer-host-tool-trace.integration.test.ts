@@ -89,7 +89,7 @@ const manifest = {
 } satisfies EngineManifest;
 const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
-const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['web_search'], steps: 2 }));
+const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['web_search'], steps: 2, label: inv.number }));
 export default { automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
@@ -230,6 +230,25 @@ describe('sys_2.infer host tools', () => {
 							]
 						}),
 						step('submit', {})
+					]);
+					// the inference's whole transcript is a conversation of its own, labelled, finished, owned by nobody
+					const { rows: transcripts } = yield* t.db.write({
+						text: 'SELECT id, title, owner, status FROM sys_conversation WHERE run IS NOT NULL',
+						params: []
+					});
+					expect(transcripts).toMatchObject([
+						{ title: 'match · INV-1', owner: null, status: 'idle' }
+					]);
+					const { rows: messages } = yield* t.db.write({
+						text: 'SELECT role, author FROM sys_message WHERE conversation = $1 ORDER BY seq',
+						params: [String(transcripts[0]?.['id'])]
+					});
+					expect(messages).toEqual([
+						{ role: 'user', author: 'match' },
+						{ role: 'assistant', author: null },
+						{ role: 'tool', author: null },
+						{ role: 'assistant', author: null },
+						{ role: 'tool', author: null }
 					]);
 				})
 			)

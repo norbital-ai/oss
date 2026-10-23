@@ -583,6 +583,7 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 			collection: 'sys_message',
 			conversation: id,
 			thread: conversation.integration !== null,
+			...(conversation.run == null ? {} : { automation: true }),
 			...(Option.isSome(start) ? { from: start.value.seq } : {})
 		};
 	}

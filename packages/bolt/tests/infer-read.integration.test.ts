@@ -2,6 +2,7 @@
 // policies over several turns (the agent's `read` tool: grants, masks, bounded pages), then edits and submits; a
 // collection outside the policies is refused, a masked field never reaches the model, `steps` still caps the tool turns,
 // and a `runAs: 'trigger'` run cannot offer `read`.
+import { FacilityFailure } from '../src/decl/errors.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -129,7 +130,7 @@ const cassette = (steps: readonly Step[]) => {
 					requests.push(request);
 					const step = steps[index++];
 					return step === undefined
-						? Stream.fail(Port.failure('ai')(new Error('cassette exhausted')))
+						? Stream.fail(new FacilityFailure({ kind: 'invalid', message: 'cassette exhausted' }))
 						: step(request);
 				})
 			)

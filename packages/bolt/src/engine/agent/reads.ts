@@ -34,7 +34,8 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 				...(status === 'idle' || status === 'running' || status === 'stopped' ? { status } : {}),
 				rows: rows.flatMap((row) => transcriptRow(row, staff, read.thread) ?? []),
 				...(read.from === undefined ? {} : { from: read.from }),
-				...(read.thread ? { thread: true } : {})
+				...(read.thread ? { thread: true } : {}),
+				...(read.automation ? { automation: true } : {})
 			};
 		}
 		case 'conversations': {
@@ -44,9 +45,15 @@ export const agentRead = Effect.fn('Agents.read')(function* (
     JOIN sys_user u ON u.id = COALESCE(p."as"->'envoy'->>'member', p."as"->>'member', p.author) WHERE p.conversation = c.id
     ORDER BY p.seq LIMIT 1) END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
     (c.owner = $1 OR (c.integration IS NOT NULL AND (c.envoy IN (SELECT jsonb_array_elements_text($2::jsonb)) OR
-    EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id AND $1 IN (p.author, p."as"->>'member', p."as"->'envoy'->>'member')))))
+    EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id AND $1 IN (p.author, p."as"->>'member', p."as"->'envoy'->>'member'))))
+    OR (c.run IS NOT NULL AND $3))
     ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`,
-					params: [read.member, JSON.stringify(publicEnvoys(manifest))]
+					// an automation's inference transcripts are an administrator's to read
+					params: [
+						read.member,
+						JSON.stringify(publicEnvoys(manifest)),
+						reader.as === 'workspace' || reader.authority.admin
+					]
 				}
 			]);
 			const rows = yield* Schema.decodeUnknownEffect(

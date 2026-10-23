@@ -1,5 +1,5 @@
-// A conversation (§5.9, rules 57–63): an in-app agent thread, a sub-agent's, or one chat or mail thread of an
-// integration instance (`integration`, a relationship).
+// A conversation (§5.9, rules 57–63): an in-app agent thread, a sub-agent's, one chat or mail thread of an
+// integration instance (`integration`, a relationship), or an automation run's inference transcript (`run`).
 import { model } from '../../../decl/model.ts';
 
 export default model({
@@ -16,6 +16,8 @@ export default model({
 		/** Provider membership for personal sync, shared by the conversation rather than copied into every message. */
 		participants: { kind: 'json', optional: true },
 		parent: { kind: 'text', optional: true },
+		/** An automation run's inference (`ctx.ai.sys_2.infer`): its transcript, read-only, for administrators. */
+		run: { kind: 'text', optional: true },
 		status: { kind: 'text', default: 'idle' },
 		lease_until: { kind: 'instant', optional: true },
 		model: { kind: 'text', default: 'default' },

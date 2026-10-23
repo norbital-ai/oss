@@ -128,6 +128,8 @@
 		older = $state<AgentRow[]>([]);
 	/** The open conversation is an envoy's integration thread: read-only (rule 61). */
 	let thread = $state(false);
+	/** The open conversation is an automation's inference transcript: read-only, like a thread. */
+	let automation = $state(false);
 	let from = $state<number | null>(null),
 		edge = $state<{ first: number; more: boolean } | null>(null),
 		loadingOlder = $state(false);
@@ -248,6 +250,8 @@
 	 * direct messages, then each envoy group chat by its name. `order` keeps Web UI first and an envoy's DMs before its groups.
 	 */
 	function sourceOf(c: AgentConversation): { order: number; label: string } {
+		// an automation's inferences, after every conversation a person has
+		if (c.run != null) return { order: 3, label: t('Automations') };
 		if (c.integration === null) return { order: 0, label: t('Web UI') };
 		const name = envoys[c.envoy ?? ''] ?? human(c.envoy ?? c.integration);
 		return c.kind === 'group'
@@ -325,7 +329,7 @@
 	const transcript = liveEdge(() =>
 		conversation === null
 			? null
-			: bolt.live<{ rows: AgentRow[]; from?: number; thread?: true }>({
+			: bolt.live<{ rows: AgentRow[]; from?: number; thread?: true; automation?: true }>({
 					read: { m: 'transcript', a: [conversation, { tail: WINDOW }] }
 				})
 	);
@@ -334,6 +338,7 @@
 		(id) => {
 			onConversation?.(id);
 			thread = false;
+			automation = false;
 		}
 	);
 	watch(
@@ -344,6 +349,7 @@
 			live = [...value.rows];
 			from = value.from ?? null;
 			thread = value.thread === true;
+			automation = value.automation === true;
 			if (
 				outbox.some(
 					(item) => item.stored !== undefined && value.rows.some((row) => row.id === item.stored)
@@ -1772,7 +1778,10 @@
 														aria-label={named}
 														title={named}
 														data-failed-steps
-														><Icon name="lucide:circle-alert" class="size-3 text-destructive" /></span
+														><Icon
+															name="lucide:circle-alert"
+															class="size-3 text-destructive"
+														/></span
 													>{/if}
 												<Icon
 													name="lucide:chevron-right"
@@ -2109,12 +2118,14 @@
 
 				{@render transcriptTab()}
 			</div>
-			{#if thread}
+			{#if thread || automation}
 				<p
 					class="shrink-0 border-t border-border px-4 py-3 text-center text-xs text-muted-foreground"
 					data-agent-read-only
 				>
-					{t('An integration conversation, answered by its envoy. Read-only here.')}
+					{automation
+						? t("An automation's inference, recorded as it ran. Read-only here.")
+						: t('An integration conversation, answered by its envoy. Read-only here.')}
 				</p>
 			{:else}
 				{#if drafting && current?.plan}

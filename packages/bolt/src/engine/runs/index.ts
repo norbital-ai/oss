@@ -28,6 +28,7 @@ import { inferFacility, type InferTool } from '../agent/ai.ts';
 import { readTool } from '../agent/tools.ts';
 import {
 	LIMITS,
+	type AiMessage,
 	type Authority,
 	type Bindings,
 	type CrossAnswer,
@@ -73,6 +74,7 @@ import { encodeWire } from '@norbital-ai/std/wire';
 import { decodeInput } from '../callables/decode.ts';
 import { DecisionTrace, readableFile, storedFiles } from '../decisions/index.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
+import { preview } from '../conversations/store.ts';
 import { instanceRequest } from '../integrations/instances.ts';
 import { feedsOf } from '../integrations/feeds.ts';
 import { verifiedWebhook, type WebhookRequest } from './webhook.ts';
@@ -829,9 +831,63 @@ export const RunsLive = Layer.effect(
 										)
 									)
 						});
-						return yield* inferFacility(ai, { load: facilities.fileLoader, onDraft: recorded })(
-							call,
-							[...records, ...tools].map(traced)
+						// the inference's whole transcript is a conversation of its own, as an agent's is: labelled, read-only, for
+						// administrators (the run's own `session` names it)
+						const named = Schema.decodeUnknownOption(
+							Schema.Struct({
+								label: Schema.optionalKey(Schema.String),
+								model: Schema.optionalKey(Schema.String)
+							})
+						)(call.args[0]);
+						const label = Option.isSome(named) ? named.value.label : undefined;
+						yield* db
+							.write({
+								text: "INSERT INTO sys_conversation (id, title, run, status, model) VALUES ($1, $2, $3, 'running', $4)",
+								params: [
+									session,
+									label === undefined ? run.automation : `${run.automation} · ${label}`,
+									run.id,
+									(Option.isSome(named) ? named.value.model : undefined) ?? 'default'
+								]
+							})
+							.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+						const transcribe = (message: AiMessage) => {
+							const content = message.content;
+							const text =
+								typeof content === 'string'
+									? content
+									: Predicate.isObject(content) && typeof content['text'] === 'string'
+										? content['text']
+										: JSON.stringify(content);
+							return db
+								.write({
+									text: "INSERT INTO sys_message (id, conversation, role, content, text, preview, mode, author) VALUES (gen_random_uuid()::text, $1, $2, $3::jsonb, $4, $5, 'agent', $6)",
+									// the automation asked: its prompt is written by it, as a member writes theirs
+									params: [
+										session,
+										message.role,
+										// a prompt is a bare string: encoded, it is JSON like every other content
+										JSON.stringify(content),
+										text,
+										preview(text),
+										message.role === 'user' ? run.automation : null
+									]
+								})
+								.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+						};
+						return yield* inferFacility(ai, {
+							load: facilities.fileLoader,
+							onDraft: recorded,
+							onMessage: transcribe
+						})(call, [...records, ...tools].map(traced)).pipe(
+							Effect.ensuring(
+								db
+									.write({
+										text: "UPDATE sys_conversation SET status = 'idle', updated_at = now() WHERE id = $1",
+										params: [session]
+									})
+									.pipe(Effect.ignore)
+							)
 						);
 					}).pipe(
 						Effect.catch((error) =>

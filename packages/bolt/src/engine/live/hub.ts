@@ -543,7 +543,7 @@ export const LiveHubLive = Layer.effect(
 				decide: (a, view, captured) =>
 					view.read.kind === 'conversations' &&
 					captured.collection === view.read.collection &&
-					listed(captured.new ?? captured.old, view.read.member, publicEnvoys())
+					listed(captured.new ?? captured.old, view.read.member, publicEnvoys(), a.admin)
 						? 'hit'
 						: 'skip',
 				resolve: (a, view, captured) => ({

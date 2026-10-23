@@ -450,7 +450,8 @@ const InferArgs = Schema.Struct({
 	output: Schema.optionalKey(InferOutput),
 	rules: Schema.optionalKey(Rules),
 	initial: Schema.optionalKey(Schema.Json),
-	steps: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_STEPS })))
+	steps: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_STEPS }))),
+	label: Schema.optionalKey(Schema.String)
 });
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
 function schemaChecker(output: SchemaOutput): (value: Json) => string[] {
@@ -585,6 +586,8 @@ export function inferFacility(
 		wallMs?: number;
 		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
+		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
+		onMessage?: (message: AiMessage) => Effect.Effect<void>;
 	} = {}
 ) {
 	return Effect.fn('Ai.inferFacility')(function* (
@@ -751,14 +754,27 @@ export function inferFacility(
 					);
 		};
 
+		// the transcript reaches the host as it grows: each batch's new messages before every model turn and at its end
+		const recorded = new WeakMap<AiMessage[], number>();
+		const record = (messages: AiMessage[]) =>
+			Effect.suspend(() => {
+				const from = recorded.get(messages) ?? 0;
+				recorded.set(messages, messages.length);
+				return options.onMessage === undefined
+					? Effect.void
+					: Effect.forEach(messages.slice(from), options.onMessage, { discard: true });
+			});
+		const read = (files: { mime: string; bytes: Uint8Array }[], prompt: string, final: boolean) => {
+			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
+			return batch(files, messages, final).pipe(Effect.ensuring(record(messages)));
+		};
 		/** One conversation over one batch of files; a batch before the last hands back its draft unchecked. */
-		const read = Effect.fn('Ai.inferBatch')(function* (
+		const batch = Effect.fn('Ai.inferBatch')(function* (
 			files: { mime: string; bytes: Uint8Array }[],
-			prompt: string,
+			messages: AiMessage[],
 			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
-			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
 			const answerBy = (yield* Clock.currentTimeMillis) + INFER_MS * ANSWER_BY;
 			let text = '',
 				continuation: string | undefined,
@@ -784,6 +800,7 @@ export function inferFacility(
 					);
 				}
 				const tooling = spent ? finishing : offered;
+				yield* record(messages);
 				const r = yield* modelCall(
 					ai,
 					{

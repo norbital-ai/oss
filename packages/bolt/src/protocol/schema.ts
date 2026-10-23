@@ -385,7 +385,9 @@ export const AgentConversation = Schema.Struct({
 	kind: Schema.NullOr(Schema.Literals(['dm', 'group'])),
 	thread: Schema.NullOr(Schema.String),
 	/** A DM's member by name when the sender is one; null otherwise. */
-	peer: Schema.NullOr(Schema.String)
+	peer: Schema.NullOr(Schema.String),
+	/** The automation run whose inference this transcript records: read-only, an administrator's to read. */
+	run: Schema.optionalKey(Schema.NullOr(Schema.String))
 });
 export type AgentConversation = typeof AgentConversation.Type;
 

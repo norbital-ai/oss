@@ -573,6 +573,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Team: '团队',
 	'An integration conversation, answered by its envoy. Read-only here.':
 		'集成对话，由代理回复。此处只读。',
+	"An automation's inference, recorded as it ran. Read-only here.":
+		'自动化的推理记录，按运行过程保存。此处只读。',
 	'The outcome is unknown; refresh to see it.': '结果未知；请刷新查看。',
 	'The page {page} could not be loaded:': '页面 {page} 无法加载：',
 	'The request failed.': '请求失败。',

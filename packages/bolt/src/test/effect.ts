@@ -53,7 +53,14 @@ import type {
 	StoredMember,
 	WorkspaceReads
 } from '../decl/ctx.ts';
-import { type ActFailure, ActRefused, ActUnknown, actFailure, ReadFailed } from '../decl/errors.ts';
+import {
+	type ActFailure,
+	ActRefused,
+	ActUnknown,
+	actFailure,
+	FacilityFailure,
+	ReadFailed
+} from '../decl/errors.ts';
 import type { Is, ReadableName, WorkspaceReadField } from '../decl/names.ts';
 import { nullableOfExpr } from '../decl/model.ts';
 import type { StartInput } from '../decl/runtime/facilities.ts';
@@ -1042,12 +1049,12 @@ export const CassetteAi = (options: CassetteOptions) =>
 					requests.push(request);
 					const next = turns.get(request.model)?.shift();
 					if (next === undefined)
+						// an exhausted cassette is the fixture's own refusal, never a provider blip to wait out
 						return Stream.fail(
-							Port.failure('ai')(
-								new Error(
-									`cassette: '${request.model}' has no turn left (${requests.length} requests played)`
-								)
-							)
+							new FacilityFailure({
+								kind: 'invalid',
+								message: `cassette: '${request.model}' has no turn left (${requests.length} requests played)`
+							})
 						);
 					if (options.firstPartMs !== undefined) yield* Effect.sleep(options.firstPartMs);
 					const events: AiEvent[] =

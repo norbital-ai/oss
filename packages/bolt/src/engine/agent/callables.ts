@@ -26,9 +26,10 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 		manifest = yield* Manifest;
 	const member = authority.actor.kind === 'member' ? authority.actor.id : null;
 	const row = yield* db.one(Conversation, {
-		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.parent, c.status, c.model, c.plan, c.goals
+		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.parent, c.status, c.model, c.plan, c.goals, c.run
   FROM sys_conversation c WHERE c.id = $1 AND
   ((c.integration IS NULL AND c.owner IS NOT NULL AND ($2 OR c.owner = $3)) OR
+   (c.run IS NOT NULL AND $2) OR
    (c.integration IS NOT NULL AND $3 IS NOT NULL AND (($4 AND c.envoy IN (SELECT jsonb_array_elements_text($5::jsonb))) OR
     EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND $3 IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member')))))`,
 		params: [

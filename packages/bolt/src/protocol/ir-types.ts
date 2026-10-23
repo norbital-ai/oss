@@ -227,6 +227,8 @@ export type ReadIR =
 			readonly collection: 'sys_message';
 			readonly conversation: string;
 			readonly thread: boolean;
+			/** An automation run's inference transcript: read-only. */
+			readonly automation?: true | undefined;
 			readonly from?: number | undefined;
 	  }
 	/** The shell inbox: own notices, with an optional caller-filtered open request list. */

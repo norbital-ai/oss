@@ -250,6 +250,11 @@ type InferRequest<O, Tools> = {
 	 * after 24 of the batch's 30 minutes, one final turn offers no host tools and must answer; otherwise the call fails `invalid`. Absent: no step budget.
 	 */
 	steps?: number;
+	/**
+	 * Names this inference's transcript: an administrator reads it in the agent panel, read-only, as
+	 * `<automation> · <label>` (e.g. `MY · contribution`).
+	 */
+	label?: string;
 } & (Tools extends true
 	? {
 			/**

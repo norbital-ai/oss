@@ -53,7 +53,9 @@ export const Conversation = Schema.Struct({
 	status: Schema.Literals(['idle', 'running', 'stopped']),
 	model: Schema.String,
 	plan: Schema.NullOr(PlanSchema),
-	goals: Schema.NullOr(Schema.Array(GoalSchema))
+	goals: Schema.NullOr(Schema.Array(GoalSchema)),
+	/** The automation run whose inference this is (its transcript, read-only). */
+	run: Schema.optionalKey(Schema.NullOr(Schema.String))
 }).annotate({ identifier: 'sys_conversation' });
 export type ConversationRow = typeof Conversation.Type;
 /** What a row is beyond its role; absent on ordinary messages. */
@@ -234,13 +236,16 @@ export const CONVERSATIONS = 100;
 export const listed = (
 	r: RowData | null,
 	member: string,
-	publicEnvoys: readonly string[] = []
+	publicEnvoys: readonly string[] = [],
+	admin = false
 ): boolean =>
 	r !== null &&
 	(r['parent'] ?? null) === null &&
-	((r['integration'] ?? null) === null
-		? r['owner'] === member
-		: publicEnvoys.includes(String(r['envoy'] ?? '')));
+	((r['run'] ?? null) !== null
+		? admin
+		: (r['integration'] ?? null) === null
+			? r['owner'] === member
+			: publicEnvoys.includes(String(r['envoy'] ?? '')));
 /** A `sys_conversation` image as the list shows it, so a live patch matches a re-read. */
 export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	id: r['id']!,
@@ -254,6 +259,8 @@ export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	// ones. `integration` (the instance) is null exactly when the conversation is the member's own.
 	envoy: r['envoy'] ?? null,
 	integration: r['integration'] ?? null,
+	// an automation run's inference transcript: labelled by its title, read-only
+	run: r['run'] ?? null,
 	// an instance thread's own facts: a direct message or a group chat, and the provider's thread (the peer or the group)
 	kind: r['integration'] == null ? null : (r['kind'] ?? null),
 	thread: r['thread'] ?? null,
