@@ -64,6 +64,10 @@ export function isJsonSchema(value: unknown): value is JsonSchema {
 	);
 }
 
+/** A JSON Schema document: an object naming its dialect in `$schema`, the keyword by which a value says it is a schema. */
+export const isJsonSchemaDocument = (value: unknown): value is Exclude<JsonSchema, boolean> =>
+	isRecord(value) && Predicate.isString(value.$schema) && isJsonSchema(value);
+
 const COMPOSITIONS = [
 	'allOf',
 	'anyOf',

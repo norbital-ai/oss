@@ -34,10 +34,12 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { cn, uiText } from '../primitives/utils.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { arcOf, currencyOf, format, isMasked, shownKind } from './kind.js';
+	import { arcOf, currencyOf, format, inferKind, isMasked, shownKind, wideKind } from './kind.js';
 	import { KINDS } from './registry.js';
 	import Self from './show.svelte';
 	import StateBadge from './state-badge.svelte';
+	import JsonSchemaMatrix from './json-schema-matrix.svelte';
+	import { isJsonSchemaDocument } from './json-schema.js';
 	import Picker from './picker.svelte';
 
 	let {
@@ -160,17 +162,21 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	>
 {:else if shape !== undefined}
 	<Self kind={shape} value={v} {name} {row} {readonly} {id} class={className} />
-{:else if kind.kind === 'object' && object !== null}
+{:else if kind.kind === 'object' && object !== null && readonly}
+	<!-- short values flow across the width, label over value; a structure, code or long text takes a whole row -->
 	<dl
 		{id}
-		class={cn(
-			'grid gap-x-3 gap-y-1 text-sm',
-			readonly
-				? 'grid-cols-1 sm:grid-cols-[minmax(0,max-content)_minmax(0,1fr)] sm:gap-y-1.5'
-				: 'grid-cols-[auto_1fr]',
-			className
-		)}
+		class={cn('grid grid-cols-[repeat(auto-fill,minmax(min(12rem,100%),1fr))] gap-x-6 gap-y-3 text-sm', className)}
 	>
+		{#each Object.entries(kind.fields).filter(([, k]) => !k.hidden) as [f, k] (f)}
+			<div class={cn('grid min-w-0 content-start gap-0.5', wideKind(k) && 'col-span-full')}>
+				<dt class="text-xs text-muted-foreground">{k.label ?? humanize(f)}</dt>
+				<dd class="min-w-0"><Self kind={k} value={object[f]} name={f} row={object} {readonly} /></dd>
+			</div>
+		{/each}
+	</dl>
+{:else if kind.kind === 'object' && object !== null}
+	<dl {id} class={cn('grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm', className)}>
 		{#each Object.entries(kind.fields).filter(([, k]) => !k.hidden) as [f, k] (f)}
 			<dt class="text-muted-foreground">{k.label ?? humanize(f)}</dt>
 			<dd class="min-w-0"><Self kind={k} value={object[f]} name={f} row={object} {readonly} /></dd>
@@ -186,8 +192,36 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		{id}
 		class={className}
 	/>
+{:else if kind.kind === 'list' && Arr.isArray<Value>(v) && kind.of.kind === 'object' && !Object.values(kind.of.fields).some(wideKind)}
+	<!-- a list of flat records is a table: a column per field, a row per item -->
+	{@const columns = Object.entries(kind.of.fields).filter(([, k]) => !k.hidden)}
+	<div {id} class={cn('min-w-0 overflow-x-auto rounded-md border border-border', className)}>
+		<table class="w-full text-sm">
+			<thead class="bg-muted/50 text-left text-muted-foreground">
+				<tr>
+					{#each columns as [f, k] (f)}<th class="px-3 py-2 font-medium whitespace-nowrap"
+							>{k.label ?? humanize(f)}</th
+						>{/each}
+				</tr>
+			</thead>
+			<tbody>
+				{#each v as item, i (i)}
+					{@const cells = item !== null && typeof item === 'object' && !Arr.isArray<Value>(item) && !(item instanceof Decimal) ? item : {}}
+					<tr class="border-t border-border align-top">
+						{#each columns as [f, k] (f)}<td class="px-3 py-2"
+								><Self kind={k} value={cells[f]} name={f} row={cells} /></td
+							>{/each}
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+{:else if kind.kind === 'list' && Arr.isArray<Value>(v) && !wideKind(kind.of)}
+	<ul {id} class={cn('flex flex-wrap gap-x-3 gap-y-1', className)}>
+		{#each v as item, i (i)}<li><Self kind={kind.of} value={item} {name} /></li>{/each}
+	</ul>
 {:else if kind.kind === 'list' && Arr.isArray<Value>(v)}
-	<ul {id} class={cn('grid gap-1', className)}>
+	<ul {id} class={cn('grid gap-3', className)}>
 		{#each v as item, i (i)}<li><Self kind={kind.of} value={item} {name} {readonly} /></li>{/each}
 	</ul>
 {:else if kind.kind === 'record' && object !== null}
@@ -202,14 +236,11 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		{id}
 		class={className}
 	/>
+{:else if kind.kind === 'json' && isJsonSchemaDocument(v)}
+	<JsonSchemaMatrix value={v} {id} />
 {:else if kind.kind === 'json'}
-	<pre
-		{id}
-		class={cn('max-h-64 overflow-auto rounded-sm bg-muted p-2 text-xs', className)}>{JSON.stringify(
-			v,
-			null,
-			2
-		)}</pre>
+	<!-- undeclared JSON shows by what it holds: fields, tables and values, never raw text -->
+	<Self kind={inferKind(v)} value={v} {name} {row} {readonly} {id} class={className} />
 {:else if readonly}
 	<CopyText {id} {text} class={numeric ? 'tabular-nums' : undefined}>{@render inline()}</CopyText>
 {:else}

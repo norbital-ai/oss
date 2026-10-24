@@ -971,7 +971,7 @@
 {#snippet selection(rows: readonly RowIn<S>[])}
 	{@const all = pageAll(rows)}
 	<div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-1" data-selection>
-		<label class="inline-flex items-center gap-2 @3xl:hidden">
+		<label class="inline-flex items-center gap-2 md:hidden">
 			<input
 				type="checkbox"
 				checked={all}
@@ -1104,7 +1104,7 @@
 					<div
 						class={[
 							'min-h-0 flex-1 overflow-auto rounded-t-md',
-							layout !== 'grid' && !(kind === 'local' && onChange) && 'hidden @3xl:block'
+							layout !== 'grid' && !(kind === 'local' && onChange) && 'hidden md:block'
 						]}
 						data-table-wide
 					>
@@ -1357,7 +1357,7 @@
 					</div>
 					{#if layout !== 'grid' && !(kind === 'local' && onChange)}
 						<ul
-							class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md @3xl:hidden"
+							class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md md:hidden"
 							data-table-list
 						>
 							{#if narrow.on}<li

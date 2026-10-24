@@ -1,6 +1,6 @@
 <!--
 @component
-Edits a JSON Schema value compactly, laid out by the schema itself: an object is a column of label | control rows, a
+Edits a JSON Schema value compactly, laid out by the schema itself: an object is a Field | Value matrix of label | control rows, a
 nested object an indented group of its own rows, an array of flat objects an editable table (a column per property, a
 row per item) and any other array a numbered list. Leaves dispatch through `Editor` and the workspace datatype
 registry; unsupported shapes keep the raw JSON editor.
@@ -168,14 +168,29 @@ registry; unsupported shapes keep the raw JSON editor.
 {/snippet}
 
 {#snippet rows(fields: readonly Column[])}
-	<div class="@container grid min-w-0 divide-y divide-border">
+	<!-- the schema matrix's look with each type cell a control: the outermost object is a bordered Field | Value table -->
+	<div
+		class={[
+			'@container grid min-w-0 divide-y divide-border',
+			depth === 0 && 'rounded-md border border-border'
+		]}
+	>
+		{#if depth === 0}
+			<div
+				class="hidden gap-x-3 rounded-t-md bg-muted/50 px-3 py-2 text-sm font-medium text-muted-foreground @md:grid @md:grid-cols-[minmax(8rem,16rem)_minmax(0,1fr)]"
+				aria-hidden="true"
+			>
+				<span>{t('schemaField')}</span><span>{t('schemaValue')}</span>
+			</div>
+		{/if}
 		{#each fields as field (field.name)}
 			{@const child = specOf(field.schema)}
 			{@const nested = jsonSchemaKind(field.schema).kind === 'object'}
 			<div
 				class={[
 					'grid min-w-0 gap-x-3 gap-y-1 py-1.5',
-					!nested && '@md:grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)]'
+					depth === 0 && 'px-3',
+					!nested && '@md:grid-cols-[minmax(8rem,16rem)_minmax(0,1fr)]'
 				]}
 				data-schema-field={path(field.name)}
 			>

@@ -33,7 +33,7 @@ Edits a structured value by its kind literal: an object's fields, a list's items
 	import { cn, uiText } from '../primitives/utils.js';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Editor from './editor.svelte';
-	import { armValue, initial } from './kind.js';
+	import { armValue, initial, wideKind } from './kind.js';
 	import Self from './schema-editor.svelte';
 
 	let { kind, value, onChange, name = '', disabled = false, errors }: SchemaEditorProps = $props();
@@ -106,7 +106,7 @@ Edits a structured value by its kind literal: an object's fields, a list's items
 	{:else if kind.kind === 'union' && 'arms' in kind}
 		{@const tag = typeof obj[kind.by] === 'string' ? String(obj[kind.by]) : ''}
 		<Combobox
-			options={Object.keys(kind.arms).map((arm) => ({ value: arm, label: arm.replace(/_/g, ' ') }))}
+			options={Object.keys(kind.arms).map((arm) => ({ value: arm, label: humanize(arm) }))}
 			value={tag || null}
 			onChange={(arm) => {
 				if (arm !== null) onChange(armValue(kind, arm));
@@ -125,6 +125,72 @@ Edits a structured value by its kind literal: an object's fields, a list's items
 				{disabled}
 				{errors}
 			/>{/if}
+	{:else if kind.kind === 'list' && kind.of.kind === 'object' && !Object.values(kind.of.fields).some(wideKind)}
+		<!-- a list of flat records edits as a table: a column per field, a row per item -->
+		{@const columns = Object.entries(kind.of.fields).filter(([, k]) => !k.hidden)}
+		{#if list.length > 0}
+			<div class="min-w-0 overflow-x-auto rounded-md border border-border">
+				<table class="w-full text-sm">
+					<thead class="bg-muted/50 text-left text-muted-foreground">
+						<tr>
+							{#each columns as [f, k] (f)}<th class="px-2 py-1.5 font-medium whitespace-nowrap"
+									>{title(f, k)}</th
+								>{/each}
+							{#if !disabled}<th class="w-px"><span class="sr-only">{t('remove')}</span></th>{/if}
+						</tr>
+					</thead>
+					<tbody>
+						{#each list as item, i (i)}
+							{@const cells =
+								typeof item === 'object' &&
+								item !== null &&
+								!Arr.isArray<Value>(item) &&
+								!(item instanceof Decimal)
+									? item
+									: {}}
+							<tr class="border-t border-border align-top">
+								{#each columns as [f, k] (f)}
+									<td class={['px-1 py-1', k.kind !== 'bool' && 'min-w-32']}>
+										<label for={at(`${i}.${f}`)} class="sr-only">{title(f, k)} {i + 1}</label>
+										<Editor
+											kind={k}
+											value={cells[f] ?? null}
+											onChange={(x) =>
+												onChange(list.map((y, j) => (j === i ? { ...cells, [f]: x } : y)))}
+											name={at(`${i}.${f}`)}
+											id={at(`${i}.${f}`)}
+											{disabled}
+											{errors}
+											row={cells}
+										/>
+									</td>
+								{/each}
+								{#if !disabled}
+									<td class="px-1 py-1">
+										<Button
+											variant="ghost"
+											size="icon"
+											aria-label={`${t('remove')} ${i + 1}`}
+											onclick={() => onChange(list.filter((_, j) => j !== i))}
+											><Icon icon="lucide:trash-2" class="size-3.5" /></Button
+										>
+									</td>
+								{/if}
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+		{#if !disabled && (kind.max === undefined || list.length < kind.max)}
+			<Button
+				variant="outline"
+				size="sm"
+				class="justify-self-start"
+				onclick={() => onChange([...list, initial(kind.of)])}
+				><Icon icon="lucide:plus" class="size-3.5" />{t('add')}</Button
+			>
+		{/if}
 	{:else if kind.kind === 'list'}
 		{#each list as item, i (i)}
 			<div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
@@ -173,7 +239,7 @@ Edits a structured value by its kind literal: an object's fields, a list's items
 		{/if}
 	{:else if kind.kind === 'record'}
 		{#each Object.entries(obj) as [key, item] (key)}
-			<div class="grid grid-cols-[8rem_minmax(0,1fr)_auto] items-start gap-2">
+			<div class="grid grid-cols-[minmax(8rem,16rem)_minmax(0,1fr)_auto] items-start gap-2">
 				<span class="truncate pt-2 text-sm font-medium">{key}</span>
 				<div class="min-w-0">
 					<Editor

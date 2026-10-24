@@ -32,7 +32,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		level?: TabLevel;
 		/**
 		 * `vertical`: a rail of tabs on the left, the body on the right (a compact scroller on a narrow container). Omitted,
-		 * a nested strip (level 2 or deeper) of more than two tabs is vertical; a top strip, or two tabs, is horizontal.
+		 * horizontal: the body keeps the full width.
 		 */
 		orientation?: 'horizontal' | 'vertical';
 	};
@@ -77,10 +77,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
 	const placed = $derived(tabLevel(parent?.level, explicit));
 	const variant = $derived(tabVariant(placed.level));
-	const vertical = $derived(
-		(orientation ?? (placed.level >= 2 && tabs.length > 2 ? 'vertical' : 'horizontal')) ===
-			'vertical'
-	);
+	const vertical = $derived(orientation === 'vertical');
 	// `shown`: every tab name and title of the strips around a body, so a record view inside one does not repeat them
 	setContext(TAB_LEVEL, {
 		get level() {

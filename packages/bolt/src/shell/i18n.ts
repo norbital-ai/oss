@@ -131,7 +131,25 @@ const UI_ZH: { readonly [k in UiTextKey]: string } = {
 	searchView: '此视图无法显示排序结果：请在表格中打开',
 	searchNone: '此处没有搜索索引',
 	searchFields: '搜索 {fields}',
-	searchCommands: '输入 / 使用命令'
+	searchCommands: '输入 / 使用命令',
+	schemaField: '字段',
+	schemaKey: '键',
+	schemaKeyHelp: '以点分隔的键；[] 表示列表项，例如 lines[].amount',
+	schemaType: '类型',
+	schemaLabel: '标签',
+	schemaValues: '允许的值',
+	schemaValuesHelp: '以逗号分隔：a, b, c',
+	schemaHelp: '说明',
+	schemaValue: '值',
+	schemaNone: '没有字段',
+	schemaItem: '每一项',
+	typeString: '文本',
+	typeDate: '日期',
+	typeNumber: '数字',
+	typeInteger: '整数',
+	typeBoolean: '是 / 否',
+	typeObject: '分组',
+	typeArray: '列表'
 };
 
 export const SHELL_ZH: { readonly [key: string]: string } = {

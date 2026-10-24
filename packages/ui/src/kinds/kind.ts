@@ -163,6 +163,38 @@ export const shownKind = (kind: Kind): Kind =>
 				...(kind.money.currency === undefined ? {} : { currency: kind.money.currency })
 			}
 		: kind;
+/** A plain object value (not a list, not a `Decimal`). */
+const plainObject = (v: Value): v is { readonly [k: string]: Value } =>
+	typeof v === 'object' && v !== null && !Arr.isArray<Value>(v) && !(v instanceof Decimal);
+/**
+ * The kind an undeclared JSON value shows as: scalars by their type, objects field by field, and a list of objects as
+ * one object kind over every key its items hold (so it shows as a table).
+ */
+export function inferKind(v: Value): Kind {
+	if (typeof v === 'string') return { kind: 'text' };
+	if (typeof v === 'number') return { kind: 'number' };
+	if (typeof v === 'boolean') return { kind: 'bool' };
+	if (Arr.isArray<Value>(v)) {
+		if (v.length === 0 || !v.every(plainObject)) return { kind: 'list', of: { kind: 'json' } };
+		const fields: { [k: string]: Kind } = {};
+		for (const item of v)
+			for (const [k, held] of Object.entries(item))
+				if (fields[k] === undefined || held !== null) fields[k] = inferKind(held);
+		return { kind: 'list', of: { kind: 'object', fields } };
+	}
+	if (plainObject(v))
+		return {
+			kind: 'object',
+			fields: Object.fromEntries(Object.entries(v).map(([k, held]) => [k, inferKind(held)]))
+		};
+	return { kind: 'json' };
+}
+/** Whether a value of this kind needs a whole row: structures, maps, code and long-form text. */
+export const wideKind = (kind: Kind): boolean =>
+	(kind.kind === 'list' && wideKind(kind.of)) ||
+	['object', 'record', 'union', 'json', 'custom', 'point'].includes(kind.kind) ||
+	(kind.kind === 'text' && (kind.format === 'cel' || kind.format === 'markdown'));
+
 /** Named fields of a row as one line by kind (a record's title, a subtitle): `Q-1 · Jan 2, 2026 · On hold`; empties left out. */
 export function fieldsText(
 	fields: Fields,

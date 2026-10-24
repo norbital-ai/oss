@@ -1,11 +1,11 @@
 <!--
 @component
 One field of the enclosing `Form` by name: its label, help, the kind's editor (or an `editor` snippet) and its error.
-Readonly, it is a label over the value as copyable text: no field chrome, and no `editor` snippet.
+Readonly, it is a label over the value as copyable text (or a `view` snippet): no field chrome, and no `editor` snippet.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import { required, type Value, type Kind } from '../kinds/kind.js';
+	import { required, wideKind, type Value, type Kind } from '../kinds/kind.js';
 
 	/** What a `Field editor` snippet receives: the field's value and kind, typed by context in the generated alias. */
 	export type FieldEditor = {
@@ -28,6 +28,8 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 		help?: string;
 		helpPosition?: 'below' | 'label';
 		editor?: Snippet<[FieldEditor]>;
+		/** Renders the value when the field is readonly, in place of the kind's display (a value shaped by another record's schema, say). */
+		view?: Snippet<[Pick<FieldEditor, 'value' | 'kind' | 'name' | 'id'>]>;
 		address?: string;
 		class?: string;
 		/** Overrides the enclosing `Form`/`Fieldset`; a field the viewer cannot write (no update grant, a state lock) is readonly whatever this says. */
@@ -54,6 +56,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 		help,
 		helpPosition = 'below',
 		editor,
+		view,
 		address,
 		class: className,
 		readonly,
@@ -74,6 +77,8 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 		field !== undefined && required(field.kind) && field.kind.kind !== 'bool'
 	);
 	const id = $props.id();
+	// a structure, code or long text takes its grid's whole row; short fields flow beside each other
+	const wide = $derived(field !== undefined && wideKind(field.kind));
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
 	// what the engine knows the viewer cannot write is a floor no prop lifts (nor does it lift an enclosing readonly); a
@@ -104,7 +109,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	<!-- hidden: the host fills it -->
 {:else if controls.readonly}
 	<div
-		class={cn('grid content-start gap-1', className)}
+		class={cn('grid min-w-0 content-start gap-1', wide && 'col-span-full', className)}
 		data-field={name}
 		data-readonly
 		role="group"
@@ -118,15 +123,19 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 				)}{#if helpPosition === 'label' && (help ?? field.kind.help)}
 				<span class="text-meta font-normal">{help ?? field.kind.help}</span>{/if}</span
 		>
-		<Show
-			readonly
-			kind={field.kind}
-			value={form.get(name)}
-			{name}
-			row={form.row}
-			relation={field.relation}
-			{address}
-		/>
+		{#if view}
+			{@render view({ value: form.get(name), kind: field.kind, name, id: `${id}-${name}` })}
+		{:else}
+			<Show
+				readonly
+				kind={field.kind}
+				value={form.get(name)}
+				{name}
+				row={form.row}
+				relation={field.relation}
+				{address}
+			/>
+		{/if}
 		{#if form.mode !== 'view' && form.spec.readonly !== true}
 			{#each [...new Set( [...form.restrictions(name), ...(field.reason === undefined ? [] : [field.reason])] )] as reason (reason)}<p
 					class="text-meta"
@@ -145,7 +154,7 @@ Readonly, it is a label over the value as copyable text: no field chrome, and no
 	{@const error = rawError === undefined ? undefined : bolt.t(rawError)}
 	<!-- the control the label names says it is required, whether the kind's editor or an `editor` snippet renders it -->
 	<div
-		class={cn('grid content-start gap-2', className)}
+		class={cn('grid min-w-0 content-start gap-2', wide && 'col-span-full', className)}
 		data-field={name}
 		{@attach (node) => {
 			const control = node.querySelector(`#${CSS.escape(`${id}-${name}`)}`);

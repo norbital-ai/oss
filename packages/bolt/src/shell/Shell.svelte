@@ -776,7 +776,7 @@
 		</Cover>
 	{:else if portal}
 		<Toaster />
-		<div class="h-dvh min-h-0 overflow-clip">{@render content()}</div>
+		<div class="relative h-dvh min-h-0 overflow-clip">{@render content()}</div>
 	{:else}
 		{#snippet navigation(open: boolean)}
 			<Nav
@@ -831,7 +831,9 @@
 			</Nav>
 		{/snippet}
 		<Toaster />
-		<div class="flex h-dvh min-h-0 overflow-clip">
+		<!-- relative: an out-of-flow descendant without a positioned ancestor (an sr-only label deep in a scroll port) is
+		     clipped here instead of growing the document past the viewport -->
+		<div class="relative flex h-dvh min-h-0 overflow-clip">
 			{#if !narrow.current}
 				<!-- Sidebar: 16rem, or a 3rem icon rail; the rail on its edge toggles it (⌘B) -->
 				<aside

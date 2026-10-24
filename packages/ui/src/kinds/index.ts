@@ -51,4 +51,15 @@ export {
 } from './kind.js';
 export { KINDS, presentation, sortable } from './registry.js';
 export { default as JsonSchemaForm, type JsonSchemaFormProps } from './json-schema-form.svelte';
-export { isJsonSchema, jsonSchemaKind, resolveJsonSchema, type JsonSchema } from './json-schema.js';
+export {
+	isJsonSchema,
+	isJsonSchemaDocument,
+	jsonSchemaKind,
+	resolveJsonSchema,
+	type JsonSchema
+} from './json-schema.js';
+export {
+	default as JsonSchemaMatrix,
+	type JsonSchemaMatrixProps
+} from './json-schema-matrix.svelte';
+export { jsonSchemaFromRows, jsonSchemaRows, type JsonSchemaRow } from './json-schema-rows.js';

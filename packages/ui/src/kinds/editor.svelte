@@ -63,6 +63,8 @@ The editor of one value by its field kind: every kind's input in one component (
 	import Picker from './picker.svelte';
 	import SchemaEditor from './schema-editor.svelte';
 	import JsonSchemaForm from './json-schema-form.svelte';
+	import JsonSchemaMatrix from './json-schema-matrix.svelte';
+	import { isJsonSchemaDocument } from './json-schema.js';
 	import Show from './show.svelte';
 	import TagsInput from './tags-input.svelte';
 	import TypedInput from './typed-input.svelte';
@@ -323,6 +325,8 @@ The editor of one value by its field kind: every kind's input in one component (
 	<SchemaEditor kind={custom.shape} {value} {onChange} {name} {disabled} {errors} />
 {:else if kind.kind === 'json' && jsonSchema !== undefined}
 	<JsonSchemaForm schema={jsonSchema} {value} {onChange} {name} {id} {disabled} {errors} />
+{:else if kind.kind === 'json' && !kind.shape && isJsonSchemaDocument(v)}
+	<JsonSchemaMatrix value={v} {onChange} {name} {id} {disabled} />
 {:else if kind.kind === 'json' && kind.shape}
 	<SchemaEditor kind={kind.shape} {value} {onChange} {name} {disabled} {errors} />
 {:else if plan.editor === 'schema'}

@@ -11,6 +11,7 @@
 	import type { Fields } from '../kinds/kind.js';
 	import { locked, type FormSpec, type Outcome, type Row } from './draft.js';
 	import Field from './field.svelte';
+	import Grid from '../layout/grid.svelte';
 	import Section, { groupSections, type RecordSection } from './section.svelte';
 	import { useBolt } from '../client/context.js';
 	import { msg } from '../text/messages.js';
@@ -186,11 +187,12 @@
 							defaultOpen={s?.defaultOpen}
 							summary={typeof s?.summary === 'function' ? s.summary(form.row) : s?.summary}
 						>
-							{#each g.names as name (name)}<Field {name} />{/each}
+							<!-- short fields flow across the width; a structured or long one spans its row (Field) -->
+							<Grid minimum="card">{#each g.names as name (name)}<Field {name} />{/each}</Grid>
 						</Section>
 					{/each}
 				{:else}
-					{#each visible as name (name)}<Field {name} />{/each}
+					<Grid minimum="card">{#each visible as name (name)}<Field {name} />{/each}</Grid>
 				{/if}
 				{#if form.notice}
 					<Alert
