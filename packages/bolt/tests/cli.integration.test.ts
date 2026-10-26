@@ -12,6 +12,7 @@ import {
 	readdirSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,20 +22,22 @@ import { afterAll, beforeAll, describe, expect, it, layer } from '@effect/vitest
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, Layer, Option, Schema } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
-import { readArtifact, readPack } from '../src/compiler/artifact/index.ts';
+import { readPack, readPackSource } from '../src/engine/write/pack.ts';
 import type { TemplateManifest } from '../src/protocol/schema.ts';
-import { workspaceFiles } from '../src/engine/artifact/read.ts';
+import { readArtifact, skillFiles, treeHash, workspaceFiles } from '../src/engine/artifact/read.ts';
 import { AuthorErrors, buildWorkspace } from '../src/cli/build.ts';
 import { DevHost, DevHostLive } from '../src/cli/dev.ts';
-import { localFiles } from '../src/engine/facilities.ts';
+import { localFiles } from '../src/node/files.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { auditShape } from '../src/engine/audit.ts';
+import { memoryAudit } from '../src/test/index.ts';
 import { main } from '../src/cli/main.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 
 const BOLT = fileURLToPath(new URL('../src/index.ts', import.meta.url));
 const SHELL_BUILD = fileURLToPath(new URL('../src/shell/build.d.ts', import.meta.url));
 // the client as templates see it: its built declarations (the source's ui augmentation needs ui as an installed package)
-const CLIENT = fileURLToPath(new URL('../build/client/index.d.ts', import.meta.url));
+const CLIENT = fileURLToPath(new URL('../build/page/index.d.ts', import.meta.url));
 const UI = fileURLToPath(new URL('../../ui/build/index.d.ts', import.meta.url));
 const FIXTURE = fileURLToPath(new URL('./fixtures/good', import.meta.url));
 const scratch = join(tmpdir(), 'norbital-scratch', `cli-${randomUUID()}`);
@@ -59,6 +62,11 @@ const fixtureBuild = (...args: Parameters<typeof buildWorkspace>) =>
 /** The good fixture as a workspace of its own: bolt by package name and a tsconfig for its new location. */
 function workspace(): void {
 	cpSync(FIXTURE, root, { recursive: true, filter: (p) => !p.includes('.norbital') });
+	symlinkSync(
+		fileURLToPath(new URL('../node_modules', import.meta.url)),
+		join(root, 'node_modules'),
+		'dir'
+	);
 	for (const f of readdirSync(join(root, 'src'), { recursive: true })
 		.map(String)
 		.filter((f) => f.endsWith('.ts'))) {
@@ -85,7 +93,7 @@ function workspace(): void {
 		})
 	);
 	// a file field, a bank asset for it, and a workspace asset shipped in the artifact
-	const model = join(root, 'src/data/model/+customers.model.ts');
+	const model = join(root, 'src/data/model/customers/+model.ts');
 	writeFileSync(
 		model,
 		readFileSync(model, 'utf8').replace(
@@ -113,7 +121,7 @@ function workspace(): void {
 			industry: 'Testing',
 			description: 'Good workspace fixture',
 			visibility: 'unlisted',
-			counts: { collections: 3, apps: 2, automations: 1 },
+			counts: { models: 3, apps: 2, automations: 1 },
 			tags: [],
 			seed: { bankTree: 'acme' }
 		} satisfies TemplateManifest)
@@ -166,9 +174,19 @@ describe('bolt build', () => {
 					'schema.sql',
 					'guest.mjs',
 					'client/index.html',
-					'skills/triage.md'
+					'skills/triage/SKILL.md',
+					'skills/triage/scripts/count.js'
 				])
 					expect(existsSync(join(out, f)), f).toBe(true);
+				// a skill's digest is its built folder's tree hash; a file run reads the folder through `skillFiles`
+				const built = yield* readArtifact(out);
+				expect(built.manifest.agent.skills['triage']?.digest).toBe(
+					yield* treeHash(join(out, 'skills', 'triage'))
+				);
+				const skill = yield* skillFiles(out);
+				expect(
+					new TextDecoder().decode(yield* Effect.promise(() => skill('triage', 'scripts/count.js')))
+				).toContain('notices: ');
 				expect(artifact.artifact).toMatchObject({
 					format: 1,
 					handle: 'norbital_good',
@@ -185,17 +203,18 @@ describe('bolt build', () => {
 					expect(readFileSync(join(out, 'client/assets', p), 'utf8'), p).not.toContain(
 						'A view needs the shell'
 					);
-				// the bundle carries the messages (base and locales), the record view and ui's stylesheet
+				// the entry carries the messages (base and locales); the record view is the platform layer's
 				const shell = readFileSync(join(out, 'client', artifact.artifact.client.entry), 'utf8');
-				for (const text of ['Hello', 'Helo', 'record.tab.record'])
-					expect(shell, text).toContain(text);
-				// the account menu's versions are baked, never left as the free global (L-BOLT-073)
-				const bundle = readdirSync(join(out, 'client/assets'))
+				for (const text of ['Hello', 'Helo']) expect(shell, text).toContain(text);
+				const layer = readdirSync(join(out, 'client/assets/platform'))
 					.filter((f) => f.endsWith('.js'))
-					.map((f) => readFileSync(join(out, 'client/assets', f), 'utf8'))
+					.map((f) => readFileSync(join(out, 'client/assets/platform', f), 'utf8'))
 					.join('\n');
-				expect(bundle).not.toContain('__BOLT_BUILD__');
-				expect(bundle).toContain(process.versions.node);
+				expect(layer).toContain('record.tab.record');
+				// the account menu's versions (L-BOLT-073) are the workspace entry's: the shared layer carries none of them
+				expect(shell).toContain(`globalThis.__BOLT_BUILD__=`);
+				expect(shell).toContain(process.versions.node);
+				expect(layer).not.toContain(process.versions.node);
 				expect(artifact.artifact.client.css.length).toBeGreaterThan(0);
 				expect(readFileSync(join(out, 'schema.sql'), 'utf8')).toMatch(
 					/create table "?customers"?/i
@@ -224,31 +243,20 @@ describe('bolt build', () => {
 						team: 't1'
 					}
 				]);
-				// the agent's workspace: the source as released and the checker's type index (`workspace_search`, `workspace_type`)
+				// the agent's workspace: the source as released; a build loads no TypeScript program, so it writes no type index
 				const ws = yield* workspaceFiles(out);
 				if (ws === undefined) throw new Error('Built workspace source is missing.');
 				expect(yield* Effect.promise(() => ws.files())).toContain(
-					'src/data/collection/orders/+collection.ts'
+					'src/data/model/orders/+model.ts'
 				);
-				expect(yield* Effect.promise(() => ws.read('src/agent/skill/+triage.skill.md'))).toContain(
+				expect(yield* Effect.promise(() => ws.read('src/agent/skill/triage/+skill.md'))).toContain(
 					'description: Triage a notice'
 				);
 				expect(yield* Effect.promise(() => ws.read('../manifest.json'))).toBeNull();
-				const types = yield* Effect.promise(() => ws.types());
-				if (types === null) throw new Error('Built workspace type index is missing.');
-				expect(types['collections.orders.queries.count_placed']).toMatchObject({
-					type: '{\n\tinput: {};\n\toutput: number;\n}',
-					docs: 'Placed orders',
-					source: 'src/data/collection/orders/+collection.ts:6'
-				});
-				expect(types['collections.customers.create']!.type).toMatch(
-					/readonly name: string; readonly rating\?: number \| null;/
-				);
-				expect(types['customFields.rating']).toMatchObject({ type: 'number', docs: 'A score' });
-				expect(types['components.data/custom_field/rating/+renderer']).toMatchObject({
-					type: '{\n\tview: unknown;\n}',
-					source: 'src/data/custom_field/rating/+renderer.svelte'
-				});
+				// the type setup beside the source is the language tool's: the agent's port lists the source only
+				expect(
+					(yield* Effect.promise(() => ws.files())).some((file) => file.startsWith('.norbital/'))
+				).toBe(false);
 				const files = () =>
 					Object.fromEntries(
 						readdirSync(join(out, 'client'), { recursive: true })
@@ -268,7 +276,7 @@ describe('bolt build', () => {
 							])
 					);
 				const before = files();
-				const again = yield* buildWorkspace(root, { bank, types: false });
+				const again = yield* buildWorkspace(root, { bank });
 				// file by file first, so a difference names the file that moved
 				expect(files()).toEqual(before);
 				expect(again.artifact.artifact.hashes).toEqual(artifact.artifact.hashes);
@@ -278,7 +286,12 @@ describe('bolt build', () => {
 				expect(again.packs['sample']!.hash).toBe(packs['sample']!.hash);
 				// L-BOLT-903: activation verifies every recorded digest
 				yield* readArtifact(out);
-				for (const f of ['guest.mjs', 'manifest.json', 'client/index.html', 'skills/triage.md']) {
+				for (const f of [
+					'guest.mjs',
+					'manifest.json',
+					'client/index.html',
+					'skills/triage/SKILL.md'
+				]) {
 					const was = readFileSync(join(out, f), 'utf8');
 					writeFileSync(join(out, f), f === 'manifest.json' ? `${was} ` : `${was}\n//`);
 					expect((yield* readArtifact(out).pipe(Effect.flip)).message, f).toMatch(
@@ -305,12 +318,11 @@ describe('bolt build', () => {
 					original = readFileSync(customers, 'utf8');
 				yield* fixtureBuild(root, {});
 				const written = statSync(pack).mtimeMs;
-				const preview = yield* fixtureBuild(root, { types: false });
+				const preview = yield* fixtureBuild(root);
 				expect(statSync(pack).mtimeMs).toBe(written);
 				expect(preview.packs['base']!.rows).toEqual({ customers: 1 });
 				const ws = yield* workspaceFiles(join(root, '.norbital/artifact'));
 				if (ws === undefined) throw new Error('Built workspace source is missing.');
-				expect(yield* Effect.promise(() => ws.types())).toBeNull();
 				writeFileSync(
 					customers,
 					JSON.stringify([
@@ -318,7 +330,7 @@ describe('bolt build', () => {
 						{ id: '0199a000-0000-4000-8000-000000000002', name: 'Beta' }
 					])
 				);
-				const changed = yield* fixtureBuild(root, { types: false }).pipe(
+				const changed = yield* fixtureBuild(root).pipe(
 					Effect.ensuring(Effect.sync(() => writeFileSync(customers, original)))
 				);
 				expect(changed.packs['base']!.rows).toEqual({ customers: 2 });
@@ -333,12 +345,17 @@ describe('bolt build', () => {
 				write(
 					join(root, 'seed/seed.ts'),
 					`import type { SeedSource } from '@norbital-ai/bolt';
+import { Schema } from 'effect';
 import { cents } from '../src/lib/money.ts';
+const customers = Schema.decodeUnknownSync(Schema.Array(Schema.StructWithRest(
+	Schema.Struct({ id: Schema.String, name: Schema.String }),
+	[Schema.Record(Schema.String, Schema.Json)]
+)));
 export default { bank: 'acme', start: ['nightly'],
-	rows: (bank) => ({ customers: bank.has('customers.json') ? bank.json<{ id: string; name: string }[]>('customers.json').map((c) => ({ ...c, name: c.name + ' ' + cents(1) })) : [] }),
+	rows: (bank) => ({ customers: bank.has('customers.json') ? customers(bank.json('customers.json')).map((c) => ({ ...c, name: c.name + ' ' + cents(1) })) : [] }),
 } satisfies SeedSource;`
 				);
-				const { packs } = yield* buildWorkspace(root, { bank, types: false });
+				const { packs } = yield* buildWorkspace(root, { bank });
 				expect(packs['sample']).toMatchObject({ start: ['nightly'], rows: { customers: 1 } });
 				expect(
 					(yield* readPack(join(root, '.norbital/seed/sample'))).rows['customers']?.[0]
@@ -347,15 +364,20 @@ export default { bank: 'acme', start: ['nightly'],
 					join(root, 'seed/seed.ts'),
 					`export default { bank: 'acme', start: ['nope'], rows: () => ({}) };`
 				);
-				const failed = yield* buildWorkspace(root, { bank, types: false }).pipe(Effect.flip);
+				const failed = yield* buildWorkspace(root, { bank }).pipe(Effect.flip);
 				expect(failed).toBeInstanceOf(AuthorErrors);
 				if (!(failed instanceof AuthorErrors)) throw new Error('Expected author errors.');
 				expect(failed.errors.map((e) => e.code)).toEqual(['seed/start']);
 				write(
 					join(root, 'seed/seed.ts'),
 					`import type { SeedSource } from '@norbital-ai/bolt';
-export default { bank: 'acme', start: ['nightly'], rows: (b) => !b.has('customers.json') ? {} : ({ customers: b.json('customers.json'),
-sys_user: b.json<{ id: string; name: string; email: string; status: string; team_id: string }[]>('user.json').map((u) => ({ id: u.id, name: u.name, email: u.email, kind: 'staff', admin: u.status === 'admin', team: u.team_id })) }) } satisfies SeedSource;`
+import { Schema } from 'effect';
+const customers = Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)));
+const users = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({
+	id: Schema.String, name: Schema.String, email: Schema.String, status: Schema.String, team_id: Schema.String
+})));
+export default { bank: 'acme', start: ['nightly'], rows: (b) => !b.has('customers.json') ? {} : ({ customers: customers(b.json('customers.json')),
+sys_user: users(b.json('user.json')).map((u) => ({ id: u.id, name: u.name, email: u.email, kind: 'staff', admin: u.status === 'admin', team: u.team_id })) }) } satisfies SeedSource;`
 				);
 			}).pipe(Effect.provide(NodeServices.layer)),
 		60_000
@@ -377,23 +399,19 @@ sys_user: b.json<{ id: string; name: string; email: string; status: string; team
 
 const port = 5300 + Math.floor(Math.random() * 500);
 const development = Layer.unwrap(
-	fixtureBuild(root, { bank, types: false }).pipe(
-		Effect.map(({ artifact }) =>
-			Layer.unwrap(
-				readPack(join(root, '.norbital/seed/sample')).pipe(
-					Effect.map((pack) =>
-						DevHostLive(artifact, {
-							port,
-							pack,
-							founder: 'ann@acme.example',
-							files: localFiles(join(scratch, 'files')),
-							log: () => {}
-						})
-					)
-				)
-			).pipe(Layer.provideMerge(PgliteDb.layer()))
-		)
-	)
+	Effect.gen(function* () {
+		const { artifact } = yield* fixtureBuild(root, { bank });
+		const pack = yield* readPackSource(join(root, '.norbital/seed/sample'));
+		const audit = yield* auditShape(memoryAudit().port);
+		return DevHostLive(artifact, {
+			port,
+			pack,
+			audit,
+			founder: 'ann@acme.example',
+			files: localFiles(join(scratch, 'files')),
+			log: () => {}
+		}).pipe(Layer.provideMerge(PgliteDb.layer()));
+	})
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev host', (it) => {
@@ -442,7 +460,7 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 				).toBe(200);
 				const q = yield* Schema.decodeUnknownEffect(names)(
 					yield* json(
-						yield* call('/__bolt/q', { reads: [{ m: 'read', a: ['customers', { all: true }] }] })
+						yield* call('/__bolt/q', { reads: [{ m: 'query', a: ['customers', { all: true }] }] })
 					)
 				);
 				expect(q.answers[0]?.rows.map((row) => row.name)).toEqual(['Bank Co']);
@@ -512,7 +530,7 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 		() =>
 			Effect.gen(function* () {
 				const host = yield* DevHost;
-				const model = join(root, 'src/data/model/+customers.model.ts');
+				const model = join(root, 'src/data/model/customers/+model.ts');
 				writeFileSync(
 					model,
 					readFileSync(model, 'utf8').replace(
@@ -520,7 +538,7 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 						"name: { kind: 'text' }, city: { kind: 'text', optional: true },"
 					)
 				);
-				const { artifact } = yield* buildWorkspace(root, { types: false });
+				const { artifact } = yield* buildWorkspace(root);
 				yield* host.swap(yield* readArtifact(artifact.dir));
 				const q = yield* Schema.decodeUnknownEffect(
 					Schema.Struct({
@@ -532,7 +550,7 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 					})
 				)(
 					yield* json(
-						yield* call('/__bolt/q', { reads: [{ m: 'read', a: ['customers', { all: true }] }] })
+						yield* call('/__bolt/q', { reads: [{ m: 'query', a: ['customers', { all: true }] }] })
 					)
 				);
 				expect(q.answers[0]?.rows).toHaveLength(2);

@@ -17,7 +17,6 @@ const invocation: Invocation = {
 		seed: 'wall'
 	},
 	budget: {
-		cpuMs: LIMITS.guestCpuMs,
 		crossings: LIMITS.crossings.sync,
 		readBytes: LIMITS.readBytes
 	}

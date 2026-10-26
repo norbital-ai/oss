@@ -1,9 +1,8 @@
 // Rate limits (rule 38): fixed windows counted first in the serving cell's memory, persisted by acts as a piece of their
 // one statement (`bolt_rate`), and loaded in one read when a cell takes a tenant. Client addresses are resolved through
 // the trusted-proxy list; IPv6 counts by its /64; an address never reaches a bucket key in plain text.
-import { createHmac } from 'node:crypto';
-import { BlockList, isIPv4, isIPv6 } from 'node:net';
 import type { Json } from '../../decl/values.ts';
+import { hmacSha256, toBase64url } from '../crypto.ts';
 import type { Authority, LimitRule } from '../contracts.ts';
 
 import { duration } from '../runs/time.ts';
@@ -78,20 +77,72 @@ rate AS (INSERT INTO bolt_rate (rule, bucket, window_start, n) SELECT rule, buck
 }
 
 // ── addresses ──
+/** Dotted-quad IPv4 (no leading zeros, as `node:net` accepts it): its four bytes, else null. */
+const ipv4 = (a: string): number[] | null => {
+	const parts = a.split('.');
+	if (parts.length !== 4 || !parts.every((p) => /^(0|[1-9]\d{0,2})$/.test(p))) return null;
+	const bytes = parts.map(Number);
+	return bytes.every((b) => b < 256) ? bytes : null;
+};
+/** IPv6 text (with `::` and a trailing dotted quad): its eight 16-bit words, else null. */
+const ipv6 = (a: string): number[] | null => {
+	const halves = a.split('::');
+	if (halves.length > 2) return null;
+	const words = (part: string, last: boolean): number[] | null => {
+		if (part === '') return [];
+		const out: number[] = [];
+		const groups = part.split(':');
+		for (const [i, g] of groups.entries()) {
+			const quad = last && i === groups.length - 1 && g.includes('.') ? ipv4(g) : null;
+			if (quad !== null) out.push((quad[0]! << 8) | quad[1]!, (quad[2]! << 8) | quad[3]!);
+			else if (/^[0-9a-f]{1,4}$/i.test(g)) out.push(parseInt(g, 16));
+			else return null;
+		}
+		return out;
+	};
+	const head = words(halves[0]!, halves.length === 1),
+		tail = halves.length === 2 ? words(halves[1]!, true) : [];
+	if (head === null || tail === null) return null;
+	const fill = 8 - head.length - tail.length;
+	if (halves.length === 1 ? fill !== 0 : fill < 1) return null;
+	return [...head, ...Array<number>(fill).fill(0), ...tail];
+};
+/** Any address as IPv6 words; IPv4 as its mapped form, so `::ffff:a.b.c.d` matches an IPv4 subnet, as `BlockList` does. */
+const ipWords = (a: string): number[] | null => {
+	const quad = ipv4(a);
+	return quad === null
+		? ipv6(a)
+		: [0, 0, 0, 0, 0, 0xffff, (quad[0]! << 8) | quad[1]!, (quad[2]! << 8) | quad[3]!];
+};
 /** The client address: the TCP peer, stepping right to left through X-Forwarded-For while the hop is trusted. */
 export function clientAddress(
 	peer: string,
 	forwardedFor: string | undefined,
 	trusted: readonly string[]
 ): string {
-	const list = new BlockList();
-	for (const cidr of trusted) {
+	// a malformed entry trusts nothing
+	const subnets = trusted.flatMap((cidr) => {
 		const [net, bits] = cidr.split('/') as [string, string | undefined];
-		const type = isIPv6(net) ? 'ipv6' : 'ipv4';
-		list.addSubnet(net, Number(bits ?? (type === 'ipv6' ? 128 : 32)), type);
-	}
-	const isTrusted = (a: string) =>
-		(isIPv4(a) || isIPv6(a)) && list.check(a, isIPv6(a) ? 'ipv6' : 'ipv4');
+		const words = ipWords(net),
+			max = ipv4(net) === null ? 128 : 32,
+			n = bits === undefined ? max : Number(bits);
+		return words === null || !Number.isInteger(n) || n < 0 || n > max
+			? []
+			: [{ words, bits: n + 128 - max }];
+	});
+	const isTrusted = (a: string) => {
+		const words = ipWords(a);
+		return (
+			words !== null &&
+			subnets.some((s) =>
+				words.every((w, i) => {
+					const left = Math.min(16, Math.max(0, s.bits - i * 16)),
+						mask = (0xffff << (16 - left)) & 0xffff;
+					return (w & mask) === (s.words[i]! & mask);
+				})
+			)
+		);
+	};
 	const hops = (forwardedFor ?? '')
 		.split(',')
 		.map((s) => s.trim())
@@ -104,21 +155,16 @@ export function clientAddress(
 export function addressBucket(address: string): string {
 	const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
 	if (mapped) return mapped[1]!;
-	if (!isIPv6(address)) return address;
-	const [head, tail = ''] = address.split('::') as [string, string?];
-	const h = head === '' ? [] : head.split(':'),
-		t = tail === '' ? [] : tail.split(':');
-	const full = address.includes('::')
-		? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
-		: h;
-	return `${full
+	const words = ipv6(address);
+	if (words === null) return address;
+	return `${words
 		.slice(0, 4)
-		.map((x) => parseInt(x, 16).toString(16))
+		.map((w) => w.toString(16))
 		.join(':')}::/64`;
 }
 /** `HMAC-SHA256(ip_mac, key)`: IP and pre-sign-in address buckets never hold the value (rule 38, §5.13). */
 export const macKey = (ipMac: Uint8Array, value: string): string =>
-	createHmac('sha256', ipMac).update(value).digest('base64url');
+	toBase64url(hmacSha256(ipMac, value));
 
 // ── the buckets of one request ──
 export type RateKind =

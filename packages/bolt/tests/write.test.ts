@@ -160,7 +160,7 @@ describe('engine/write decode and flatten', () => {
 
 describe('engine/write statement', () => {
 	it('every data-modifying piece reads through the idempotency gate (rule 20)', () => {
-		const sql = compileCommit(manifest, cat, {
+		const phases = compileCommit(manifest, cat, {
 			key: 'k',
 			digest: 'd',
 			issuedAt: NOW,
@@ -182,23 +182,26 @@ describe('engine/write statement', () => {
 			],
 			runs: [{ id: 'r', automation: 'a', input: null, dueAt: NOW, cause: 'x', depth: 0 }],
 			notices: []
-		}).text;
-		const pieces = sql.split(/,\n(?=\w+ AS (?:MATERIALIZED )?\()/);
-		const writing = pieces.filter((p) => /^\w+ AS \(\s*(INSERT|UPDATE|DELETE)/.test(p));
-		expect(writing.length).toBeGreaterThan(5);
-		for (const p of writing)
-			if (
-				!p.startsWith('idem ') &&
-				!p.startsWith('out ') &&
-				!p.startsWith('history_history_source ')
-			)
-				expect(p).toContain('EXISTS (SELECT 1 FROM idem)');
-		// History reads the attributed source, which reads only the gated row pieces.
-		expect(pieces.find((p) => p.startsWith('history_history_source '))).toContain(
-			'FROM history_source'
+		});
+		const mutation = phases.find((phase) => phase.text.includes('native_fresh AS'));
+		const finalizer = phases.find((phase) => phase.text.includes('native_saved AS'));
+		if (mutation === undefined || finalizer === undefined)
+			throw new Error('The commit needs mutation and finalization phases.');
+		const pieces = mutation.text.split(/,\n(?=\w+ AS (?:MATERIALIZED )?\()/);
+		const writing = pieces.filter((piece) => /^p\d+ AS \(\s*(INSERT|UPDATE|DELETE)/.test(piece));
+		expect(writing.length).toBeGreaterThanOrEqual(3);
+		for (const piece of writing) expect(piece).toContain('EXISTS (SELECT 1 FROM idem)');
+		expect(pieces.find((piece) => piece.startsWith('native_fresh '))).toContain(
+			'EXISTS (SELECT 1 FROM idem)'
 		);
-		expect(pieces.find((p) => p.startsWith('history_source '))).toContain('FROM allp');
-		expect(pieces.find((p) => p.startsWith('out '))).toContain('FROM idem');
+		// A subsequent command can see rows written by native FK actions; only a fresh admitted invocation finalizes.
+		expect(finalizer.text).toContain('FROM pg_temp.bolt_changes');
+		expect(finalizer.text).toContain('FROM pg_temp.bolt_write_context');
+		expect(finalizer.text).toContain('AND fresh');
+		expect(finalizer.text).toContain('FROM allp');
+		expect(finalizer.text).toContain('FROM idem');
+		expect(phases.indexOf(mutation)).toBeLessThan(phases.indexOf(finalizer));
+		expect(phases.at(-1)?.text).toContain('DELETE FROM pg_temp.bolt_write_context');
 	});
 });
 

@@ -4,11 +4,12 @@
 	of the displayed page. Opening one marks it read and follows its link.
 -->
 <script lang="ts">
-	import { attach, live, fork } from '@norbital-ai/ui/effect';
+	import { attach, observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Queue, Schema } from 'effect';
 	import { Button, Icon, Popover, cn } from '@norbital-ai/ui';
 	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import type { Notice } from './inbox/data.ts';
+	import { noticePath } from '../protocol/wire.ts';
+	import type { NoticeRow } from '../protocol/schema.ts';
 	import type { ShellBolt } from './runtime.ts';
 	import type { ShellApi } from './api-types.ts';
 
@@ -30,8 +31,8 @@
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
-	const notices = live(() =>
-		bolt.live<{ rows: Notice[]; unread: number }>({ read: { m: 'inbox', a: [] } })
+	const notices = observe(() =>
+		bolt.observe<{ rows: NoticeRow[]; unread: number }>({ read: { m: 'inbox', a: [] } })
 	);
 	const rows = $derived($notices?.rows ?? []);
 	const unread = $derived($notices?.unread ?? 0);
@@ -40,16 +41,11 @@
 	const markRead = (ids: readonly string[]) => {
 		if (ids.length > 0) fork(api.markNoticesRead(ids), () => {});
 	};
-	const linkOf = (link: unknown) =>
-		typeof link === 'object' && link !== null && 'collection' in link && 'id' in link
-			? `/inbox?record=${encodeURIComponent(String(link.collection))}/${encodeURIComponent(String(link.id))}`
-			: null;
-	function openNotice(n: Notice): void {
+	function openNotice(n: NoticeRow): void {
 		if (!n.read) markRead([n.id]);
-		const href = linkOf(n.link);
-		if (href === null) return;
+		if (n.link === null) return;
 		open = false;
-		onNavigate(href);
+		onNavigate(noticePath(n.link));
 	}
 	class AppBadgeFailed extends Schema.TaggedError<AppBadgeFailed>()('AppBadgeFailed', {
 		operation: Schema.Literals(['set', 'clear']),

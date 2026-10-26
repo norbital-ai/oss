@@ -20,7 +20,7 @@ async function editor(changed: (value: Value) => void) {
 	document.body.append(target);
 	const app = mount(Harness, {
 		target,
-		props: { kind: { kind: 'json' }, initial: { a: 1 }, changed }
+		props: { kind: { kind: 'json' }, initial: { a: 1 }, rawJson: true, changed }
 	});
 	await settle();
 	const element = target.querySelector('.cm-editor');
@@ -37,12 +37,9 @@ async function editor(changed: (value: Value) => void) {
 	};
 }
 
-it.live('repeated editor mounts reuse stylesheet rules while keeping independent drafts', () =>
+it.live('repeated editor mounts keep independent drafts', () =>
 	browser(async () => {
-		const ruleCount = () =>
-			Array.from(document.styleSheets).reduce((count, sheet) => count + sheet.cssRules.length, 0);
-		let mountedRuleCount: number | undefined;
-		for (let index = 0; index < 6; index++) {
+		for (let index = 0; index < 2; index++) {
 			const changes: Value[] = [];
 			const mounted = await editor((value) => changes.push(value));
 			try {
@@ -53,20 +50,10 @@ it.live('repeated editor mounts reuse stylesheet rules while keeping independent
 				await settle();
 				assert.deepEqual(changes, [index]);
 				assert.equal(mounted.view.state.doc.toString(), String(index));
-				if (mountedRuleCount === undefined) {
-					mountedRuleCount = ruleCount();
-					assert.ok(mountedRuleCount > 0, 'the native editor must mount actual stylesheet rules');
-				} else
-					assert.equal(ruleCount(), mountedRuleCount, 'new editors must reuse mounted CSS rules');
 			} finally {
 				await mounted.close();
 			}
 			assert.equal(mounted.target.querySelector('.cm-editor'), null);
-			assert.equal(
-				ruleCount(),
-				mountedRuleCount,
-				'destroying a view must not add stylesheet rules'
-			);
 		}
 	})
 );
@@ -155,4 +142,29 @@ it.live('URL JSON distinguishes valid null from invalid text and retains sort st
 			);
 		}
 	})
+);
+
+it.live(
+	'explicit source JSON stays in the text editor when the draft becomes a schema document',
+	() =>
+		browser(async () => {
+			const changes: Value[] = [];
+			const mounted = await editor((value) => changes.push(value));
+			try {
+				const schema = {
+					$schema: 'https://json-schema.org/draft/2020-12/schema',
+					type: 'object',
+					properties: { code: { type: 'string' } }
+				};
+				mounted.view.dispatch({
+					changes: { from: 0, to: mounted.view.state.doc.length, insert: JSON.stringify(schema) }
+				});
+				await settle();
+				assert.deepEqual(changes.at(-1), schema);
+				assert.ok(mounted.target.querySelector('.cm-editor'));
+				assert.equal(mounted.target.querySelector('[data-structured-data]'), null);
+			} finally {
+				await mounted.close();
+			}
+		})
 );

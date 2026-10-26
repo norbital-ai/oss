@@ -1,0 +1,172 @@
+{
+	"envelope": {
+		"at": [
+			"at"
+		],
+		"enums": [
+			{
+				"path": [
+					"category"
+				],
+				"values": [
+					"write",
+					"approval",
+					"identity",
+					"automation",
+					"integration"
+				]
+			},
+			{
+				"path": [
+					"status"
+				],
+				"values": [
+					"prepared",
+					"committed",
+					"pendingApproval",
+					"refused",
+					"conflict",
+					"failed",
+					"unknown"
+				]
+			},
+			{
+				"path": [
+					"actor",
+					"kind"
+				],
+				"values": [
+					"member",
+					"envoy",
+					"visitor",
+					"apiKey",
+					"system"
+				]
+			}
+		],
+		"id": [
+			"id"
+		],
+		"nonempty": [
+			[
+				"operationId"
+			],
+			[
+				"action"
+			]
+		],
+		"objects": [
+			[
+				"actor"
+			]
+		],
+		"payload": [
+			"payload"
+		],
+		"required": [
+			"id",
+			"operationId",
+			"at",
+			"category",
+			"action",
+			"status",
+			"actor",
+			"subject",
+			"invocation",
+			"transaction",
+			"run",
+			"approval",
+			"payload"
+		]
+	},
+	"format": 1,
+	"indexes": [
+		{
+			"name": "event_actor",
+			"paths": [
+				[
+					"actor",
+					"kind"
+				],
+				[
+					"actor",
+					"id"
+				]
+			]
+		},
+		{
+			"name": "event_subject",
+			"paths": [
+				[
+					"subject",
+					"model"
+				],
+				[
+					"subject",
+					"id"
+				]
+			]
+		},
+		{
+			"name": "event_status",
+			"paths": [
+				[
+					"status"
+				]
+			]
+		},
+		{
+			"name": "event_category",
+			"paths": [
+				[
+					"category"
+				]
+			]
+		},
+		{
+			"name": "event_action",
+			"paths": [
+				[
+					"action"
+				]
+			]
+		},
+		{
+			"name": "event_invocation",
+			"paths": [
+				[
+					"invocation"
+				]
+			]
+		},
+		{
+			"name": "event_run",
+			"paths": [
+				[
+					"run"
+				]
+			]
+		}
+	],
+	"namespace": "bolt_audit",
+	"pending": {
+		"operation": [
+			"operationId"
+		],
+		"prepared": "prepared",
+		"status": [
+			"status"
+		],
+		"terminalSuffix": ":terminal",
+		"unresolved": [
+			"prepared",
+			"unknown"
+		]
+	},
+	"retention": {
+		"batch": 1000,
+		"days": 30
+	},
+	"retirement": false,
+	"scope": []
+}

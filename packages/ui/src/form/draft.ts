@@ -1,6 +1,6 @@
 // A form's draft as data (§5.10 behaviour, rule 67): what the form is, what it sends, and how an outcome settles it.
 // Pure, so the Svelte state around it stays a thin shell and every rule here has a test.
-import type { CollectionExposure } from '../kinds/context.js';
+import type { AutomationExposure, CollectionExposure } from '../kinds/context.js';
 import type { ChildInput } from '../kinds/context.js';
 import { initial, problems, type Fields, type Value, type Kind } from '../kinds/kind.js';
 import { encodeWire } from '@norbital-ai/std/wire';
@@ -9,7 +9,7 @@ import { Equal } from 'effect';
 
 /** A row's values by field name. */
 export type Row = { readonly [field: string]: Value };
-/** A write outcome as a form settles it: committed, pending approval, refused, conflict or unknown. */
+/** A write outcome as a form settles it: committed, pending approval, refused, conflict, unknown or still running. */
 export type Outcome =
 	| {
 			kind: 'committed';
@@ -26,12 +26,13 @@ export type Outcome =
 			kind: 'conflict';
 			records: readonly { collection: string; id: string; fields: readonly string[] }[];
 	  }
-	| { kind: 'unknown'; invocation: string };
+	| { kind: 'unknown'; invocation: string }
+	| { kind: 'running'; run: string };
 
-/** What a `Form` edits: a collection's create or update allowlist, or an action's `input` literal. */
+/** What a `Form` edits: a collection's create or update allowlist, or an automation's input. */
 type FormTarget =
 	| { of: 'collection'; collection: string; mode: 'create' | 'update'; id?: string }
-	| { of: 'action'; collection: string; action: string; record: boolean; id?: string };
+	| { of: 'automation'; automation: string };
 export type FormSpec = {
 	target: FormTarget;
 	/** Editable fields in order, each with its kind (a relation FK carries its targets). */
@@ -39,7 +40,7 @@ export type FormSpec = {
 		name: string;
 		kind: Kind;
 		readonly?: true;
-		reason?: 'integrationOwned' | 'ownedParent';
+		reason?: 'syncOwned' | 'ownedParent';
 		relation?: { targets: readonly string[]; where?: Where | undefined };
 	}[];
 	callable: string;
@@ -52,30 +53,21 @@ export type FormSpec = {
 /** The form one `of` describes, from the collection's exposure; `null` when the caller has no such verb. An update the
  * caller cannot make but can read is the read-only form of the readable fields. */
 export function formSpec(
-	of: string | { action: string },
+	of: string | { automation: string },
 	exposure: CollectionExposure | undefined,
 	mode: 'create' | 'update',
-	id?: string
+	id?: string,
+	automation?: AutomationExposure
 ): FormSpec | null {
-	if (exposure === undefined) return null;
 	if (typeof of !== 'string') {
-		const dot = of.action.lastIndexOf('.');
-		const collection = of.action.slice(0, dot),
-			action = of.action.slice(dot + 1);
-		const spec = exposure.actions?.[action];
-		if (spec === undefined) return null;
+		if (automation === undefined) return null;
 		return {
-			target: {
-				of: 'action',
-				collection,
-				action,
-				record: spec.target === 'record',
-				...(id === undefined ? {} : { id })
-			},
-			fields: Object.entries(spec.input).map(([name, kind]) => ({ name, kind })),
-			callable: of.action
+			target: { of: 'automation', automation: of.automation },
+			fields: Object.entries(automation.input).map(([name, kind]) => ({ name, kind })),
+			callable: of.automation
 		};
 	}
+	if (exposure === undefined) return null;
 	const readOnly = exposure[mode] === undefined && mode === 'update';
 	const allow = readOnly
 		? { columns: [...Object.keys(exposure.fields), ...Object.keys(exposure.relations ?? {})] }
@@ -170,8 +162,7 @@ export function payload(spec: FormSpec, base: Row, draft: Row): Value | null {
 		);
 		return Object.keys(set).length === 0 ? null : { target: t.id ?? null, set };
 	}
-	const input = present(draft);
-	return t.record ? { target: t.id ?? null, input } : input;
+	return present(draft);
 }
 
 /** Advisory problems before sending, keyed by dotted path: the host decides, this only saves a refused round trip. */
@@ -196,18 +187,24 @@ function refusalPlace(
 }
 
 type Settled = {
-	/** The draft after the outcome: fresh after a create or action settles, `null` to keep the current draft (edits made
+	/** The draft after the outcome: fresh after a create or automation start settles, `null` to keep the current draft (edits made
 	 * while the act was in flight included). */
 	draft: Record<string, Value> | null;
 	/** What "changed" is measured against next: the sent values once an update settles. */
 	base: Record<string, Value>;
 	errors: Map<string, string>;
-	/** Form-level text: a refusal no field owns, a conflict, an unknown outcome, a held write. */
-	notice: { tone: 'info' | 'danger' | 'warning'; text: string } | null;
-	/** Whether the next submit mints a new idempotency key: only `unknown` retries the same invocation (rule 31). */
+	/** Form-level text: a refusal no field owns, a conflict, an unknown outcome, a held write, or the `run` still writing. */
+	notice: Notice | null;
+	/** Whether the next submit mints a new idempotency key: `unknown` and `running` retry the same invocation (rule 31). */
 	newKey: boolean;
 };
-export type NoticeText = { pendingApproval: string; conflict: string; unknown: string };
+export type Notice = { tone: 'info' | 'danger' | 'warning'; text: string; run?: string };
+export type NoticeText = {
+	pendingApproval: string;
+	conflict: string;
+	unknown: string;
+	running: string;
+};
 
 /** Settles a draft by the outcome of sending `sent` over `base`. */
 export function settle(
@@ -217,7 +214,7 @@ export function settle(
 	outcome: Outcome,
 	text: NoticeText
 ): Settled {
-	const reset = spec.target.of === 'action' || spec.target.mode === 'create';
+	const reset = spec.target.of === 'automation' || spec.target.mode === 'create';
 	const fresh = startValues(spec, null);
 	const done = (notice: Settled['notice']): Settled =>
 		reset
@@ -262,6 +259,15 @@ export function settle(
 				base: { ...base },
 				errors: new Map(),
 				notice: { tone: 'warning', text: text.unknown },
+				newKey: false
+			};
+		// the write goes on as a run: the draft stays, and the notice follows the run to its end
+		case 'running':
+			return {
+				draft: null,
+				base: { ...base },
+				errors: new Map(),
+				notice: { tone: 'info', text: text.running, run: outcome.run },
 				newKey: false
 			};
 	}

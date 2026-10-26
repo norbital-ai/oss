@@ -1,9 +1,9 @@
 /// <reference types="node" />
 // G1 (§11.2): the 120-model scale fixture ported onto the next declarations and
 // measured with tsc. Each model carries what makes checking expensive: a state with edges and `edit`, roll-ups over an
-// owned inverse, computed trees, a collection with relation actions, union/record inputs, a transform, a query and a
-// record action whose bodies read with `select` and `Paged` arms and write with `act`, a policy with a masked field,
-// `previous`, ordered approval routes and moves, and every tenth model an automation.
+// owned inverse, computed trees, relation writes, union/record inputs and inline write/query bodies.
+// One literal names index breaks source inference cycles; policies retain masks, previous values and approval callbacks,
+// every model has a standalone workflow, and every tenth model also has a scheduled automation.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -12,6 +12,8 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from '@effect/vitest';
 import { Config, Effect, Option, Schema } from 'effect';
+import { splitModel, type RefField } from '../src/decl/model.ts';
+import { literal } from '../src/compiler/names.ts';
 
 class ScaleFailed extends Schema.TaggedError<ScaleFailed>()('ScaleFailed', {
 	message: Schema.String
@@ -35,146 +37,217 @@ const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
 
 const m = (i: number) => `m${((i % N) + N) % N}`;
 
-const modelFile = (i: number, typo = false) => `import { model } from '${'$'}BOLT';
-export default model({
-	description: 'M${i}', label: '${typo ? 'nmae' : 'name'}', key: ['name'],
-	fields: {
-		name: { kind: 'text', max: 120 },
-		status: { kind: 'state', initial: 'draft', states: {
-			draft: { to: ['open'] }, open: { to: ['closed', 'draft'], edit: ['status', 'qty', '${typo ? 'a_off' : 'a_of'}'] }, closed: { edit: 'none' } } },
-		qty: { kind: 'decimal', scale: 2 },
-		due: { kind: 'date', optional: true },
-		tags: { kind: 'text', many: true, optional: true },
-		email: { kind: 'text', format: 'email', optional: true },
-		total: { kind: 'sum', of: '${typo ? 'a_of.qtty' : 'a_of.qty'}', where: { status: { in: ['open', 'closed'] } } },
-		n_b: { kind: 'count', of: 'b_of' },
-		ref: { kind: 'seq', pattern: 'M${i}-{0000}', per: ['${typo ? 'b_' : 'b'}'] },
+const modelData = (i: number, typo = false) => {
+	const extra: Record<string, RefField> = typo
+		? { c: { kind: 'ref', to: 'm1', inverse: 'a_of', optional: true } }
+		: {};
+	return {
+		description: `M${i}`,
+		label: typo ? 'nmae' : 'name',
+		key: ['name'],
+		fields: {
+			name: { kind: 'text', max: 120 },
+			status: {
+				kind: 'state',
+				initial: 'draft',
+				states: {
+					draft: { to: ['open'] },
+					open: { to: ['closed', 'draft'], edit: ['status', 'qty', typo ? 'a_off' : 'a_of'] },
+					closed: { edit: 'none' }
+				}
+			},
+			qty: { kind: 'decimal', scale: 2 },
+			due: { kind: 'date', optional: true },
+			tags: { kind: 'text', many: true, optional: true },
+			email: { kind: 'text', format: 'email', optional: true },
+			total: {
+				kind: 'sum',
+				of: typo ? 'a_of.qtty' : 'a_of.qty',
+				where: { status: { in: ['open', 'closed'] } }
+			},
+			n_b: { kind: 'count', of: 'b_of' },
+			ref: { kind: 'seq', pattern: `M${i}-{0000}`, per: [typo ? 'b_' : 'b'] },
+			a: { kind: 'ref', to: m(i + 1), inverse: 'a_of', owned: true },
+			b: { kind: 'ref', to: m(i + 7), inverse: 'b_of', optional: true, onDelete: 'setNull' },
+			...extra
+		},
+		search: { text: ['name'] },
+		computed: {
+			upper: { kind: 'text', expr: { upper: { field: 'name' } } },
+			qty_x2: {
+				kind: 'decimal',
+				expr: { round: [{ times: [{ field: 'qty' }, { field: 'qty' }] }, 2] }
+			},
+			due_soon: { kind: 'date', expr: { plusDays: [{ field: 'due' }, -7] } }
+		},
+		check: { named: { name: { ne: '' } } },
+		read: 'all',
+		create: {
+			columns: ['name', 'qty', 'a', 'b', 'due'],
+			with: { b_of: { link: {}, unlink: {} } },
+			transform: true
+		},
+		update: {
+			columns: ['name', 'status', 'qty', 'b'],
+			with: {
+				a_of: { create: { columns: ['name', 'qty'] }, update: { columns: ['qty'] }, delete: {} }
+			},
+			transform: true
+		},
+		delete: { check: true },
+		queries: {
+			open: {
+				description: 'Open rows',
+				input: {
+					since: { kind: 'date' },
+					pay: {
+						kind: 'union',
+						by: 't',
+						arms: {
+							card: { last4: { kind: 'text' } },
+							bank: { ref: { kind: 'int', optional: true } }
+						}
+					},
+					split: { kind: 'record', of: { kind: 'decimal', scale: 2 } }
+				},
+				output: { kind: 'list', of: { kind: 'id', of: m(i) } },
+				run: true
+			}
+		},
+		notify: true
+	} as const;
+};
+const modelFile = (i: number, typo = false) => `import { model } from '$BOLT';
+const data = ${JSON.stringify(modelData(i, typo))} as const;
+export default model('${m(i)}', { ...data,
+ create: { ...data.create, transform: function* (rows, ctx) {
+  yield* ctx.db.query('${m(i)}', { where: { status: { eq: 'open' } }, limit: 10 });
+  return rows;
+ } },
+ update: { ...data.update, transform: function* (changes) { return changes.map(({ set }) => set); } },
+ delete: { check: function* (rows, ctx) { const at = rows.findIndex((row) => row.status === 'closed'); if (at >= 0) yield* ctx.refuse('A closed row stays.', { row: at }); } },
+ queries: { open: { ...data.queries.open, run: function* ({ since, pay, split }, ctx) {
+  const page = yield* ctx.query('${m(i)}', { where: { status: { eq: 'open' }, due: { gte: since }, a: { is: { upper: { eq: pay.t === 'card' ? pay.last4 : 'X' } } } }, select: { name: true }, limit: Object.keys(split).length });
+  return page.rows.map((row) => row.id);
+ } } },
+ notify: function* () { return [{ title: 'M${i}', to: [{ team: 'T0' }] }]; }
+});`;
+const workflowData = (i: number) => ({
+	description: `Go ${m(i)}`,
+	input: {
+		target: { kind: 'id', of: m(i) },
+		note: { kind: 'text' },
+		other: { kind: 'id', of: m(i + 7), where: { status: { eq: 'open' } } }
 	},
-	search: { text: ['name'] },
-	computed: {
-		upper: { kind: 'text', expr: { upper: { field: 'name' } } },
-		qty_x2: { kind: 'decimal', expr: { round: [{ times: [{ field: 'qty' }, { field: 'qty' }] }, 2] } },
-		due_soon: { kind: 'date', expr: { plusDays: [{ field: 'due' }, -7] } },
+	output: { kind: 'object', fields: { n: { kind: 'int' } } },
+	runAs: 'trigger'
+});
+const workflowFile = (i: number) => `import { automation } from '$BOLT';
+export default automation('${m(i)}_go', { ...${JSON.stringify(workflowData(i))}, run: function* ({ target: targetId, note, other }, ctx) {
+ const target = yield* ctx.query('${m(i)}', { id: targetId });
+ if (target === null) throw new Error('The target is no longer readable.');
+ const far = yield* ctx.query('${m(i + 7)}', { where: { upper: { eq: note + target.name }, qty_x2: { gt: 0 } }, select: { name: true, qty: true, email: true, a: { select: { name: true } }, a_of: { select: { qty: true }, limit: 10 } }, all: true });
+ yield* ctx.act('${m(i)}.update', { target: target.id, set: { qty: target.qty } });
+ yield* ctx.act('${m(i + 7)}.update', { target: other, set: { name: note } });
+ return { n: far.rows.length };
+} });`;
+const policyData = (i: number) => ({
+	description: `P${i}`,
+	grants: {
+		[m(i)]: {
+			read: {
+				where: { upper: { eq: 'A' }, total: { gt: 0 } },
+				fields: [
+					'name',
+					'status',
+					'qty',
+					'due',
+					'tags',
+					'total',
+					'n_b',
+					'ref',
+					'upper',
+					'qty_x2',
+					'due_soon',
+					'a',
+					'b'
+				]
+			},
+			create: { where: 'read', fields: ['name', 'qty', 'a'] },
+			update: {
+				where: 'read',
+				previous: { status: { in: ['draft', 'open'] } },
+				fields: ['name', 'status', 'qty', 'a_of']
+			},
+			delete: { where: { status: { eq: 'draft' } } },
+			queries: ['open'],
+			moves: { status: ['draft->open'] }
+		},
+		[m(i + 7)]: { read: { email: { eq: { actor: 'email' } }, qty_x2: { gt: 1 } } }
 	},
-	check: { named: { name: { ne: '' } } },
+	automations: [`${m(i)}_go`],
+	limits: { act: '10/min' }
 });
-`;
-
-const collectionFile = (i: number) => `import { Effect } from 'effect';
-import { collection } from '${'$'}BOLT';
-const c = collection('${m(i)}', {
-	read: { fields: 'all' },
-	create: { input: { columns: ['name', 'qty', 'a', 'b', 'due'], with: { b_of: { link: {}, unlink: {} } } } },
-	update: { input: { columns: ['name', 'status', 'qty', 'b'], with: { a_of: { create: { columns: ['name', 'qty'] }, update: { columns: ['qty'] }, delete: {} } } } },
-	delete: { transform: true },
-	queries: { open: { description: 'Open rows', input: { since: { kind: 'date' },
-		pay: { kind: 'union', by: 't', arms: { card: { last4: { kind: 'text' } }, bank: { ref: { kind: 'int', optional: true } } } },
-		split: { kind: 'record', of: { kind: 'decimal', scale: 2 } } }, output: { kind: 'list', of: { kind: 'id', of: '${m(i)}' } } } },
-	actions: { go: { description: 'Go', target: 'record', input: { note: { kind: 'text' }, other: { kind: 'id', of: '${m(i + 7)}', where: { status: { eq: 'open' } } } },
-		output: { kind: 'object', fields: { n: { kind: 'int' } } } } },
-	notifications: { approvalStepRequested: [{ channel: 'inbox', to: ['step_approvers', { team: 'T0' }], title: 'M${i}' }] },
-});
-c.transform(function* (inputs, ctx) {
-	const siblings = yield* ctx.db.read('${m(i)}', { where: { status: { eq: 'open' } }, limit: 10 });
-	if (inputs.some((input, k) => '$delete' in input && ctx.existing[k]?.status === 'closed')) return yield* ctx.refuse('A closed row stays.');
-	return inputs.map((input, k) => '$delete' in input || input.name !== undefined ? input : { ...input, name: ctx.existing[k]?.name ?? String(siblings.rows.length) });
-});
-c.query('open', function* ({ since, pay, split }, ctx) {
-	const page = yield* ctx.read('${m(i)}', { where: { status: { eq: 'open' }, due: { gte: since }, a: { is: { upper: { eq: pay.t === 'card' ? pay.last4 : 'X' } } } },
-		select: { name: true }, limit: Object.keys(split).length });
-	return page.rows.map((r) => r.id);
-});
-c.action('go', function* ({ note, other }, ctx) {
-	const far = yield* ctx.read('${m(i + 7)}', { where: { upper: { eq: note + ctx.target.name }, qty_x2: { gt: 0 }, a_of: { some: { status: { eq: 'open' } } } },
-		select: { name: true, qty: true, email: true, a: { select: { name: true } }, a_of: { select: { qty: true }, limit: 10 } }, all: true });
-	yield* ctx.act('${m(i)}.update', { target: ctx.target.id, set: { qty: ctx.target.qty, a_of: { create: [{ name: note, qty: ctx.target.qty }] } } });
-	yield* ctx.act('${m(i + 7)}.update', { target: other, set: { name: note } });
-	const made = yield* ctx.act('${m(i)}.upsert', { name: note, qty: ctx.target.qty, a: ctx.target.a }, { onConflict: 'update' }).pipe(Effect.orElseSucceed(() => null)); // hook:ctx-types (rule 28)
-	return { n: far.rows.length + (made?.kind === 'committed' ? made.records.length : 0) };
-});
-export default c;
-`;
-
-const policyFile = (i: number) => `import { policy } from '${'$'}BOLT';
-export default policy({ description: 'P${i}', grants: {
-	${m(i)}: {
-		read: { where: { upper: { eq: 'A' }, total: { gt: 0 } },
-			fields: ['name', 'status', 'qty', 'due', 'tags', 'total', 'n_b', 'ref', 'upper', 'qty_x2', 'due_soon', 'a', 'b'] },
-		create: { where: 'read', fields: ['name', 'qty', 'a'] },
-		update: { where: 'read', previous: { status: { in: ['draft', 'open'] } }, fields: ['name', 'status', 'qty', 'a_of'] },
-		approval: { create: { match: { record: { qty: { gt: 100 } } }, steps: [['T0']] },
-			update: [{ match: { previous: { status: { eq: 'draft' } }, changed: ['status'], requestor: 'in_team' }, steps: [['T0'], ['T1']] }, { steps: [['T1']] }] },
-		delete: { status: { eq: 'draft' } },
-		queries: ['open'], actions: ['go'], moves: { status: ['draft->open'] },
-	},
-	${m(i + 7)}: { read: { email: { eq: { actor: 'email' } }, qty_x2: { gt: 1 } } },
-}, limits: { '${m(i)}.go': '10/min' } });
-`;
-
-const automationFile = (i: number) => `import { automation } from '${'$'}BOLT';
-const a = automation({ description: 'Chase ${m(i)}', runAs: ['p${i}'],
-	on: [{ updated: '${m(i)}', fields: ['status'], where: { status: { eq: 'open' } } }, { cron: '0 2 * * *' }] });
-a.run(function* ({ ids = [] }, ctx) {
-	const rows = yield* ctx.read('${m(i)}', { where: { id: { in: ids } }, select: { name: true }, all: true });
-	yield* ctx.act('${m(i)}.update', ids.map((id) => ({ target: id, set: { status: 'closed' as const } })));
-	yield* ctx.notify({ to: { team: 'T0' }, title: String(rows.rows.length) });
-});
-export default a;
-`;
-
-const relationshipsFile = (typo: boolean) => `import { relationship } from '${'$'}BOLT';
-export default relationship({${typo ? `\n\t'm0.c': { to: 'm1', inverse: 'a_of', optional: true },` : ''}
-${Array.from(
-	{ length: N },
-	(_, i) => `\t'${m(i)}.a': { to: '${m(i + 1)}', inverse: 'a_of', owned: true },
-	'${m(i)}.b': { to: '${m(i + 7)}', inverse: 'b_of', optional: true, onDelete: 'setNull' },`
-).join('\n')}
-});
-`;
-
+const policyFile = (i: number) => `import { policy } from '$BOLT';
+const data = ${JSON.stringify(policyData(i))} as const;
+export default policy({ ...data, grants: { ...data.grants, '${m(i)}': { ...data.grants['${m(i)}'],
+ create: { ...data.grants['${m(i)}'].create, approval: (_write, flow) => flow.step('Review', { teams: ['T0'] }) },
+ update: { ...data.grants['${m(i)}'].update, approval: (write, flow) => flow.step('Review', { teams: ['T0'] }).if(write.changed.includes('status'), (next) => next.step('Finance', { teams: ['T1'] })) }
+} } });`;
 const automated = () => Array.from({ length: N }, (_, i) => i).filter((i) => i % 10 === 0);
-const namesFile = () => `import type { Check, Verify } from '${'$'}BOLT';
-declare module '${'$'}BOLT' {
-	interface Names {
-		workspace: { currency: 'SGD' };
-		models: {
-${Array.from({ length: N }, (_, i) => `\t\t\t${m(i)}: typeof import('./models/${m(i)}.ts').default;`).join('\n')}
-		};
-		relationships: typeof import('./relationships.ts').default;
-		collections: {
-${Array.from({ length: N }, (_, i) => `\t\t\t${m(i)}: typeof import('./collections/${m(i)}.ts').default;`).join('\n')}
-		};
-		policies: {
-${Array.from({ length: N }, (_, i) => `\t\t\tp${i}: typeof import('./policies/p${i}.ts').default;`).join('\n')}
-		};
-		automations: {
-${automated()
-	.map((i) => `\t\t\ta${i}: typeof import('./automations/a${i}.ts').default;`)
-	.join('\n')}
-		};
-		teams: { T0: unknown; T1: unknown };
-	}
-}
+const automationData = (i: number) => ({
+	description: `Chase ${m(i)}`,
+	runAs: [`p${i}`],
+	on: [
+		{ updated: m(i), fields: ['status'], where: { status: { eq: 'open' } } },
+		{ cron: '0 2 * * *' }
+	]
+});
+const automationFile = (i: number) => `import { automation } from '$BOLT';
+export default automation('a${i}', { ...${JSON.stringify(automationData(i))}, run: function* ({ ids = [] }, ctx) {
+ const rows = yield* ctx.query('${m(i)}', { where: { id: { in: ids } }, select: { name: true }, all: true });
+ yield* ctx.act('${m(i)}.update', ids.map((id) => ({ target: id, set: { status: 'closed' as const } })));
+ yield* ctx.notify({ to: [{ team: 'T0' }], title: String(rows.rows.length) });
+} });`;
+const namesFile = (typo: boolean) => {
+	const parts = Array.from(
+		{ length: N },
+		(_, i) => [m(i), splitModel(m(i), modelData(i, typo && i === 0))] as const
+	);
+	const names = {
+		workspace: { currency: 'SGD' },
+		models: Object.fromEntries(parts.map(([name, p]) => [name, p.model])),
+		relationships: Object.assign({}, ...parts.map(([, p]) => p.relationships)),
+		collections: Object.fromEntries(
+			parts.flatMap(([name, p]) => (p.collection === undefined ? [] : [[name, p.collection]]))
+		),
+		policies: Object.fromEntries(Array.from({ length: N }, (_, i) => [`p${i}`, policyData(i)])),
+		automations: Object.fromEntries([
+			...Array.from({ length: N }, (_, i) => [`${m(i)}_go`, { spec: workflowData(i) }]),
+			...automated().map((i) => [`a${i}`, { spec: automationData(i) }])
+		]),
+		teams: { T0: [], T1: [] }
+	};
+	return `import type { Check, Verify } from '$BOLT';
+declare module '$BOLT' { interface Names ${literal(names)} }
 export const __verify: Check<Verify> = true;
 `;
+};
 
-/** Writes the workspace against `dts` (Bolt as a tenant sees it); `typo` plants five `__verify` mistakes. */
+/** Writes the same literal names a tenant sync creates; `typo` plants cross-file declaration mistakes. */
 const write = (dir: string, dts: string, typo: boolean) => {
-	const files: Record<string, string> = {
-		'names.ts': namesFile(),
-		'relationships.ts': relationshipsFile(typo)
-	};
+	const files: Record<string, string> = { 'names.ts': namesFile(typo) };
 	for (let i = 0; i < N; i++) {
-		files[`models/${m(i)}.ts`] = modelFile(i, typo && i === 0);
-		files[`collections/${m(i)}.ts`] = collectionFile(i);
-		files[`policies/p${i}.ts`] = policyFile(i);
+		files[`src/data/model/${m(i)}/+model.ts`] = modelFile(i, typo && i === 0);
+		files[`src/access_control/policy/+p${i}.policy.ts`] = policyFile(i);
+		files[`src/automation/+${m(i)}_go.automation.ts`] = workflowFile(i);
 	}
-	for (const i of automated()) files[`automations/a${i}.ts`] = automationFile(i);
+	for (const i of automated()) files[`src/automation/+a${i}.automation.ts`] = automationFile(i);
 	for (const [path, text] of Object.entries(files)) {
 		const file = join(dir, path);
-		mkdirSync(join(file, '..'), { recursive: true });
-		const src = relative(join(file, '..'), join(dts, 'index.js'));
-		writeFileSync(file, text.replaceAll('$BOLT', src.startsWith('.') ? src : `./${src}`));
+		mkdirSync(dirname(file), { recursive: true });
+		const source = relative(dirname(file), join(dts, 'index.js'));
+		writeFileSync(file, text.replaceAll('$BOLT', source.startsWith('.') ? source : `./${source}`));
 	}
 	writeFileSync(
 		join(dir, 'tsconfig.json'),

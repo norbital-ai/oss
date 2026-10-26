@@ -3,6 +3,7 @@ import { Sse } from 'effect/unstable/encoding';
 import { FacilityFailure } from '../decl/errors.ts';
 import { CONVERT_TARGETS } from './contracts.ts';
 import { Convert } from './ports.ts';
+import { fromBase64, toBase64 } from './crypto.ts';
 import { Port } from './port.ts';
 
 export type DocumentConverterConfig = {
@@ -48,7 +49,7 @@ export function documentConverter(config: DocumentConverterConfig): Convert['Ser
 							const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Result))(
 								event.data
 							).pipe(Effect.mapError(failure));
-							seen.bytes = new Uint8Array(Buffer.from(result.bytes, 'base64'));
+							seen.bytes = fromBase64(result.bytes);
 						}
 					})
 				)
@@ -66,9 +67,7 @@ export function documentConverter(config: DocumentConverterConfig): Convert['Ser
 					to,
 					...(options.page === undefined ? {} : { page: options.page }),
 					...(options.landscape === undefined ? {} : { landscape: options.landscape }),
-					...(options.reference === undefined
-						? {}
-						: { reference: Buffer.from(options.reference).toString('base64') })
+					...(options.reference === undefined ? {} : { reference: toBase64(options.reference) })
 				};
 				yield* Port.attempt('convert', (signal) =>
 					fetcher(`${base}/v1/convert`, {

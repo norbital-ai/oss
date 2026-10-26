@@ -15,7 +15,6 @@ import {
 	Predicate,
 	Queue,
 	Result,
-	Schedule,
 	Schema,
 	Scope,
 	Stream
@@ -24,7 +23,6 @@ import type { Json } from '../src/decl/values.ts';
 import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
 import {
-	ANSWERED,
 	FIXED,
 	NUDGE,
 	RECOVERY,
@@ -39,7 +37,8 @@ import { compileAuthority } from '../src/engine/access/authority.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
-import { Ai, type AiEvent } from '../src/engine/ports.ts';
+import { Ai, Mcp, type AiEvent } from '../src/engine/ports.ts';
+import { mcpPort } from '../src/node/mcp.ts';
 import { Agents, Live } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { AgentConversation, AgentRow, type Frame } from '../src/protocol/schema.ts';
@@ -65,22 +64,15 @@ const manifest: EngineManifest = {
 			read: { fields: 'all' },
 			create: { input: { columns: ['title', 'region'] } },
 			update: { input: { columns: ['title', 'region'] } },
-			delete: {},
-			actions: {
-				mark: {
-					description: 'Mark a quote',
-					input: { title: { kind: 'text' } },
-					output: { kind: 'text' },
-					agent: 'confirm'
-				}
-			}
+			delete: {}
 		}
 	},
 	policies: {
 		narrow: { description: 'Titles only', grants: { quotes: { read: { fields: ['title'] } } } },
 		rep: {
 			description: 'Rep',
-			grants: { quotes: { read: true, create: true, update: true, actions: ['mark'] } },
+			grants: { quotes: { read: true, create: true, update: true } },
+			automations: ['quotes_mark'],
 			capabilities: { mcp: ['hq'], skills: ['pricing'] }
 		},
 		reader: { description: 'Reads quotes', grants: { quotes: { read: true } } }
@@ -113,13 +105,24 @@ const manifest: EngineManifest = {
 		internal: 'Staff brief.',
 		external: 'Customer brief.',
 		skills: {
-			pricing: '---\ndescription: How we price\n---\n## Discounts\nTen percent.\n## Rounding\nUp.'
+			pricing: {
+				text: '---\ndescription: How we price\n---\n## Discounts\nTen percent.\n## Rounding\nUp.',
+				digest: '',
+				files: ['SKILL.md']
+			}
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	teams: { rep: ['rep'], reader: ['reader'], narrow: ['narrow'] },
-	automations: {},
+	automations: {
+		quotes_mark: {
+			description: 'Mark a quote',
+			input: { title: { kind: 'text' } },
+			output: { kind: 'text' },
+			runAs: 'trigger',
+			agent: 'confirm'
+		}
+	},
 	connections: {
 		desk: { integration: 'whatsapp', envoy: 'sales_desk' },
 		field: { integration: 'whatsapp', envoy: 'field' }
@@ -127,9 +130,9 @@ const manifest: EngineManifest = {
 	apps: {},
 	customFields: {}
 };
-const guest = program(`export default { collection: { quotes: { bodies: { actions: {
-	mark: function* (input, ctx) { return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id; },
-} } } } };`);
+const guest = program(`export default { automation: { quotes_mark: { body: function* (input, ctx) {
+	return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id;
+} } } };`);
 
 // Each cassette step is a native provider stream, pulled once by the real Ai service.
 type Step = Ai['Service']['infer'];
@@ -290,9 +293,10 @@ it.live('SDK close aborts an already-running MCP request without a second drain 
 			const hq = yield* mcpFixture;
 			const scope = yield* Scope.make();
 			yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
+			const mcp = Mcp.fromAbi(yield* mcpPort);
 			const sessions = yield* mcpSessions(manifest, {
 				secret: (name) => Effect.succeed(name === 'HQ_URL' ? hq.url : 's3cret')
-			}).pipe(Scope.provide(scope));
+			}).pipe(Scope.provide(scope), Effect.provide(mcp));
 			const call = yield* Effect.forkChild(
 				sessions.call('hq', 'echo', { text: 'hold-native-close' }).pipe(Effect.result)
 			);
@@ -499,7 +503,7 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'ask hq' });
 						yield* agent.drain(c);
 						expect(toolNames(ai.requests[0])).toEqual(
-							expect.arrayContaining(['read', 'act', 'skill', 'mcp__hq__echo', 'subagent'])
+							expect.arrayContaining(['query', 'act', 'skill', 'mcp__hq__echo', 'subagent'])
 						);
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
@@ -539,12 +543,12 @@ describe('in-app turns', () => {
 	);
 
 	it.live(
-		'holds a confirm action on a card until the member confirms; it then executes and the turn goes on',
+		'holds an automation start until the member confirms, then queues it as that member',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('act', { callable: 'quotes.mark', input: { title: 'Chair' } }, 'k1'),
+						use('act', { callable: 'automation.quotes_mark', input: { title: 'Chair' } }, 'k1'),
 						say('Marked.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -561,232 +565,38 @@ describe('in-app turns', () => {
 							(yield* Effect.flip(agent.confirm(held.id, true, yield* authority(bob)))).message
 						).toMatch(/only the person/);
 						const { reply } = yield* agent.confirm(held.id, true, yield* authority(ann));
-						expect(yield* quotes(t)).toEqual([{ title: 'Chair', created_by: ann }]);
+						expect(yield* quotes(t)).toEqual([]);
 						expect(reply).toMatchObject({
 							text: 'Marked.',
-							meta: { receipts: [{ outcome: 'committed', callable: 'quotes.mark' }] }
+							meta: { receipts: [{ outcome: 'committed', callable: 'automation.quotes_mark' }] }
 						});
-						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({ kind: 'committed' });
-					}).pipe(Effect.provide(fixture.context));
-				})
-			)
-	);
-
-	it.live(
-		'a confirm host tool is held on a card: declined it never runs; approved it runs once, as the person, and the turn goes on',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const calls: Array<{ input: Json; actor: string; callId: string }> = [];
-					const publish: HostTool = {
-						name: 'go_live',
-						description: 'Go live',
-						input: { type: 'object' },
-						confirm: true,
-						call: async (input, context) => {
-							calls.push({
-								input,
-								actor: context.actor.kind === 'member' ? context.actor.id : context.actor.kind,
-								callId: context.callId
-							});
-							return { live: true };
-						}
-					};
-					const fixture = yield* setup(
-						[
-							use('go_live', { commit: 'c1' }, 'g1'),
-							say('Not published.'),
-							use('go_live', { commit: 'c2' }, 'g2'),
-							say('Published.')
-						],
-						{ hostTools: async () => [publish] }
-					);
-					return yield* Effect.gen(function* () {
-						const { ai, agent, user, authority } = fixture;
-						const root = yield* user('root', { admin: true });
-						const c = yield* agent.start({ owner: root });
-						yield* agent.post({ conversation: c, as: { member: root }, text: 'publish' });
-						yield* agent.drain(c);
-						expect(calls).toEqual([]);
-						const first = (yield* agent.transcript(c)).find((r) => r.state === 'confirm')!;
-						expect(first.meta).toMatchObject({
-							tag: 'confirm',
-							call: { id: 'g1', name: 'go_live' }
-						});
-						const declined = yield* agent.confirm(first.id, false, yield* authority(root));
-						expect(declined.reply?.text).toBe('Not published.');
-						expect(calls).toEqual([]);
-						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({ declined: true });
-						yield* agent.post({ conversation: c, as: { member: root }, text: 'publish now' });
-						yield* agent.drain(c);
-						const second = (yield* agent.transcript(c)).find((r) => r.state === 'confirm')!;
-						expect(calls).toEqual([]);
-						const { reply } = yield* agent.confirm(second.id, true, yield* authority(root));
-						expect(calls).toEqual([{ input: { commit: 'c2' }, actor: root, callId: 'g2' }]);
-						expect(reply?.text).toBe('Published.');
-						expect(toolResults(ai.requests[3]!).at(-1)).toMatchObject({ live: true });
-						// a repeat press is refused: the call never runs a second time
+						const started = toolResult(
+							Schema.Struct({
+								run: Schema.String,
+								outcome: Schema.Struct({ kind: Schema.Literal('committed') })
+							}),
+							ai.requests[1]!,
+							0
+						);
 						expect(
-							(yield* Effect.flip(agent.confirm(second.id, true, yield* authority(root)))).message
-						).toBe(ANSWERED);
-						expect(calls).toHaveLength(1);
-					}).pipe(Effect.provide(fixture.context));
-				})
-			)
-	);
-
-	it.live(
-		'an approved host call is claimed once, shows its steps, and still settles when its confirm is interrupted',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					let calls = 0;
-					const publish: HostTool = {
-						name: 'go_live',
-						description: 'Go live',
-						input: { type: 'object' },
-						confirm: true,
-						// like a publish whose cutover retires the generation running it: it never answers here
-						call: (_input, context, signal) => {
-							calls += 1;
-							context.progress?.('diagnose');
-							return new Promise((_resolve, reject) =>
-								signal.addEventListener('abort', () => reject(signal.reason))
-							);
-						}
-					};
-					const fixture = yield* setup([use('go_live', { commit: 'c1' }, 'g1')], {
-						hostTools: async () => [publish]
-					});
-					return yield* Effect.gen(function* () {
-						const { agent, user, authority } = fixture;
-						const root = yield* user('root', { admin: true });
-						const c = yield* agent.start({ owner: root });
-						yield* agent.post({ conversation: c, as: { member: root }, text: 'publish' });
-						yield* agent.drain(c);
-						const held = (yield* agent.transcript(c)).find((r) => r.state === 'confirm')!;
-						const pressed = yield* Effect.forkChild(
-							agent.confirm(held.id, true, yield* authority(root))
-						);
-						const row = Effect.map(agent.transcript(c), (rows) =>
-							rows.find((r) => r.id === held.id)
-						);
-						// the card is claimed and shows the host's step while the call runs
-						const running = yield* row.pipe(
-							Effect.repeat({
-								until: (r) =>
-									r?.state === 'approved' &&
-									Predicate.isObject(r.content) &&
-									r.content['progress'] === 'diagnose',
-								schedule: Schedule.spaced('10 millis'),
-								times: 500
+							yield* t.db.rows(Schema.Struct({ state: Schema.String }), {
+								text: 'SELECT state FROM sys_run WHERE id = $1',
+								params: [started.run]
 							})
-						);
-						expect(running?.state).toBe('approved');
-						expect(
-							(yield* Effect.flip(agent.confirm(held.id, true, yield* authority(root)))).message
-						).toBe(ANSWERED);
-						yield* Fiber.interrupt(pressed);
-						const settled = yield* row;
-						expect(settled?.state).toBeNull();
-						expect(settled?.content).toMatchObject({
-							id: 'g1',
-							name: 'go_live',
-							result: { restarted: FIXED.restartedDuring('Building…') }
+						).toEqual([{ state: 'queued' }]);
+						yield* t.runDue();
+						expect(yield* quotes(t)).toEqual([{ title: 'Chair', created_by: ann }]);
+						const quoteId = yield* t.db.value(Schema.String, {
+							text: 'SELECT id FROM quotes',
+							params: []
 						});
 						expect(
-							(yield* Effect.flip(agent.confirm(held.id, true, yield* authority(root)))).message
-						).toBe(ANSWERED);
-						expect(calls).toBe(1);
-					}).pipe(Effect.provide(fixture.context));
-				})
-			)
-	);
-
-	it.live(
-		'a confirm settled by the switch-over restart is resumed once by the next generation, which reports the outcome',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const publish: HostTool = {
-						name: 'go_live',
-						description: 'Go live',
-						input: { type: 'object' },
-						confirm: true,
-						// its cutover retires the generation running it: it never answers there
-						call: (_input, context, signal) => {
-							context.progress?.('merge');
-							return new Promise((_resolve, reject) =>
-								signal.addEventListener('abort', () => reject(signal.reason))
-							);
-						}
-					};
-					const fixture = yield* setup(
-						[use('go_live', { commit: 'c1' }, 'g1'), say('Applied: the workspace is on c1.')],
-						{ hostTools: async () => [publish] }
-					);
-					const { agent, user, authority, ai, t } = fixture;
-					const { c, held } = yield* Effect.gen(function* () {
-						const root = yield* user('root', { admin: true });
-						const c = yield* agent.start({ owner: root });
-						yield* agent.post({ conversation: c, as: { member: root }, text: 'publish' });
-						yield* agent.drain(c);
-						const held = (yield* agent.transcript(c)).find((r) => r.state === 'confirm')!;
-						const pressed = yield* Effect.forkChild(
-							agent.confirm(held.id, true, yield* authority(root))
-						);
-						yield* agent.transcript(c).pipe(
-							Effect.repeat({
-								until: (rows) =>
-									rows.some(
-										(r) =>
-											r.id === held.id &&
-											Predicate.isObject(r.content) &&
-											r.content['progress'] === 'merge'
-									),
-								schedule: Schedule.spaced('10 millis'),
-								times: 500
+							yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+								text: 'SELECT state, output FROM sys_run WHERE id = $1',
+								params: [started.run]
 							})
-						);
-						yield* Fiber.interrupt(pressed);
-						return { c, held };
+						).toEqual([{ state: 'succeeded', output: quoteId }]);
 					}).pipe(Effect.provide(fixture.context));
-					// the old generation settled the card but never ran the turn on
-					expect(ai.requests).toHaveLength(1);
-					const generation = Effect.gen(function* () {
-						return Context.get(
-							yield* Layer.build(
-								TestWorkspace.layer({
-									manifest,
-									guest: yield* guest,
-									ports: ai.layer,
-									db: Layer.succeed(TenantDb, t.db),
-									host: { agent: { mcp: { secret: () => Effect.succeed(undefined) } } }
-								})
-							),
-							Agents
-						);
-					});
-					// the new generation resumes it at its start
-					const next = yield* generation;
-					const rows = yield* next.transcript(c).pipe(
-						Effect.repeat({
-							until: (rows) => rows.some((r) => r.role === 'assistant' && r.meta?.tag === 'reply'),
-							schedule: Schedule.spaced('10 millis'),
-							times: 500
-						})
-					);
-					expect(rows.find((r) => r.role === 'assistant' && r.meta?.tag === 'reply')?.text).toBe(
-						'Applied: the workspace is on c1.'
-					);
-					expect(toolResults(ai.requests[1]!).at(-1)).toMatchObject({
-						restarted: FIXED.restartedDuring('Switching over…')
-					});
-					expect(rows.find((r) => r.id === held.id)?.content).toMatchObject({ resumed: true });
-					// one resume per settled card: a later generation finds nothing to resume
-					yield* generation;
-					yield* Effect.sleep('100 millis');
-					expect(ai.requests).toHaveLength(2);
 				})
 			)
 	);
@@ -975,7 +785,7 @@ describe('envoy conversations', () => {
 									return use('read_messages', {})(req);
 								})
 							),
-						use('read', { collection: 'quotes' }),
+						use('query', { collection: 'quotes' }),
 						say('Both seen.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -1395,23 +1205,23 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 	);
 
 	it.live(
-		'read keeps named fields whole and pages on from the last row it shows, and honours field masks (parity 1.1, 1.3)',
+		'query keeps named fields whole and pages on from the last row it shows, and honours field masks (parity 1.1, 1.3)',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const long = (i: number) => `${String(i).padStart(2, '0')} ${'x'.repeat(2_000)}`;
 					const q = { collection: 'quotes', select: { title: true }, orderBy: { title: 'asc' } };
 					const onward: Step = (req) =>
-						use('read', {
+						use('query', {
 							...q,
 							limit: 1,
 							after: toolResult(Schema.Struct({ next: Schema.String }), req, 0).next
 						})(req);
 					const fixture = yield* setup([
-						use('read', { ...q, limit: 30 }),
+						use('query', { ...q, limit: 30 }),
 						onward,
 						say('a'),
-						use('read', { collection: 'quotes', limit: 1 }),
+						use('query', { collection: 'quotes', limit: 1 }),
 						say('b')
 					]);
 					return yield* Effect.gen(function* () {
@@ -1585,7 +1395,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						input: { type: 'object' },
 						call: async () => big
 					};
-					const bad = use('read', { collection: 'nope' });
+					const bad = use('query', { collection: 'nope' });
 					const fixture = yield* setup(
 						[
 							say('first'),
@@ -1616,7 +1426,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						);
 						const whole = JSON.stringify(big, null, 2);
 						expect(toolResults(ai.requests[3]!)[1]).toMatchObject({
-							readOutput: `clipped: the whole result (${whole.length} bytes) is .scratch/tool-output/${c2}/b1-big.txt. read_output { call: 'b1', offset } reads it on`
+							readOutput: `clipped: the whole result (${whole.length} bytes). read_output { call: 'b1', offset } reads it on`
 						});
 						expect(toolResults(ai.requests[4]!)[2]).toMatchObject({
 							offset: 100,
@@ -1671,7 +1481,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						);
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 							readOutput: expect.stringContaining(
-								`.scratch/tool-output/${c}/r1-draft_read.txt. read_output { call: 'r1', offset } reads it on`
+								`). read_output { call: 'r1', offset } reads it on`
 							)
 						});
 						const Out = Schema.Struct({
@@ -1742,8 +1552,12 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							hostTools: async () => tools,
 							hostInlineMs: 20,
 							skills: async () => ({
-								authoring:
-									'---\ndescription: Author a workspace\n---\n## Rules\nOne file per collection.'
+								authoring: {
+									text: '---\ndescription: Author a workspace\n---\n## Rules\nOne file per collection.',
+									digest: '',
+									files: ['SKILL.md'],
+									read: async () => new Uint8Array()
+								}
 							})
 						}
 					);
@@ -2038,16 +1852,91 @@ describe('durable turns (rule 48)', () => {
 				})
 			)
 	);
+
+	// l06: a research turn's generation closed mid-call (a reload), and the turn read idle with no answer
+	it.live(
+		'a turn whose generation closes mid-call keeps its lease and agent.turn run; the next generation answers from the transcript',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup(
+						[say('The search was cut off; here is what I found.')],
+						{},
+						new Date(yield* Clock.currentTimeMillis).toISOString()
+					);
+					return yield* Effect.gen(function* () {
+						const { t, ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						// the first generation: a host call that is still running when the generation closes
+						const started = Promise.withResolvers<void>();
+						const held: HostTool = {
+							name: 'held',
+							description: 'A long search',
+							input: { type: 'object' },
+							call: (_input, _ctx, signal) =>
+								new Promise((resolve) => {
+									started.resolve();
+									signal.addEventListener('abort', () => resolve({ aborted: true }));
+								})
+						};
+						const first = cassette([use('held', {}, 'h1')]);
+						const generation = yield* Scope.make();
+						const before = Context.get(
+							yield* Layer.build(
+								TestWorkspace.layer({
+									manifest,
+									guest: yield* guest,
+									seed: 'none',
+									now: t.clock.now(),
+									ports: first.layer,
+									db: Layer.succeed(TenantDb, t.db),
+									host: {
+										agent: { mcp: { secret: () => Effect.succeed(undefined) }, hostTools: [held] }
+									}
+								})
+							).pipe(Scope.provide(generation)),
+							Agents
+						);
+						const c = yield* before.start({ owner: root });
+						yield* before.post({ conversation: c, as: { member: root }, text: 'research this' });
+						const turn = yield* Effect.forkChild(before.drain(c).pipe(Effect.exit));
+						yield* Effect.promise(() => started.promise);
+						yield* Scope.close(generation, Exit.void);
+						yield* Fiber.join(turn);
+						const [held1] = (yield* t.db.read([
+							{
+								text: `SELECT c.status, (SELECT count(*)::int FROM sys_run WHERE automation = 'agent.turn' AND state = 'queued' AND input->>'conversation' = c.id) AS runs FROM sys_conversation c WHERE c.id = $1`,
+								params: [c]
+							}
+						]))[0]!.rows;
+						expect(held1).toEqual({ status: 'running', runs: 1 });
+						// the next generation takes the turn over once the lease lapses, and answers
+						t.clock.advance('2min');
+						yield* t.runDue();
+						expect(ai.requests).toHaveLength(1);
+						expect(toolResults(ai.requests[0]!)).toContainEqual({
+							error: 'The turn ended before this call finished.'
+						});
+						expect((yield* agent.transcript(c)).at(-1)).toMatchObject({
+							role: 'assistant',
+							text: 'The search was cut off; here is what I found.',
+							meta: { tag: 'reply' }
+						});
+						expect((yield* agent.conversation(c)).status).toBe('idle');
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
 });
 
 describe('counting is one aggregate read (hr: "why did turnover spike in March 2026" took 24 reads)', () => {
 	it.live(
-		'the read tool offers aggregate with count and by (time buckets named), and a grouped aggregate needs no limit from the model',
+		'the query tool offers aggregate with count and by (time buckets named), and a grouped aggregate needs no limit from the model',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('read', { collection: 'quotes', aggregate: { count: true, by: 'region' } }),
+						use('query', { collection: 'quotes', aggregate: { count: true, by: 'region' } }),
 						say('Two north, one south.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -2071,9 +1960,10 @@ describe('counting is one aggregate read (hr: "why did turnover spike in March 2
 							text: 'How many quotes per region?'
 						});
 						yield* agent.drain(c);
-						const read = ai.requests[0]!.tools!.find((x) => x.name === 'read')!;
-						expect(read.description).toContain('aggregate');
-						expect(read.description).toContain('by: { month:');
+						const query = ai.requests[0]!.tools!.find((x) => x.name === 'query');
+						if (query === undefined) throw new Error('The query tool must be offered.');
+						expect(query.description).toContain('aggregate');
+						expect(query.description).toContain('by: { month:');
 						expect(
 							Schema.decodeUnknownSync(
 								Schema.Struct({
@@ -2083,7 +1973,7 @@ describe('counting is one aggregate read (hr: "why did turnover spike in March 2
 										})
 									})
 								})
-							)(read.input).properties.aggregate.properties
+							)(query.input).properties.aggregate.properties
 						).toMatchObject({ count: {}, by: {} });
 						expect(ai.requests[0]!.system).toContain('one aggregate read');
 						const answer = JSON.stringify(toolResults(ai.requests[1]!)[0]);
@@ -2113,7 +2003,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const bad = use('read', { collection: 'quotes', where: { month: '2026-03' } });
+					const bad = use('query', { collection: 'quotes', where: { month: '2026-03' } });
 					const fixture = yield* setup([
 						...Array.from({ length: 12 }, () => bad),
 						say(''),
@@ -2173,7 +2063,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 							toolCalls: [
 								{
 									id: 'g1',
-									name: 'read',
+									name: 'query',
 									input: {},
 									invalid: 'Expected double-quoted property name in JSON at position 12'
 								}
@@ -2204,7 +2094,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const fixture = yield* setup([use('read', { collection: 'quotes' }), say(''), say('')]);
+					const fixture = yield* setup([use('query', { collection: 'quotes' }), say(''), say('')]);
 					return yield* Effect.gen(function* () {
 						const { agent, user } = fixture;
 						const root = yield* user('root', { admin: true });

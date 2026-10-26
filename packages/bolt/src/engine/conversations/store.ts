@@ -2,12 +2,13 @@
 // `sys_message` rows in a `sys_conversation` (one per provider chat or mail thread of an instance), the system models the
 // agents area shares. A notice on a conversation connection is delivered by the run the engine's trigger queues
 // (`engine/schema/engine.ts`).
-import { createHash } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
+import * as EffectArray from 'effect/Array';
 import { Crypto, Effect, Option, Schema } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { Chain } from '../write/sql.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import type { MessageInsert } from '../services.ts';
 import type { As } from '../agent/schema.ts';
 
@@ -18,7 +19,7 @@ export const ADMIT = 'envoys.admit';
 
 /** Stable ids: a redelivery of the same provider message is the same row (deduplicated by `(instance, provider_id)`). */
 export const stableId = (...parts: readonly string[]): string => {
-	const h = createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+	const h = sha256Hex(JSON.stringify(parts));
 	return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 };
 export const conversationId = (instance: string, thread: string): string =>
@@ -52,7 +53,7 @@ export function post(
 	message: MessageInsert & { readonly addressed?: false | undefined }
 ): string {
 	const text = message.text ?? null,
-		files = Array.isArray(message.files) ? message.files : [];
+		files = EffectArray.isArray<typeof message.files>(message.files) ? message.files : [];
 	const row = msg(
 		c,
 		`INSERT INTO sys_message AS m (id, conversation, role, content, text, preview, state, mode, "as", author, meta, turn, supersedes, addressed)

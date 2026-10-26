@@ -51,6 +51,7 @@ export const KINDS = {
 	count: entry('count', 'show', true),
 	vector: entry('vector', 'show', true),
 	id: entry('id', 'id'),
+	ref: entry('ref', 'id'),
 	json: entry('json', 'json'),
 	custom: entry('custom', 'json'),
 	file: entry('file', 'show'),

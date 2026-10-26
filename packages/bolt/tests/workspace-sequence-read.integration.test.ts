@@ -11,21 +11,29 @@ it.effect(
 		Effect.scoped(
 			Effect.gen(function* () {
 				const guest = {
-					source: `export default { collection: { orders: { bodies: { transform: function* (rows, ctx) {
-		const ids = ctx.existing.flatMap((row) => row ? [row.id] : []);
-		if (!ids.length) return rows;
-		const labels = yield* ctx.db.read('orders', { where: { id: { in: ids } }, select: { number: true }, all: true });
-		const ordinary = yield* ctx.db.read('orders', { where: { id: { in: ids } }, all: true });
+					source: `export default { collection: { orders: { bodies: { update: function* (changes, ctx) {
+		const ids = changes.map(({ before }) => before.id);
+		const labels = yield* ctx.db.query('orders', { where: { id: { in: ids } }, select: { number: true }, all: true });
+		const ordinary = yield* ctx.db.query('orders', { where: { id: { in: ids } }, all: true });
 		if (ordinary.rows.some((row) => Object.hasOwn(row, 'number') || Object.hasOwn(row, 'total'))) yield* ctx.refuse('ordinary rows exposed derived fields');
 		if (labels.rows.some((row) => Object.keys(row).sort().join(',') !== 'id,number')) yield* ctx.refuse('sequence projection read other fields');
-		return rows.map((row, i) => row.status === 'submitted' ? { ...row, note: labels.rows.find((label) => label.id === ctx.existing[i].id).number } : row);
+		return changes.map(({ before, set }) => set.status === 'submitted' ? { ...set, note: labels.rows.find((label) => label.id === before.id).number } : set);
 	} } } } };`
 				};
 				const context = yield* Layer.build(
 					TestWorkspace.layer({
-						manifest,
+						manifest: {
+							...manifest,
+							collections: {
+								...manifest.collections,
+								orders: {
+									...manifest.collections.orders,
+									update: { ...manifest.collections.orders.update, transform: true }
+								}
+							}
+						},
 						guest: yield* program(guest.source),
-						transforms: ['orders'],
+						transforms: ['orders.update'],
 						seed
 					})
 				);
@@ -54,7 +62,7 @@ it.effect(
 						})).outcome.kind
 					).toBe('committed');
 					expect(
-						(yield* qReply(route, as.authority, { reads: [{ m: 'get', a: ['orders', id, {}] }] }))
+						(yield* qReply(route, as.authority, { reads: [{ m: 'query', a: ['orders', { id }] }] }))
 							.answers[0]
 					).toMatchObject({ number, note: number });
 					expect(

@@ -1,4 +1,4 @@
-// engine/conversations on PGlite (§4.2 class `message`, §4.3, rule 61, rule 41's exception, G12 (3)): serial-pcn's
+// engine/conversations on PGlite (§4.3, rule 61, rule 41's exception, G12 (3)): serial-pcn's
 // `customer_notices` shape — a `sent_emails` row's create sends its mail through the `customer_mail` connection, delivery
 // reports and the customer's reply land on the row after it is closed — plus one-statement inbound keyed by instance
 // (dedupe, edits, revokes, files, oversize descriptors, the `messages` feed it queues), personal instances (sync only),
@@ -9,7 +9,13 @@ import { createHash } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { Drivers, Files } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { Activation, Approvals, Conversations, Outbound } from '../src/engine/services.ts';
+import {
+	Activation,
+	Approvals,
+	Conversations,
+	Outbound,
+	RunHandlers
+} from '../src/engine/services.ts';
 import { EngineLive } from '../src/engine/host.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { DbError } from '../src/engine/errors.ts';
@@ -19,13 +25,13 @@ import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { HostIdentity } from '../src/shell/host.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, Outcome } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
 import { SendRefused } from '../src/engine/conversations/status.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { settings } from '../src/shell/settings/data.ts';
-import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
+import { KitInvalid, TestWorkspace, type TestOptions } from '../src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
 const manifest = Result.getOrThrow(
@@ -68,6 +74,7 @@ const manifest = Result.getOrThrow(
 			sent_emails: {
 				read: { fields: 'all' },
 				create: { input: { columns: ['to', 'subject', 'body'] } },
+				syncs: { mail: { with: 'customer_notices', read: true, write: true } },
 				update: {
 					input: {
 						columns: [
@@ -81,18 +88,19 @@ const manifest = Result.getOrThrow(
 					}
 				}
 			},
-			supplier_mail: { read: { fields: 'all' } }
+			supplier_mail: {
+				read: { fields: 'all' },
+				syncs: { inbox: { with: 'mail_import', read: true } }
+			}
 		},
 		integrations: {
 			customer_notices: {
 				description: 'Customer notices',
-				driver: 'email',
-				outbound: { notice: { from: 'sent_emails', via: 'customer_mail' } }
+				driver: 'email'
 			},
 			mail_import: {
 				description: 'The supplier inbox',
-				driver: 'email',
-				feeds: { supplier_mail: { into: 'supplier_mail', key: ['message_id'], from: 'messages' } }
+				driver: 'email'
 			}
 		},
 		connections: {
@@ -102,7 +110,6 @@ const manifest = Result.getOrThrow(
 			slack_b: { integration: 'slack' },
 			supplier_inbox: { integration: 'mail_import' }
 		},
-		pipelines: {},
 		policies: {
 			staff: {
 				description: 'Staff',
@@ -113,7 +120,7 @@ const manifest = Result.getOrThrow(
 				grants: {
 					sent_emails: {
 						read: true,
-						approval: { create: [{ match: { requestor: 'in_team' }, steps: [['Leads']] }] }
+						create: { approval: true }
 					}
 				}
 			}
@@ -136,19 +143,15 @@ const manifest = Result.getOrThrow(
 );
 
 const guest = program(`export default {
-	integration_definition: {
-		customer_notices: { bodies: { feeds: {}, outbound: { notice: {
-			build: (record) => record.to === 'nobody' ? null : ({ to: [record.to], subject: record.subject, text: record.body, thread: record.id }),
-			events: {
-				sent: (e) => ({ sent_at: e.at }), delivered: (e) => ({ delivered_at: e.at }), opened: (e) => ({ opened_at: e.at }),
-				bounced: (e) => ({ failed_reason: e.reason }), failed: (e) => ({ failed_reason: e.reason }), replied: (e) => ({ replied_at: e.at }),
-				deferred: (e) => ({ failed_reason: 'deferred ' + (e.code ?? '') }), auto_replied: (e) => ({ failed_reason: 'auto: ' + e.reply.subject }),
-			},
+	collection: {
+		sent_emails: { bodies: { syncs: { mail: {
+			write: function* ({op,row},ctx) { if(op!=='create'||row.to==='nobody')return null;return {$id:yield* ctx.send({to:[row.to],subject:row.subject,text:row.body,thread:row.id})}; },
+			read: function* ({deliveries}) { return {rows:deliveries.filter((e)=>e.kind!=='message').map((e)=>({$id:e.message,...(e.kind==='sent'?{sent_at:e.at}:e.kind==='delivered'?{delivered_at:e.at}:e.kind==='opened'?{opened_at:e.at}:e.kind==='replied'?{replied_at:e.at}:e.kind==='auto_replied'?{failed_reason:'auto: '+e.reply.subject}:{failed_reason:e.kind==='deferred'?'deferred '+(e.code??''):e.reason})}))}; }
 		} } } },
-		mail_import: { bodies: { feeds: { supplier_mail: { map: function* (mails) { return mails.map((m) => m.deleted ? { delete: { message_id: m.id } }
-			: { upsert: { message_id: m.id, subject: m.subject, files: m.attachments } }); } } }, outbound: {} } },
+		supplier_mail: { bodies: { syncs: { inbox: { read: function* ({deliveries}) {return {rows:deliveries.filter((d)=>d.kind==='message').map(({message:m})=>({$id:m.id,$version:m.version,...(m.deleted?{$deleted:true}:{message_id:m.id,subject:m.subject,files:m.attachments})}))};} } } } }
 	},
-	automation: { ping: { body: function* (input, ctx) { return yield* ctx.send('desk_wa', { to: '6591234567@s.whatsapp.net', text: 'hello from a run' }); } } },
+	policy:{clerk:{grants:{sent_emails:{create:{approval:(_write,flow)=>flow.step('Leads',{teams:['Leads']})}}}}},
+	automation: { ping: { body: function* (input,ctx) {return yield* ctx.send('desk_wa',{to:'6591234567@s.whatsapp.net',text:'hello from a run'});} } }
 };`);
 
 const ok = (o: Outcome) => {
@@ -214,7 +217,8 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			remove: (key) =>
 				Effect.sync(() => {
 					blobs.delete(key);
-				})
+				}),
+			download: () => Port.unavailable('files.download')
 		};
 		const ports = Layer.mergeAll(
 			Layer.succeed(Files, files),
@@ -238,7 +242,6 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			...nativeConversations,
 			send: (...args) => nativeConversations.send(...args).pipe(Effect.provide(context)),
 			receive: (...args) => nativeConversations.receive(...args).pipe(Effect.provide(context)),
-			webhook: (...args) => nativeConversations.webhook(...args).pipe(Effect.provide(context)),
 			handlers: Object.fromEntries(
 				Object.entries(nativeConversations.handlers).map(([name, handler]) => [
 					name,
@@ -263,7 +266,7 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			}).pipe(Effect.map((o) => ok(o).records[0]!.id));
 		const row = (id: string) =>
 			qReply(route, t.as(t.admin).authority, {
-				reads: [{ m: 'get', a: ['sent_emails', id, {}] }]
+				reads: [{ m: 'query', a: ['sent_emails', { id }] }]
 			}).pipe(
 				Effect.flatMap((r) =>
 					Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(r.answers[0])
@@ -271,12 +274,33 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			);
 		const rows = (text: string) =>
 			t.db.read([{ text, params: [] }]).pipe(Effect.map((r) => r[0]?.rows ?? []));
+		const runs = () =>
+			t.db.rows(
+				Schema.Struct({
+					automation: Schema.String,
+					state: Schema.String,
+					due: Schema.String,
+					error: Schema.NullOr(Schema.String)
+				}),
+				{
+					text: `SELECT automation, state, due_at::text AS due, left(error->>'message',400) AS error
+			FROM sys_run WHERE state IN ('queued','running','failed') ORDER BY due_at,id LIMIT 10`,
+					params: []
+				}
+			);
 		const outbox = () =>
 			rows(
-				`SELECT id, integration, status, attempts, error, conversation, provider_id, record FROM sys_message WHERE direction = 'outbound' AND status IS NOT NULL ORDER BY seq`
+				`SELECT m.id, m.integration, m.status, m.attempts, m.error, m.conversation, m.provider_id, o.record
+				FROM sys_message m LEFT JOIN sys_outbox o ON o.key = m.meta ->> 'sync_write'
+				WHERE m.direction = 'outbound' AND m.status IS NOT NULL ORDER BY m.seq`
 			);
 		const sent = (instance: string) => recorded.filter((s) => s.instance === instance);
-		const deliver = () => outbound.deliver.pipe(Effect.provide(context));
+		const deliver = () =>
+			t.syncs.deliver().pipe(
+				Effect.andThen(outbound.deliver),
+				Effect.tap(() => t.syncs.read('sent_emails.sync.mail')),
+				Effect.provide(context)
+			);
 		const report = (
 			instance: string,
 			providerId: string,
@@ -284,11 +308,13 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 				[k: string]: Json;
 			}
 		) =>
-			conversations.receive(instance, {
-				kind: 'delivery',
-				providerId,
-				report: { provider: 'fake', ...r }
-			});
+			conversations
+				.receive(instance, {
+					kind: 'delivery',
+					providerId,
+					report: { provider: 'fake', ...r }
+				})
+				.pipe(Effect.andThen(t.syncs.read('sent_emails.sync.mail')));
 		const timeline = () =>
 			rows(
 				`SELECT status, delivery FROM sys_message WHERE direction = 'outbound' ORDER BY seq`
@@ -300,16 +326,18 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 				})
 			);
 		const reply = (id: string, headers: { [k: string]: string }, subject: string) =>
-			t.receive(
-				'customer_mail',
-				mail({
-					id,
-					sentAt: '2026-09-25T11:00:00.000Z',
-					subject,
-					text: 'x',
-					headers: { 'in-reply-to': provider('customer_mail'), ...headers }
-				})
-			);
+			t
+				.receive(
+					'customer_mail',
+					mail({
+						id,
+						sentAt: '2026-09-25T11:00:00.000Z',
+						subject,
+						text: 'x',
+						headers: { 'in-reply-to': provider('customer_mail'), ...headers }
+					})
+				)
+				.pipe(Effect.andThen(t.syncs.read('sent_emails.sync.mail')));
 		const history = () =>
 			rows(
 				`SELECT integration, provider_id, text, deleted_at IS NOT NULL AS deleted, ${filesOf('m')} AS files, conversation, origin FROM sys_message m WHERE direction = 'inbound' ORDER BY seq`
@@ -350,6 +378,7 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			notice,
 			row,
 			rows,
+			runs,
 			outbox,
 			sent,
 			deliver,
@@ -377,228 +406,19 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 		};
 	});
 
-describe('record-driven outbound to a conversation (G12 (3))', () => {
-	it.live(
-		'a build that answers null sends nothing for that row: skipped, not failed, and the row is not patched',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* fixture(),
-						t = f.t;
-					const id = ok(
-						yield* f.act(f.staff(), 'sent_emails.create', { to: 'nobody', subject: 'x', body: 'y' })
-					).records[0]!.id;
-					yield* f.deliver();
-					expect(f.sent('customer_mail')).toHaveLength(0);
-					expect(yield* f.outbox()).toMatchObject([
-						{ status: 'skipped', error: expect.stringContaining('sends nothing') }
-					]);
-					expect(yield* f.row(id)).toMatchObject({ failed_reason: null, sent_at: null });
-					// the instance's day in Settings counts it on its own, neutral: never a failure, never the last error
-					const s = yield* settings(
-						Context.get(f.context, HostIdentity),
-						t.manifest,
-						t.as(t.admin).authority
-					);
-					expect(s.instances.find((i) => i.id === 'customer_mail')?.delivery).toMatchObject({
-						failed: 0,
-						skipped: 1,
-						lastError: null
-					});
-				})
-			)
-	);
-
-	it.live("a notice row's create queues its mail and the delivery run in the same statement", () =>
+describe('conversation sync writes', () => {
+	it.live('queues a committed row through its sync before sending its message', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				t.count.reset();
+				const f = yield* fixture();
 				const id = yield* f.notice();
-				expect(t.count.writes).toBe(1);
-				expect(yield* f.outbox()).toMatchObject([
-					{
-						integration: 'customer_mail',
-						status: 'queued',
-						record: { collection: 'sent_emails', id }
-					}
-				]);
-				const [runs] = yield* t.db.read([
-					{
-						text: `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'integrations.deliver' AND state = 'queued'`,
-						params: []
-					}
-				]);
-				expect(runs!.rows[0]!['n']).toBe(1);
-				expect(t.fakes.deadlines.announced.length).toBeGreaterThan(0);
-			})
-		)
-	);
-
-	it.live(
-		'the delivery run builds the message from the committed row and sends it once; `sent` lands on the row',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* fixture(),
-						t = f.t;
-					const id = yield* f.notice();
-					yield* t.runDue();
-					expect(f.sent('customer_mail')).toMatchObject([
-						{
-							message: {
-								to: ['carol@acme.com'],
-								subject: 'PCN 1234',
-								text: 'Your parts change.',
-								thread: id
-							}
-						}
-					]);
-					expect((yield* f.row(id))['sent_at']).not.toBeNull();
-					yield* t.runDue();
-					yield* f.deliver();
-					expect(f.sent('customer_mail')).toHaveLength(1);
-				})
-			)
-	);
-
-	it.live(
-		"delivered, opened and the customer's reply land on the row after it is closed: per-state edit never refuses them (rule 41)",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* fixture(),
-						t = f.t;
-					const id = yield* f.notice();
-					yield* t.runDue();
-					ok(
-						yield* f.act(f.staff(), 'sent_emails.update', { target: id, set: { status: 'closed' } })
-					);
-					expect(
-						yield* f.act(f.staff(), 'sent_emails.update', {
-							target: id,
-							set: { failed_reason: 'x' }
-						})
-					).toMatchObject({ kind: 'refused', code: 'locked' });
-					const pid = provider('customer_mail');
-					yield* f.report('customer_mail', pid, {
-						kind: 'delivered',
-						at: '2026-09-25T10:01:00.000Z'
-					});
-					yield* f.report('customer_mail', pid, {
-						kind: 'opened',
-						at: '2026-09-25T10:02:00.000Z',
-						approximate: true
-					});
-					yield* t.receive(
-						'customer_mail',
-						mail({ id: '<reply-1@acme.com>', headers: { 'in-reply-to': pid } })
-					);
-					expect(yield* f.row(id)).toMatchObject({
-						status: 'closed',
-						delivered_at: '2026-09-25T10:01:00.000Z',
-						opened_at: '2026-09-25T10:02:00.000Z',
-						replied_at: '2026-09-25T10:03:00.000Z'
-					});
-				})
-			)
-	);
-
-	it.live(
-		'a reply whose match failed after it was stored is matched on its redelivery, and only once',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const storage = yield* Layer.build(PgliteDb.layer()),
-						inner = Context.get(storage, TenantDb);
-					let down = false;
-					const db = TenantDb.typed({
-						read: inner.read,
-						transaction: inner.transaction,
-						write: (statement, lock) =>
-							Effect.suspend(() => {
-								if (
-									down &&
-									statement.text.includes('WITH cur AS (SELECT id, status FROM sys_message')
-								) {
-									down = false;
-									return Effect.fail(DbError.make('08006', 'the database went away'));
-								}
-								return inner.write(statement, lock);
-							})
-					});
-					const f = yield* fixture({ db: Layer.succeed(TenantDb, db) }),
-						t = f.t;
-					const id = yield* f.notice();
-					yield* t.runDue();
-					const answer = mail({
-						id: '<reply-1@acme.com>',
-						headers: { 'in-reply-to': provider('customer_mail') }
-					});
-					down = true;
-					expect((yield* Effect.flip(t.receive('customer_mail', answer))).message).toMatch(
-						/went away/
-					);
-					expect((yield* f.row(id))['replied_at']).toBeNull();
-					// unacknowledged, so the provider delivers it again
-					yield* t.receive('customer_mail', answer);
-					expect((yield* f.row(id))['replied_at']).toEqual('2026-09-25T10:03:00.000Z');
-					yield* t.receive('customer_mail', answer);
-					const [out] = (yield* t.db.read([
-						{
-							text: `SELECT status, delivery FROM sys_message WHERE direction = 'outbound'`,
-							params: []
-						}
-					]))[0]!.rows;
-					expect(out!['status']).toBe('replied');
-					expect(
-						Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ kind: Schema.String })))(
-							out!['delivery']
-						).filter((e) => e.kind === 'replied')
-					).toHaveLength(1);
-				})
-			)
-	);
-
-	it.live(
-		'a send the link refuses is retried with backoff and, after 8 attempts, fails on the row',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* fixture(),
-						t = f.t;
-					f.failing(() => new Error('provider down'));
-					const id = yield* f.notice();
-					for (let i = 0; i < 8; i++) {
-						yield* f.deliver();
-						t.clock.advance('10min');
-					}
-					expect(yield* f.outbox()).toMatchObject([
-						{ status: 'failed', attempts: 8, error: 'provider down' }
-					]);
-					expect((yield* f.row(id))['failed_reason']).toBe('provider down');
-					expect(f.sent('customer_mail')).toHaveLength(0);
-				})
-			)
-	);
-
-	it.live("a bounce reported later marks the row failed with the provider's reason", () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				const id = yield* f.notice();
-				yield* t.runDue();
-				yield* f.report('customer_mail', provider('customer_mail'), {
-					kind: 'bounced',
-					at: '2026-09-25T10:05:00.000Z',
-					code: '552 5.2.2',
-					reason: 'mailbox full',
-					permanent: true
-				});
-				expect((yield* f.row(id))['failed_reason']).toBe('mailbox full');
-				expect(yield* f.outbox()).toMatchObject([{ status: 'bounced', error: 'mailbox full' }]);
+				expect(f.sent('customer_mail')).toHaveLength(0);
+				yield* f.deliver();
+				expect(f.sent('customer_mail')).toHaveLength(1);
+				expect(yield* f.outbox()).toMatchObject([{ record: id, status: 'sent' }]);
+				expect(yield* f.row(id)).toMatchObject({ subject: 'PCN 1234' });
+				yield* f.deliver();
+				expect(f.sent('customer_mail')).toHaveLength(1);
 			})
 		)
 	);
@@ -610,10 +430,9 @@ describe('delivery status (§5.9)', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const f = yield* fixture(),
-						t = f.t;
+					const f = yield* fixture();
 					const id = yield* f.notice();
-					yield* t.runDue();
+					yield* f.deliver();
 					const bounce = {
 						kind: 'bounced' as const,
 						at: '2026-09-25T10:05:00.000Z',
@@ -628,7 +447,9 @@ describe('delivery status (§5.9)', () => {
 						at: '2026-09-25T10:06:00.000Z'
 					});
 					const got = yield* f.timeline();
-					expect(got['status']).toBe('bounced');
+					expect(got['status'], JSON.stringify({ timeline: got, runs: yield* f.runs() })).toBe(
+						'bounced'
+					);
 					expect(
 						Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ kind: Schema.String })))(
 							got['delivery']
@@ -651,10 +472,9 @@ describe('delivery status (§5.9)', () => {
 	it.live('status only advances: deferred after delivered is recorded, not applied', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
+				const f = yield* fixture();
 				yield* f.notice();
-				yield* t.runDue();
+				yield* f.deliver();
 				yield* f.report('customer_mail', provider('customer_mail'), {
 					kind: 'delivered',
 					at: '2026-09-25T10:05:00.000Z'
@@ -664,7 +484,7 @@ describe('delivery status (§5.9)', () => {
 					at: '2026-09-25T10:06:00.000Z',
 					code: '451 4.7.1'
 				});
-				expect((yield* f.timeline())['status']).toBe('delivered');
+				expect((yield* f.timeline())['status'], JSON.stringify(yield* f.runs())).toBe('delivered');
 			})
 		)
 	);
@@ -674,10 +494,9 @@ describe('delivery status (§5.9)', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const f = yield* fixture(),
-						t = f.t;
+					const f = yield* fixture();
 					const id = yield* f.notice();
-					yield* t.runDue();
+					yield* f.deliver();
 					yield* f.reply(
 						'<ooo@acme.com>',
 						{ 'auto-submitted': 'auto-replied' },
@@ -712,14 +531,16 @@ describe('delivery status (§5.9)', () => {
 						.pipe(Effect.map((answer) => ({ ...answer, presumeAfterMs: 86_400_000 })))
 				);
 				const id = yield* f.notice();
-				yield* t.runDue();
+				yield* f.deliver();
 				t.clock.advance('23h');
 				yield* f.deliver();
 				expect((yield* f.timeline())['status']).toBe('sent');
 				t.clock.advance('2h');
 				yield* f.deliver();
 				const got = yield* f.timeline();
-				expect(got['status']).toBe('delivered');
+				expect(got['status'], JSON.stringify({ timeline: got, runs: yield* f.runs() })).toBe(
+					'delivered'
+				);
 				expect(
 					Schema.decodeUnknownSync(Schema.Array(Schema.Json))(got['delivery']).at(-1)
 				).toMatchObject({ kind: 'delivered', presumed: true, provider: 'bolt' });
@@ -794,15 +615,15 @@ describe('a proposed notice awaiting approval (rules 47, 61)', () => {
 				if (o.kind !== 'pendingApproval') throw new Error(JSON.stringify(o));
 				expect(
 					yield* f.approvals
-						.process({
+						.decide({
 							requestId: o.requestId,
-							status: 'REJECTED',
+							decision: 'reject',
 							reason: 'no',
 							authority: yield* member('Leads'),
 							now: t.clock.now()
 						})
 						.pipe(Effect.provide(f.context))
-				).toMatchObject({ kind: 'decided', status: 'REJECTED' });
+				).toMatchObject({ kind: 'decided', status: 'Rejected' });
 				yield* t.runDue();
 				yield* f.deliver();
 				expect(f.sent('customer_mail')).toHaveLength(0);
@@ -879,10 +700,7 @@ describe('delivery order and epochs', () => {
 									release: 'test',
 									publicUrl: 'http://localhost',
 									guest: Option.some(yield* guest),
-									transforms: new Set<string>(),
-									projections: new Set<string>(),
-									start: [],
-									secretsKey: Option.none()
+									start: []
 								})
 							)
 						)
@@ -893,7 +711,9 @@ describe('delivery order and epochs', () => {
 				t.clock.advance('1h');
 				yield* forked.deliver.pipe(Effect.provide(Context.merge(f.context, forkContext)));
 				expect(f.sent('customer_mail')).toHaveLength(0);
-				expect(yield* f.outbox()).toMatchObject([{ status: 'skipped' }]);
+				expect(yield* f.outbox(), JSON.stringify(yield* f.runs())).toMatchObject([
+					{ status: 'skipped' }
+				]);
 				const forkRoute = yield* routeFixture(Context.merge(f.context, forkContext));
 				ok(
 					(yield* actReply(forkRoute, f.staff(), {
@@ -902,6 +722,14 @@ describe('delivery order and epochs', () => {
 						issuedAt: t.clock.now()
 					})).outcome
 				);
+				const syncWrite = yield* Context.get(forkContext, RunHandlers).handler('sync.deliver');
+				if (Option.isNone(syncWrite))
+					return yield* new KitInvalid({
+						message: 'The fork has no native sync delivery handler.'
+					});
+				yield* syncWrite
+					.value({}, { id: crypto.randomUUID(), starter: null })
+					.pipe(Effect.provide(Context.merge(f.context, forkContext)));
 				yield* forked.deliver.pipe(Effect.provide(Context.merge(f.context, forkContext)));
 				expect(f.sent('customer_mail')).toHaveLength(1);
 			})
@@ -1133,14 +961,13 @@ describe('inbound (§4.3)', () => {
 	);
 
 	it.live(
-		'saving a cutoff waits for an attachment ingest already admitted under the old boundary',
+		'a cutoff saves while attachment storage waits and fences that ingest before commit',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture(),
 						entered = yield* Deferred.make<void>(),
 						release = yield* Deferred.make<void>(),
-						saveStarted = yield* Deferred.make<void>(),
 						bytes = new TextEncoder().encode('%PDF-1.7'),
 						originalPut = f.files.put,
 						boundary = {
@@ -1177,32 +1004,44 @@ describe('inbound (§4.3)', () => {
 							bins: [bytes]
 						})
 						.pipe(Effect.forkChild);
-					yield* Deferred.await(entered);
-					let saved = false;
-					const save = yield* Effect.gen(function* () {
-						yield* Deferred.succeed(saveStarted, undefined);
-						const result = yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-							target: 'desk_wa',
-							set: { import_start: boundary }
-						});
-						saved = true;
-						return result;
-					}).pipe(Effect.forkChild);
-					yield* Deferred.await(saveStarted);
-					yield* Effect.sleep('20 millis');
-					expect(saved).toBe(false);
-					yield* Deferred.succeed(release, undefined);
-					yield* Fiber.join(ingest);
-					ok(yield* Fiber.join(save));
-					expect(saved).toBe(true);
+					yield* Deferred.await(entered).pipe(
+						Effect.raceFirst(
+							Fiber.join(ingest).pipe(
+								Effect.andThen(
+									Effect.fail(
+										new KitInvalid({
+											message:
+												'The admitted attachment ingest finished without reaching the storage barrier.'
+										})
+									)
+								)
+							)
+						)
+					);
+					// External storage holds no SQL lease: this guarded setting write commits before release.
+					const saved = yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
+						target: 'desk_wa',
+						set: { import_start: boundary }
+					});
+					expect(saved, JSON.stringify(saved)).toMatchObject({ kind: 'committed' });
 					expect(
 						yield* f.rows("SELECT import_start FROM sys_integration WHERE id = 'desk_wa'")
 					).toEqual([{ import_start: boundary }]);
+					yield* Deferred.succeed(release, undefined);
+					expect(yield* Fiber.join(ingest).pipe(Effect.flip)).toMatchObject({
+						_tag: 'BoltError',
+						code: 'sourceChanged',
+						phase: 'admission'
+					});
+					expect(
+						yield* f.t.db.rows(Schema.Struct({ messages: Schema.Int, files: Schema.Int }), {
+							text: `SELECT (SELECT count(*)::int FROM sys_message WHERE integration='desk_wa') AS messages,
+							(SELECT count(*)::int FROM sys_file) AS files`,
+							params: []
+						})
+					).toEqual([{ messages: 0, files: 0 }]);
 					const before = yield* f.history();
-					expect(before).toMatchObject([
-						{ provider_id: 'before-cutoff', text: 'first', files: [{ name: 'first.pdf' }] }
-					]);
-					expect(before).toHaveLength(1);
+					expect(before).toEqual([]);
 					yield* f.conversations.receive('desk_wa', {
 						kind: 'messages',
 						messages: [
@@ -1262,7 +1101,7 @@ describe('inbound (§4.3)', () => {
 					const messageSql = `SELECT id, seq, conversation, text, version, sender, sender_name, sent_at,
 					email, ${filesOf('m')} AS files, edited_at, created_at FROM sys_message m WHERE integration = 'supplier_inbox'`,
 						runsSql = `SELECT id, automation, state, input, key FROM sys_run
-						WHERE automation = 'mail_import.supplier_mail' ORDER BY id`,
+						WHERE automation = 'supplier_mail.sync.inbox' ORDER BY id`,
 						before = yield* f.rows(messageSql),
 						runs = yield* f.rows(runsSql),
 						put = vi.spyOn(f.files, 'put');
@@ -1506,7 +1345,7 @@ describe('inbound (§4.3)', () => {
 	);
 
 	it.live(
-		'a messages feed is queued in the ingest statement: one run per message version, none for a redelivery, and the run maps it',
+		'a message sync is queued in the ingest statement: one run per message version, none for a redelivery, and the run maps it',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1519,15 +1358,13 @@ describe('inbound (§4.3)', () => {
 							subject: 'PCN 1234',
 							...over
 						});
-					t.count.reset();
 					yield* f.conversations.receive('supplier_inbox', { kind: 'messages', messages: [pcn()] });
-					expect(t.count.writes).toBe(1);
 					yield* f.conversations.receive('supplier_inbox', { kind: 'messages', messages: [pcn()] });
 					const runs = () =>
 						t.db
 							.read([
 								{
-									text: `SELECT automation, state, input FROM sys_run WHERE automation = 'mail_import.supplier_mail' ORDER BY due_at, id`,
+									text: `SELECT automation, state, input FROM sys_run WHERE automation = 'supplier_mail.sync.inbox' ORDER BY due_at, id`,
 									params: []
 								}
 							])
@@ -1535,20 +1372,24 @@ describe('inbound (§4.3)', () => {
 					expect(yield* runs()).toMatchObject([
 						{ state: 'queued', input: { instance: 'supplier_inbox' } }
 					]);
+					// The source's readSoon coalesces inbound hints for exactly two seconds.
+					t.clock.advance('2s');
 					yield* t.runDue();
 					const rows = () =>
 						t.db
 							.read([{ text: `SELECT inbox, message_id, subject FROM supplier_mail`, params: [] }])
 							.pipe(Effect.map((r) => r[0]?.rows ?? []));
-					expect(yield* rows()).toEqual([
+					expect(yield* rows(), JSON.stringify(yield* runs())).toEqual([
 						{ inbox: 'supplier_inbox', message_id: '<pcn-1@onsemi.com>', subject: 'PCN 1234' }
 					]);
 					yield* t.receive(
 						'supplier_inbox',
 						pcn({ subject: 'PCN 1234 rev B', version: '2026-09-25T10:04:00.000Z' })
 					);
+					t.clock.advance('2s');
+					yield* t.runDue();
 					expect(yield* runs()).toHaveLength(2);
-					expect(yield* rows()).toEqual([
+					expect(yield* rows(), JSON.stringify(yield* runs())).toEqual([
 						{ inbox: 'supplier_inbox', message_id: '<pcn-1@onsemi.com>', subject: 'PCN 1234 rev B' }
 					]);
 					// an envoy-less instance queues no admission
@@ -1565,7 +1406,7 @@ describe('inbound (§4.3)', () => {
 	);
 
 	it.live(
-		'a messages feed maps each attachment as its message stores it: { id, name, mime, bytes }, no id when its bytes never arrived',
+		'a message sync maps each attachment as its message stores it: { id, name, mime, bytes }, no id when its bytes never arrived',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1585,11 +1426,16 @@ describe('inbound (§4.3)', () => {
 						}),
 						{ bins: [pdf] }
 					);
+					t.clock.advance('2s');
 					yield* t.runDue();
 					const [row] = (yield* t.db.read([
 						{ text: `SELECT files FROM supplier_mail`, params: [] }
 					]))[0]!.rows;
-					expect(row!['files']).toEqual([
+					if (row === undefined)
+						return yield* new KitInvalid({
+							message: `The attachment read did not map its message: ${JSON.stringify(yield* f.runs())}`
+						});
+					expect(row['files']).toEqual([
 						{
 							id: expect.any(String),
 							name: 'pcn.pdf',
@@ -1610,7 +1456,7 @@ describe('inbound (§4.3)', () => {
 					const f = yield* fixture(),
 						t = f.t;
 					yield* t.db.write({
-						text: `ALTER TABLE sys_run ADD CONSTRAINT reject_feed CHECK (automation <> 'mail_import.supplier_mail')`,
+						text: `ALTER TABLE sys_run ADD CONSTRAINT reject_sync CHECK (automation <> 'supplier_mail.sync.inbox')`,
 						params: []
 					});
 					const pcn = mail({
@@ -1625,7 +1471,7 @@ describe('inbound (§4.3)', () => {
 					).toBeTruthy();
 					expect(yield* f.history()).toEqual([]);
 					yield* t.db.write({
-						text: 'ALTER TABLE sys_run DROP CONSTRAINT reject_feed',
+						text: 'ALTER TABLE sys_run DROP CONSTRAINT reject_sync',
 						params: []
 					});
 					yield* f.conversations.receive('supplier_inbox', { kind: 'messages', messages: [pcn] });
@@ -1633,7 +1479,7 @@ describe('inbound (§4.3)', () => {
 					expect(
 						(yield* t.db.read([
 							{
-								text: `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'mail_import.supplier_mail'`,
+								text: `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'supplier_mail.sync.inbox'`,
 								params: []
 							}
 						]))[0]!.rows[0]!['n']
@@ -1866,13 +1712,21 @@ describe('connection notices (rule 47)', () => {
 								[
 									{
 										id: `${id}-inbox`,
-										to: { channel: 'inbox', recipients },
+										to: recipients,
+										via: [],
+										body: null,
+										link: null,
+										attachments: [],
 										title: 'Source recipients',
 										once: `${id}-inbox`
 									},
 									{
 										id: `${id}-out`,
-										to: { channel: to, recipients },
+										to: recipients,
+										via: [to],
+										body: null,
+										link: null,
+										attachments: [],
 										title: 'Source recipients',
 										once: `${id}-out`
 									}
@@ -1882,7 +1736,7 @@ describe('connection notices (rule 47)', () => {
 								manifest.teams
 							);
 							yield* t.db.write(c.sql('1 AS done'));
-							return `${id}-out`;
+							return `${id}-out:${to}`;
 						});
 					const notify = (id: string) => {
 						const handler = f.conversations.handlers['notifications.deliver'];

@@ -6,7 +6,7 @@
 <script lang="ts">
 	import { Icon } from '@norbital-ai/ui';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import { dirtyFolders } from './model.ts';
+	import { dirtyFolders, sizeText, type StudioState } from './model.ts';
 
 	let {
 		files,
@@ -17,7 +17,7 @@
 		t
 	}: {
 		files: readonly string[];
-		base: { readonly [path: string]: string };
+		base: StudioState['files'];
 		drafts: { readonly [path: string]: string | null };
 		selected: string;
 		onselect: (path: string) => void;
@@ -57,14 +57,8 @@
 	};
 	const dirtyDirs = $derived(dirtyFolders(Object.keys(drafts)));
 	const dirty = (dir: string) => dirtyDirs.has(`${dir}/`);
-	const size = (path: string) => {
-		const n = (drafts[path] ?? base[path] ?? '').length;
-		return n < 1024
-			? `${n}B`
-			: n < 1024 * 1024
-				? `${Math.round(n / 1024)}K`
-				: `${Math.round(n / (1024 * 1024))}M`;
-	};
+	// a drafted file shows its mark instead, so a size is always the saved file's
+	const size = (path: string) => sizeText(base[path]?.bytes ?? 0);
 	const FILE_ICONS: readonly [RegExp, string][] = [
 		[/^package\.json$/, 'npm'],
 		[/^tsconfig.*\.json$/, 'tsconfig'],

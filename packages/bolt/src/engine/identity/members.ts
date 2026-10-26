@@ -1,7 +1,11 @@
 // Member administration (rules 38b, 38c): invitations, the admin flag with its `lastAdmin` guard, (de)activation,
 // member team selection and API keys. Definitions and policy grants remain source declarations.
-import { timingSafeEqual } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
+import { audited, auditActor } from '../audit-operation.ts';
+import { Audit } from '../audit.ts';
+import type { AuditActor } from '../../protocol/audit.ts';
+import { fromHex, timingSafeEqual, toBase64url } from '../crypto.ts';
+import { toHex } from '@norbital-ai/store';
 import { under } from '../../protocol/wire.ts';
 import { Effect, Result, Schema } from 'effect';
 import {
@@ -60,7 +64,32 @@ function write<T>(
 	read?: (row: RowData | undefined) => T | IdentityRefusal
 ): Effect.Effect<T | null, EngineError> {
 	return Effect.gen(function* (): Effect.fn.Return<T | null, EngineError> {
-		const out = yield* h.db.write({ text, params: s.params }, lock);
+		const audit = h.audit ?? (yield* Audit);
+		const member = s.params.find(
+			(value) => typeof value === 'string' && value.startsWith('member:')
+		);
+		const actor: AuditActor =
+			s.auditActor !== undefined
+				? auditActor(s.auditActor)
+				: typeof member === 'string'
+					? { kind: 'member', id: member.slice(7), label: null }
+					: { kind: 'system', id: 'host', label: null };
+		const safe = s.params.map((value) =>
+			typeof value === 'string' && (/^[0-9a-f]{64}$/i.test(value) || value.startsWith('nbk_'))
+				? '[credential redacted]'
+				: value
+		);
+		const out = yield* audited(
+			h.db,
+			{
+				category: 'identity',
+				action:
+					(/\b(?:INTO|UPDATE|FROM)\s+(sys_[a-z_]+)/i.exec(text)?.[1] ?? 'identity') + '.mutate',
+				actor,
+				payload: { parameters: safe }
+			},
+			h.db.write({ text, params: s.params }, lock)
+		).pipe(Effect.provideService(Audit, audit));
 		if (h.events !== undefined) yield* h.events.announce;
 		if (s.params.includes(MEMBERSHIP)) yield* announceMembership(h);
 		const value = read === undefined ? null : read(out.rows[0]);
@@ -167,7 +196,7 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 	if (denied) return yield* Effect.fail(denied);
 	if (inputs.length === 0 || inputs.length > 1000)
 		return yield* Effect.fail(refuse('check', 'Invite between 1 and 1000 people at once.'));
-	const prepared = [];
+	const prepared: { input: InviteInput; to: Address[]; id: string }[] = [];
 	const seen = new Set<string>();
 	for (const input of inputs) {
 		const to = addressesOf(input);
@@ -490,8 +519,8 @@ ${identityHistory(s, 'sys_user', 'u', yield* h.now, by(auth))}${projection(h, s,
 	);
 });
 // ── API keys (§5.11.2): `nbk_<prefix>_<secret>`, stored as SHA-256, shown once ──
-const secret = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
-const prefixOf = () => Buffer.from(crypto.getRandomValues(new Uint8Array(6))).toString('hex');
+const secret = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
+const prefixOf = () => toHex(crypto.getRandomValues(new Uint8Array(6)));
 export const issueKey = Effect.fn('Bolt.issueKey')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
@@ -506,7 +535,7 @@ export const issueKey = Effect.fn('Bolt.issueKey')(function* (
 	const id = yield* newId(h.crypto),
 		prefix = prefixOf(),
 		key = `nbk_${prefix}_${secret()}`,
-		s = new IdentityStatement(h);
+		s = new IdentityStatement(h, auth.actor);
 	return yield* write(
 		h,
 		s,
@@ -526,7 +555,7 @@ export const rotateKey = Effect.fn('Bolt.rotateKey')(function* (
 	if (denied) return yield* Effect.fail(denied);
 	const prefix = prefixOf(),
 		key = `nbk_${prefix}_${secret()}`,
-		s = new IdentityStatement(h);
+		s = new IdentityStatement(h, auth.actor);
 	return yield* write(
 		h,
 		s,
@@ -543,7 +572,7 @@ export const revokeKey = Effect.fn('Bolt.revokeKey')(function* (
 ) {
 	const denied = requireAdmin(auth);
 	if (denied) return yield* Effect.fail(denied);
-	const s = new IdentityStatement(h);
+	const s = new IdentityStatement(h, auth.actor);
 	return yield* write(
 		h,
 		s,
@@ -570,10 +599,7 @@ export const authenticateKey = Effect.fn('Bolt.authenticateKey')(function* (
 		Schema.UndefinedOr(Schema.Struct({ id: Schema.String, hash: Schema.String })),
 		rows!.rows[0]
 	);
-	return r !== undefined &&
-		timingSafeEqual(Buffer.from(sha256(bearer), 'hex'), Buffer.from(r.hash, 'hex'))
-		? r.id
-		: null;
+	return r !== undefined && timingSafeEqual(fromHex(sha256(bearer)), fromHex(r.hash)) ? r.id : null;
 });
 /**
  * The `bolt.membership` platform run (§5.11.3): hands the queued `{ user, email, phone, team, state }` to the host's port. A

@@ -1,12 +1,11 @@
 # @norbital-ai/doctor
 
-The static rules `bolt check` runs over a workspace's TypeScript and Svelte source (RFC §3.3.10, OD-K5′).
+The audit over a workspace's TypeScript and Svelte source (RFC §3.3.10, OD-K5′).
 
-Four fixed packs, one YAML file per rule under `packs/`: `boundaries`, `layout`, `svelte` and `reactive`. There is no
-configuration, no CLI and no pack-authoring API: a workspace adds no rules. Findings are `error` or `hint`; only
-`error` blocks. A reviewed
-`repository-health:allow <rule> -- <reason>` on the reported line, or in the comment block directly above it, suppresses
-that one rule there; a marker without a reason suppresses nothing. `.doctorignore` scopes files and rules.
+Four packs, one YAML file per rule under `packs/`: `boundaries`, `layout`, `svelte` and `reactive`. Findings are
+`error` or `hint`. A reviewed `repository-health:allow <rule> -- <reason>` on the reported line, or in the comment block
+directly above it, suppresses that one rule there; a marker without a reason suppresses nothing. `.doctorignore` scopes
+files and rules.
 
 ```ts
 import { doctor, search, type Finding, type SearchRule } from '@norbital-ai/doctor';
@@ -14,12 +13,20 @@ import { doctor, search, type Finding, type SearchRule } from '@norbital-ai/doct
 const findings: readonly Finding[] = doctor({ root: workspaceRoot });
 ```
 
+**An organization's rule set** (`@norbital-ai/doctor/rule-set`, Schemas only) is data its host stores: each platform
+rule's state (`error`, `hint` or `off`), organization-wide path globs the audit skips, and its own rules in the packs'
+schema. `norbital-doctor [root] [--rules <file>] [--rules-only] [--json]` is the one entrypoint that runs it, for the
+sandbox's `audit` job and a repository's CI alike. With `--json` it writes one `AuditEvent` per line — every rule as
+that organization sees it, each own rule that does not compile (the audit completes without it), the findings, and a
+last `done` line naming the rule set's digest and this doctor's version — and exits 0 once complete. Without it, an
+`error` finding or a rule error exits 1. It writes nothing into the tree.
+
 `search()` matches one ad hoc rule without running a pack; it is the only public rule-matching API.
 
 The realm's own gates select the realm packs under `packs/realm/` by name: `realm/boundaries` (package isolation and
 host neutrality), `realm/graph` (unreachable modules, unreferenced exports, duplicate bodies; tests reach but are never
-reported), `realm/overlaps`, `realm/structure`, `realm/effect`, `realm/ceremony`, `realm/erase` (type erasure), and `realm/types` (the type-aware
-tier: a call resolved to a `@deprecated` signature is `LEGACY2`). An absolute directory selects a host's own pack.
+reported), `realm/overlaps`, `realm/structure`, `realm/effect`, `realm/ceremony` and `realm/erase`
+(type erasure). An absolute directory selects a host's own pack.
 
 ```ts
 doctor({ root: ossRoot, packs: ['realm/boundaries', 'realm/graph'] });

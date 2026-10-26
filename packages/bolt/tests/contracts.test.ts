@@ -54,15 +54,15 @@ describe('next engine contracts', () => {
 			expect(m.collections.orders).toHaveProperty('read');
 			expect(m.integrations.mail).toEqual({
 				description: 'The notices mailbox',
-				driver: 'email',
-				feeds: { notices: { into: 'notices', from: 'messages', key: ['message_id'] } }
+				driver: 'email'
 			});
+			expect(m.collections.notices?.syncs).toEqual({ messages: { with: 'mail', read: true } });
 			expect(m.envoys.desk?.policies).toEqual(['sales_rep']);
 			expect(m.connections.support).toEqual({ integration: 'mail', envoy: 'desk' });
 			expect(m.workspace.tz).toBeTypeOf('string');
 			expect(Object.keys(m.automations)).toEqual(['nightly']);
 			expect(m.automations.nightly).toBeDefined();
-			expect(m.agent.skills.triage).toContain('description: Triage a notice');
+			expect(m.agent.skills.triage?.text).toContain('description: Triage a notice');
 			expect(m.agent.internal).toBeTypeOf('string');
 			expect(JSON.parse(JSON.stringify(m.models))).toEqual(m.models);
 		}).pipe(Effect.provide(NodeServices.layer))

@@ -15,7 +15,7 @@ import Turnstile from '../auth/Turnstile.svelte';
 import type { ChallengeQueue } from '../runtime.ts';
 import { HEADERS, PATHS } from '../../protocol/wire.ts';
 
-export { attach, fork, live, query, run } from '@norbital-ai/ui/effect';
+export { attach, fork, run } from '@norbital-ai/ui/effect';
 export { resolveDevice, type DeviceApi } from '../../page/device.ts';
 export { fileRef } from '../../page/file-ref.ts';
 export { frameworkText } from '../i18n.ts';
@@ -34,13 +34,15 @@ const client = (): PublicClient => {
 export const bolt: Omit<PublicClient, 'describe'> & {
 	readonly describe: PublicClient['describe'];
 } = {
-	read: <T>(...args: Parameters<Bolt['read']>) => client().read<T>(...args),
-	get: <T>(...args: Parameters<Bolt['get']>) => client().get<T>(...args),
-	aggregate: <T>(...args: Parameters<Bolt['aggregate']>) => client().aggregate<T>(...args),
-	similar: <T>(...args: Parameters<Bolt['similar']>) => client().similar<T>(...args),
-	history: <T>(...args: Parameters<Bolt['history']>) => client().history<T>(...args),
-	query: <T>(...args: Parameters<Bolt['query']>) => client().query<T>(...args),
-	live: <T>(...args: Parameters<Bolt['live']>) => client().live<T>(...args),
+	get aggregate() {
+		return client().aggregate;
+	},
+	get history() {
+		return client().history;
+	},
+	get query() {
+		return client().query;
+	},
 	act: (...args) => client().act(...args),
 	recordCapabilities: (...args) => client().recordCapabilities(...args),
 	decode: (...args) => client().decode(...args),
@@ -49,6 +51,9 @@ export const bolt: Omit<PublicClient, 'describe'> & {
 	},
 	options: (...args) => client().options(...args),
 	start: (...args) => client().start(...args),
+	clock: (...args) => client().clock(...args),
+	convert: (...args) => client().convert(...args),
+	observe: (...args) => client().observe(...args),
 	upload: (...args) => client().upload(...args),
 	fileUrl: (...args) => client().fileUrl(...args),
 	get approvals() {
@@ -157,6 +162,7 @@ export const hydratePublicPage = <D>(
 		const pageClient = yield* createBolt({
 			actor: props.boot.actor,
 			locale: props.boot.workspace.locale,
+			tz: props.boot.workspace.tz,
 			messages: props.boot.messages,
 			base: props.boot.base,
 			catalog: props.boot.catalog,
@@ -212,7 +218,9 @@ export const hydratePublicPage = <D>(
 				)
 			)
 		);
-		let widget: ReturnType<typeof mount> | null = null;
+		const mountWidget = (target: HTMLElement, siteKey: string, queue: ChallengeQueue) =>
+			mount(Turnstile, { target, props: { siteKey, queue } });
+		let widget: ReturnType<typeof mountWidget> | null = null;
 		let closed = false;
 		const cleanup = Effect.suspend(() => {
 			if (closed) return Effect.void;
@@ -239,8 +247,7 @@ export const hydratePublicPage = <D>(
 		) {
 			const siteKey = props.boot.visitor.siteKey;
 			widget = yield* Effect.try({
-				try: () =>
-					mount(Turnstile, { target: challengeTarget, props: { siteKey, queue: challenge } }),
+				try: () => mountWidget(challengeTarget, siteKey, challenge),
 				catch: (cause) => new PublicHydrationFailure({ reason: String(cause) })
 			}).pipe(Effect.onError(() => cleanup.pipe(Effect.orDie)));
 		}

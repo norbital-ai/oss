@@ -1,19 +1,22 @@
 // Integration instances (FINAL §3): the definitions an instance names, its row as the engine acts for it, the native
-// `sys_integration` transform, an instance's live request (`ctx.request`) and the body runner every integration body
-// shares. The transform reads the manifest's definitions and envoys, which no guest transform sees: the collection's
+// `sys_integration` transform, an instance's live request (`ctx.request`, paced by the definition's `rate` and a `429`'s
+// `Retry-After`) and the body runner sync bodies and the `test` body share. The transform reads the manifest's definitions and envoys, which no guest transform sees: the collection's
 // allowlists fix `integration` and `owner` at create; this keeps the rest true of the definition — a known definition,
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
 // definition, a configuration that decodes (defaults filled), and a named instance (`+workspace.ts`'s) never deleted here.
-import { Clock, Effect, Option, Predicate, Schema } from 'effect';
+import { Clock, Crypto, Effect, Option, Predicate, Schema } from 'effect';
 import { localOf } from '@norbital-ai/std/zone';
-import type { Kind } from '@norbital-ai/std/kind';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Drivers } from '../ports.ts';
 import { Manifest, Reads, Live, Wake, type Bridge } from '../services.ts';
 import type { GuestShape } from '../services.ts';
+import { prepareSend, sendPiece } from '../conversations/outbound.ts';
+import { stableId } from '../conversations/store.ts';
+import { duration } from '../runs/time.ts';
 import { Port } from '../port.ts';
+import { RequestOutput } from './request-schema.ts';
 import type { EngineManifest } from '../manifest.ts';
-import type { Json } from '../../decl/values.ts';
+import type { Json, Rate } from '../../decl/values.ts';
 import {
 	configurationDefaults,
 	DRIVERS,
@@ -28,6 +31,7 @@ import {
 	type CrossAnswer,
 	type EngineActor,
 	type InputPath,
+	type InvocationKind,
 	type Outcome,
 	type RowData
 } from '../contracts.ts';
@@ -50,12 +54,12 @@ export const definitionOf = (m: EngineManifest, name: string): IntegrationSpec |
 		: Object.hasOwn(SYSTEM.integrations, name)
 			? SYSTEM.integrations[name]
 			: undefined;
-/** The conversation a definition carries — its own (a custom chat) or its driver's — with the handle its senders are matched by. */
+/** The conversation a definition's driver carries, with the handle its senders are matched by. */
 export const conversationOf = (
 	def: IntegrationSpec
 ): { kind: 'chat' | 'email'; handle: HandleKind | null } | undefined => {
 	const driver = DRIVERS[def.driver];
-	return def.conversation ?? ('conversation' in driver ? driver.conversation : undefined);
+	return 'conversation' in driver ? driver.conversation : undefined;
 };
 /** Whether a definition carries a conversation. */
 export const conversational = (def: IntegrationSpec): boolean => conversationOf(def) !== undefined;
@@ -246,171 +250,6 @@ const fail = (code: string, message: string): CrossAnswer => ({
 	ok: false,
 	error: { kind: 'bolt', code, message }
 });
-const KindCommon = {
-	optional: Schema.optionalKey(Schema.Literal(true)),
-	default: Schema.optionalKey(Schema.Json),
-	unique: Schema.optionalKey(Schema.Literal(true)),
-	label: Schema.optionalKey(Schema.String),
-	help: Schema.optionalKey(Schema.String),
-	hidden: Schema.optionalKey(Schema.Literal(true))
-};
-const Range = { min: Schema.optionalKey(Schema.Number), max: Schema.optionalKey(Schema.Number) };
-const DatePrecision = Schema.Literals(['year', 'month', 'week', 'day']);
-const TimePrecision = Schema.Literals(['hour', 'minute']);
-const Precision = Schema.Literals(['year', 'month', 'week', 'day', 'hour', 'minute']);
-/** The authored output declaration crosses as JSON; only a decoded kind reaches std/kind's value codec. */
-export const RequestOutput: Schema.Codec<Kind> = Schema.suspend(() =>
-	Schema.Union([
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('text'),
-			format: Schema.optionalKey(
-				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
-			),
-			max: Schema.optionalKey(Schema.Number),
-			many: Schema.optionalKey(Schema.Literal(true))
-		}),
-		Schema.Struct({ ...KindCommon, ...Range, kind: Schema.Literal('int') }),
-		Schema.Struct({ ...KindCommon, ...Range, kind: Schema.Literal('number') }),
-		Schema.Struct({
-			...KindCommon,
-			...Range,
-			kind: Schema.Literal('decimal'),
-			scale: Schema.Number,
-			precision: Schema.optionalKey(Schema.Number)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('money'),
-			currency: Schema.optionalKey(Schema.String),
-			scale: Schema.optionalKey(Schema.Number)
-		}),
-		...(['currency', 'bool', 'duration', 'point'] as const).map((kind) =>
-			Schema.Struct({ ...KindCommon, kind: Schema.Literal(kind) })
-		),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('date'),
-			precision: Schema.optionalKey(DatePrecision)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('instant'),
-			precision: Schema.optionalKey(Precision)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('time'),
-			precision: Schema.optionalKey(TimePrecision)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('period'),
-			of: Schema.Literal('date'),
-			precision: Schema.optionalKey(DatePrecision)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('period'),
-			of: Schema.Literal('instant'),
-			precision: Schema.optionalKey(Precision)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('enum'),
-			values: Schema.Array(Schema.String),
-			many: Schema.optionalKey(Schema.Literal(true))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('state'),
-			initial: Schema.String,
-			states: Schema.Record(
-				Schema.String,
-				Schema.Struct({
-					to: Schema.optionalKey(Schema.Array(Schema.String)),
-					edit: Schema.optionalKey(
-						Schema.Union([Schema.Literals(['all', 'none']), Schema.Array(Schema.String)])
-					)
-				})
-			)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('seq'),
-			pattern: Schema.optionalKey(Schema.String),
-			per: Schema.optionalKey(Schema.Array(Schema.String))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('sum'),
-			of: Schema.String,
-			where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-			money: Schema.optionalKey(Schema.Struct({ currency: Schema.optionalKey(Schema.String) }))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('count'),
-			of: Schema.String,
-			where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('json'),
-			shape: Schema.optionalKey(RequestOutput)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('file'),
-			accept: Schema.Array(Schema.String),
-			max: Schema.String,
-			multiple: Schema.optionalKey(Schema.Literal(true))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('vector'),
-			dim: Schema.Number,
-			metric: Schema.Literals(['l2', 'cosine', 'ip'])
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('custom'),
-			of: Schema.String,
-			many: Schema.optionalKey(Schema.Literal(true))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('id'),
-			of: Schema.String,
-			where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
-		}),
-		Schema.Struct({
-			...KindCommon,
-			...Range,
-			kind: Schema.Literal('list'),
-			of: RequestOutput,
-			key: Schema.optionalKey(Schema.String)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('object'),
-			fields: Schema.Record(Schema.String, RequestOutput),
-			rest: Schema.optionalKey(RequestOutput)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('union'),
-			of: Schema.Array(RequestOutput)
-		}),
-		Schema.Struct({
-			...KindCommon,
-			kind: Schema.Literal('union'),
-			by: Schema.String,
-			arms: Schema.Record(Schema.String, Schema.Record(Schema.String, RequestOutput))
-		}),
-		Schema.Struct({ ...KindCommon, kind: Schema.Literal('record'), of: RequestOutput })
-	])
-);
 const HttpOp = Schema.Struct({
 	method: Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
 	path: Schema.String,
@@ -425,18 +264,42 @@ const HttpOp = Schema.Struct({
 });
 const HttpResponse = Schema.Struct({
 	status: Schema.Number,
-	body: Schema.optionalKey(Schema.Json)
+	body: Schema.optionalKey(Schema.Json),
+	/** A `429`'s or `503`'s `Retry-After`, in seconds (engine/integrations/http.ts). */
+	retryAfter: Schema.optionalKey(Schema.Number)
 });
 type RequestConfig = {
 	manifest: EngineManifest;
 	db: TenantDbShape;
 	links: Drivers['Service'];
 };
+/** When an instance's next request may start (its `rate`), and until when its provider asked us to wait (`Retry-After`). */
+type Pace = { next: number; blocked: number };
+// ponytail: in-process per tenant database (the cell owns the tenant); a cross-cell budget would need a shared window
+const paces = new WeakMap<TenantDbShape, Map<string, Pace>>();
+const paceOf = (db: TenantDbShape, instance: string): Pace => {
+	let all = paces.get(db);
+	if (all === undefined) paces.set(db, (all = new Map()));
+	let p = all.get(instance);
+	if (p === undefined) all.set(instance, (p = { next: 0, blocked: 0 }));
+	return p;
+};
+/** The milliseconds a definition's `rate` (`'10/s'`, `'600/min'`, `'5/10s'`) leaves between two requests. */
+const spacing = (rate: Rate | undefined): number => {
+	if (rate === undefined) return 0;
+	const [n, per = 's'] = rate.split('/');
+	return duration(/^\d/.test(per) ? per : `1${per}`) / Number(n);
+};
+/** Until when an instance's provider asked (`Retry-After`) that nothing be sent to it; 0 when it did not. */
+export const retryAfterOf = (db: TenantDbShape, instance: string): number =>
+	paces.get(db)?.get(instance)?.blocked ?? 0;
 export const instanceRequest = (
 	cfg: RequestConfig,
 	to: string,
 	op: Json,
-	known?: Effect.Effect<Instance | undefined, EngineError>
+	known?: Effect.Effect<Instance | undefined, EngineError>,
+	/** A sync write's `Idempotency-Key`, set on every http request it makes. */
+	key?: string
 ): Effect.Effect<CrossAnswer, EngineError> =>
 	Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 		const instance = yield* known ??
@@ -480,7 +343,35 @@ export const instanceRequest = (
 					);
 		const wire = yield* decode.pipe(Effect.catch((error) => Effect.succeed(error)));
 		if (wire instanceof BoltError) return fail(wire.code, wire.message);
-		const { output, ...http } = 'output' in wire ? wire : { ...wire, output: undefined };
+		const { output, ...plain } = 'output' in wire ? wire : { ...wire, output: undefined };
+		const http =
+			key === undefined || !('method' in plain)
+				? plain
+				: {
+						...plain,
+						headers: {
+							...Object.fromEntries(
+								Object.entries(plain.headers ?? {}).filter(
+									([h]) => h.toLowerCase() !== 'idempotency-key'
+								)
+							),
+							'idempotency-key': key
+						}
+					};
+		// every request waits its turn under the definition's `rate`, and after a provider's `Retry-After`
+		const pace = paceOf(cfg.db, to),
+			now = yield* Clock.currentTimeMillis;
+		let start = Math.max(now, pace.next, pace.blocked);
+		pace.next = start + spacing(instance.definition.rate);
+		for (;;) {
+			const current = yield* Clock.currentTimeMillis;
+			if (pace.blocked > start) {
+				start = Math.max(pace.blocked, pace.next);
+				pace.next = start + spacing(instance.definition.rate);
+			}
+			if (start <= current) break;
+			yield* Effect.sleep(start - current);
+		}
 		const got = yield* cfg.links
 			.request(to, http)
 			.pipe(
@@ -535,6 +426,11 @@ export const instanceRequest = (
 				BoltError.make('upstream', 'facility', 'The request answered an invalid response.')
 			)
 		);
+		if ((res.status === 429 || res.status === 503) && res.retryAfter !== undefined)
+			pace.blocked = Math.max(
+				pace.blocked,
+				(yield* Clock.currentTimeMillis) + res.retryAfter * 1000
+			);
 		if (res.status === 429)
 			return {
 				ok: false,
@@ -544,7 +440,8 @@ export const instanceRequest = (
 			return {
 				ok: false,
 				error: {
-					kind: 'upstream',
+					kind:
+						res.status >= 400 && res.status < 500 && res.status !== 408 ? 'invalid' : 'upstream',
 					message: `'${to}' answered ${res.status}${typeof res.body === 'string' && res.body !== '' ? `: ${res.body.slice(0, 200)}` : ''}`,
 					status: res.status
 				}
@@ -566,24 +463,55 @@ type BodyConfig = RequestConfig & {
 	guest: GuestShape;
 	read: Reads['Service']['run'];
 	bindings: () => Effect.Effect<Bindings>;
+	crypto: Crypto.Crypto;
+	/** The engine's wake: a message a sync write sent is queued for delivery at `at`. */
+	announce: (at: string) => Effect.Effect<void>;
 };
+/**
+ * One sync body (`syncRead`, `syncWrite`, target `'<model>.<sync>'`) or a definition's `test` (`integration`) in the guest,
+ * for `instance`: workspace reads, `request` through the instance (`key` its `Idempotency-Key`) and, for a conversation
+ * definition, `send` through it (a retried write with the same `key` queues the same message once).
+ */
 export const integrationBody = (
 	cfg: BodyConfig,
 	options: {
 		id: string;
 		actor: EngineActor;
-		path: string;
+		kind: InvocationKind;
+		target: string;
 		args: readonly Json[];
-		instance?: string;
-		partition?: string | null;
+		instance: string;
 		key?: string;
-		configuration?: Json;
-		request?: boolean;
+		configuration: Json;
 	}
 ) =>
 	Effect.gen(function* () {
 		const bindings = yield* cfg.bindings();
-		let known: Effect.Effect<Instance | undefined, EngineError> | undefined;
+		const known = instancesOf(cfg.manifest, cfg.db, { ids: [options.instance] }).pipe(
+			Effect.map(([first]) => first)
+		);
+		let sends = 0;
+		const send = (message: Json) =>
+			Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
+				const prepared = yield* prepareSend(
+					cfg.manifest,
+					cfg.db,
+					options.instance,
+					message,
+					cfg.crypto
+				);
+				if ('error' in prepared) return fail('invalidInput', prepared.error);
+				const id = stableId('sync.send', options.key ?? options.id, String(sends++)),
+					c = new Chain();
+				sendPiece(
+					c,
+					{ ...prepared, id, ...(options.key === undefined ? {} : { syncWrite: options.key }) },
+					bindings.now
+				);
+				yield* cfg.db.write(c.sql('NULL AS outcome'));
+				yield* cfg.announce(bindings.now);
+				return { ok: true, value: id };
+			});
 		const bridge: Bridge = {
 			cross: (calls) =>
 				Effect.gen(function* () {
@@ -609,56 +537,46 @@ export const integrationBody = (
 								return Effect.succeed(
 									answers[index++] ?? fail('internal', 'the read returned no answer')
 								);
-							if (
-								call._tag === 'request' &&
-								options.request === true &&
-								options.instance !== undefined &&
-								call.to === null
-							)
-								return instanceRequest(
-									cfg,
-									options.instance,
-									call.operation,
-									(known ??= instancesOf(cfg.manifest, cfg.db, { ids: [options.instance] }).pipe(
-										Effect.map(([first]) => first)
-									))
-								).pipe(
-									Effect.catch((error) =>
-										Effect.succeed(
-											fail(error._tag === 'BoltError' ? error.code : 'internal', error.message)
-										)
+							const done =
+								call._tag === 'request' && call.to === null
+									? instanceRequest(cfg, options.instance, call.operation, known, options.key)
+									: call._tag === 'send' && options.kind === 'syncWrite'
+										? send(call.message)
+										: undefined;
+							return done === undefined
+								? Effect.succeed(
+										fail('unsupported', `an integration body cannot ${call._tag} here`)
 									)
-								);
-							return Effect.succeed(
-								fail(
-									'unsupported',
-									`an integration body cannot ${call._tag}${call._tag === 'request' ? ' here' : ''}`
-								)
-							);
+								: done.pipe(
+										Effect.catch((error) =>
+											Effect.succeed(
+												fail(error._tag === 'BoltError' ? error.code : 'internal', error.message)
+											)
+										)
+									);
 						},
-						{ concurrency: 'unbounded' }
+						// a write's sends keep their order (their ids are numbered)
+						{ concurrency: options.kind === 'syncWrite' ? 1 : 'unbounded' }
 					);
 				})
 		};
 		const result = yield* cfg.guest.invoke(
 			{
 				id: options.id,
-				kind: 'integration',
-				target: options.path,
-				input: [...options.args],
+				kind: options.kind,
+				target: options.target,
+				input: options.kind === 'integration' ? [...options.args] : (options.args[0] ?? null),
 				ctx: {
 					actor: options.actor,
 					now: bindings.now,
 					today: bindings.today,
 					tz: bindings.tz,
 					seed: options.id,
-					...(options.instance === undefined ? {} : { instance: options.instance }),
-					...(options.partition === undefined ? {} : { partition: options.partition }),
+					instance: options.instance,
 					...(options.key === undefined ? {} : { key: options.key }),
-					...(options.configuration === undefined ? {} : { configuration: options.configuration })
+					configuration: options.configuration
 				},
 				budget: {
-					cpuMs: LIMITS.guestCpuMs,
 					crossings: LIMITS.crossings.sync,
 					readBytes: LIMITS.readBytes
 				}

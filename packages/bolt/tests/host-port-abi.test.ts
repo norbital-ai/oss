@@ -43,7 +43,11 @@ describe('fromAbi', () => {
 				put: async (bytes, meta) => ({ ...blob, bytes: bytes.length, mime: meta.mime }),
 				get: async () => new Uint8Array([1]),
 				url: async (key) => `https://files/${key}`,
-				remove: async () => {}
+				remove: async () => {},
+				download: async (url) =>
+					url.endsWith('.png')
+						? { ...blob, mime: 'image/png', name: 'seal.png' }
+						: Promise.reject({ kind: 'invalid', message: 'not media' })
 			});
 			expect(
 				yield* using(Files, files, (f) =>
@@ -51,6 +55,13 @@ describe('fromAbi', () => {
 				)
 			).toEqual({ ...blob, bytes: 3, mime: 'text/csv' });
 			expect(yield* using(Files, files, (f) => f.url('k1', 60))).toBe('https://files/k1');
+			expect(yield* using(Files, files, (f) => f.download('https://law.example/seal.png'))).toEqual(
+				{ ...blob, mime: 'image/png', name: 'seal.png' }
+			);
+			// a host's refusal keeps its kind across the ABI
+			expect(
+				yield* Effect.flip(using(Files, files, (f) => f.download('https://law.example/a.ts')))
+			).toMatchObject({ _tag: 'FacilityFailure', kind: 'invalid', message: 'not media' });
 			const absent = yield* Effect.flip(
 				using(Files, Files.fromAbi(undefined), (f) => f.get('k1', 10))
 			);

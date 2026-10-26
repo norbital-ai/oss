@@ -1,7 +1,7 @@
 // The second write workspace shares the native tenant-db and transform bridge.
 import { Effect, Result } from 'effect';
 import type { Bindings, Invocation } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 import { readEngine } from '../src/engine/query/engine.ts';
@@ -68,7 +68,7 @@ export const manifest = Result.getOrThrow(
 			tags: {
 				read: { fields: 'all' },
 				create: { input: { columns: ['name'] } },
-				delete: { transform: true }
+				delete: {}
 			},
 			receipts: {
 				read: { fields: 'all' },
@@ -87,7 +87,7 @@ export const manifest = Result.getOrThrow(
 
 /** A manifest's schema on an explicit native tenant database. */
 export const migrate = (db: TenantDbShape, m: EngineManifest = manifest) =>
-	applyPlan(db, plan(null, m), { accept: true });
+	Effect.flatMap(plan(null, m), (p) => applyPlan(db, p, { accept: true }));
 export const open = (m: EngineManifest = manifest) =>
 	Effect.gen(function* () {
 		const pg = yield* PgliteDb.open(),

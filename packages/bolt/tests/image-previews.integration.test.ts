@@ -4,8 +4,9 @@ import { expect, it, vi } from '@effect/vitest';
 import { Context, Effect, Layer } from 'effect';
 import { decode as decodePng, encode as encodePng } from 'fast-png';
 import jpeg from 'jpeg-js';
-import { imagePreview } from '../src/engine/files/image.ts';
-import { Files } from '../src/engine/ports.ts';
+import type { ImagePreviewMime, ImagePreviewSize } from '../src/engine/contracts.ts';
+import { Files, Images } from '../src/engine/ports.ts';
+import { imagesPort } from '../src/node/images.ts';
 import { ImagePreviews, ImagePreviewsLive } from '../src/protocol/image-previews.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -17,7 +18,6 @@ const manifest = {
 	collections: {},
 	policies: {},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	automations: {},
 	connections: {},
@@ -115,6 +115,12 @@ const orientedJpeg = (orientation: number) => {
 	marker.writeUInt16BE(exif.length + 2, 2);
 	return new Uint8Array(Buffer.concat([bytes.subarray(0, 2), marker, exif, bytes.subarray(2)]));
 };
+
+/** A preview through the Node host's image port, as the engine asks for one. */
+const imagePreview = (bytes: Uint8Array, mime: ImagePreviewMime, edge: ImagePreviewSize) =>
+	Effect.gen(function* () {
+		return yield* (yield* Images).preview(bytes, mime, edge);
+	}).pipe(Effect.provide(Images.fromAbi(imagesPort)));
 
 it.live('supports all three fixed bounds without upscaling and keeps PNG alpha', () =>
 	Effect.gen(function* () {

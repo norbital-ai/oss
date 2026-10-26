@@ -7,6 +7,17 @@ Direct Node launches require `node --no-node-snapshot <entry>` for the native gu
 as specified by [isolated-vm](https://github.com/laverdet/isolated-vm#requirements). The Bolt CLI
 and the server's fork test workers supply the flag.
 
+Schema changes ship as committed files in `migrations/`: editable SQL, `snapshot.json` and
+`migrations.lock.json`. Review the generated SQL and add `-- accept: <step-id>` within each destructive
+step's block when accepting that step. Run `bolt build` again to replay the complete SQL history,
+compare its resulting schema with the declarations and record the verified checksums, then commit all
+three kinds of file with the source change.
+
+Startup applies the artifact's migration files in order and records each applied checksum. An applied
+file cannot be edited; a later change needs a new migration. Changed history, an unverified snapshot
+or a destructive step without its SQL acceptance line refuses startup. Development follows the same
+migration checks; runtime flags do not override them.
+
 - `ServerLive(config, options?)` is a scoped Layer providing `Server`. It activates the artifact
   against its database, files, secrets and facilities and owns the HTTP listener. `DatabaseLive(config)`
   supplies the native `TenantDb` adapter. `BoltConfig(flags?)` reads `BOLT_*` through Effect Config;
@@ -18,6 +29,11 @@ and the server's fork test workers supply the flag.
   bucket URL, `BOLT_FILES_CREDENTIAL` `<access key id>:<secret>`). `BOLT_ENVIRONMENT` other than `production` shows
   the shell's badge; `--dev` or `BOLT_DEV=1` runs `bolt start` as `bolt dev`, only on a loopback origin outside
   production.
+- `BOLT_AUDIT_DIR` is required: a separate persistent local database directory for administrator audit events,
+  including writes, approvals, identities, automation results and integration changes. Preserve this directory
+  across process and artifact restarts, including when the tenant database uses Postgres. It must not point at
+  the tenant or system database. The host owns and closes the audit store, retains immutable events for 30 days,
+  and provides indexed filtering, full-payload search and recovery through Bolt's audit facility.
 - File and deadline ports come from `@norbital-ai/bolt/engine`: `localFiles` and
   `inProcessDeadlines`. `s3Files` is this server's internal adapter (`src/ports.ts`), not a package
   entry. Deadlines use a scoped `DeadlineTimer` fiber with no polling. Inbox notices

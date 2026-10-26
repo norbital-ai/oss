@@ -2,11 +2,13 @@
 // facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
 import type { StartableName } from '../access/policy.ts';
 import type { Eff } from '../ctx.ts';
+import type { OutputOf } from '../body.ts';
 import type { FacilityFailure, Unavailable as UnavailableFailure } from '../errors.ts';
 import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '../fields.ts';
 import type {
 	AutomationName,
 	CollectionName,
+	CollectionSpecOf,
 	Columns,
 	HostToolName,
 	InstanceId,
@@ -24,10 +26,13 @@ import type {
 	Offset,
 	Point,
 	RecordRef,
+	RequestId,
 	Size,
 	Vector
 } from '../values.ts';
 import type { ConversationOf, RequestOf, RequestResult, SendInput } from './integration.ts';
+import type { Finding } from './sync.ts';
+import type { Where } from '../where.ts';
 import type {
 	AiModelClass,
 	AutomationSpecOf,
@@ -41,9 +46,19 @@ import type {
 // ── runs (rules 48–56) ──
 /** A started run: its id and the automation it runs. */
 export type RunHandle<A = StartableName> = { readonly id: Id<'sys_run'>; readonly automation: A };
+/** Where a run stands. */
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
+/** Why a run started; `handoff`: an act that outlived the person-wait, held by its run (compute model §3). */
 export type RunCause =
-	'cron' | 'webhook' | 'created' | 'updated' | 'deleted' | 'schedule' | 'start' | 'retry';
+	| 'cron'
+	| 'webhook'
+	| 'created'
+	| 'updated'
+	| 'deleted'
+	| 'schedule'
+	| 'start'
+	| 'retry'
+	| 'handoff';
 /**
  * A run as `$bolt.runs` and the run ledger show it: cause, status, due and start time, progress, result and error.
  */
@@ -56,15 +71,65 @@ export type RunRow<O = unknown> = {
 	readonly started: Instant | null;
 	readonly progress: { readonly ratio: number | null; readonly text: string | null } | null;
 	readonly result?: O;
-	readonly error: { readonly code: string; readonly message: string } | null;
+	readonly error: {
+		readonly code: string;
+		readonly message?: string;
+		readonly field?: string;
+		readonly row?: number;
+		readonly rows?: readonly number[];
+		readonly rule?: string;
+		readonly data?: { readonly requestId: RequestId };
+		readonly records?: readonly {
+			readonly collection: string;
+			readonly id: string;
+			readonly fields: readonly string[];
+		}[];
+		readonly invocation?: string;
+	} | null;
 	readonly attempt_count: number;
 };
-/** The input a start or a schedule passes: the automation's declared input, else nothing (a feed run takes none). */
+/** The input a start or a schedule passes: the automation's declared input, else nothing (a sync run takes none). */
+type SyncOf<A> = A extends `${infer M}.sync.${infer S}`
+	? CollectionSpecOf<M> extends { syncs: infer X }
+		? X[S & keyof X]
+		: never
+	: never;
+type SyncModel<A> = A extends `${infer M}.sync.${string}` ? M : never;
+type SyncContext<X> = X extends { context: infer F } ? InputOf<F> : {};
+/** File syncs import a stored upload or export the view to a sheet or declared document target. */
+export type FileSyncStartInput<A> = (
+	| { readonly mode: 'import'; readonly file: Id<'sys_file'>; readonly accept?: boolean }
+	| {
+			readonly mode: 'template' | 'export';
+			readonly format?: 'xlsx' | 'csv' | 'tsv' | 'json';
+			readonly to?: DeclaredConvertTarget;
+			readonly where?: Where<SyncModel<A>>;
+	  }
+) & { readonly context?: SyncContext<SyncOf<A>> };
+/** The typed input accepted when starting an automation or a model sync. */
 export type StartInput<A> = A extends AutomationName
 	? AutomationSpecOf<A> extends { input: infer I }
 		? InputOf<I>
 		: { readonly [key: string]: never }
-	: { readonly [key: string]: never };
+	: SyncOf<A> extends { with: 'file' }
+		? FileSyncStartInput<A>
+		: { readonly [key: string]: never };
+/** The typed result recorded by an automation, or no result for a sync read. */
+export type StartOutput<A> = A extends AutomationName
+	? OutputOf<AutomationSpecOf<A>>
+	: SyncOf<A> extends { with: 'file' }
+		? | { readonly file: FileRef & { readonly bytes: number; readonly sha256: string } }
+			| { readonly applied: false; readonly findings: readonly Finding[] }
+			| {
+					readonly applied: true;
+					readonly created: number;
+					readonly updated: number;
+					readonly deleted: number;
+					readonly findings: readonly Finding[];
+			  }
+			| { readonly pendingApproval: true; readonly findings: readonly Finding[] }
+		: undefined;
+/** `ctx.schedule`: queues a run of an automation (or a sync's read) after the current write commits. */
 export interface Schedule {
 	/** Due at once without `at`; with `key`, a queued run under the same key is replaced (rule 51). */
 	<const A extends string>(
@@ -74,18 +139,42 @@ export interface Schedule {
 	): Eff<RunHandle<A>>;
 }
 
-// ── notices (§3.3.9) ──
-type NoticeRecipient = { team: TeamName } | { user: Id<'sys_user'> } | { policy: PolicyName };
+// ── notices (§3.3.9, spec §2.2): one shape for a model's `notify` and `ctx.notify` ──
 /**
- * A notice sent with `ctx.notify`: recipients (team, member or policy holders), a title and body message, an optional record link and a `once` key.
+ * Whom a notice goes to: a team's members, one member, a policy's holders, or, in a model's `notify` for an approval
+ * event, the request's `'requester'` or the current step's `'approvers'` (teams and users); elsewhere those two resolve
+ * to nobody.
+ */
+export type Recipient =
+	| { team: TeamName }
+	| { user: Id<'sys_user'> }
+	| { policy: PolicyName }
+	| 'requester'
+	| 'approvers';
+/**
+ * A file a notice carries: a stored file, or a document converted at delivery (after the commit, retried with the
+ * delivery) from Markdown or HTML to a target `+workspace.ts` declares under `convert.to`.
+ */
+export type NoticeAttachment =
+	FileRef | { document: ConvertSource; to: ConvertTarget; name: string };
+/**
+ * One notice. The in-app inbox always gets it; `via` also sends it through those conversation connections (`bolt check`
+ * refuses any other name) to each recipient's handle there. `link` defaults to the record the event is about; `once`
+ * delivers at most one notice per key.
+ * @example
+ * { title: 'New colour matching job', description: `${name} is waiting on the board.`, to: [{ team: 'colour_matchers' }],
+ *   via: ['whatsapp'], attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }] }
  */
 export type Notice = {
-	to: NoticeRecipient | readonly NoticeRecipient[];
 	title: Msg;
-	body?: Msg;
+	description?: Msg;
+	to: readonly Recipient[];
+	via?: readonly ConnectionName[];
+	attachments?: readonly NoticeAttachment[];
 	link?: RecordRef;
 	once?: string;
 };
+/** `ctx.notify`: queues notices, delivered after the current write commits; a notice never delays or fails it. */
 export type Notify = (notice: Notice | readonly Notice[]) => Eff<void>;
 
 // ── facility errors ──
@@ -170,13 +259,15 @@ export type ImageFacts = {
 type FileFieldOf<C> = {
 	[P in keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'file' } ? P : never;
 }[keyof Columns<C> & string];
-/** Where a stored file belongs: a collection's file field, or an automation's run (collected with it). */
+/** Where a stored file belongs: a model's file field, or an automation's run (collected with it). */
 type FileOwner =
 	{ [C in CollectionName]: `${C}.${FileFieldOf<C>}` }[CollectionName] | StartableName;
+/** One worksheet: its name and rows of cell values. */
 type Sheet = {
 	readonly name: string;
 	readonly rows: readonly (readonly (string | number | boolean | null)[])[];
 };
+/** `ctx.files`: stored files by reference; bytes only on request. */
 export type Files = {
 	meta: Call<[ref: FileRef], FileMeta>;
 	/** At most `max` bytes (default and ceiling 4MiB). */
@@ -192,7 +283,7 @@ export type Files = {
 
 // ── convert: markdown or HTML to a document the workspace declares (`workspace({ convert: { to } })`) ──
 /**
- * What each conversion target takes beyond `to`, `name` and `for`: a `reference` document styles a Word, PowerPoint or
+ * What each conversion target takes beyond `to` and `name`: a `reference` document styles a Word, PowerPoint or
  * OpenDocument output (its fonts, headers, footers and page setup, as pandoc's reference-doc); a PDF sets its paper.
  */
 export type ConvertTargets = {
@@ -203,7 +294,7 @@ export type ConvertTargets = {
 	epub: {};
 	html: {};
 };
-/** A document format `ctx.convert.document` can produce. */
+/** A document format the converter can produce (`bolt.convert`, `ctx.convert.document`, notice attachments, file exports). */
 export type ConvertTarget = keyof ConvertTargets;
 /**
  * The source of a conversion: Markdown (pandoc's dialect, with pipe tables and front matter) or an HTML document. HTML is
@@ -211,10 +302,16 @@ export type ConvertTarget = keyof ConvertTargets;
  * by Typst.
  */
 export type ConvertSource = { readonly markdown: string } | { readonly html: string };
-/** One declared target's options, discriminated by `to`: `reference` only where the format takes one, `page` only for PDF. */
-export type ConvertOptions = {
-	[T in DeclaredConvertTarget]: { to: T; name: string; for: FileOwner } & ConvertTargets[T];
+/**
+ * One declared target, its file name and its options, discriminated by `to`: `reference` only where the format takes
+ * one, `page` only for PDF. What a page's `bolt.convert(source, request)` takes: the file it answers is the viewer's own
+ * and short-lived (`bolt.fileUrl` downloads it), and calls count against the policy limit key `convert` (default `30/min`).
+ */
+export type ConvertRequest = {
+	[T in DeclaredConvertTarget]: { to: T; name: string } & ConvertTargets[T];
 }[DeclaredConvertTarget];
+/** `ctx.convert.document`'s options: a `ConvertRequest` and the owner `for` the stored output belongs to. */
+export type ConvertOptions = ConvertRequest & { for: FileOwner };
 /**
  * `ctx.convert` (optional host capability): only the targets `+workspace.ts` declares under `convert.to` type-check, and
  * the host confirms at start that it serves them. The output is stored like `files.put`'s, owned by `for`.
@@ -259,7 +356,7 @@ type InferRequest<O, Tools> = {
 	? {
 			/**
 			 * Tools the model may call between `edit`s: host tools the `runAs` policies name, and `'read'`, workspace
-			 * records read as those policies (grants, masks and row scopes as for `ctx.read`; a bounded page per call; batch up to 8).
+			 * records read as those policies (grants, masks and row scopes as for `ctx.query`; a bounded page per call; batch up to 8).
 			 * @example Three-way matching: check an invoice against its open PO and goods receipts before answering.
 			 * ```ts
 			 * const match = yield* ctx.ai.sys_2.infer({

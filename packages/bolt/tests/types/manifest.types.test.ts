@@ -3,9 +3,8 @@
 // `readonly` where the decl type is not. Never run, only checked.
 import { expectTypeOf } from '@effect/vitest';
 import type { TeamEntries } from '../../src/decl/access/team.ts';
-import type { CollectionSpec } from '../../src/decl/collection.ts';
 import type { customField } from '../../src/decl/custom-field.ts';
-import type { ModelSpec } from '../../src/decl/model.ts';
+import type { CollectionSpec, ModelSpec } from '../../src/decl/model.ts';
 import type { RelationshipSpec } from '../../src/decl/names.ts';
 import type { EnvoySpec, mcp } from '../../src/decl/runtime/agent.ts';
 import type { AppSpec, GroupSpec, secrets, workspace } from '../../src/decl/runtime/app.ts';
@@ -33,7 +32,7 @@ expectTypeOf<Part<'apps'>>().toEqualTypeOf<AppSpec>();
 expectTypeOf<Part<'kiosks'>>().toEqualTypeOf<KioskSpec>();
 expectTypeOf<Part<'groups'>>().toEqualTypeOf<GroupSpec>();
 expectTypeOf<Part<'customFields'>>().toEqualTypeOf<
-	ReturnType<typeof customField>['spec'] & { check?: true }
+	Omit<ReturnType<typeof customField>['spec'], 'validate'> & { check?: true }
 >();
 
 // ── parts decoded member by member: the decl shape ──

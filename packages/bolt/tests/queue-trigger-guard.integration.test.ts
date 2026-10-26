@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
+import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { queueTriggered } from '../src/engine/runs/queue.ts';
 import { Chain } from '../src/engine/write/sql.ts';
@@ -22,7 +22,7 @@ it.effect("a filtered trigger never casts another collection's row image", () =>
 			}
 		};
 		const db = PgliteDb.make(yield* PgliteDb.open());
-		yield* applyPlan(db, plan(null, manifest), { accept: true });
+		yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 		const order = '0199a000-0000-4000-8000-000000000091';
 		const c = new Chain();
 		c.cte(

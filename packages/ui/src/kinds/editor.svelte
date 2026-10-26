@@ -11,8 +11,10 @@ The editor of one value by its field kind: every kind's input in one component (
 	/** The editor of one value by its kind (every §3.3.2 kind; derived kinds render read-only). */
 	export type EditorProps = {
 		kind: Kind;
-		/** JSON Schema for the next-generation JSON editor; omitted retains the raw editor. */
+		/** JSON Schema for a generated structured editor; omitted infers the stored structure. */
 		jsonSchema?: JsonSchema;
+		/** Edit an untyped value as source JSON, retaining invalid text until it parses. */
+		rawJson?: boolean;
 		value: Value;
 		onChange(next: Value): void;
 		/** The field's name (file uploads, custom renderers) and the dotted path errors are keyed by. */
@@ -57,13 +59,11 @@ The editor of one value by its field kind: every kind's input in one component (
 	import { fieldEntry } from './builtin/index.js';
 	import TimeInput from './time-input.svelte';
 	import { presentation } from './registry.js';
-	import { arcOf } from './kind.js';
+	import { arcOf, isMasked } from './kind.js';
 	import { humanize } from '../text/messages.js';
 	import TimeRangeInput from './time-range-input.svelte';
 	import Picker from './picker.svelte';
-	import SchemaEditor from './schema-editor.svelte';
-	import JsonSchemaForm from './json-schema-form.svelte';
-	import JsonSchemaMatrix from './json-schema-matrix.svelte';
+	import StructuredData from './structured-data.svelte';
 	import { isJsonSchemaDocument } from './json-schema.js';
 	import Show from './show.svelte';
 	import TagsInput from './tags-input.svelte';
@@ -72,6 +72,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	let {
 		kind,
 		jsonSchema,
+		rawJson = false,
 		value,
 		onChange,
 		name,
@@ -92,7 +93,18 @@ The editor of one value by its field kind: every kind's input in one component (
 	const t = uiText();
 	const words = useEnumText();
 	const v = $derived(value);
-	const plan = $derived(presentation(kind));
+	// a declared enum transition offers only the next states (and the current one) once the record has a state
+	const enumValues = $derived.by(() => {
+		if (kind.kind !== 'enum') return [];
+		const from = name === undefined ? '' : String(row[name] ?? '');
+		const allowed = kind.transitions?.[from];
+		return allowed === undefined ? kind.values : [...new Set([from, ...allowed])];
+	});
+	const plan = $derived(
+		rawJson && (kind.kind === 'json' || kind.kind === 'custom')
+			? { ...presentation(kind), editor: 'json' as const }
+			: presentation(kind)
+	);
 	// an arc's chosen target before a record there is picked
 	let chosenArm = $state<string | null>(null);
 	const invalid = $derived(errors?.has(name) ?? false);
@@ -128,7 +140,11 @@ The editor of one value by its field kind: every kind's input in one component (
 	});
 </script>
 
-{#if controls.readonly}
+{#if isMasked(v)}
+	<Show {kind} {value} {name} {row} {id} readonly />
+{:else if controls.readonly && kind.kind === 'json' && jsonSchema !== undefined}
+	<StructuredData schema={jsonSchema} {value} mode="view" {name} {id} {errors} {row} />
+{:else if controls.readonly}
 	<Show {kind} {value} {name} {row} {relation} {address} {id} readonly />
 {:else if relation !== undefined && relation.targets.length > 1}
 	<!-- an arc: its target first, then the record there; the value is `{ collection, id }` -->
@@ -312,7 +328,7 @@ The editor of one value by its field kind: every kind's input in one component (
 {:else if plan.editor === 'enum' && kind.kind === 'enum'}
 	<Combobox
 		{id}
-		options={kind.values.map((o) => ({ value: o, label: words(o, name) }))}
+		options={enumValues.map((o) => ({ value: o, label: words(o, name) }))}
 		value={str(v)}
 		onChange={(o) => onChange(o)}
 		clearable={kind.optional === true}
@@ -321,18 +337,50 @@ The editor of one value by its field kind: every kind's input in one component (
 	/>
 {:else if plan.editor === 'id' && kind.kind === 'id'}
 	<Picker of={kind.of} value={str(v)} {onChange} where={kind.where} {id} {disabled} {invalid} />
-{:else if kind.kind === 'custom' && custom}
-	<SchemaEditor kind={custom.shape} {value} {onChange} {name} {disabled} {errors} />
-{:else if kind.kind === 'json' && jsonSchema !== undefined}
-	<JsonSchemaForm schema={jsonSchema} {value} {onChange} {name} {id} {disabled} {errors} />
-{:else if kind.kind === 'json' && !kind.shape && isJsonSchemaDocument(v)}
-	<JsonSchemaMatrix value={v} {onChange} {name} {id} {disabled} />
-{:else if kind.kind === 'json' && kind.shape}
-	<SchemaEditor kind={kind.shape} {value} {onChange} {name} {disabled} {errors} />
+{:else if kind.kind === 'custom' && custom && !rawJson}
+	<StructuredData
+		kind={custom.shape}
+		{value}
+		mode="edit"
+		{onChange}
+		{name}
+		{id}
+		{disabled}
+		{errors}
+		{row}
+	/>
+{:else if kind.kind === 'json' && jsonSchema !== undefined && !rawJson}
+	<StructuredData
+		schema={jsonSchema}
+		{value}
+		mode="edit"
+		{onChange}
+		{name}
+		{id}
+		{disabled}
+		{errors}
+		{row}
+	/>
+{:else if kind.kind === 'json' && !kind.shape && isJsonSchemaDocument(v) && !rawJson}
+	<StructuredData schema={v} mode="schema" {onChange} {name} {id} {disabled} {errors} />
+{:else if kind.kind === 'json' && kind.shape && !rawJson}
+	<StructuredData
+		kind={kind.shape}
+		{value}
+		mode="edit"
+		{onChange}
+		{name}
+		{id}
+		{disabled}
+		{errors}
+		{row}
+	/>
 {:else if plan.editor === 'schema'}
-	<SchemaEditor {kind} {value} {onChange} {name} {disabled} {errors} />
+	<StructuredData {kind} {value} mode="edit" {onChange} {name} {id} {disabled} {errors} {row} />
+{:else if plan.editor === 'json' && !rawJson}
+	<StructuredData {value} mode="edit" {onChange} {name} {id} {disabled} {errors} {row} />
 {:else if plan.editor === 'json'}
-	<!-- an untyped json value, or a custom field this page was not given: edited as JSON text -->
+	<!-- Explicit raw/source editing, also used by the shared renderer for unconstrained leaves. -->
 	<CodeEditor
 		{id}
 		language="json"

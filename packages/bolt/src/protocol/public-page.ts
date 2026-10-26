@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import type { Kind } from '@norbital-ai/std/kind';
+import type { Kind, OutputKind } from '@norbital-ai/std/kind';
 import type { Json } from '../decl/values.ts';
 import type { ShellBoot } from '../shell/nav.ts';
 
@@ -146,6 +146,41 @@ const kind: Schema.Codec<Kind, Json> = Schema.suspend(() =>
 		Schema.Struct({ ...common, kind: Schema.Literal('record'), of: kind })
 	])
 );
+/** Metadata codecs are shared by browser-catalog emission and public hydration. */
+export const FieldsSchema = fields();
+export const OutputKindSchema: Schema.Codec<OutputKind, Json> = Schema.suspend(() =>
+	Schema.Union([
+		kind,
+		Schema.Struct({ ...common, kind: Schema.Literal('row'), of: Schema.String }),
+		Schema.Struct({ ...common, ...range, kind: Schema.Literal('list'), of: OutputKindSchema }),
+		Schema.Struct({
+			...common,
+			kind: Schema.Literal('object'),
+			fields: Schema.Record(Schema.String, OutputKindSchema),
+			rest: Schema.optionalKey(OutputKindSchema)
+		}),
+		Schema.Struct({ ...common, kind: Schema.Literal('record'), of: OutputKindSchema }),
+		Schema.Struct({
+			...common,
+			kind: Schema.Literal('union'),
+			by: Schema.String,
+			arms: Schema.Record(Schema.String, Schema.Record(Schema.String, OutputKindSchema))
+		})
+	])
+);
+const SyncExposureSchema = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('file'),
+		parser: Schema.optionalKey(
+			Schema.Array(
+				Schema.Union([Schema.String, Schema.Struct({ type: Schema.String, extensions: strings })])
+			)
+		),
+		import: trueKey,
+		export: Schema.optionalKey(strings)
+	}),
+	Schema.Struct({ kind: Schema.Literal('remote'), with: Schema.String })
+]);
 const childIdentity = { collection: Schema.String, parent: Schema.String, owned: trueKey };
 const child = Schema.Struct({
 	...childIdentity,
@@ -166,13 +201,13 @@ const PublicCatalog = Schema.Record(
 		label: strings,
 		search: Schema.optionalKey(strings),
 		semantic: trueKey,
-		similarity: Schema.optionalKey(
+		indexes: Schema.optionalKey(
 			Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
 		),
 		queries: Schema.optionalKey(
 			Schema.Record(
 				Schema.String,
-				Schema.Struct({ input: fields(), output: kind, description: Schema.String })
+				Schema.Struct({ input: fields(), output: OutputKindSchema, description: Schema.String })
 			)
 		),
 		fields: fields(),
@@ -200,22 +235,11 @@ const PublicCatalog = Schema.Record(
 		),
 		update: Schema.optionalKey(Schema.Struct({ columns: strings, with: children })),
 		readonlyFields: Schema.optionalKey(
-			Schema.Record(Schema.String, Schema.Literals(['integrationOwned', 'ownedParent']))
-		),
-		actions: Schema.optionalKey(
-			Schema.Record(
-				Schema.String,
-				Schema.Struct({
-					input: fields(),
-					target: Schema.optionalKey(Schema.Literal('record')),
-					description: optionalString
-				})
-			)
+			Schema.Record(Schema.String, Schema.Literals(['syncOwned', 'ownedParent']))
 		),
 		description: optionalString,
 		delete: trueKey,
-		integration: optionalString,
-		pipeline: Schema.optionalKey(Schema.Struct({ import: optionalString, export: optionalString }))
+		syncs: Schema.optionalKey(Schema.Record(Schema.String, SyncExposureSchema))
 	})
 );
 
@@ -236,7 +260,11 @@ export const PublicBoot = Schema.Struct({
 	contract: Schema.String,
 	describe: Schema.Boolean,
 	messages: Schema.Record(Schema.String, Schema.String),
-	catalog: PublicCatalog
+	catalog: PublicCatalog,
+	automations: Schema.Record(
+		Schema.String,
+		Schema.Struct({ input: fields(), description: optionalString })
+	)
 });
 export interface PublicBoot extends Schema.Schema.Type<typeof PublicBoot> {}
 
@@ -279,7 +307,8 @@ export const toPublicBoot = (
 		contract: boot.contract,
 		describe: options.describe ?? (boot.visitor === null && boot.aiUnconfigured !== true),
 		messages: options.messages ?? {},
-		catalog: boot.catalog
+		catalog: boot.catalog,
+		automations: boot.automations
 	});
 
 export class PublicHydrationFailure extends Schema.TaggedError<PublicHydrationFailure>()(

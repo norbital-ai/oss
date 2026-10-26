@@ -5,10 +5,10 @@
 	sheet holds the connection too, as its first tab. New makes one of any definition (a member's own account where the driver syncs one). A row opens its
 	sheet: the generic setup over the host's verbs (provider choice, pairing, test, reconnect, disconnect), then the
 	instance's own fields (name, active, the envoy answering a workspace conversation instance, the configuration its
-	definition declares) and, for a conversation, its raw messages. Every write is the collection's native form or act.
+	definition declares) and, for a conversation, its raw messages. Every write is the model's native form or act.
 -->
 <script lang="ts">
-	import { fork, query } from '@norbital-ai/ui/effect';
+	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Effect, Predicate } from 'effect';
 	import { Decimal } from '@norbital-ai/std/decimal';
 	import type { Value } from '@norbital-ai/std/kind';
@@ -33,7 +33,7 @@
 	import type { InstanceState } from '../../protocol/instance-status.ts';
 	import IntegrationSetup from '../../page/IntegrationSetup.svelte';
 	import { driverLabel, statusLabel, type IntegrationSetupEntry } from './setup.ts';
-	import type { InstanceMessage } from './messages.ts';
+	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
@@ -113,7 +113,7 @@
 		fork(
 			confirmAction({
 				title: t('Delete {name}?').replace('{name}', i.name),
-				body: t('Its credentials, feed progress, conversations and messages are deleted with it.'),
+				body: t('Its credentials, sync progress, conversations and messages are deleted with it.'),
 				confirmLabel: t('Delete'),
 				cancelLabel: t('Cancel'),
 				destructive: true
@@ -149,7 +149,7 @@
 		{ scope: typeof messageScope; rows: InstanceMessage[]; more: boolean } | undefined
 	>();
 	const log = $derived(messageWindow?.scope === messageScope ? messageWindow : undefined);
-	const messages = query(() => {
+	const messages = observeOnce(() => {
 		const scope = messageScope;
 		const before = messageRequest?.scope === scope ? messageRequest.before : undefined;
 		return scope.instance === null
@@ -177,6 +177,33 @@
 			if (older && before === undefined) return;
 			messageRequest = { scope: messageScope, ...(before === undefined ? {} : { before }) };
 		});
+
+	const syncHealth = observeOnce(() => {
+		const instance = current;
+		return instance === undefined || definition(instance.integration)?.syncs !== true
+			? null
+			: api.instanceSyncHealth(instance.id);
+	});
+	let replaying = $state<string | null>(null);
+	function replayDead(): void {
+		const instance = current?.id;
+		if (instance === undefined || replaying === instance) return;
+		replaying = instance;
+		error = null;
+		fork(
+			api.replayInstanceSync(instance).pipe(
+				Effect.andThen(syncHealth.refetch()),
+				Effect.ensuring(
+					Effect.sync(() => {
+						if (replaying === instance) replaying = null;
+					})
+				)
+			),
+			(cause) => {
+				if (open === instance) error = cause.message;
+			}
+		);
+	}
 
 	let creating = $state(false);
 	const labelOf = (name: string, f: InputFields[string]) =>
@@ -300,6 +327,77 @@
 						{t}
 						{locale}
 					/>{/if}
+			{/snippet}
+			{#snippet syncTab()}
+				<div class="flex flex-col gap-3 text-sm" data-instance-sync>
+					<div class="flex items-center justify-between gap-3">
+						<h3 class="font-medium">{t('Sync health')}</h3>
+						<Button
+							size="sm"
+							variant="ghost"
+							disabled={syncHealth.loading}
+							onclick={() => fork(syncHealth.refetch())}>{t('Refresh')}</Button
+						>
+					</div>
+					{#if syncHealth.error !== undefined}<p role="alert" class="text-destructive">
+							{syncHealth.error.message}
+						</p>{/if}
+					{#if syncHealth.current}
+						{@const health = syncHealth.current}
+						<dl class="grid grid-cols-2 gap-x-4 gap-y-3">
+							<div>
+								<dt class="text-meta">{t('Last read')}</dt>
+								<dd>{when(health.last_read_at)}</dd>
+							</div>
+							<div>
+								<dt class="text-meta">{t('Read lag')}</dt>
+								<dd class="tabular-nums">
+									{health.lag_seconds === null
+										? '—'
+										: t('{seconds} s').replace(
+												'{seconds}',
+												String(Math.max(0, Math.round(health.lag_seconds)))
+											)}
+								</dd>
+							</div>
+							<div>
+								<dt class="text-meta">{t('Last change')}</dt>
+								<dd>{when(health.last_change_at)}</dd>
+							</div>
+							<div>
+								<dt class="text-meta">{t('Last webhook')}</dt>
+								<dd>{when(health.last_hint_at)}</dd>
+							</div>
+							<div>
+								<dt class="text-meta">{t('Pending writes')}</dt>
+								<dd class="tabular-nums">{health.pending}</dd>
+							</div>
+							<div>
+								<dt class="text-meta">{t('Dead letters')}</dt>
+								<dd class="tabular-nums">{health.dead}</dd>
+							</div>
+							<div>
+								<dt class="text-meta">{t('Failed writes')}</dt>
+								<dd class="tabular-nums">{health.failed}</dd>
+							</div>
+						</dl>
+						{#if health.webhooks_quiet}<p role="status" class="text-warning">
+								{t('Webhooks are quiet while reads still find changes.')}
+							</p>{/if}
+						{#if health.dead > 0}<div class="flex flex-col items-start gap-2 border-t pt-3">
+								<p class="text-meta">
+									{t('Retry deliveries that stopped after repeated failures.')}
+								</p>
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={replaying === i.id}
+									onclick={replayDead}
+									>{t(replaying === i.id ? 'Replaying…' : 'Replay dead letters')}</Button
+								>
+							</div>{/if}
+					{:else if syncHealth.loading}<p class="text-meta">{t('Loading…')}</p>{/if}
+				</div>
 			{/snippet}
 			{#snippet settingsTab()}
 				{#snippet envoyEditor({ value, onChange, id }: FieldEditor)}
@@ -463,6 +561,17 @@
 						body: settingsTab,
 						keepAlive: true
 					},
+					...(d?.syncs === true
+						? [
+								{
+									name: 'sync',
+									title: t('Sync'),
+									icon: 'lucide:refresh-cw',
+									body: syncTab,
+									keepAlive: true as const
+								}
+							]
+						: []),
 					...(d?.conversation === true
 						? [
 								{

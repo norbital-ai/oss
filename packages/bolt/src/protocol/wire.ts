@@ -1,6 +1,6 @@
 // The one wire (§5.7, rules 32, 64–67): paths, headers, bodies and live frames shared by the host handler and `$bolt`.
 // Pure data and pure functions; the bodies' types are their Schemas' (`schema.ts`).
-import type { EngineActor, Outcome } from '../engine/contracts.ts';
+import type { ActOutcome, EngineActor } from '../engine/contracts.ts';
 import { BoltError, CODE } from './errors.ts';
 import type { WireError } from './schema.ts';
 
@@ -81,21 +81,24 @@ export type {
 	WireRead
 } from './schema.ts';
 
-/** Rule 32: an outcome's status (200, 202, 409, 504, a refusal 400/403/404/429 or 422). */
-const OUTCOME_STATUS: { readonly [K in Exclude<Outcome['kind'], 'refused'>]: number } = {
+/** Rule 32: an outcome's status (200, 202, 409, 504, a refusal 400/403/404/429 or 422); 202 is two kinds, told apart by `kind`. */
+const OUTCOME_STATUS: { readonly [K in Exclude<ActOutcome['kind'], 'refused'>]: number } = {
 	committed: 200,
 	pendingApproval: 202,
+	running: 202,
 	conflict: 409,
 	unknown: 504
 };
-const REFUSED_STATUS: { readonly [C in Extract<Outcome, { kind: 'refused' }>['code']]?: number } = {
+const REFUSED_STATUS: {
+	readonly [C in Extract<ActOutcome, { kind: 'refused' }>['code']]?: number;
+} = {
 	invalidInput: 400,
 	forbidden: 403,
 	locked: 403,
 	notFound: 404,
 	rateLimited: 429
 };
-export const statusOf = (o: Outcome): number =>
+export const statusOf = (o: ActOutcome): number =>
 	o.kind === 'refused' ? (REFUSED_STATUS[o.code] ?? 422) : OUTCOME_STATUS[o.kind];
 /** The client's reading of a transport failure's status (`statusOf` reversed): the refusal it stands for, else `null` (the outcome is unknown). */
 const STATUS_REFUSAL: {
@@ -117,7 +120,7 @@ export const wireError = (e: unknown): { status: number; body: WireError } =>
 		? { status: CODE[e.code].status, body: { error: { code: e.code, message: e.message } } }
 		: { status: 500, body: { error: { code: 'internal', message: 'The request failed.' } } };
 /** Rule 32: public and API-key actors receive codes only (and the structured `field`, `row` and `data`). */
-export function redact(o: Outcome, actor: EngineActor): Outcome {
+export function redact(o: ActOutcome, actor: EngineActor): ActOutcome {
 	return o.kind === 'refused' && (actor.kind === 'envoy' || actor.kind === 'apiKey')
 		? {
 				kind: 'refused',

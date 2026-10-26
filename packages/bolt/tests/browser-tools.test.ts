@@ -1,7 +1,7 @@
 // The built-in browser tools drive the host's browsing facility; without one, every call says what is missing.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer } from 'effect';
-import type { EngineActor } from '../src/engine/contracts.ts';
+import type { Downloaded, EngineActor } from '../src/engine/contracts.ts';
 import { Browser } from '../src/engine/ports.ts';
 import { BROWSER_RUN_PROFILE, browserTools } from '../src/engine/agent/browser.ts';
 import type { HostTool } from '../src/engine/agent/tools.ts';
@@ -41,7 +41,7 @@ describe('built-in browser tools', () => {
 				act: () => Effect.succeed(null),
 				evaluate: () => Effect.succeed(null),
 				screenshot: () => Effect.succeed(new Uint8Array()),
-				download: () => Effect.succeed({ name: '', mime: '', bytes: new Uint8Array() })
+				download: () => Effect.die('unused download')
 			});
 			const [navigate] = browserTools(yield* Browser.pipe(Effect.provide(browser)));
 			yield* call(navigate, { url: 'https://law.example' }, run);
@@ -66,15 +66,17 @@ describe('built-in browser tools', () => {
 				screenshot: () => Effect.succeed(new Uint8Array()),
 				download: (_profile, url) =>
 					Effect.succeed({
+						key: 'k',
+						sha256: 's',
 						name: url.split('/').at(-1) ?? '',
 						mime: 'image/png',
-						bytes: new Uint8Array(3)
+						bytes: 3
 					})
 			});
 			const download = browserTools(yield* Browser.pipe(Effect.provide(browser))).find(
 				(tool) => tool.name === 'browser_download'
 			);
-			const kept: { name: string; mime: string; bytes: Uint8Array }[] = [];
+			const kept: Downloaded[] = [];
 			const answer = yield* Effect.promise((signal) =>
 				download === undefined
 					? Promise.reject(new Error('no such tool'))

@@ -1,6 +1,6 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
-import { afterEach, it } from '@effect/vitest';
+import { afterEach, it, vi } from '@effect/vitest';
 import { Deferred, Effect } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
 import type { KindsHost } from '../src/kinds/context.ts';
@@ -51,7 +51,7 @@ const catalog: NonNullable<KindsHost['catalog']> = {
 			columns: ['name', 'enabled', 'count', 'amount', 'note', 'masked', 'locked', 'secret', 'state']
 		},
 		masked: ['masked'],
-		readonlyFields: { locked: 'integrationOwned' },
+		readonlyFields: { locked: 'syncOwned' },
 		delete: true
 	}
 };
@@ -87,7 +87,10 @@ async function show(
 		await unmount(app);
 		target.remove();
 	});
-	await settle();
+	await vi.waitFor(() => {
+		flushSync();
+		element(target, '[data-table-wide] tbody tr:not([aria-hidden])');
+	});
 	return target;
 }
 async function openEditor(target: HTMLElement) {

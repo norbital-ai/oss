@@ -1,7 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { catalog } from '../src/protocol/catalog.ts';
-import { read, get, aggregate, select, where } from '../src/protocol/ir.ts';
-import { compile, compileGets, whereSql, grantSql } from '../src/engine/query/sql.ts';
+import {
+	aggregate,
+	compile,
+	compileGets,
+	get,
+	grantSql,
+	read,
+	select,
+	where,
+	whereSql
+} from '@norbital-ai/store';
+import { storeSync } from '../src/protocol/errors.ts';
+import { readOptions, resolverOf } from '../src/engine/query/reader.ts';
 import { bindings, manifest, rep } from './query.fixture.ts';
 
 const cat = catalog(manifest);
@@ -11,28 +22,35 @@ const sources = new Map([
 	['orders', '__bolt_prepared_1'],
 	['lines', '__bolt_prepared_2']
 ]);
-const options = { sources };
 
 describe('engine-owned prospective query sources', () => {
 	it('routes root, relation predicates, nested selections and aggregation paths through the same sources', () => {
 		const queries = [
-			read(cat, 'accounts', {
-				all: true,
-				where: { orders: { some: { status: { eq: 'open' } } } },
-				select: {
-					name: true,
-					orders: {
-						all: true,
-						select: { status: true, lines: { all: true, select: { sku: true } } }
+			storeSync(
+				read(cat, 'accounts', {
+					all: true,
+					where: { orders: { some: { status: { eq: 'open' } } } },
+					select: {
+						name: true,
+						orders: {
+							all: true,
+							select: { status: true, lines: { all: true, select: { sku: true } } }
+						}
 					}
-				}
-			}),
-			read(cat, 'orders', { all: true, select: { account: { select: { name: true } } } }),
-			aggregate(cat, 'orders', { by: ['account.region'], count: true, sum: ['total'], all: true })
+				})
+			),
+			storeSync(
+				read(cat, 'orders', { all: true, select: { account: { select: { name: true } } } })
+			),
+			storeSync(
+				aggregate(cat, 'orders', { by: ['account.region'], count: true, sum: ['total'], all: true })
+			)
 		];
 		for (const query of queries) {
-			const ordinary = compile(cat, query, workspace, bindings);
-			const prospective = compile(cat, query, workspace, bindings, undefined, options);
+			const ordinary = storeSync(compile(cat, query, readOptions(workspace, bindings)));
+			const prospective = storeSync(
+				compile(cat, query, readOptions(workspace, bindings, { sources }))
+			);
 			expect(prospective.sql.params).toEqual(ordinary.sql.params);
 			expect(prospective.sql.text).toContain('"__bolt_prepared_0"');
 			expect(prospective.sql.text).toContain('"__bolt_prepared_1"');
@@ -40,50 +58,55 @@ describe('engine-owned prospective query sources', () => {
 		}
 	});
 	it('keeps caller scope and masks when replacing physical sources', () => {
-		const query = read(cat, 'orders', {
-			limit: 3,
-			select: { total: true, account: { select: { name: true } } }
-		});
-		const ordinary = compile(cat, query, { as: 'caller', authority: rep }, bindings);
-		const prospective = compile(
-			cat,
-			query,
-			{ as: 'caller', authority: rep },
-			bindings,
-			undefined,
-			options
+		const query = storeSync(
+			read(cat, 'orders', {
+				limit: 3,
+				select: { total: true, account: { select: { name: true } } }
+			})
 		);
+		const caller = { as: 'caller', authority: rep } as const;
+		const ordinary = storeSync(compile(cat, query, readOptions(caller, bindings)));
+		const prospective = storeSync(compile(cat, query, readOptions(caller, bindings, { sources })));
 		expect(prospective.sql.params).toEqual(ordinary.sql.params);
 		expect(prospective.sql.text).toContain('CASE WHEN');
 		expect(prospective.sql.text).not.toMatch(/FROM "(?:accounts|orders)"/);
 	});
 	it('routes single, batched and predicate reads, quoting source identifiers as identifiers', () => {
 		const id = '00000000-0000-4000-8000-000000000001';
+		const order = storeSync(get(cat, 'orders', id));
 		expect(
-			compile(cat, get(cat, 'orders', id), workspace, bindings, undefined, options).sql.text
+			storeSync(compile(cat, order, readOptions(workspace, bindings, { sources }))).sql.text
 		).toContain('FROM "__bolt_prepared_1"');
 		expect(
-			compileGets(
-				cat,
-				'orders',
-				[id],
-				select(cat, 'orders', { status: true }),
-				workspace,
-				bindings,
-				options
+			storeSync(
+				compileGets(
+					cat,
+					'orders',
+					[id],
+					storeSync(select(cat, 'orders', { status: true })),
+					readOptions(workspace, bindings, { sources })
+				)
 			).text
 		).toContain('FROM "__bolt_prepared_1"');
-		const predicate = where(cat, 'orders', { account: { is: { region: { eq: 'north' } } } });
+		const predicate = storeSync(
+			where(cat, 'orders', { account: { is: { region: { eq: 'north' } } } })
+		);
 		for (const sql of [
-			whereSql(cat, 'orders', predicate, workspace, bindings, options),
-			grantSql(cat, 'orders', predicate, rep, bindings, options)
+			storeSync(whereSql(cat, 'orders', predicate, readOptions(workspace, bindings, { sources }))),
+			storeSync(
+				grantSql(cat, 'orders', predicate, {
+					resolve: resolverOf(bindings, rep),
+					tz: bindings.tz,
+					sources
+				})
+			)
 		]) {
 			expect(sql.text).toContain('FROM "__bolt_prepared_0"');
 			expect(sql.text).toContain('FROM "__bolt_prepared_1"');
 		}
-		const odd = { sources: new Map([['orders', 'prepared"name']]) };
+		const odd = new Map([['orders', 'prepared"name']]);
 		expect(
-			compile(cat, get(cat, 'orders', id), workspace, bindings, undefined, odd).sql.text
+			storeSync(compile(cat, order, readOptions(workspace, bindings, { sources: odd }))).sql.text
 		).toContain('FROM "prepared""name"');
 	});
 });

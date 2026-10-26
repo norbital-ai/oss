@@ -9,8 +9,16 @@ import type {
 } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { ProviderUnavailable, answerFailure } from '../errors.ts';
-import { storedCredential } from '../link.ts';
-import { field, hostCall, linkOf, same, str, withFetch, type Obj } from '../util.ts';
+import {
+	field,
+	hostCall,
+	linkOf,
+	same,
+	str,
+	storedCredential,
+	withFetch,
+	type Obj
+} from '../util.ts';
 import { twilio } from './messages.ts';
 
 const API = 'https://api.twilio.com/2010-04-01';

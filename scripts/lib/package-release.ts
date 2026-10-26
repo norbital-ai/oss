@@ -49,6 +49,7 @@ export const publicPackageDirectories = [
 	'doctor',
 	'providers',
 	'std',
+	'store',
 	'ui'
 ] as const;
 export type PackageEntry = {

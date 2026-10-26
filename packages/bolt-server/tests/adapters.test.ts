@@ -12,7 +12,6 @@ import {
 	Fiber,
 	Layer,
 	Option,
-	Redacted,
 	Schema,
 	Scope,
 	Stream
@@ -22,10 +21,12 @@ import { FetchHttpClient } from 'effect/unstable/http';
 import {
 	DeadlinePort,
 	inProcessDeadlines,
-	PgliteDb,
+	Keys,
+	Port,
 	Secrets,
 	TenantDb
 } from '@norbital-ai/bolt/engine';
+import { nodePorts, PgliteDb } from '@norbital-ai/bolt/node';
 import { BoltConfig, ConfigError, type StartFlags } from '../src/config.ts';
 import { main } from '../src/main.ts';
 import { openAi } from '../src/ports.ts';
@@ -46,7 +47,8 @@ describe('bolt start configuration (§5.11.6)', () => {
 	const base = {
 		BOLT_ARTIFACT: '/a',
 		BOLT_PUBLIC_URL: 'https://acme.example',
-		BOLT_PGLITE_DIR: '/db'
+		BOLT_PGLITE_DIR: '/db',
+		BOLT_AUDIT_DIR: '/audit'
 	};
 	it.effect('accepts a complete host Google OAuth client and refuses either missing half', () =>
 		Effect.gen(function* () {
@@ -68,7 +70,6 @@ describe('bolt start configuration (§5.11.6)', () => {
 	it.effect('decodes the defaults and the flags', () =>
 		Effect.gen(function* () {
 			const c = yield* config(base, {
-				accept: true,
 				trustProxy: '10.0.0.0/8,::1',
 				founder: 'a@b.example',
 				seed: './pack'
@@ -77,10 +78,10 @@ describe('bolt start configuration (§5.11.6)', () => {
 				host: '127.0.0.1',
 				port: 3100,
 				database: { pglite: '/db' },
+				auditDir: '/audit',
 				publicUrl: 'https://acme.example',
 				files: null,
 				transactional: null,
-				accept: true,
 				trustProxy: ['10.0.0.0/8', '::1'],
 				founder: 'a@b.example',
 				seed: './pack',
@@ -94,6 +95,8 @@ describe('bolt start configuration (§5.11.6)', () => {
 		{ env: { ...base, BOLT_SERVER_PORT: '1' }, message: /unknown configuration: BOLT_SERVER_PORT/ },
 		{ env: { ...base, BOLT_APNS_KEYS: '{"TEAM":{}}' }, message: /BOLT_APNS_KEYS does not match/ },
 		{ env: { ...base, BOLT_DATABASE_URL: 'postgres://x' }, message: /exactly one/ },
+		{ env: { ...base, BOLT_AUDIT_DIR: undefined }, message: /BOLT_AUDIT_DIR is required/ },
+		{ env: { ...base, BOLT_AUDIT_DIR: '/db/.' }, message: /must be separate/ },
 		{
 			env: { BOLT_ARTIFACT: '/a', BOLT_PUBLIC_URL: 'https://acme.example' },
 			message: /exactly one/
@@ -123,6 +126,7 @@ describe('bolt start configuration (§5.11.6)', () => {
 				message: expect.stringMatching(/CIDR/)
 			});
 			expect(yield* main(['--port=invalid']).pipe(Effect.provide(NodeServices.layer))).toBe(2);
+			expect(yield* main(['--accept']).pipe(Effect.provide(NodeServices.layer))).toBe(2);
 		})
 	);
 });
@@ -138,10 +142,14 @@ describe('sealed secrets (§5.11.4)', () => {
 					params: []
 				});
 				const context = yield* Layer.build(
-					Secrets.layer(
-						['ERP_TOKEN', 'BASE'],
-						Option.some(Redacted.make(Buffer.alloc(32, 7)))
-					).pipe(Layer.provide(Layer.succeed(TenantDb, db)))
+					Secrets.layer(['ERP_TOKEN', 'BASE']).pipe(
+						Layer.provide(
+							Layer.mergeAll(
+								Layer.succeed(TenantDb, db),
+								Keys.fromAbi((yield* nodePorts({ secretsKey: new Uint8Array(32).fill(7) })).keys)
+							)
+						)
+					)
 				);
 				const s = Context.get(context, Secrets);
 				yield* s.set('workspace', 'ERP_TOKEN', 'tok');
@@ -153,19 +161,19 @@ describe('sealed secrets (§5.11.4)', () => {
 					});
 				const workspace = yield* row('secret:workspace:ERP_TOKEN'),
 					user = yield* row('secret:user-1:google');
-				expect(s.open('workspace', 'ERP_TOKEN', workspace)).toEqual(Option.some('tok'));
+				expect(yield* s.open('workspace', 'ERP_TOKEN', workspace)).toEqual(Option.some('tok'));
 				expect(
 					yield* Config.string('ERP_TOKEN').pipe(Effect.provide(ConfigProvider.layer(s.config)))
 				).toBe('tok');
 				expect(yield* Effect.flip(s.set('workspace', 'OTHER', 'x'))).toMatchObject({
 					message: expect.stringMatching(/declared/)
 				});
-				expect(s.open('user-1', 'google', user)).toEqual(Option.some('refresh'));
-				expect(s.open('user-2', 'google', user)).toEqual(Option.none());
+				expect(yield* s.open('user-1', 'google', user)).toEqual(Option.some('refresh'));
+				expect(yield* s.open('user-2', 'google', user)).toEqual(Option.none());
 				expect(workspace).not.toContain('tok');
 				const keylessContext = yield* Layer.build(
-					Secrets.layer(['ERP_TOKEN', 'BASE'], Option.none()).pipe(
-						Layer.provide(Layer.succeed(TenantDb, db))
+					Secrets.layer(['ERP_TOKEN', 'BASE']).pipe(
+						Layer.provide(Layer.mergeAll(Layer.succeed(TenantDb, db), Keys.unavailable))
 					)
 				);
 				const keyless = Context.get(keylessContext, Secrets);
@@ -406,7 +414,10 @@ describe('the OpenAI-compatible model port (P19)', () => {
 				const request = new Request(input, init);
 				url = request.url;
 				sent = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(await request.text());
-				return Response.json({ choices: [{ message: { content: 'ok' } }] });
+				const structured = Schema.is(Schema.Struct({ response_format: Schema.Json }))(sent);
+				return Response.json({
+					choices: [{ message: { content: structured ? '{"ok":true}' : 'ok' } }]
+				});
 			};
 			const http = client(f);
 			const ai = yield* openAi(
@@ -420,7 +431,8 @@ describe('the OpenAI-compatible model port (P19)', () => {
 					embed: {},
 					modalities: { sys2: null, embed: null }
 				},
-				['default', 'fast', 'strong']
+				['default', 'fast', 'strong'],
+				() => Port.unavailable('files')
 			).pipe(Effect.provide(http));
 			expect(ai.models).toEqual(['default', 'fast']);
 			const events = yield* Stream.runCollect(
@@ -433,6 +445,42 @@ describe('the OpenAI-compatible model port (P19)', () => {
 				url,
 				Schema.decodeUnknownSync(Schema.Struct({ model: Schema.String }))(sent).model
 			]).toEqual(['https://llm.test/v1/chat/completions', 'gpt-y']);
+			expect(sent).not.toHaveProperty('provider');
+			const deepSeekModel = 'deepseek/deepseek-v4.1-flash-1017';
+			const router = yield* openAi(
+				{
+					sys1: { endpoint: 'https://s1.test/v1' },
+					sys2: { endpoint: 'https://openrouter.ai/api/v1', credential: 'k' }
+				},
+				{
+					sys1: 'tiny',
+					sys2: { default: deepSeekModel, fast: 'openai/gpt-x' },
+					embed: {},
+					modalities: { sys2: null, embed: null }
+				},
+				['default', 'fast'],
+				() => Port.unavailable('files')
+			).pipe(Effect.provide(http));
+			yield* Stream.runDrain(
+				router.infer({
+					model: deepSeekModel,
+					messages: [{ role: 'user', content: 'hi' }],
+					tools: [{ name: 'read', description: 'Read', input: { type: 'object' } }],
+					output: { type: 'object', properties: { ok: { type: 'boolean' } } }
+				})
+			);
+			expect(url).toBe('https://openrouter.ai/api/v1/chat/completions');
+			expect(sent).toMatchObject({
+				model: deepSeekModel,
+				provider: { sort: 'price', require_parameters: true },
+				tools: [{ type: 'function', function: { name: 'read' } }],
+				response_format: { type: 'json_schema' }
+			});
+			yield* Stream.runDrain(
+				router.infer({ model: 'fast', messages: [{ role: 'user', content: 'hi' }] })
+			);
+			expect(sent).toMatchObject({ model: 'openai/gpt-x' });
+			expect(sent).not.toHaveProperty('provider');
 		})
 	);
 	it.effect(
@@ -475,7 +523,8 @@ describe('the OpenAI-compatible model port (P19)', () => {
 						embed: {},
 						modalities: { sys2: null, embed: null }
 					},
-					['default']
+					['default'],
+					() => Port.unavailable('files')
 				).pipe(Effect.provide(http));
 				const request = {
 					state: { text: 'see photo', photo: { name: 'p.png', mime: 'image/png', size: 2 } },
@@ -550,7 +599,8 @@ describe('the OpenAI-compatible model port (P19)', () => {
 						embed: {},
 						modalities: { sys2: null, embed: null }
 					},
-					['default']
+					['default'],
+					() => Port.unavailable('files')
 				).pipe(Effect.provide(http));
 				const request = {
 					state: { text: 'hi' },

@@ -22,9 +22,10 @@
 		| { part: 'childCustom'; props?: Record<string, never> };
 	export type ViewHarnessProps = {
 		catalog: NonNullable<KindsHost['catalog']>;
+		automations?: KindsHost['automations'];
 		geocoder?: KindsHost['geocoder'];
 		upload?: KindsHost['upload'];
-		read?: KindsHost['read'];
+		query?: KindsHost['query'];
 		zone?: string;
 	} & (
 		| (Extract<ViewPart, { part: 'point' | 'picker' }> & { bolt?: ViewBolt })
@@ -40,7 +41,7 @@
 	import { provideKinds } from '../src/kinds/context.js';
 	import PointInput from '../src/kinds/point-input.svelte';
 	import Picker from '../src/kinds/picker.svelte';
-	import { Sheet } from '../src/primitives/sheet/index.js';
+	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import { provideBolt } from '../src/client/context.js';
 	import { type Page } from '../src/collection/types.js';
 	import Board from '../src/board/Board.svelte';
@@ -62,6 +63,9 @@
 		get catalog() {
 			return fixture.catalog;
 		},
+		get automations() {
+			return fixture.automations;
+		},
 		get geocoder() {
 			return fixture.geocoder;
 		},
@@ -71,9 +75,9 @@
 		get upload() {
 			return fixture.upload;
 		},
-		get read() {
+		get query() {
 			const bolt = fixture.bolt;
-			return fixture.read ?? (bolt === undefined ? undefined : (c, o) => bolt.read<Page>(c, o));
+			return fixture.query ?? (bolt === undefined ? undefined : (c, o) => bolt.query<Page>(c, o));
 		}
 	});
 	let boardScope = $state<BoardProps['where']>(undefined);

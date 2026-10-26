@@ -10,15 +10,17 @@ import { GATED, type Chain } from '../write/sql.ts';
 import { sendInputSchema, deliverRun, EPOCH, QUEUED } from '../integrations/outbound.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
 import { conversationId, preview, threadOf, msg as messagePiece } from './store.ts';
-import type { Obj } from './value.ts';
+import type { RowData } from '../contracts.ts';
 const sql = (text: string, ...params: Json[]) => ({ text, params });
 /** A message already built: one queued row in its conversation on `instance`. */
 type Send = {
 	id: string;
 	instance: string;
 	thread: string;
-	message: Obj;
+	message: RowData;
 	kind?: 'dm' | 'group';
+	/** The sync outbox key whose acknowledgement releases this send. */
+	syncWrite?: string;
 };
 export function sendPiece(c: Chain, s: Send, now: string, gated = false): string {
 	const conv = conversationId(s.instance, s.thread);
@@ -35,14 +37,14 @@ export function sendPiece(c: Chain, s: Send, now: string, gated = false): string
 	);
 	const sent = messagePiece(
 		c,
-		`INSERT INTO sys_message (id, conversation, integration, direction, status, class, message, thread, text, preview, epoch, sent_at,
+		`INSERT INTO sys_message (id, conversation, integration, direction, status, meta, message, thread, text, preview, epoch, sent_at,
 		next_attempt_at, created_at, delivery)
-		SELECT ${c.p(s.id)}, ${c.p(conv)}, ${c.p(s.instance)}, 'outbound', 'queued', 'message', ${c.p(s.message)}::jsonb, ${c.p(typeof s.message['thread'] === 'string' ? s.message['thread'] : null)},
+		SELECT ${c.p(s.id)}, ${c.p(conv)}, ${c.p(s.instance)}, 'outbound', 'queued', ${c.p(s.syncWrite === undefined ? null : { sync_write: s.syncWrite })}::jsonb, ${c.p(s.message)}::jsonb, ${c.p(typeof s.message['thread'] === 'string' ? s.message['thread'] : null)},
 			${c.p(text)}, ${c.p(preview(text))}, ${EPOCH}, ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz, ${c.p(now)}::timestamptz, ${QUEUED(c, now)}
 		${gated ? `WHERE ${GATED}` : ''} ON CONFLICT (id) DO NOTHING`,
 		'id'
 	);
-	deliverRun(c, sent, now);
+	if (s.syncWrite === undefined) deliverRun(c, sent, now);
 	return sent;
 }
 /**

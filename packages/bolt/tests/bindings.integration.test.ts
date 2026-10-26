@@ -1,6 +1,5 @@
-// `engine.bindings()` is the one clock every handler reads (cross-cutting F2): at 17:30 UTC it is already the next day in
-// Kuala Lumpur, so `ctx.today` is the workspace's date through `/q`, an act's `{ today }` default, the files handler's
-// read predicate and the integrations handler's authorization — never the UTC date.
+// At 17:30 UTC it is already the next day in Kuala Lumpur: `ctx.today` and an act's `{ today }` default use that workspace
+// day. File and integration authorization use a policy with the same fixed, materialized cutoff.
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { expect, it } from '@effect/vitest';
@@ -43,12 +42,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		pipelines: {},
-		// a note is readable from its due day on, so a reader's file download depends on which day `today` is
+		// The policy's cutoff is a concrete date; clock operands are not part of query grammar.
 		policies: {
 			reader: {
 				description: 'Reads due notes',
-				grants: { notes: { read: { where: { due: { lte: { today: '' } } } } } }
+				grants: { notes: { read: { where: { due: { lte: TODAY } } } } }
 			}
 		},
 		teams: { Readers: { name: 'Readers', policies: ['reader'] } },
@@ -71,7 +69,7 @@ const json = (response: Response) =>
 	});
 
 it.live(
-	'binds ctx.today to the workspace day through q, act defaults, files and integrations',
+	'binds ctx.today and defaults to the workspace day, and authorizes files and integrations at a fixed cutoff',
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -114,9 +112,7 @@ it.live(
 
 				// `/q`: a collection query's body sees the workspace day
 				expect(
-					yield* json(
-						yield* post('/__bolt/q', { reads: [{ m: 'query', a: ['notes', 'today', {}] }] })
-					)
+					yield* json(yield* post('/__bolt/q', { reads: [{ m: 'query', a: ['notes.today', {}] }] }))
 				).toEqual({ answers: [TODAY] });
 
 				// `/act`: a `{ today }` default lands on the workspace day
@@ -182,7 +178,8 @@ it.live(
 							const b = yield* bindings;
 							seen.push(b.today);
 							return yield* work;
-						}).pipe(Effect.provide(context))
+						}).pipe(Effect.provide(context)),
+					admit: (work) => work.pipe(Effect.provide(context))
 				}).pipe(Effect.provide(NodeCrypto.layer));
 				const response = yield* integrationRoutes(
 					HttpServerRequest.fromWeb(

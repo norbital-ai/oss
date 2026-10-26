@@ -173,7 +173,7 @@ describe('the inbound decode and the outbound check', () => {
 			})
 	);
 	it.effect(
-		"a definition carries its driver's conversation, or its own (a custom chat over http), with the handle its senders carry",
+		"a definition carries its driver's conversation and sender handle; request drivers carry none",
 		() =>
 			Effect.gen(function* () {
 				expect(conversationOf({ description: 'x', driver: 'whatsapp' })).toEqual({
@@ -191,10 +191,10 @@ describe('the inbound decode and the outbound check', () => {
 				expect(
 					conversationOf({
 						description: 'x',
-						driver: 'http',
-						conversation: { kind: 'chat', handle: 'telegram' }
+						driver: 'telegram'
 					})
 				).toEqual({ kind: 'chat', handle: 'telegram' });
+				expect(conversationOf({ description: 'x', driver: 'http' })).toBeUndefined();
 				expect(conversationOf({ description: 'x', driver: 'sqlserver' })).toBeUndefined();
 			})
 	);

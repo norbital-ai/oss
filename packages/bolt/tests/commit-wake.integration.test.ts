@@ -1,8 +1,8 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Layer } from 'effect';
 import { Live, Links, Wake } from '../src/engine/services.ts';
-import { committed, compileCommit, CommitAnswer, type Commit } from '../src/engine/write/commit.ts';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
+import { committed, executeCommit, type Commit } from '../src/engine/write/commit.ts';
+import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import { manifest as base, NOW, TODAY } from './write-fixture.ts';
@@ -56,7 +56,7 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 		};
 		const pg = yield* PgliteDb.open(),
 			db = PgliteDb.make(pg);
-		yield* applyPlan(db, plan(null, manifest), { accept: true });
+		yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 		const first = '0199a000-0000-4000-8000-000000000071',
 			second = '0199a000-0000-4000-8000-000000000072';
 		const common: Omit<Commit, 'writes'> = {
@@ -72,53 +72,47 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 			notices: [],
 			output: null
 		};
-		yield* db.returning(
-			CommitAnswer,
-			compileCommit(manifest, catalogOf(manifest), {
-				...common,
-				writes: [
-					{
-						collection: 'orders',
-						id: first,
-						op: 'create',
-						values: { title: 'erase', note: 'personal' }
-					},
-					{
-						collection: 'orders',
-						id: second,
-						op: 'create',
-						values: { title: 'ordinary', note: 'retained' }
-					}
-				]
-			})
-		);
-		const [answer] = yield* db.returning(
-			CommitAnswer,
-			compileCommit(manifest, catalogOf(manifest), {
-				...common,
-				key: 'mixed',
-				digest: 'mixed',
-				writes: [
-					{
-						collection: 'orders',
-						id: first,
-						op: 'update',
-						revision: 1,
-						set: { note: null },
-						erased: true
-					},
-					{
-						collection: 'orders',
-						id: second,
-						op: 'update',
-						revision: 1,
-						set: { title: 'ordinary changed' },
-						erased: false
-					}
-				],
-				erasures: [{ mode: 'anonymise', collection: 'orders', ids: [first], purge: ['note'] }]
-			})
-		);
+		yield* executeCommit(db, manifest, catalogOf(manifest), {
+			...common,
+			writes: [
+				{
+					collection: 'orders',
+					id: first,
+					op: 'create',
+					values: { title: 'erase', note: 'personal' }
+				},
+				{
+					collection: 'orders',
+					id: second,
+					op: 'create',
+					values: { title: 'ordinary', note: 'retained' }
+				}
+			]
+		});
+		const [answer] = yield* executeCommit(db, manifest, catalogOf(manifest), {
+			...common,
+			key: 'mixed',
+			digest: 'mixed',
+			writes: [
+				{
+					collection: 'orders',
+					id: first,
+					op: 'update',
+					revision: 1,
+					set: { note: null },
+					erased: true
+				},
+				{
+					collection: 'orders',
+					id: second,
+					op: 'update',
+					revision: 1,
+					set: { title: 'ordinary changed' },
+					erased: false
+				}
+			],
+			erasures: [{ mode: 'anonymise', collection: 'orders', ids: [first], purge: ['note'] }]
+		});
 		expect(answer?.captured.map((row) => ({ id: row.id, cause: row.cause }))).toEqual([
 			{ id: first, cause: 'erased' },
 			{ id: second, cause: 'direct' }

@@ -9,10 +9,11 @@ import { decodeManifest } from '../../src/engine/manifest.ts';
 import {
 	GuestConfig,
 	GuestLive,
-	IsolatesLive,
 	type GuestOptions,
 	type GuestProgram
 } from '../../src/engine/guest/runner.ts';
+import { GuestIsolates } from '../../src/engine/ports.ts';
+import { nodePorts } from '../../src/node/ports.ts';
 import {
 	Activation,
 	Manifest,
@@ -25,28 +26,34 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const ENTRY = '\0bolt:fixture-entry',
 	INSTALL = '\0bolt:fixture-install';
 const edge = resolve(root, 'src/decl/runtime/guest.ts'),
-	collections = resolve(root, 'src/decl/collection.ts');
+	bodies = resolve(root, 'src/decl/body.ts'),
+	policy = resolve(root, 'src/decl/access/policy.ts');
 class GuestFixtureFailed extends Schema.TaggedError<GuestFixtureFailed>()('GuestFixtureFailed', {
 	message: Schema.String
 }) {}
 const entry = (sourceFile: string) => `import '${INSTALL}';
 import value from ${JSON.stringify(sourceFile)};
-import { attached } from ${JSON.stringify(collections)};
+import { attached } from ${JSON.stringify(bodies)};
+import { approvalFlow, snapshotOf } from ${JSON.stringify(policy)};
 const gen = (fn, at) => typeof fn === 'function' && Object.prototype.toString.call(fn) === '[object GeneratorFunction]' ? attached(fn, at) : fn;
 for (const c of Object.values(value.collection ?? {})) {
 	if (!c?.bodies) continue;
-	for (const key of ['project','transform']) c.bodies[key] = gen(c.bodies[key], 1);
-	for (const part of ['queries','actions']) for (const [name, body] of Object.entries(c.bodies[part] ?? {})) c.bodies[part][name] = gen(body,1);
+	for (const key of ['create','update','delete','notify']) c.bodies[key] = gen(c.bodies[key], 1);
+	for (const [name, body] of Object.entries(c.bodies.queries ?? {})) c.bodies.queries[name] = gen(body,1);
+	for (const sync of Object.values(c.bodies.syncs ?? {})) {
+		for (const key of ['read','write']) sync[key] = gen(sync[key],1);
+		for (const [type, body] of Object.entries(sync.parse ?? {})) sync.parse[type] = gen(body,1);
+	}
+}
+for (const p of Object.values(value.policy ?? {})) for (const grant of Object.values(p.grants ?? {})) {
+	for (const op of ['create','update','delete']) if (typeof grant[op]?.approval === 'function') {
+		const approve = grant[op].approval;
+		grant[op].approval = (write) => snapshotOf(approve(write, approvalFlow()));
+	}
 }
 for (const a of Object.values(value.automation ?? {})) a.body = gen(a.body,1);
 for (const page of Object.values(value.page ?? {})) page.body = gen(page.body,1);
-for (const p of Object.values(value.pipeline ?? {})) for (const key of ['known','check','template']) if(p.spec?.import?.[key]) p.spec.import[key] = gen(p.spec.import[key],0);
-for (const i of Object.values(value.integration_definition ?? value.integration ?? {})) {
-	if (!i?.bodies) continue;
-	i.bodies.test = gen(i.bodies.test,0); i.bodies.receive = gen(i.bodies.receive,-1); i.bodies.send = gen(i.bodies.send,1);
-	for (const feed of Object.values(i.bodies.feeds ?? {})) for (const key of ['read','map']) feed[key] = gen(feed[key],1);
-	for (const out of Object.values(i.bodies.outbound ?? {})) out.run = gen(out.run,1);
-}
+for (const i of Object.values(value.integration_definition ?? {})) if(i?.bodies) i.bodies.test = gen(i.bodies.test,0);
 export default value;`;
 const fixtureFailure = (error: unknown) =>
 	new GuestFixtureFailed({ message: error instanceof Error ? error.message : String(error) });
@@ -72,7 +79,13 @@ const compileProgram = (source: string): Effect.Effect<GuestProgram> =>
 					configFile: false,
 					logLevel: 'silent',
 					resolve: {
-						alias: [{ find: /^@norbital-ai\/bolt$/, replacement: resolve(root, 'src/index.ts') }]
+						alias: [
+							{ find: /^@norbital-ai\/bolt$/, replacement: resolve(root, 'src/index.ts') },
+							{
+								find: /^@norbital-ai\/bolt\/errors$/,
+								replacement: resolve(root, 'src/decl/errors.ts')
+							}
+						]
 					},
 					plugins: [
 						{
@@ -124,13 +137,23 @@ const compileProgram = (source: string): Effect.Effect<GuestProgram> =>
 		})
 	).pipe(Effect.orDie);
 
-/** Each snippet compiles once, even when its workspace is independently scoped by several tests. */
+const programs = new Map<string, Effect.Effect<GuestProgram>>();
+/** Only compiled source strings are shared within a test file; databases and guest runtimes remain scoped. */
 export const program = (source: string): Effect.Effect<GuestProgram> => {
+	const existing = programs.get(source);
+	if (existing !== undefined) return existing;
 	let cached: Effect.Effect<GuestProgram> | undefined;
-	return Effect.gen(function* () {
-		cached ??= yield* Effect.cached(compileProgram(source));
-		return yield* cached;
+	const compiled: Effect.Effect<GuestProgram> = Effect.gen(function* () {
+		const prepared =
+			cached ??
+			(yield* Effect.cached(
+				compileProgram(source).pipe(Effect.map((value) => Object.freeze(value)))
+			));
+		cached = prepared;
+		return yield* prepared;
 	});
+	programs.set(source, compiled);
+	return compiled;
 };
 
 export const fixtureManifest = Result.getOrThrow(
@@ -143,11 +166,7 @@ export const fixtureManifest = Result.getOrThrow(
 			b: { read: { fields: 'all' }, update: { input: { columns: [] } } },
 			t: {
 				read: { fields: 'all' },
-				create: { input: { columns: [] } },
-				actions: {
-					first: { description: 'first', input: {} },
-					second: { description: 'second', input: {} }
-				}
+				create: { input: { columns: [] } }
 			},
 			jobs: { read: { fields: 'all' }, update: { input: { columns: [] } } }
 		},
@@ -157,7 +176,6 @@ export const fixtureManifest = Result.getOrThrow(
 			b: { description: 'b', runAs: 'trigger' }
 		},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		connections: {},
 		envoys: {},
@@ -174,7 +192,9 @@ export const guestLayer = (
 	guest: GuestProgram,
 	options: GuestOptions = {},
 	events?: (ids: EventIds) => Effect.Effect<InvocationEvents>,
-	isolates = IsolatesLive
+	isolates: Layer.Layer<GuestIsolates> = Layer.unwrap(
+		Effect.map(nodePorts(), (ports) => GuestIsolates.fromAbi(ports.guestIsolates))
+	)
 ) =>
 	GuestLive.pipe(
 		Layer.provideMerge(isolates),
@@ -188,10 +208,7 @@ export const guestLayer = (
 					release: 'test',
 					publicUrl: 'http://localhost',
 					guest: Option.some(guest),
-					transforms: new Set<string>(),
-					projections: new Set<string>(),
-					start: [],
-					secretsKey: Option.none()
+					start: []
 				}),
 				Layer.succeed(Telemetry, {
 					open: events ?? (() => Effect.succeed({ emit: () => Effect.void }))

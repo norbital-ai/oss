@@ -4,7 +4,9 @@ import type { Authority, EngineActor } from '../engine/contracts.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import { canOpenKiosk } from '../decl/runtime/kiosk.ts';
 import { BOLT } from '../protocol/wire.ts';
-import type { CollectionExposure } from '@norbital-ai/ui';
+import type { AutomationExposure, CollectionExposure } from '@norbital-ai/ui';
+import { Schema } from 'effect';
+import { FieldsSchema } from '../protocol/public-page.ts';
 
 type AppSpec = EngineManifest['apps'][string];
 /** Browser route metadata; agent availability comes from the authorized boot surfaces. */
@@ -140,6 +142,8 @@ export type ShellBoot = {
 	visitor: { app: string; siteKey?: string } | null;
 	/** What ui's generated forms and record views read per collection (its `CollectionExposure`), as this caller may use it. */
 	catalog: { readonly [collection: string]: CollectionExposure };
+	/** Inputs of the automations this caller may start; the host still validates every start. */
+	automations: Readonly<Record<string, AutomationExposure>>;
 	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
 	aiUnconfigured?: true;
 	/** The schema fingerprint the page boots against: `$bolt` sends it as `Bolt-Contract` (L-BOLT-171). */
@@ -194,16 +198,20 @@ export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean
 }
 
 /**
- * The `Content-Security-Policy` a document is served with: a `portal: true` page or any kiosk page
- * may be framed by any website (made to be embedded); every other page only by the workspace itself,
- * so no other site can overlay it (clickjacking). `path` is the workspace path (`/app/portal/book`),
- * without a base.
+ * The `Content-Security-Policy` a document is served with: a kiosk page or a `portal: true` page may
+ * be framed by the workspace itself and the origins its `embed` names; every other page only by the
+ * workspace, so no other site can overlay it (clickjacking). `path` is the workspace path
+ * (`/app/portal/book`), without a base.
  */
 export function framePolicy(m: ShellManifest, path: string): string {
 	const r = route(m, new URL(path, 'http://x'));
-	if (r.kind === 'kiosk') return 'frame-ancestors *';
-	const portal = r.kind === 'page' && appOf(m, r.app)?.pages[r.page]?.portal === true;
-	return `frame-ancestors ${portal ? '*' : "'self'"}`;
+	const embed =
+		r.kind === 'kiosk'
+			? m.kiosks?.[r.kiosk]?.embed
+			: r.kind === 'page'
+				? appOf(m, r.app)?.pages[r.page]?.embed
+				: undefined;
+	return ["frame-ancestors 'self'", ...(embed ?? [])].join(' ');
 }
 
 /** A member whose policy names a public app by name (never `*` or a group) opens it as themselves, not as its visitor. */
@@ -251,6 +259,32 @@ export function kioskNav(
 						}
 					];
 		});
+}
+
+/** Authorized input metadata for native automation forms. */
+export function automationInputs(
+	m: EngineManifest,
+	authority: Authority
+): Readonly<Record<string, AutomationExposure>> {
+	if (authority.actor.kind === 'visitor') return {};
+	return Object.fromEntries(
+		(authority.admin ? Object.keys(m.automations) : authority.automations).flatMap<
+			readonly [string, AutomationExposure]
+		>((name) => {
+			const spec = m.automations[name];
+			return spec === undefined
+				? []
+				: [
+						[
+							name,
+							{
+								input: Schema.decodeUnknownSync(FieldsSchema)(spec.input ?? {}),
+								description: spec.description
+							}
+						]
+					];
+		})
+	);
 }
 
 /** The automations `authority` may start from Settings → Automations with no input: every input field optional. */
@@ -388,7 +422,8 @@ const STUDIO_TABS = [
 	'mrs',
 	'runtime',
 	'operations',
-	'usage'
+	'usage',
+	'rules'
 ] as const;
 export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>

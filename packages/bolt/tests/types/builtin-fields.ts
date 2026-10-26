@@ -17,7 +17,12 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(): T => true as T;
 
 // one namespace: built-ins and the workspace's
-is<Eq<CustomFieldName, 'money' | 'file' | 'point' | 'phone' | 'rating'>>();
+is<
+	Eq<
+		CustomFieldName,
+		'money' | 'file' | 'point' | 'phone' | 'rating' | 'variant' | 'scalar_variant'
+	>
+>();
 
 // the value type flows from the shape, built-in or workspace
 is<Eq<ValueOf<{ kind: 'custom'; of: 'phone' }>, string>>();
@@ -31,7 +36,7 @@ is<
 	>
 >();
 
-model({
+model('probe', {
 	description: 'x',
 	label: 'a',
 	fields: {
@@ -41,19 +46,19 @@ model({
 		r: { kind: 'custom', of: 'rating', optional: true }
 	}
 });
-model({
+model('probe', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error B1 a misspelt built-in
 	fields: { a: { kind: 'text' }, m: { kind: 'custom', of: 'phnoe' } }
 });
-model({
+model('probe', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error B2 a misspelt workspace custom field
 	fields: { a: { kind: 'text' }, r: { kind: 'custom', of: 'ratng' } }
 });
-model({
+model('probe', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error B3 a built-in's default of the wrong type

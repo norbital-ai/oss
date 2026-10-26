@@ -1,5 +1,6 @@
 // Portable failure codes and schemas shared by native engine and protocol consumers.
-import { Schema } from 'effect';
+import { Cause, Effect, Exit, Schema } from 'effect';
+import { StoreError } from '@norbital-ai/store';
 
 export const PHASES = [
 	'decode',
@@ -59,10 +60,13 @@ export const CODES = [
 	'invalidRecords',
 	'invalidSpec',
 	'invalidWhere',
+	'journalFull',
 	'keyReuse',
 	'lastAdmin',
 	'locked',
 	'memory',
+	'migrationChanged',
+	'migrationInvalid',
 	'missingBody',
 	'missingRef',
 	'needsSql',
@@ -161,10 +165,13 @@ export const CODE = {
 	invalidRecords: fault(500),
 	invalidSpec: fault(500),
 	invalidWhere: fault(500),
+	journalFull: fault(500),
 	keyReuse: fault(500),
 	lastAdmin: fault(409),
 	locked: fault(500),
 	memory: fault(500),
+	migrationChanged: fault(500),
+	migrationInvalid: fault(500),
 	missingBody: fault(500),
 	missingRef: fault(500),
 	needsSql: fault(500),
@@ -256,6 +263,19 @@ export class BoltError extends Schema.TaggedError<BoltError>()('BoltError', Bolt
 			...(cause === undefined ? {} : { cause })
 		});
 	}
+}
+/** A store refusal (`@norbital-ai/store`) as Bolt's: the same code, phase and message. */
+export const fromStore = (e: StoreError): BoltError =>
+	BoltError.make(e.code, e.phase, e.message, e.cause);
+/**
+ * A store Effect run where Bolt's caller is synchronous (a declaration compiled once per manifest, the browser's
+ * decoder): its value, or its refusal thrown as Bolt's.
+ */
+export function storeSync<A, E>(effect: Effect.Effect<A, E>): A {
+	const exit = Effect.runSyncExit(effect);
+	if (Exit.isSuccess(exit)) return exit.value;
+	const failure = Cause.squash(exit.cause);
+	throw failure instanceof StoreError ? fromStore(failure) : failure;
 }
 const isProps = (
 	args: BoltErrorArgs

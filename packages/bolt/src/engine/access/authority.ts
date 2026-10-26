@@ -1,10 +1,9 @@
 // Policies → Authority (rules 33–37, 35a): held grants union into arms, `'read'` and `via` resolve, masks derive from
 // the read arms, and an administrator (or a platform run) bypasses authored policy. Plus what a write and a read
 // consult of it: `moves` (rule 34) and the read scope (rule 13); the write judge itself is `write/act.ts`'s.
-import { Predicate } from 'effect';
+import { Schema } from 'effect';
 import type { Admits, WritableColumns, VisitorMayRead, OperandValue } from '../services.ts';
 import type {
-	ApprovalRoute,
 	Arm,
 	Authority,
 	CollectionAuthority,
@@ -12,19 +11,18 @@ import type {
 	LimitRule,
 	WriteArm
 } from '../contracts.ts';
-import type { EngineManifest } from '../manifest.ts';
-import type { Pred } from '../../protocol/ir-types.ts';
+import { ScopeData, type EngineManifest, type GrantArm } from '../manifest.ts';
+import type { Pred } from '@norbital-ai/store';
 import { or, toPred, TRUE } from './pred.ts';
 import type { Rate } from '../../decl/values.ts';
-import { SYSTEM_COLUMNS } from '../../protocol/catalog.ts';
+import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { SYSTEM } from '../../system/index.ts';
-import { approvalRoutes, unknownApprovalTeam } from '../approvals/configuration.ts';
 
 /** Whom an Authority is compiled for: resolved by `identity/actor`. */
 export type Holder = {
 	actor: EngineActor;
 	policies: readonly string[];
-	/** Rule 35: bypasses grants, `moves` and approval flows; preserves checks, edges, `edit` and transforms. */
+	/** Rule 35: bypasses grants, `moves` and approval flows; preserves checks, edges, `edit` and write callbacks. */
 	admin: boolean;
 	/** A platform run: the workspace's own work, unscoped like an admin but never an administrator (rule 38c). */
 	platform?: boolean;
@@ -32,9 +30,7 @@ export type Holder = {
 	scopes?: { readonly [policy: string]: readonly string[] };
 };
 
-type Obj = { readonly [k: string]: unknown };
 const OPS = ['create', 'update', 'delete'] as const;
-type Op = (typeof OPS)[number];
 /** Identity collections: read by grant or the kernel directory, written only by their admin verbs (rule 38c). */
 const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
 const KERNEL = '$directory';
@@ -45,33 +41,42 @@ const emptyCollection = (): Mutable => ({
 	create: [],
 	update: [],
 	delete: [],
-	approval: { create: [], update: [], delete: [] },
 	queries: [],
-	actions: [],
 	moves: {},
 	masks: {}
 });
 type Mutable = {
 	-readonly [
-		K in Exclude<keyof CollectionAuthority, 'moves' | 'approval'>
+		K in Exclude<keyof CollectionAuthority, 'moves'>
 	]: CollectionAuthority[K] extends readonly (infer T)[] ? T[] : CollectionAuthority[K];
 } & {
 	moves: { [field: string]: 'all' | readonly string[] };
-	approval: { [O in Op]: ApprovalRoute[] };
 };
 
-/** A direct grant object is `{ where?, fields?, previous? }` unless the model has a field of that name. */
-function scopeObject(m: EngineManifest, model: string, v: unknown): Obj | undefined {
-	if (!Predicate.isObject(v)) return undefined;
-	const keys = Object.keys(v);
+const isScope = Schema.is(ScopeData);
+/** A grant object is `{ where?, fields?, previous?, approval? }` unless the model has a field of that name. */
+export function scopeObject(
+	m: EngineManifest,
+	model: string,
+	g: GrantArm | undefined
+): ScopeData | undefined {
+	if (typeof g !== 'object' || !isScope(g)) return undefined;
+	const keys = Object.keys(g);
 	const own = m.models[model]?.fields ?? {};
 	return keys.length > 0 &&
-		keys.every((k) => ['where', 'fields', 'previous'].includes(k) && own[k] === undefined)
-		? v
+		keys.every(
+			(k) => ['where', 'fields', 'previous', 'approval'].includes(k) && own[k] === undefined
+		)
+		? g
 		: undefined;
 }
 
-function readArm(m: EngineManifest, c: string, policy: string, g: unknown): Arm | undefined {
+function readArm(
+	m: EngineManifest,
+	c: string,
+	policy: string,
+	g: GrantArm | undefined
+): Arm | undefined {
 	if (g === undefined) return undefined;
 	if (g === true) return { policy, where: TRUE, fields: 'all' };
 	const s = scopeObject(m, c, g);
@@ -79,26 +84,28 @@ function readArm(m: EngineManifest, c: string, policy: string, g: unknown): Arm 
 	return {
 		policy,
 		where: s.where === undefined ? TRUE : toPred(m, c, s.where),
-		fields: (s.fields as readonly string[] | undefined) ?? 'all'
+		fields: s.fields ?? 'all'
 	};
 }
 function writeArm(
 	m: EngineManifest,
 	c: string,
 	policy: string,
-	g: unknown,
+	g: GrantArm | undefined,
 	read: Arm | undefined
 ): WriteArm | undefined {
 	if (g === undefined) return undefined;
-	const scope = (w: unknown): Pred =>
+	const scope = (w: GrantArm | undefined): Pred =>
 		w === undefined || w === true ? TRUE : w === 'read' ? (read?.where ?? TRUE) : toPred(m, c, w);
 	const s = scopeObject(m, c, g);
 	if (s === undefined) return { policy, where: scope(g), fields: 'all' };
 	return {
 		policy,
 		where: scope(s.where),
-		fields: (s.fields as readonly string[] | undefined) ?? 'all',
-		...(s.previous === undefined ? {} : { previous: scope(s.previous) })
+		fields: s.fields ?? 'all',
+		...(s.previous === undefined ? {} : { previous: scope(s.previous) }),
+		// the manifest marks the policy's approval callback (the guest runs it, kind `approval`)
+		...(s.approval === true ? { approval: s.approval } : {})
 	};
 }
 
@@ -148,6 +155,7 @@ const DEFAULTS: readonly LimitRule[] = [
 	{ key: 'act', rate: '600/min', per: 'actor' },
 	{ key: 'read', rate: '3000/min', per: 'actor' },
 	{ key: 'upload', rate: '120/min', per: 'actor' },
+	{ key: 'convert', rate: '30/min', per: 'actor' },
 	{ key: 'agent', rate: '100/h', per: 'actor' },
 	// a private envoy's one fixed "not recognised" reply to an unknown sender: once per window, so a flood is never answered by one
 	{ key: 'envoys.unrecognised', rate: '1/15min', per: 'sender' }
@@ -186,15 +194,14 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 			if (!(IDENTITY as readonly string[]).includes(c))
 				(a.create.push(all), a.update.push(all), a.delete.push(all));
 			a.queries.push(...Object.keys(m.collections[c]?.queries ?? {}));
-			a.actions.push(...Object.keys(m.collections[c]?.actions ?? {}));
 			for (const [f, k] of Object.entries(m.models[c]?.fields ?? {}))
 				if (k.kind === 'state') a.moves[f] = 'all';
 		}
 	} else {
 		for (const p of policies)
 			for (const [c, g] of Object.entries(m.policies[p]!.grants)) {
-				if ('via' in g) {
-					via.push({ c, rel: g.via as string });
+				if (g.via !== undefined) {
+					via.push({ c, rel: g.via });
 					continue;
 				}
 				const a = col(c);
@@ -206,28 +213,15 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 					const w = writeArm(m, c, p, g[op], read);
 					if (w) a[op].push(w);
 				}
-				for (const op of OPS)
-					for (const route of approvalRoutes(
-						Predicate.isObject(g.approval) ? g.approval[op] : undefined
-					)) {
-						const unknown = unknownApprovalTeam(m, route);
-						if (unknown !== undefined)
-							throw new Error(
-								`Approval route '${p}.${c}.${op}' references unknown source team '${unknown}'.`
-							);
-						a.approval[op].push(route);
-					}
-				a.queries.push(...((g.queries as string[] | undefined) ?? []));
-				a.actions.push(...((g.actions as string[] | undefined) ?? []));
+				a.queries.push(...(g.queries ?? []));
 				if (g.moves === 'all')
 					for (const [f, k] of Object.entries(m.models[c]?.fields ?? {})) {
 						if (k.kind === 'state') a.moves[f] = 'all';
 					}
 				else
-					for (const [f, edges] of Object.entries((g.moves ?? {}) as Obj)) {
+					for (const [f, edges] of Object.entries(g.moves ?? {})) {
 						const had = a.moves[f];
-						a.moves[f] =
-							had === 'all' ? 'all' : [...new Set([...(had ?? []), ...(edges as string[])])];
+						a.moves[f] = had === 'all' ? 'all' : [...new Set([...(had ?? []), ...edges])];
 					}
 			}
 		// `via`: the child's rows are the parent's; reads follow the parent's read, writes the parent's update (a child
@@ -242,7 +236,8 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 			for (const u of via) if (u.c === parent) liftVia(u);
 			const p = cols[parent],
 				a = col(c);
-			const lift = <A extends Arm>(arm: A): A => ({
+			// the parent's approval callback judges the parent's writes; a child it lifts to writes directly
+			const lift = ({ approval: _approval, ...arm }: WriteArm): WriteArm => ({
 				...arm,
 				where: { t: 'one', rel, target: parent, pred: arm.where },
 				fields: 'all'
@@ -257,7 +252,6 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 	}
 	for (const [c, a] of Object.entries(cols)) {
 		a.queries = [...new Set(a.queries)];
-		a.actions = [...new Set(a.actions)];
 		if (!bypass) a.masks = masks(m, c, a.read);
 	}
 	const caps = {
@@ -364,3 +358,19 @@ export const operandValue: OperandValue = (operand, authority) => {
 			return member?.party?.id ?? null;
 	}
 };
+
+/**
+ * A model a read-only remote sync owns (spec §3: a sync with `read` and no `write`): its rows come from that sync, so
+ * every other writer, administrators included, changes only its local fields (its `update.columns`) and never creates
+ * or deletes one. A read+write sync leaves the fields editable (each edit reaches the outbox).
+ */
+export function syncOwned(
+	m: EngineManifest,
+	model: string
+): { readonly sync: string; readonly local: readonly string[] } | undefined {
+	const spec = m.collections[model];
+	for (const [name, s] of Object.entries(spec?.syncs ?? {}))
+		if (s.with !== 'file' && s.read === true && s.write !== true)
+			return { sync: `${model}.sync.${name}`, local: spec?.update?.input.columns ?? [] };
+	return undefined;
+}

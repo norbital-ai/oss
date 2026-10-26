@@ -7,6 +7,7 @@ import {
 	Deferred,
 	Effect,
 	FiberSet,
+	FileSystem,
 	Layer,
 	Option,
 	Redacted,
@@ -14,6 +15,8 @@ import {
 	Schema
 } from 'effect';
 import { HttpClient } from 'effect/unstable/http';
+import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
+import * as NodePath from '@effect/platform-node/NodePath';
 import {
 	readArtifact,
 	loadPackWithAssets,
@@ -24,6 +27,7 @@ import { toDrivers, openRouterSpeech } from '@norbital-ai/providers';
 import { aiModalityRefusals } from '@norbital-ai/providers/openrouter';
 import {
 	Activation,
+	Audit,
 	AgentHost,
 	Ai,
 	BoltError,
@@ -33,8 +37,14 @@ import {
 	EngineLive,
 	Files,
 	Geo,
+	GuestIsolates,
 	HostIdentity,
+	Http,
+	Docs,
+	Images,
 	IntegrationManager,
+	Keys,
+	Mcp,
 	Metering,
 	Port,
 	PublicPages,
@@ -47,7 +57,8 @@ import {
 	TenantDb,
 	Transport,
 	WebRead,
-	applyPlan,
+	applyMigrations,
+	auditFromAbi,
 	challengedApps,
 	declaredSecrets,
 	credentials,
@@ -56,12 +67,9 @@ import {
 	inProcessDeadlines,
 	integrationLinks,
 	loadKeys,
-	localFiles,
 	makeIdentityHost,
-	plan,
 	RateWindows,
-	readApplied,
-	readPack,
+	readPackSource,
 	Runs,
 	signupOf,
 	Turnstile,
@@ -70,6 +78,7 @@ import {
 	type EngineHost,
 	type Provider
 } from '@norbital-ai/bolt/engine';
+import { cronClock, localAudit, localFiles, nodePorts } from '@norbital-ai/bolt/node';
 import { s3Files, nominatim, openAi } from './ports.ts';
 import { publicWeb } from './web.ts';
 import { messaging, type Sender } from './mail.ts';
@@ -168,25 +177,8 @@ export const activate = Effect.fn('server.activate')(function* (
 		manifest = artifact.manifest,
 		db = yield* TenantDb;
 	const log = options.log ?? ((line: string) => console.log(`[bolt] ${line}`));
-	yield* applyPlan(
-		db,
-		plan(yield* readApplied(db), manifest),
-		config.accept || config.mode === 'dev' ? { accept: true } : {}
-	).pipe(
-		Effect.catchTag('BoltError', (error) =>
-			Effect.fail(
-				error.code === 'destructiveNotAccepted'
-					? BoltError.make(
-							error.code,
-							error.phase,
-							`${error.message}; start with --accept to apply these steps.`,
-							error
-						)
-					: error
-			)
-		)
-	);
-	const pack = config.seed === null ? undefined : yield* readPack(config.seed);
+	yield* applyMigrations(db, manifest, artifact.migrations);
+	const pack = config.seed === null ? undefined : yield* readPackSource(config.seed);
 	if (pack !== undefined) {
 		const loaded = yield* loadPackWithAssets(
 			db,
@@ -202,15 +194,32 @@ export const activate = Effect.fn('server.activate')(function* (
 		);
 	}
 	const crypto = yield* Crypto.Crypto;
+	const fs = yield* FileSystem.FileSystem;
+	yield* fs.makeDirectory(config.auditDir, { recursive: true });
+	const auditDir = yield* fs.realPath(config.auditDir);
+	if ('pglite' in config.database && auditDir === (yield* fs.realPath(config.database.pglite)))
+		return yield* Effect.fail(
+			BoltError.make(
+				'invalidSpec',
+				'admission',
+				'The audit database must be separate from the tenant database.'
+			)
+		);
+	const audit = yield* localAudit(auditDir);
 	const epochId = yield* crypto.randomUUIDv4.pipe(
 		Effect.mapError((error) =>
 			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 		)
 	);
-	const epoch = yield* db.value(Schema.String, {
+	const [storedEpoch] = yield* db.returning(Schema.Struct({ value: Schema.String }), {
 		text: `INSERT INTO sys_config (key,value) VALUES ('epoch',$1) ON CONFLICT (key) DO UPDATE SET value = sys_config.value RETURNING value`,
 		params: [epochId]
 	});
+	if (storedEpoch === undefined)
+		return yield* Effect.fail(
+			BoltError.make('internal', 'commit', 'The epoch initialization returned no row.')
+		);
+	const epoch = storedEpoch.value;
 	const admitted = yield* envelope(options.maxConcurrent ?? 8);
 	const contextReady = yield* Deferred.make<Context.Context<EngineServices | TenantDb>>();
 	const enter = <A, E>(work: Effect.Effect<A, E, EngineServices | TenantDb>) =>
@@ -223,11 +232,15 @@ export const activate = Effect.fn('server.activate')(function* (
 		options?: { readonly signal?: AbortSignal | undefined }
 	) => runProviderRuntime(Effect.result(effect), options).then(Result.getOrThrow);
 	const providers = options.providers ?? (yield* toDrivers(drivers(), runProviders));
+	const native = yield* nodePorts({
+			release: artifact.dir,
+			...(config.masterKey === null ? {} : { secretsKey: config.masterKey })
+		}),
+		keys = Keys.fromAbi(native.keys);
 	const secretContext = yield* Layer.build(
-		Secrets.layer(
-			declaredSecrets(manifest),
-			config.masterKey === null ? Option.none() : Option.some(Redacted.make(config.masterKey))
-		).pipe(Layer.provide(Layer.succeed(TenantDb, db)))
+		Secrets.layer(declaredSecrets(manifest)).pipe(
+			Layer.provide(Layer.mergeAll(Layer.succeed(TenantDb, db), keys))
+		)
 	);
 	const codec = Context.get(secretContext, Secrets);
 	const secrets = Object.fromEntries(
@@ -245,16 +258,17 @@ export const activate = Effect.fn('server.activate')(function* (
 		secrets,
 		oauth: config.googleOAuth === null ? {} : { google: config.googleOAuth },
 		log,
-		enter
+		enter,
+		admit: enter
 	});
 	const mail = yield* messaging(config, log),
 		httpContext = yield* Effect.context<HttpClient.HttpClient>();
-	const native = apns(db, config.apns);
+	const apnsPush = apns(db, config.apns);
 	const transport: Transport['Service'] = {
 		send: (message) => {
 			if (message._tag === 'Push')
 				return message.subscription.kind === 'apns'
-					? native.send(message)
+					? apnsPush.send(message)
 					: config.vapid === null
 						? Port.unavailable('push')
 						: push(db, config.vapid, config.publicUrl).send(message);
@@ -283,7 +297,8 @@ export const activate = Effect.fn('server.activate')(function* (
 							...(embed === undefined ? {} : { embed: endpoint(embed) })
 						},
 						config.ai,
-						declared
+						declared,
+						files.get
 					)
 				);
 	const geo =
@@ -336,9 +351,18 @@ export const activate = Effect.fn('server.activate')(function* (
 				});
 	const workspace = yield* workspaceFiles(artifact.dir);
 	const ports = Layer.mergeAll(
+		NodeFileSystem.layer,
+		NodePath.layer,
 		Layer.succeed(Crypto.Crypto, crypto),
+		auditFromAbi(audit).pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto))),
 		Layer.succeed(AgentHost, workspace === undefined ? {} : { workspace }),
 		Layer.succeed(TenantDb, db),
+		keys,
+		GuestIsolates.fromAbi(native.guestIsolates),
+		Http.fromAbi(native.http),
+		Images.fromAbi(native.images),
+		Docs.fromAbi(native.docs),
+		Mcp.fromAbi(native.mcp),
 		Layer.succeed(Files, files),
 		Layer.succeed(Transport, transport),
 		Layer.succeed(Drivers, manager.port),
@@ -356,17 +380,19 @@ export const activate = Effect.fn('server.activate')(function* (
 			release: artifact.artifact.hash,
 			publicUrl: config.publicUrl,
 			guest: Option.some(artifact.guest),
-			transforms: new Set(artifact.transforms),
-			projections: new Set(artifact.projections),
-			start: pack?.meta.start ?? [],
-			secretsKey:
-				config.masterKey === null ? Option.none() : Option.some(Redacted.make(config.masterKey))
+			start: pack?.meta.start ?? []
 		})
 	);
 	const engineContext = yield* Layer.build(EngineLive(manifest).pipe(Layer.provideMerge(ports)));
 	yield* Deferred.succeed(contextReady, engineContext);
+	const runs = Context.get(engineContext, Runs);
+	yield* cronClock({
+		crons: runs.crons,
+		fire: (id, slot) => admitted.admit(1, runs.fire(id, slot))
+	});
 	const phone = mail.phone;
 	const identity = yield* makeIdentityHost({
+		audit: Context.get(engineContext, Audit),
 		db,
 		now: Clock.currentTimeMillis.pipe(Effect.map((at) => new Date(at))),
 		windows: new RateWindows(),
@@ -414,7 +440,7 @@ export const activate = Effect.fn('server.activate')(function* (
 				Layer.succeed(HostIdentity, identity),
 				Layer.succeed(ShellConfig, {
 					publicUrl: config.publicUrl,
-					workspace: { name: artifact.artifact.name, handle: artifact.artifact.handle },
+					workspace: () => ({ name: artifact.artifact.name, handle: artifact.artifact.handle }),
 					secure: config.publicUrl.startsWith('https:'),
 					ai: sys2 !== undefined,
 					...(config.environment === null ? {} : { environment: config.environment }),

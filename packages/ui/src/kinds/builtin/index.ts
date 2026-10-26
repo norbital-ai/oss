@@ -1,5 +1,5 @@
 // The built-in custom fields (`money`, `file`, `point`, `phone`): registered exactly as a tenant's
-// `src/data/custom_field/<f>/` is (`{ shape, label, renderer }`, the renderer taking `{ view: CustomFieldView }`), under
+// `src/data/custom_field/<f>/` is (`{ shape, label, renderer }`, the renderer taking `{ view: KindView }`), under
 // the name a stored kind renders as (`fieldName`). Bolt declares the same four with `customField()`, so a model may also
 // reference one as `{ kind: 'custom', of: 'phone' }`. A host's entry of the same name wins (a tenant's name never clashes:
 // `bolt check` refuses it).

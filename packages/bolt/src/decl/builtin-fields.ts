@@ -5,30 +5,30 @@
 // custom field. A workspace custom field may not take one of these names (`discover/reserved-name`).
 import { customField } from './custom-field.ts';
 
-const money = customField({
+const money = customField('money', {
 	description: 'An exact amount in the workspace currency, kept as a decimal.',
 	shape: { kind: 'money' },
 	label: 'Money'
 });
-const file = customField({
+const file = customField('file', {
 	description: 'A stored file: its id, name, MIME type and size.',
 	shape: { kind: 'file', accept: ['*/*'], max: '20MiB' },
 	label: 'File'
 });
-const point = customField({
+const point = customField('point', {
 	description: 'A latitude and longitude, picked on a map or found by address.',
 	shape: { kind: 'point' },
 	label: 'Location'
 });
-const phone = customField({
+const phone = customField('phone', {
 	description: 'A phone number in E.164 (+6591234567), typed with its country calling code.',
 	shape: { kind: 'text', format: 'phone' },
 	label: 'Phone'
 });
 
 /**
- * The built-ins as the names index maps a workspace's custom field (`typeof import(<definition>).default`), written out:
- * `customField()` checks its shape against every custom field name, so `typeof` of the declarations would be circular.
+ * The built-ins as the generated names index prints a workspace's custom field (its literal's data), written out:
+ * `customField()` types `validate` from every custom field's shape, so `typeof` of the declarations would be circular.
  */
 export type BuiltinFields = {
 	money: { spec: { shape: { readonly kind: 'money' } } };

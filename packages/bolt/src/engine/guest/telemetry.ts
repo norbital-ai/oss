@@ -1,29 +1,22 @@
 // An invocation's events: each written to the host's runtime log as it happens.
 import { Clock, Effect, Layer, type Scope } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import type { LogEvent, LogQuery } from '../contracts.ts';
-import { Logs } from '../ports.ts';
+import type { LogQuery } from '../contracts.ts';
+import { Logs, type LogsShape } from '../ports.ts';
 import { Telemetry, type EventIds, type InvocationEvents } from '../services.ts';
-/** One event written on its own (outside an invocation's `Telemetry`). */
-export const logged = (event: LogEvent): Effect.Effect<void> =>
-	Effect.gen(function* () {
-		yield* (yield* Logs).write(event);
-	});
 /** A page of the runtime log from the host's store, newest first; the caller has checked the reader may see it. */
-export const readLog = (query: LogQuery) =>
-	Effect.gen(function* () {
-		return yield* (yield* Logs)
-			.query(query)
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make(
-						error._tag === 'Unavailable' ? 'unavailable' : 'upstream',
-						'facility',
-						error.message
-					)
+export const readLog = (logs: LogsShape, query: LogQuery) =>
+	logs
+		.query(query)
+		.pipe(
+			Effect.mapError((error) =>
+				BoltError.make(
+					error._tag === 'Unavailable' ? 'unavailable' : 'upstream',
+					'facility',
+					error.message
 				)
-			);
-	});
+			)
+		);
 export const TelemetryLive = Layer.effect(
 	Telemetry,
 	Effect.gen(function* () {

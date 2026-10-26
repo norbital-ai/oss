@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { setImmediate } from 'node:timers/promises';
 import { Effect } from 'effect';
-import { it } from '@effect/vitest';
+import { it, vi } from '@effect/vitest';
 import { browser, required, textOf, viewFixture } from './view-fixture.ts';
 import type { MatrixProps } from '../src/matrix/Matrix.svelte';
 import type { KindsHost } from '../src/kinds/context.ts';
@@ -23,13 +22,12 @@ const props = {
 	select: ['amount'],
 	colWidth: 200
 } satisfies MatrixProps;
-const settle = async () => {
-	for (let i = 0; i < 5; i++) {
+const settle = async (target: HTMLElement) => {
+	await vi.waitFor(async () => {
 		flushSync();
 		await tick();
-		await setImmediate();
-	}
-	flushSync();
+		assert.match(textOf(required(target.querySelector('tbody'))), /Principal loan.*100/s);
+	});
 };
 
 for (const toolbar of [undefined, false] as const)
@@ -57,7 +55,7 @@ for (const toolbar of [undefined, false] as const)
 				}
 			});
 			try {
-				yield* browser(settle);
+				yield* browser(() => settle(target));
 				assert.equal(target.querySelector('[data-view-toolbar]'), null);
 				assert.match(textOf(required(target.querySelector('tbody'))), /Principal loan.*100/s);
 				assert.ok(target.querySelector('[data-matrix-footer]'));
@@ -104,7 +102,7 @@ it.live('Matrix renders one native toolbar with its title and clickable trailing
 			}
 		});
 		try {
-			yield* browser(settle);
+			yield* browser(() => settle(target));
 			assert.equal(target.querySelectorAll('[data-view-toolbar]').length, 1);
 			const toolbar = required(target.querySelector('[data-view-toolbar]'));
 			assert.match(textOf(toolbar), /Repayment schedule/);
@@ -150,7 +148,7 @@ it.live('Matrix renders editable column headers without replacing its amount cel
 			}
 		});
 		try {
-			yield* browser(settle);
+			yield* browser(() => settle(target));
 			const date = required(target.querySelector<HTMLButtonElement>('thead button'));
 			assert.equal(textOf(date), '2026-10-20');
 			date.click();

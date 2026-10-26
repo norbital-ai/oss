@@ -7,8 +7,8 @@ import { type Cursor, Mailbox } from '../src/imap-smtp/model.ts';
 import { fakeImap } from './mail-servers.ts';
 import { until } from './kit.ts';
 
-vi.mock('@norbital-ai/bolt/engine', async (original) => {
-	const actual = await original<typeof import('@norbital-ai/bolt/engine')>();
+vi.mock('@norbital-ai/bolt/node', async (original) => {
+	const actual = await original<typeof import('@norbital-ai/bolt/node')>();
 	const { Effect } = await import('effect');
 	return {
 		...actual,

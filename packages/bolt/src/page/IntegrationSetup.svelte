@@ -1,7 +1,7 @@
 <!-- @component One integration instance's setup and health over its client: the provider choice, pairing (a form, a QR or code, an OAuth sign-in), the connected summary, a test, reconnecting and disconnecting. Unboxed: the page that embeds it owns the surface. -->
 <script lang="ts">
 	import { Effect, Stream } from 'effect';
-	import { live } from '@norbital-ai/ui/effect';
+	import { observe } from '@norbital-ai/ui/effect';
 	import { watch } from 'runed';
 	import { ProtocolFailed } from '../decl/errors.ts';
 	import type { Snippet } from 'svelte';
@@ -48,7 +48,7 @@
 	const failure = (e: unknown) =>
 		e instanceof Error ? e.message : t('The integration request failed. Try again.');
 
-	const feed = live(() =>
+	const feed = observe(() =>
 		Stream.merge(
 			Stream.fromEffect(
 				client.status().pipe(

@@ -142,7 +142,7 @@ const mountVisit = (
 								jar = Cookies.merge(jar, Cookies.fromSetCookie(response.headers.getSetCookie()));
 								if (url.pathname === PATHS.live && request.method === 'POST' && response.ok) {
 									const raw = yield* Effect.tryPromise({
-										try: () => response.clone().json(),
+										try: (): Promise<unknown> => response.clone().json(),
 										catch: (error) => new KitInvalid({ message: String(error) })
 									});
 									const reply = yield* Schema.decodeUnknownEffect(LiveReply)(raw).pipe(
@@ -434,12 +434,12 @@ export const sweep = (
 					const request = new Request(`${ORIGIN}${PATHS.q}`, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ reads: [{ m: 'read', a: [collection, { limit: 1 }] }] })
+						body: JSON.stringify({ reads: [{ m: 'query', a: [collection, { limit: 1 }] }] })
 					});
 					request.headers.set('cookie', cookie);
 					const response = yield* t.handle(request);
 					const body = yield* Effect.tryPromise({
-						try: () => response.json(),
+						try: (): Promise<unknown> => response.json(),
 						catch: (error) => new KitInvalid({ message: String(error) })
 					});
 					const reply = yield* Schema.decodeUnknownEffect(QReply)(body);

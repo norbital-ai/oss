@@ -6,9 +6,10 @@ import { mountEdge } from '@norbital-ai/ui/effect';
 import { shellApi } from '../src/shell/runtime.ts';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
-import type { LogQuery, LogRow } from '../src/engine/contracts.ts';
 import type { ShellApi } from '../src/shell/api-types.ts';
-import type { StudioMergeRequest, StudioOp, StudioView } from '../src/shell/studio/model.ts';
+import type { StudioInspectInput, StudioInspection } from '../src/shell/studio/inspection.ts';
+import type { WorkspaceOperation } from '@norbital-ai/ui';
+import type { StudioChangeSet, StudioOp, StudioView } from '../src/shell/studio/model.ts';
 import type { StudioTab } from '../src/shell/nav.ts';
 import Studio from '../src/shell/studio/Studio.svelte';
 import LivePane from '../src/shell/studio/LivePane.svelte';
@@ -24,14 +25,19 @@ afterEach(async () => {
 });
 function show(
 	C: typeof Studio,
-	api: Partial<ShellApi>,
+	api: Partial<ShellApi> & Pick<ShellApi, 'studio'>,
 	more: { tab?: StudioTab; onTab?: (tab: StudioTab) => void; admin?: boolean } = {}
 ) {
 	const target = document.body.appendChild(document.createElement('div'));
 	const v = mount(C, {
 		target,
 		props: {
-			api: { ...shellApi(async () => Response.json({ value: null })), ...api },
+			api: {
+				...shellApi(async () => Response.json({ value: null })),
+				studioInspect: (input: StudioInspectInput) =>
+					api.studio().pipe(Effect.map((view) => inspection(view, input))),
+				...api
+			},
 			t: (k: string) => k,
 			...more
 		}
@@ -50,8 +56,45 @@ const settle = async () => {
 	flushSync();
 };
 
-/** Studio's runtime log reads the host's log store through the logs port; an empty page is enough here. */
-const logs = () => Effect.succeed<LogRow[]>([]);
+/** The host's curated operational DTO: no source files or edit state crosses this boundary. */
+const inspection = (view: StudioView, input: StudioInspectInput) =>
+	({
+		canInspect: true,
+		asOf: '2026-09-26T00:00:00Z',
+		usage: [],
+		members: [],
+		studio: {
+			commit: view.commit,
+			message: view.message ?? '',
+			builds: view.builds ?? [],
+			releases: view.releases,
+			environments: view.environments ?? [],
+			changes: (view.changeSets ?? []).map((change) => ({
+				id: change.id,
+				title: change.title,
+				state: change.state,
+				head: change.head,
+				createdAt: change.createdAt,
+				updatedAt: change.updatedAt,
+				behind: change.behind,
+				...(change.merge === undefined ? {} : { merge: change.merge }),
+				preview: change.preview
+			})),
+			log: view.log,
+			diagnostics: view.diagnostics ?? [],
+			build: null
+		},
+		logs: [],
+		bundles: null,
+		cache: null,
+		errors: null,
+		filters: {
+			level: input.level ?? null,
+			text: input.text ?? '',
+			run: input.run ?? '',
+			build: input.build ?? null
+		}
+	}) satisfies StudioInspection;
 /** Answers the open in-app confirmation (never `window.confirm`, which WebViews suppress); its text is returned. */
 const answer = async (accept: boolean) => {
 	await vi.waitFor(() =>
@@ -72,24 +115,29 @@ const press = async (b: HTMLElement) => {
 	await settle();
 };
 
-it('Studio keeps the tab hierarchy and restores live to a recorded commit through the port', async () => {
+it('Studio restores live to a recorded commit through the port after confirmation', async () => {
 	const view: StudioView = {
 		commit: 'c2',
-		files: { 'src/a.ts': 'x' },
+		files: { 'src/a.ts': { bytes: 1 } },
 		changes: [],
 		log: [],
 		preview: null,
 		releases: [
 			{ commit: 'c2', at: '2026-09-25T00:00:00Z', message: 'two', current: true },
-			{ commit: 'c1', at: '2026-09-24T00:00:00Z', message: 'one', current: false }
+			{
+				commit: 'c1',
+				at: '2026-09-24T00:00:00Z',
+				message: 'one',
+				current: false,
+				checkpoint: '2026-09-24T00:00:00Z'
+			}
 		],
 		environments: [
 			{ name: 'preview', release: 'r2', url: 'https://acme--preview.example' },
 			{ name: 'live', release: 'r1', url: 'https://acme.example' }
 		],
 		sections: {
-			collections: [{ name: 'tasks', path: 'src/data/collection/tasks/+collection.ts' }],
-			pipelines: [],
+			models: [{ name: 'tasks', path: 'src/data/model/tasks/+model.ts' }],
 			apps: [],
 			kiosks: [],
 			policies: [],
@@ -99,8 +147,13 @@ it('Studio keeps the tab hierarchy and restores live to a recorded commit throug
 		}
 	};
 	const ran: StudioOp[] = [];
+	const inspected: StudioInspectInput[] = [];
 	const el = show(Studio, {
-		logs,
+		studioInspect: (input: StudioInspectInput) =>
+			Effect.sync(() => {
+				inspected.push(input);
+				return inspection(view, input);
+			}),
 		studio: () => Effect.succeed(view),
 		studioRun: (op) =>
 			Effect.sync(() => {
@@ -109,87 +162,105 @@ it('Studio keeps the tab hierarchy and restores live to a recorded commit throug
 			})
 	});
 	await settle();
-	const tabs = () => [...el.querySelectorAll('[role=tab]')].map((b) => b.textContent?.trim());
-	expect(tabs()).toEqual(['Workbench', 'Changes', 'Live']);
 	const click = (label: string) =>
 		press(
 			[...el.querySelectorAll<HTMLElement>('[role=tab], button')].find(
 				(x) => x.textContent?.trim() === label
 			)!
 		);
-	await click('Changes');
-	expect(tabs()).toEqual(['Workbench', 'Changes', 'Live', 'Files', 'Manifest', 'Logs']);
-	await click('Manifest');
-	expect(tabs()).toEqual([
-		'Workbench',
-		'Changes',
-		'Live',
-		'Files',
-		'Manifest',
-		'Logs',
-		'Collections',
-		'Pipelines',
-		'Apps',
-		'Kiosks',
-		'Policies',
-		'Automations',
-		'Remotes',
-		'Secrets'
-	]);
-	// levels come from nesting alone: segmented > underline > chips
-	expect(
-		[...el.querySelectorAll('[data-tabs-variant]')].map((x) => x.getAttribute('data-tabs-variant'))
-	).toEqual(['segmented', 'underline', 'chips']);
 	await click('Live');
-	expect(tabs()).toEqual(['Workbench', 'Changes', 'Live', 'Runtime log', 'Operations']);
-	// the rail picks the recorded commit; Roll back returns live to it (a source rollback)
-	await press(
-		[...el.querySelectorAll<HTMLElement>('aside button')].find((x) =>
-			x.textContent?.includes('one')
-		)!
-	);
-	await click('Roll back');
+	await click('Activity');
+	const entry = () => el.querySelector<HTMLElement>('[data-release-timeline] [data-commit="c1"]')!;
+	await press(entry().querySelector<HTMLElement>('button[title="c1"]')!);
+	expect(inspected.at(-1)).toMatchObject({ view: 'activity', build: 'c1' });
+	const rollback = () =>
+		[...entry().querySelectorAll<HTMLButtonElement>('button')].find(
+			(button) => button.textContent?.trim() === 'Roll back'
+		)!;
+	await press(rollback());
 	expect(ran).toEqual([]);
+	await answer(false);
+	expect(ran).toEqual([]);
+	await press(rollback());
 	await answer(true);
 	expect(ran).toEqual([{ op: 'rollback', commit: 'c1' }]);
-	// Operations (L-BOLT-534): the routed environments, live first
-	await click('Operations');
-	expect([...el.querySelectorAll('li strong')].map((x) => x.textContent)).toEqual([
-		'live',
-		'preview'
-	]);
-	vi.unstubAllGlobals();
+	// Shared operations confirm once, then delegate directly to the native Studio port.
+	expect(document.querySelector('[data-confirm-dialog][data-state=open]')).toBeNull();
 });
 
 it('Studio lists the workspace as a file tree: folders fold, a file opens by its full path (L-BOLT-748)', async () => {
 	const view: StudioView = {
 		commit: 'c2',
-		files: { 'src/a.ts': 'x', 'src/app/sales/+app.ts': 'y', 'package.json': '{}' },
+		files: {
+			'src/a.ts': { bytes: 1 },
+			'src/app/sales/+app.ts': { bytes: 1 },
+			'package.json': { bytes: 2 },
+			'assets/logo.png': { bytes: 2048 },
+			'seed/big.json': { bytes: 3_145_728 }
+		},
 		changes: [],
 		log: [],
 		preview: null,
 		releases: [],
 		sections: null
 	};
+	// the state carries only the tree; a file's text is read when it opens, once per commit
+	const read: string[] = [];
 	const el = show(Studio, {
 		studio: () => Effect.succeed(view),
-		studioRun: () => Effect.succeed(view)
+		studioRun: () => Effect.succeed(view),
+		studioFile: (commit, path) =>
+			Effect.sync(() => {
+				read.push(`${commit}:${path}`);
+				return path === 'assets/logo.png'
+					? { binary: true as const, bytes: 2048 }
+					: path === 'seed/big.json'
+						? { text: '[', truncated: { limit: 1_048_576, bytes: 3_145_728 } }
+						: { text: path === 'src/a.ts' ? 'x' : 'y' };
+			})
 	});
 	await settle();
 	const tree = el.querySelector('[data-file-tree]')!;
 	const rows = () => [...tree.querySelectorAll('button')].map((b) => b.getAttribute('title'));
+	const open = (path: string) => {
+		const row = tree.querySelector<HTMLButtonElement>(`button[title="${path}"]`);
+		if (row === null) throw new Error(`no tree row ${path}`);
+		return press(row);
+	};
 	// folders first and closed; opening one lists its folders, then its files
-	expect(rows()).toEqual(['src', 'package.json']);
-	await press(tree.querySelector<HTMLButtonElement>('button[title="src"]')!);
-	expect(rows()).toEqual(['src', 'src/app', 'src/a.ts', 'package.json']);
-	await press(tree.querySelector<HTMLButtonElement>('button[title="src/a.ts"]')!);
+	expect(rows()).toEqual(['assets', 'seed', 'src', 'package.json']);
+	expect(read).toEqual([]);
+	await open('src');
+	expect(rows()).toEqual(['assets', 'seed', 'src', 'src/app', 'src/a.ts', 'package.json']);
+	await open('src/a.ts');
+	await settle();
 	expect(el.querySelector('[aria-label="src/a.ts"]')?.textContent).toBe('x');
+	await open('package.json');
+	await settle();
+	await open('src/a.ts');
+	await settle();
+	expect(read).toEqual(['c2:src/a.ts', 'c2:package.json']);
+	// a binary file and a file past the host's bound open read-only, saying why
+	await open('assets');
+	await open('assets/logo.png');
+	await settle();
+	expect(el.querySelector('[data-file-note]')?.textContent).toBe('Not a text file · 2K');
+	expect(el.querySelector('[aria-label="assets/logo.png"]')?.getAttribute('contenteditable')).toBe(
+		'false'
+	);
+	await open('seed');
+	await open('seed/big.json');
+	await settle();
+	expect(el.querySelector('[data-file-note]')?.textContent).toBe(
+		'Shown up to 1M of 3M · read-only here'
+	);
+	expect(el.querySelector('[aria-label="seed/big.json"]')?.textContent).toBe('[');
 });
 
 it('Studio opens the tab its deep link names, reports tab moves, and shows the diagnosis by severity (L-BOLT-528, 530)', async () => {
 	const view: StudioView = {
 		commit: 'c2',
-		files: { 'src/a.ts': 'x' },
+		files: { 'src/a.ts': { bytes: 1 } },
 		changes: [],
 		log: [],
 		preview: null,
@@ -203,7 +274,7 @@ it('Studio opens the tab its deep link names, reports tab moves, and shows the d
 	const moved: StudioTab[] = [];
 	const el = show(
 		Studio,
-		{ logs, studio: () => Effect.succeed(view), studioRun: () => Effect.succeed(view) },
+		{ studio: () => Effect.succeed(view), studioRun: () => Effect.succeed(view) },
 		{ tab: 'live', onTab: (x) => moved.push(x) }
 	);
 	await settle();
@@ -224,7 +295,7 @@ it('Studio opens the tab its deep link names, reports tab moves, and shows the d
 	]);
 });
 
-it('Studio rolls back across a schema change only after naming the data lost, and opens a build log', async () => {
+it('Studio inspects a retained timeline build and confirms schema rollback once', async () => {
 	const view: StudioView = {
 		commit: 'c3',
 		files: {},
@@ -267,17 +338,26 @@ it('Studio rolls back across a schema change only after naming the data lost, an
 		asked: string[] = [],
 		read: string[] = [];
 	const el = show(Studio, {
-		logs,
 		studio: () => Effect.succeed(view),
 		studioRun: (op) => Effect.sync(() => (ran.push(op), view)),
-		studioBuild: (commit) =>
+		studioInspect: (input: StudioInspectInput) =>
 			Effect.sync(() => {
-				read.push(commit);
+				const result = inspection(view, input);
+				if (input.build !== 'c1') return result;
+				read.push(input.build);
+				const retained = view.builds?.find((build) => build.commit === input.build);
+				if (retained === undefined) throw new Error('Missing retained fixture build');
 				return {
-					build: view.builds![0]!,
-					log: [{ at: '2026-09-24T00:00:01Z', level: 'info' as const, message: 'compiled one' }],
-					diagnostics: []
-				};
+					...result,
+					studio: {
+						...result.studio,
+						build: {
+							build: retained,
+							log: [{ at: '2026-09-24T00:00:01Z', level: 'info', message: 'compiled one' }],
+							diagnostics: []
+						}
+					}
+				} satisfies StudioInspection;
 			})
 	});
 	await settle();
@@ -286,52 +366,53 @@ it('Studio rolls back across a schema change only after naming the data lost, an
 			x.textContent?.trim().startsWith(label)
 		)!;
 	await press(button('Live'));
-	// a version reads as what it changed; its commit is only a hover title
-	expect(el.textContent).toContain('Rolled back');
-	expect(el.querySelector('aside [title="c1"]')).not.toBeNull();
-	await press(
-		[...el.querySelectorAll<HTMLElement>('aside button')].find(
-			(x) => x.textContent?.includes('one') && !x.textContent.includes('Rolled')
-		)!
-	);
-	await press(button('Roll back'));
+	await press(button('Activity'));
+	const entry = () => el.querySelector<HTMLElement>('[data-release-timeline] [data-commit="c1"]')!;
+	await press(entry().querySelector<HTMLElement>('button[title="c1"]')!);
+	expect(read).toEqual(['c1']);
+	expect(el.querySelector('[aria-label="Selected build"]')?.textContent).toContain('compiled one');
+	const rollback = [...entry().querySelectorAll<HTMLButtonElement>('button')].find(
+		(button) => button.textContent?.trim() === 'Roll back'
+	)!;
+	await press(rollback);
 	asked.push(await answer(true));
+	expect(asked).toHaveLength(1);
 	expect(asked[0]).toContain('will be lost');
 	expect(ran).toEqual([{ op: 'rollback', commit: 'c1', discardDataSince: '2026-09-24T00:00:00Z' }]);
-	await press(button('Build log'));
-	await settle();
-	expect(read).toEqual(['c1']);
-	expect(document.body.textContent).toContain('compiled one');
+	expect(document.querySelector('[data-confirm-dialog][data-state=open]')).toBeNull();
 });
 
-it('Studio shows a member who is not an administrator their own draft and merge request only: no publish, review, merge, restore or live-data preview', async () => {
-	const mr = (id: string, branch: string): StudioMergeRequest => ({
+it('Studio opens another change and merges a previewed head through the port; non-administrators cannot merge or roll back', async () => {
+	const change = (id: string, title: string): StudioChangeSet => ({
 		id,
-		title: `mr ${id}`,
-		state: 'ready',
-		openedBy: 'x',
-		contributors: [],
-		branch,
+		title,
+		state: 'open',
+		openedBy: 'ada@example.com',
+		contributors: ['ada@example.com'],
+		branch: `change/${id}`,
 		base: 'c1',
-		head: 'c2',
+		head: `h${id}`,
 		behind: 0,
-		decision: null,
-		comments: [],
-		preview: null,
+		preview: {
+			url: `https://workspace--change-${id}.example`,
+			commit: `h${id}`,
+			artifact: 'a',
+			stale: false,
+			destructive: ['drop column leave.days']
+		},
 		log: [],
 		createdAt: '2026-09-25T00:00:00Z',
-		readyAt: null,
 		updatedAt: '2026-09-25T00:00:00Z'
 	});
 	const view: StudioView = {
-		commit: 'c2',
-		files: { 'src/a.ts': 'x' },
-		changes: [{ path: 'src/a.ts', change: 'modified' }],
+		commit: 'h1',
+		files: { 'src/a.ts': { bytes: 1 } },
+		changes: [{ path: 'src/a.ts', change: 'modified', text: 'b', baseline: 'a' }],
 		log: [],
 		preview: null,
 		sections: null,
-		branch: 'u/rep',
-		target: 'workbench',
+		change: '1',
+		branch: 'change/1',
 		releases: [
 			{ commit: 'c2', at: '2026-09-25T00:00:00Z', message: 'two', current: true },
 			{
@@ -342,29 +423,34 @@ it('Studio shows a member who is not an administrator their own draft and merge 
 				checkpoint: '2026-09-24T00:00:00Z'
 			}
 		],
-		mergeRequests: [mr('1', 'u/rep'), mr('2', 'u/ada')]
+		changeSets: [change('1', 'Leave rules'), change('2', 'Payslip footer')]
 	};
-	const el = show(
-		Studio,
-		{ studio: () => Effect.succeed(view), studioRun: () => Effect.succeed(view) },
-		{ admin: false }
-	);
-	await settle();
-	const buttons = () => [...el.querySelectorAll('button')].map((b) => b.textContent?.trim());
-	expect(buttons()).not.toContain('Publish');
-	// a merge request is opened from the toolbar's "…" menu
-	await press(el.querySelector<HTMLElement>('[aria-label=More]')!);
-	expect([...document.querySelectorAll('button')].map((b) => b.textContent?.trim())).toContain(
-		'Open merge request'
-	);
-	document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-	await settle();
-	// the target picker offers the member's own merge request, never another's
-	await press(el.querySelector<HTMLElement>('[role=combobox][aria-label=Target]')!);
-	expect(
-		[...document.querySelectorAll('[role=option]')].map((o) => o.getAttribute('data-value'))
-	).toEqual(['workbench', '1']);
-	document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+	const ran: StudioOp[] = [];
+	let current = view;
+	const studio = (admin: boolean) =>
+		show(
+			Studio,
+			{
+				studio: () => Effect.succeed(current),
+				studioRun: (op) =>
+					Effect.sync(() => {
+						ran.push(op);
+						if (op.op === 'change.open' && 'id' in op) {
+							const opened = current.changeSets?.find((change) => change.id === op.id);
+							if (opened === undefined) throw new Error('The selected fixture change is missing.');
+							current = {
+								...current,
+								commit: opened.head,
+								change: opened.id,
+								branch: opened.branch
+							};
+						}
+						return current;
+					})
+			},
+			{ admin }
+		);
+	const el = studio(true);
 	await settle();
 	const open = (label: string) =>
 		press(
@@ -372,81 +458,111 @@ it('Studio shows a member who is not an administrator their own draft and merge 
 				(x) => x.textContent?.trim() === label || x.textContent?.trim().startsWith(`${label} `)
 			)!
 		);
-	await open('Live');
-	expect(buttons()).not.toContain('Roll back');
+	// the toolbar names the change the viewer works on; nothing ships but Merge
+	expect(el.querySelector('[data-change="1"]')?.textContent).toContain('Leave rules');
 	await open('Changes');
-	await open('!1 mr 1');
-	expect(buttons()).toEqual(expect.arrayContaining(['Edit', 'Close']));
-	await open('Conversation');
-	expect(buttons()).toContain('Comment');
-	expect(buttons()).not.toContain('Approve');
-	expect(buttons()).not.toContain('Merge');
-	await open('!2 mr 2');
-	expect(buttons()).not.toContain('Edit');
-	expect(buttons()).not.toContain('Close');
-	await open('Conversation');
-	expect(buttons()).not.toContain('Comment');
+	await open('!2 Payslip footer');
+	await open('Work on it');
+	expect(ran).toEqual([{ op: 'change.open', id: '2' }]);
+	expect(el.querySelector('[data-change="2"]')?.textContent).toContain('Payslip footer');
+	// working on it went back to the Workbench; the merge is the Changes pane's
+	await open('Changes');
+	await open('!1 Leave rules');
+	await open('Work on it');
+	expect(ran.at(-1)).toEqual({ op: 'change.open', id: '1' });
+	expect(el.querySelector('[data-change="1"]')?.textContent).toContain('Leave rules');
+	await open('Merge');
+	// the merge accepts the destructive steps its current preview names, after the person read them
+	expect(await answer(true)).toContain('drop column leave.days');
+	expect(ran.at(-1)).toEqual({ op: 'change.merge', id: '1', accept: ['drop column leave.days'] });
+	const member = studio(false);
+	await settle();
+	const theirs = () => [...member.querySelectorAll('button')].map((b) => b.textContent?.trim());
+	expect(theirs()).not.toContain('Merge');
+	await press(
+		[...member.querySelectorAll<HTMLElement>('[role=tab]')].find(
+			(x) => x.textContent?.trim() === 'Live'
+		)!
+	);
+	expect(theirs()).not.toContain('Roll back');
 });
 
-it("Live scopes the runtime log to the selected deployment's live window, and narrows it by run", async () => {
-	const releases = [
-		{ commit: 'c3', at: '2026-09-26T00:00:00Z', message: 'three', current: false },
-		{ commit: 'c2', at: '2026-09-25T00:00:00Z', message: 'two', current: true },
-		{ commit: 'c1', at: '2026-09-24T00:00:00Z', message: 'one', current: false }
-	];
+it('Live delegates run and resource scope to the shared inspection without exposing source edits', async () => {
 	const view: StudioView = {
 		commit: 'c2',
-		files: {},
+		files: { 'src/private.ts': { bytes: 12 } },
 		changes: [],
 		log: [],
 		preview: null,
-		releases,
+		releases: [],
 		sections: null
 	};
-	const asked: LogQuery[] = [];
+	const asked: StudioInspectInput[] = [];
+	const operated: WorkspaceOperation[] = [];
 	const api: ShellApi = {
 		...shellApi(async () => Response.json({ value: null })),
-		logs: (x) =>
+		studioInspect: (input: StudioInspectInput) =>
 			Effect.sync(() => {
-				asked.push(x);
-				return [];
+				asked.push(input);
+				return {
+					...inspection(view, input),
+					logs: [
+						{
+							id: 'line-1',
+							at: '2026-09-25T00:00:00Z',
+							severity: 'info',
+							event: 'run.finished',
+							invocation: 'invocation-1',
+							run: 'r-7',
+							conversation: null,
+							turn: null,
+							attributes: {}
+						}
+					]
+				} satisfies StudioInspection;
 			})
 	};
-	const pane = (release: StudioView['releases'][number]) => {
-		const target = document.body.appendChild(document.createElement('div'));
-		const v = mount(LivePane, {
-			target,
-			props: {
-				api,
-				view,
-				release,
-				admin: true,
-				busy: false,
-				sub: 'runtime',
-				onsub: () => {},
-				onrestore: () => {},
-				t: (k: string) => k
-			}
-		});
-		views.push(async () => {
-			await unmount(v);
-			target.remove();
-		});
-		return target;
-	};
-	const read = async () => {
-		await new Promise((r) => setTimeout(r, 400));
-		await settle();
-		return asked.at(-1);
-	};
-	pane(releases[2]!);
-	// an earlier deployment: from its time to the next one's
-	expect(await read()).toEqual({ since: '2026-09-24T00:00:00Z', until: '2026-09-25T00:00:00Z' });
-	const live = pane(releases[1]!);
-	// the serving one: open-ended
-	expect(await read()).toEqual({ since: '2026-09-25T00:00:00Z' });
-	const run = live.querySelector<HTMLInputElement>('input[aria-label="Filter by run"]')!;
-	run.value = 'r-7';
-	run.dispatchEvent(new Event('input', { bubbles: true }));
-	expect(await read()).toEqual({ run: 'r-7', since: '2026-09-25T00:00:00Z' });
+	const target = document.body.appendChild(document.createElement('div'));
+	const v = mount(LivePane, {
+		target,
+		props: {
+			api,
+			view,
+			admin: true,
+			busy: false,
+			sub: 'runtime',
+			onsub: () => {},
+			onoperate: (operation: WorkspaceOperation) =>
+				Effect.sync(() => {
+					operated.push(operation);
+				}),
+			t: (key: string) => key
+		}
+	});
+	views.push(async () => {
+		await unmount(v);
+		target.remove();
+	});
+	await settle();
+	expect(asked.at(-1)).toEqual({ range: '7d', view: 'logs', build: null, run: null });
+	await press(target.querySelector<HTMLElement>('[role="combobox"][aria-label="Automation run"]')!);
+	await press(
+		[...document.querySelectorAll<HTMLElement>('[role="option"]')]
+			.find((option) => option.textContent?.trim() === 'r-7')!
+			.querySelector<HTMLButtonElement>('button')!
+	);
+	expect(asked.at(-1)).toMatchObject({ view: 'logs', run: 'r-7' });
+	await press(
+		[...target.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+			(tab) => tab.textContent?.trim() === 'Resources'
+		)!
+	);
+	await press(
+		[...target.querySelectorAll<HTMLButtonElement>('button')].find(
+			(button) => button.textContent?.trim() === '24h'
+		)!
+	);
+	expect(asked.at(-1)).toMatchObject({ range: '24h', view: 'resources', run: 'r-7' });
+	expect(operated).toEqual([]);
+	expect(target.querySelector('[data-file-tree], [contenteditable="true"]')).toBeNull();
 });

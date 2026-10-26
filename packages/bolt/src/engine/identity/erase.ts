@@ -2,17 +2,17 @@
 // (admin-only, never routed to approval, `locked` rules).
 // The remove/anonymise statement of a tenant collection is the write compiler's generated delete/update without a
 // transform (38e(d)); it consults `judgeErase` first.
-import { Predicate } from 'effect';
+import { Array as EffectArray, Predicate } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { catalogOf } from '../access/pred.ts';
-import { checkOf } from '../schema/ddl.ts'; // hook:write
+import { checkOf } from '@norbital-ai/store'; // hook:write
 
 const LOGIC = new Set(['and', 'or', 'not']);
 /** Field names a `Where`-shaped literal reads (own fields only; relation arms are not own fields). */
 function whereFields(w: unknown, out: Set<string>): void {
-	if (Array.isArray(w)) for (const x of w) whereFields(x, out);
+	if (EffectArray.isArray(w)) for (const x of w) whereFields(x, out);
 	else if (Predicate.isObject(w))
 		for (const [k, v] of Object.entries(w)) {
 			if (LOGIC.has(k)) whereFields(v, out);
@@ -26,7 +26,7 @@ function whereFields(w: unknown, out: Set<string>): void {
 }
 export function exprFields(e: unknown, out: Set<string>): void {
 	// hook:write — erase purges computed readers (38e(b))
-	if (Array.isArray(e)) for (const x of e) exprFields(x, out);
+	if (EffectArray.isArray(e)) for (const x of e) exprFields(x, out);
 	else if (Predicate.isObject(e)) {
 		if (typeof e.field === 'string' && Object.keys(e).length === 1) out.add(e.field);
 		else for (const v of Object.values(e)) exprFields(v, out);

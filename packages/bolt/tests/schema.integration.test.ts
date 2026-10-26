@@ -5,11 +5,18 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { BoltError } from '../src/protocol/errors.ts';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
-import { PostgresDb, type PgClient } from '../src/engine/db/postgres.ts';
-import { constraintIndex, type SchemaSlice } from '../src/engine/schema/ddl.ts';
-import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
+import { BoltError, fromStore } from '../src/protocol/errors.ts';
+import { tableOf } from '../src/protocol/catalog.ts';
+import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
+import { PostgresDb, type PgClient } from '../src/node/db/postgres.ts';
+import { constraintIndex } from '@norbital-ai/store';
+import {
+	applyPlan,
+	destructiveSteps,
+	plan,
+	readApplied,
+	type SchemaSlice
+} from '../src/engine/schema/plan.ts';
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
 let db: TenantDb;
@@ -31,10 +38,10 @@ const refusal = Effect.fnUntraced(function* (
 ) {
 	const e = yield* Effect.flip(p);
 	expect(e).toBeInstanceOf(DbError);
-	return refusalOf(e, constraintIndex(s));
+	return refusalOf(e, yield* constraintIndex(s).pipe(Effect.mapError(fromStore)));
 });
 const migrate = Effect.fnUntraced(function* (s: SchemaSlice, accept?: true | readonly string[]) {
-	const p = plan(yield* readApplied(db), s);
+	const p = yield* plan(yield* readApplied(db), s);
 	yield* applyPlan(db, p, accept === undefined ? {} : { accept });
 	return p;
 });
@@ -58,7 +65,7 @@ describe('next schema on PGlite', () => {
 		Effect.gen(function* () {
 			yield* setup();
 			expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(slice())));
-			expect(plan(yield* readApplied(db), slice()).steps).toEqual([]);
+			expect((yield* plan(yield* readApplied(db), slice())).steps).toEqual([]);
 		}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live(
@@ -83,16 +90,16 @@ describe('next schema on PGlite', () => {
 			}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live(
-		're-planning after the slice round-trips through jsonb is empty; an unrelated field adds only its column',
+		're-planning after the slice round-trips through jsonb is empty; an unrelated field refreshes its native guard',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
 				// `bolt_schema.slice` is jsonb: `states` and predicate fields come back in another key order than declared
 				const s: SchemaSlice = {
 					...slice(),
-					models: {
-						...slice().models,
-						signings: {
+					tables: {
+						...slice().tables,
+						signings: tableOf({
 							description: 'signings',
 							label: 'status',
 							fields: {
@@ -114,26 +121,27 @@ describe('next schema on PGlite', () => {
 									reason: { isNull: false }
 								}
 							}
-						}
+						})
 					}
 				};
 				yield* migrate(s);
-				expect(plan(yield* readApplied(db), s).steps).toEqual([]);
-				const signings = s.models.signings!;
+				expect((yield* plan(yield* readApplied(db), s)).steps).toEqual([]);
+				const signings = s.tables.signings!;
 				const next: SchemaSlice = {
 					...s,
-					models: {
-						...s.models,
+					tables: {
+						...s.tables,
 						signings: {
 							...signings,
 							fields: { ...signings.fields, nickname: { kind: 'text', optional: true } }
 						}
 					}
 				};
-				expect((yield* migrate(next)).steps.map((x) => x.id)).toEqual([
-					'create:column:signings.nickname'
+				expect((yield* migrate(next)).steps.map((x) => x.id).sort()).toEqual([
+					'create:column:signings.nickname',
+					'replace:trigger:signings.store_row_rules'
 				]);
-				expect(plan(yield* readApplied(db), next).steps).toEqual([]);
+				expect((yield* plan(yield* readApplied(db), next)).steps).toEqual([]);
 			}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live('computes every operator immutably and emits JSON values', () =>
@@ -202,9 +210,24 @@ describe('next schema on PGlite', () => {
 					)
 				)
 			).toMatchObject({ code: 'missingRef', field: 'customer' });
+			// Orders are owned and cascade; a non-owned term is the referer that restricts deletion.
+			yield* exec(
+				`insert into terms (id, customer, period) values ($1, $2, daterange('2026-01-01', '2026-01-02'))`,
+				[U(30), U(1)]
+			);
 			expect(yield* refusal(exec(`delete from customers where id = $1`, [U(1)]))).toMatchObject({
 				code: 'restricted'
 			});
+			expect(
+				(yield* db.read([
+					{
+						text: `select exists(select 1 from customers where id = $1) as customer,
+					exists(select 1 from orders where id = $2) as owned_order,
+					exists(select 1 from terms where id = $3) as restricting_term`,
+						params: [U(1), U(10), U(30)]
+					}
+				]))[0]?.rows
+			).toEqual([{ customer: true, owned_order: true, restricting_term: true }]);
 			expect(
 				yield* refusal(
 					exec(`insert into orders (id, code, total, qty) values ($1, 'SO-2', '1', 1)`, [U(11)])
@@ -332,11 +355,11 @@ describe('next schema on PGlite', () => {
 				const s = slice();
 				const next: SchemaSlice = {
 					...s,
-					models: {
-						...s.models,
+					tables: {
+						...s.tables,
 						notes: {
-							...s.models.notes!,
-							fields: { body: { kind: 'text' }, pinned: { kind: 'bool' } }
+							...s.tables.notes!,
+							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool' } }
 						}
 					}
 				};
@@ -344,7 +367,7 @@ describe('next schema on PGlite', () => {
 					`insert into notes (id, body, about__customers) values ($1, 'a', $2), ($3, 'b', $2)`,
 					[U(40), U(1), U(41)]
 				);
-				const p = plan(yield* readApplied(db), next);
+				const p = yield* plan(yield* readApplied(db), next);
 				expect(p.steps.find((x) => x.id === 'create:notNull:notes.pinned')?.class).toBe(
 					'validating'
 				);
@@ -355,11 +378,11 @@ describe('next schema on PGlite', () => {
 				// with a default the same change applies
 				const withDefault: SchemaSlice = {
 					...s,
-					models: {
-						...s.models,
+					tables: {
+						...s.tables,
 						notes: {
-							...s.models.notes!,
-							fields: { body: { kind: 'text' }, pinned: { kind: 'bool', default: false } }
+							...s.tables.notes!,
+							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool', default: false } }
 						}
 					}
 				};
@@ -375,11 +398,12 @@ describe('next schema on PGlite', () => {
 			yield* setup();
 			yield* seed();
 			const s = slice();
-			const { note: _, ...fields } = s.models.orders!.fields;
+			const { note: _, ...fields } = s.tables.orders!.fields;
 			const next: SchemaSlice = {
 				...s,
-				models: { ...s.models, orders: { ...s.models.orders!, fields } }
+				tables: { ...s.tables, orders: { ...s.tables.orders!, fields } }
 			};
+			expect(yield* destructiveSteps(s, next)).toEqual(['drop:column:orders.note']);
 			expect(yield* Effect.flip(migrate(next))).toMatchObject({ code: 'destructiveNotAccepted' });
 			yield* migrate(next, ['drop:column:orders.note']);
 			const [r] = yield* db.read([
@@ -398,11 +422,11 @@ describe('next schema on PGlite', () => {
 				yield* setup();
 				yield* seed();
 				const s = slice();
-				const cust = s.models.customers!;
+				const cust = s.tables.customers!;
 				const next: SchemaSlice = {
 					...s,
-					models: {
-						...s.models,
+					tables: {
+						...s.tables,
 						customers: {
 							...cust,
 							fields: {
@@ -414,7 +438,7 @@ describe('next schema on PGlite', () => {
 					}
 				};
 				yield* exec(`update customers set tags = '{vip}' where id = $1`, [U(1)]);
-				const p = plan(yield* readApplied(db), next);
+				const p = yield* plan(yield* readApplied(db), next);
 				expect(p.steps.find((x) => x.id === 'create:backfill:customers.all_orders')?.class).toBe(
 					'backfill'
 				);
@@ -423,7 +447,7 @@ describe('next schema on PGlite', () => {
 					message: expect.stringMatching(/refuses 1 existing row$/)
 				});
 				yield* exec(`update customers set tags = '{}'`);
-				yield* applyPlan(db, plan(yield* readApplied(db), next));
+				yield* applyPlan(db, yield* plan(yield* readApplied(db), next));
 				const [r] = yield* db.read([
 					{ text: 'select all_orders from customers where id = $1', params: [U(1)] }
 				]);
@@ -434,7 +458,7 @@ describe('next schema on PGlite', () => {
 		Effect.gen(function* () {
 			yield* setup();
 			const s = slice();
-			const stale = plan(yield* readApplied(db), { ...s, tz: 'UTC' });
+			const stale = yield* plan(yield* readApplied(db), { ...s, tz: 'UTC' });
 			yield* migrate({ ...s, tz: 'Europe/Paris' });
 			expect(yield* Effect.flip(applyPlan(db, stale))).toMatchObject({ code: 'schemaMoved' });
 		}).pipe(Effect.provide(Pristine.layer))
@@ -456,22 +480,31 @@ describe('next schema on PGlite', () => {
 			}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live(
-		'the node-postgres adapter sends read batches and a locked write as one round trip each',
+		'the node-postgres adapter bounds each batch, shares its connection and rolls back failed writes',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
 				yield* seed();
-				let calls = 0;
+				const calls: Parameters<PgClient['query']>[0][] = [];
+				const released: boolean[] = [];
+				let acquired = 0;
 				const client: PgClient = {
 					async query(q) {
-						calls++;
+						calls.push(q);
 						if (q.values !== undefined)
 							return pg.query<unknown>(q.text, q.values).then(postgresResult);
 						return (await pg.exec(q.text)).map(postgresResult);
 					},
-					release() {}
+					release(destroy) {
+						released.push(destroy ?? false);
+					}
 				};
-				const remote = PostgresDb.make({ connect: async () => client });
+				const remote = PostgresDb.make({
+					connect: async () => {
+						acquired++;
+						return client;
+					}
+				});
 				const rows = yield* remote.read([
 					{ text: 'select name from customers where id = $1', params: [U(1)] },
 					{
@@ -480,7 +513,23 @@ describe('next schema on PGlite', () => {
 					}
 				]);
 				expect(rows.map((r) => r.rows)).toEqual([[{ name: 'Ada' }], [{ code: 'SO-1' }]]);
-				expect(calls).toBe(1);
+				expect(calls).toHaveLength(4);
+				expect(calls[0]?.text.split(';\n')).toEqual([
+					'begin isolation level repeatable read read only',
+					"set local lock_timeout = '5s'",
+					"set local statement_timeout = '15s'",
+					"set local idle_in_transaction_session_timeout = '5s'"
+				]);
+				expect(calls.slice(1, 3).map(({ text, values }) => ({ text, values }))).toEqual([
+					{ text: 'select name from customers where id = $1', values: [U(1)] },
+					{
+						text: 'select code from orders where customer = $1 and code = $2',
+						values: [U(1), 'SO-1']
+					}
+				]);
+				expect(calls[3]?.text).toBe('commit');
+				expect(acquired).toBe(1);
+				expect(released).toEqual([false]);
 				const w = yield* remote.write(
 					{
 						text: `update customers set name = $1 where id = $2 returning name`,
@@ -489,7 +538,16 @@ describe('next schema on PGlite', () => {
 					{ tables: ['customers'], advisory: ['x'] }
 				);
 				expect(w.rows).toEqual([{ name: "O'Brien" }]);
-				expect(calls).toBe(3);
+				expect(calls).toHaveLength(7);
+				expect(calls[4]?.text).toMatch(/^begin;/i);
+				expect(calls[4]?.text).toContain('lock table "customers" in SHARE ROW EXCLUSIVE mode');
+				expect(calls[4]?.text).toContain('pg_advisory_xact_lock');
+				expect(calls[5]).toMatchObject({
+					text: 'update customers set name = $1 where id = $2 returning name',
+					name: expect.stringMatching(/^b/),
+					values: ["O'Brien", U(2)]
+				});
+				expect(calls[6]?.text).toBe('commit');
 				expect(
 					yield* Effect.flip(
 						remote.write({
@@ -498,20 +556,27 @@ describe('next schema on PGlite', () => {
 						})
 					)
 				).toMatchObject({ sqlstate: '23505' });
+				expect(calls.at(-1)?.text).toBe('rollback');
+				expect(acquired).toBe(3);
+				expect(released).toEqual([false, false, false]);
 				expect(
-					(yield* db.read([{ text: 'select count(*)::int as n from customers', params: [] }]))[0]
-						?.rows[0]?.n
-				).toBe(2);
+					(yield* db.read([
+						{
+							text: 'select name from customers order by id',
+							params: []
+						}
+					]))[0]?.rows
+				).toEqual([{ name: 'Ada' }, { name: "O'Brien" }]);
 			}).pipe(Effect.provide(Pristine.layer))
 	);
-	it.live('a locked write PREPAREs once then EXECs inside the lock batch', () =>
+	it.live('locked writes bind a stable statement name after acquiring bounded locks', () =>
 		Effect.gen(function* () {
 			yield* setup();
 			yield* seed();
-			const texts: string[] = [];
+			const calls: Parameters<PgClient['query']>[0][] = [];
 			const client: PgClient = {
 				async query(q) {
-					texts.push(q.text);
+					calls.push(q);
 					if (q.values !== undefined)
 						return pg.query<unknown>(q.text, q.values).then(postgresResult);
 					return (await pg.exec(q.text)).map(postgresResult);
@@ -525,23 +590,40 @@ describe('next schema on PGlite', () => {
 			};
 			const lock = { tables: ['customers'] as const };
 			expect((yield* remote.write(sql, lock)).rows).toEqual([{ name: 'Eve' }]);
-			expect(texts[0]).toMatch(/^prepare /i);
-			expect(texts[1]).toMatch(/execute /i);
-			expect(texts[1]).toMatch(/^begin/i);
+			expect(calls.map((q) => q.text)).toEqual([
+				expect.stringMatching(/^begin;/i),
+				sql.text,
+				'commit'
+			]);
+			expect(calls[0]?.text).toContain("set local statement_timeout = '15s'");
+			expect(calls[0]?.text).toContain('lock table "customers" in SHARE ROW EXCLUSIVE mode');
+			expect(calls[1]).toMatchObject({ name: expect.stringMatching(/^b/), values: ['Eve', U(1)] });
 			expect((yield* remote.write({ ...sql, params: ['Fay', U(1)] }, lock)).rows).toEqual([
 				{ name: 'Fay' }
 			]);
-			expect(texts.filter((t) => /^prepare /i.test(t))).toHaveLength(1);
+			expect(calls.slice(3).map((q) => q.text)).toEqual([
+				expect.stringMatching(/^begin;/i),
+				sql.text,
+				'commit'
+			]);
+			expect(calls[3]?.text).toContain('lock table "customers" in SHARE ROW EXCLUSIVE mode');
+			expect(calls[4]?.name).toBe(calls[1]?.name);
+			expect(calls[4]?.values).toEqual(['Fay', U(1)]);
+			expect(
+				(yield* db.read([
+					{
+						text: 'select name from customers where id = $1',
+						params: [U(1)]
+					}
+				]))[0]?.rows
+			).toEqual([{ name: 'Fay' }]);
 		}).pipe(Effect.provide(Pristine.layer))
 	);
-	it.live('an unlocked write is a named extended-protocol statement', () =>
+	it.live('an unlocked write binds its named statement between native deadlines and commit', () =>
 		Effect.gen(function* () {
 			yield* setup();
 			yield* seed();
-			const seen: {
-				name?: string;
-				values?: (string | null)[];
-			}[] = [];
+			const seen: Parameters<PgClient['query']>[0][] = [];
 			const client: PgClient = {
 				async query(q) {
 					seen.push(q);
@@ -557,9 +639,24 @@ describe('next schema on PGlite', () => {
 				params: ['Ada 2', U(1)]
 			});
 			expect(w.rows).toEqual([{ name: 'Ada 2' }]);
-			expect(seen).toHaveLength(1);
-			expect(seen[0]?.name).toMatch(/^b/);
-			expect(seen[0]?.values).toEqual(['Ada 2', U(1)]);
+			expect(seen).toHaveLength(3);
+			expect(seen[0]?.text).toMatch(/^begin;/i);
+			expect(seen[0]?.text).toContain("set local statement_timeout = '15s'");
+			expect(seen[0]?.text).not.toMatch(/lock table|pg_advisory_xact_lock/i);
+			expect(seen[1]).toMatchObject({
+				text: 'update customers set name = $1 where id = $2 returning name',
+				name: expect.stringMatching(/^b/),
+				values: ['Ada 2', U(1)]
+			});
+			expect(seen[2]?.text).toBe('commit');
+			expect(
+				(yield* db.read([
+					{
+						text: 'select name from customers where id = $1',
+						params: [U(1)]
+					}
+				]))[0]?.rows
+			).toEqual([{ name: 'Ada 2' }]);
 		}).pipe(Effect.provide(Pristine.layer))
 	);
 });
@@ -678,7 +775,7 @@ describe('source:connections: a connection is its named instance', () => {
 				expect((yield* rows()).map((r) => r['id'])).toEqual([run]);
 			}).pipe(Effect.provide(Pristine.layer))
 	);
-	it.live('a deleted instance takes its credentials, feed progress and messages with it', () =>
+	it.live('a deleted instance takes its credentials and messages with it', () =>
 		Effect.gen(function* () {
 			yield* setup();
 			yield* migrate({
@@ -688,26 +785,14 @@ describe('source:connections: a connection is its named instance', () => {
 			yield* exec(
 				`insert into bolt_credential (instance, name, sealed) values ('mail', 'creds', 'x')`
 			);
-			yield* exec(
-				`insert into bolt_feed (feed, instance, digest) values ('inbox.mail', 'mail', 'd')`
-			);
-			yield* exec(
-				`insert into bolt_feed_row (feed, instance, key, record, cycle) values ('inbox.mail', 'mail', '["k"]', $1, 0)`,
-				[U(1)]
-			);
 			yield* exec(`insert into sys_conversation (id, integration) values ('c1', 'mail')`);
 			yield* exec(
-				`insert into sys_message (id, conversation, seq, integration, key, class) values ('m1', 'c1', 1, 'mail', 'k1', 'message')`
+				`insert into sys_message (id, conversation, seq, integration) values ('m1', 'c1', 1, 'mail')`
 			);
-			expect(
-				yield* Effect.flip(
-					exec(`insert into sys_message (id, seq, integration, key) values ('m2', 2, 'mail', 'k1')`)
-				)
-			).toMatchObject({ sqlstate: '23505' });
 			yield* migrate(slice());
 			const [left] = yield* db.read([
 				{
-					text: `select (select count(*) from bolt_credential)::int + (select count(*) from bolt_feed)::int + (select count(*) from bolt_feed_row)::int
+					text: `select (select count(*) from bolt_credential)::int
 			+ (select count(*) from sys_conversation)::int + (select count(*) from sys_message)::int as n`,
 					params: []
 				}

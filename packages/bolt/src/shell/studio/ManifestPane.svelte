@@ -14,8 +14,7 @@
 		t
 	}: { view: StudioView; onopen: (path: string) => void; t: (key: string) => string } = $props();
 	const SECTION_TITLES: { readonly [s in Section]: string } = {
-		collections: 'Collections',
-		pipelines: 'Pipelines',
+		models: 'Models',
 		apps: 'Apps',
 		kiosks: 'Kiosks',
 		policies: 'Policies',
@@ -24,8 +23,7 @@
 		secrets: 'Secrets'
 	};
 	const ICONS: { readonly [s in Section]: string } = {
-		collections: 'lucide:database',
-		pipelines: 'lucide:workflow',
+		models: 'lucide:database',
 		apps: 'lucide:layout-grid',
 		kiosks: 'lucide:monitor',
 		policies: 'lucide:shield-check',
@@ -33,7 +31,7 @@
 		remotes: 'lucide:plug',
 		secrets: 'lucide:key-round'
 	};
-	let section = $state<string>('collections');
+	let section = $state<string>('models');
 </script>
 
 {#snippet empty(icon: string, text: string)}

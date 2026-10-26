@@ -10,11 +10,13 @@ export const FACILITY_KINDS = [
 	'tooLarge',
 	'unsupported'
 ] as const;
-/** A facility call that failed (`request`, `web`, `files`, `convert`, `ai`): its kind, message and HTTP status. */
+/** A failed facility call: its kind, message, HTTP status and optional provider retry delay. */
 export class FacilityFailure extends Schema.TaggedError<FacilityFailure>()('FacilityFailure', {
 	kind: Schema.Literals(FACILITY_KINDS),
 	message: Schema.String,
-	status: Schema.optional(Schema.Number)
+	status: Schema.optional(Schema.Number),
+	/** The provider's minimum delay before another attempt. */
+	retryAfterMs: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)))
 }) {}
 
 /** An optional facility with no provider bound (P19), or an instance not paired: the facility and why. */

@@ -21,10 +21,12 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 </script>
 
 <script lang="ts">
-	import { query } from '../effect/index.js';
+	import { observeOnce } from '../effect/index.js';
 	import { tick } from 'svelte';
 	import { watch } from 'runed';
 	import { cn } from '../primitives/utils.js';
+	import ToolbarSearch from '../collection/toolbar/ToolbarSearch.svelte';
+	import ToolbarFilter from '../collection/toolbar/ToolbarFilter.svelte';
 	import { offsets, windowOf } from '../primitives/virtual/virtual.js';
 	import {
 		LOG_LEVELS,
@@ -55,7 +57,7 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 		port: HTMLDivElement;
 		before: number;
 	} | null>(null);
-	const olderPage = query(() => {
+	const olderPage = observeOnce(() => {
 		const request = olderRequest;
 		return request === null || request.load !== loadOlder
 			? null
@@ -115,26 +117,30 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 	data-log-view
 >
 	<div class="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
-		{#each LOG_LEVELS as level (level)}
-			<button
-				type="button"
-				aria-pressed={!hidden[level]}
-				onclick={() => (hidden[level] = !hidden[level])}
-				class={cn(
-					'h-8 max-sm:min-h-11 rounded px-2 font-mono text-[11px] uppercase',
-					hidden[level] ? 'text-muted-foreground/60 line-through' : BADGE[level]
-				)}>{level}</button
-			>
-		{/each}
+		<ToolbarSearch bind:value={q} label="Search log messages" />
+		<ToolbarFilter
+			count={LOG_LEVELS.filter((level) => hidden[level]).length}
+			label="Filter log levels"
+			panelClass="w-64"
+		>
+			<h3 class="text-sm font-medium">Log levels</h3>
+			<div class="flex flex-wrap gap-1.5">
+				{#each LOG_LEVELS as level (level)}
+					<button
+						type="button"
+						aria-pressed={!hidden[level]}
+						onclick={() => (hidden[level] = !hidden[level])}
+						class={cn(
+							'h-8 max-sm:min-h-11 rounded px-2 font-mono text-micro uppercase',
+							hidden[level] ? 'text-muted-foreground/60 line-through' : BADGE[level]
+						)}>{level}</button
+					>
+				{/each}
+			</div>
+		</ToolbarFilter>
 		{#if loading}<span class="text-muted-foreground text-xs">Loading older…</span>{/if}
 		{#if notice}<span role="alert" class="text-destructive text-xs">{notice}</span>{/if}
-		<input
-			bind:value={q}
-			type="search"
-			placeholder="Filter…"
-			aria-label="Filter logs"
-			class="h-8 max-sm:min-h-11 min-w-32 flex-1 rounded border bg-background px-2 text-xs"
-		/>
+		<span class="flex-1"></span>
 		<button
 			type="button"
 			aria-pressed={follow}
@@ -171,7 +177,7 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 						<span class="whitespace-pre-wrap break-words"
 							>{#if row.source}<span class="text-muted-foreground"
 									>{row.source}
-								</span>{/if}{row.message}</span
+								</span>{' '}{/if}{row.message}</span
 						>
 					</div>
 				{/each}

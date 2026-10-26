@@ -101,11 +101,6 @@ export type AppConfig = typeof AppConfig.Type;
 /** Types a `norbital.app.ts` default export; the CLI validates it when it loads the file. */
 export const defineApp = (config: typeof AppConfig.Encoded): typeof AppConfig.Encoded => config;
 
-const decodeApp = (input: unknown) =>
-	Schema.decodeUnknownEffect(AppConfig)(input).pipe(
-		Effect.mapError((error) => new AppConfigInvalid({ message: error.message }))
-	);
-
 const CONFIG_FILES = ['norbital.app.ts', 'norbital.app.json'] as const;
 
 const Module = Schema.Struct({ default: Schema.Unknown });
@@ -129,7 +124,7 @@ export const loadApp = Effect.fn('AppShell.loadApp')(
 							Effect.flatMap(Schema.decodeUnknownEffect(Module)),
 							Effect.map((module) => module.default)
 						);
-			return yield* decodeApp(input).pipe(
+			return yield* Schema.decodeUnknownEffect(AppConfig)(input).pipe(
 				Effect.mapError((error) => new AppConfigInvalid({ message: `${file}: ${error.message}` }))
 			);
 		}

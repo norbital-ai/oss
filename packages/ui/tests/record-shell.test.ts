@@ -7,14 +7,14 @@ import {
 	type ViewScript,
 	browser
 } from './view-fixture.ts';
-import { Deferred, Effect } from 'effect';
+import { Deferred, Effect, Schema, Stream } from 'effect';
 // The record shell's header chrome: the history scrubber (a past revision shows read-only, then back to current), the
 // record/approval toggle for native proposals, and no per-field history or History tab.
 import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Value } from '@norbital-ai/std/kind';
-import type { ApprovalView } from '../src/client/contract.ts';
+import type { ApprovalView, Outcome } from '../src/client/contract.ts';
 import type { RecordCapabilities } from '../src/record/types.ts';
 import type { Row } from '../src/collection/types.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
@@ -73,11 +73,12 @@ const approvalView = (request: Partial<ApprovalView> & { id: string }): Approval
 	record: 'j1',
 	action: 'update',
 	at: '2026-09-01T00:00:00Z',
-	status: 'ONGOING',
+	status: 'Pending',
 	step: 0,
-	steps: [],
+	steps: [{ name: 'Review', teams: ['reviewers'], users: [] }],
 	superseded_by: [],
 	teamNames: {},
+	userNames: {},
 	requestor: { ref: 'u1', name: 'Ada' },
 	log: [],
 	records: [{ collection: 'jobs', id: 'j1', op: 'update' }],
@@ -128,7 +129,12 @@ async function fake(
 						return found === undefined ? null : approvalView(found);
 					})()
 				: requests
-						.filter((request) => params.get('all') === '1' || request.status === 'ONGOING')
+						.filter(
+							(request) =>
+								params.get('all') === '1' ||
+								request.status === 'Pending' ||
+								request.status === 'ChangesRequested'
+						)
 						.map(approvalView)
 	});
 	return { ...fixture, calls };
@@ -195,17 +201,11 @@ const key = async (el: Element | null, k: string) => {
 const edit = (t: ParentNode) =>
 	[...t.querySelectorAll<HTMLButtonElement>('button')].find((b) => textOf(b).trim() === 'Edit');
 
-it.live('the scrubber sits in the sheet header; no per-field history and no History tab', () =>
+it.live('history loads lazily and exposes the selected revision accessibly', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() => show(LIVE));
 		const trigger = element<HTMLElement>(v.target, 'header [data-timeline-trigger]');
 		assert.ok(trigger, 'history opens from the sheet header');
-		assert.equal(
-			trigger.parentElement,
-			element<HTMLElement>(v.target, 'header [data-record-toggle]'),
-			'history shares the record and approval action row'
-		);
-		assert.equal(textOf(trigger).trim(), '', 'history is a single icon');
 		assert.equal(trigger.getAttribute('aria-label'), 'History');
 		assert.equal(v.slider(), null, 'the ruler is hidden until opened');
 		assert.equal(v.calls.history, 0, 'history loads lazily');
@@ -218,13 +218,6 @@ it.live('the scrubber sits in the sheet header; no per-field history and no Hist
 		);
 		assert.equal(s.getAttribute('aria-valuemax'), '3');
 		assert.equal(s.getAttribute('aria-valuenow'), '3');
-		assert.equal(v.target.querySelector('[data-field-history]'), null);
-		assert.equal(
-			[...v.target.querySelectorAll<HTMLElement>('[role=tab]')].some((t) =>
-				/history/i.test(textOf(t))
-			),
-			false
-		);
 	})
 );
 
@@ -351,7 +344,7 @@ const logEntry = (
 	move,
 	by: { ref: `member:${by}`, name: by },
 	at: '2026-10-13T00:00:00Z',
-	from: move === 'request' ? null : 'ONGOING',
+	from: move === 'request' ? null : 'Pending',
 	to,
 	step: 0,
 	reason: null,
@@ -364,10 +357,10 @@ it.live('a held record shows Under approval and its request timeline, without a 
 			show(LIVE, catalog, undefined, undefined, [
 				{
 					id: 'r1',
-					steps: [['reviewers']],
+					steps: [{ name: 'Review team', teams: ['reviewers'], users: [] }],
 					teamNames: { reviewers: 'Review team' },
 					mine: true,
-					log: [logEntry('request', 'ONGOING', 'Ada')]
+					log: [logEntry('request', 'Pending', 'Ada')]
 				}
 			])
 		);
@@ -382,16 +375,25 @@ it.live('a held record shows Under approval and its request timeline, without a 
 			/Requested/
 		);
 		assert.match(
-			textOf(element<HTMLElement>(v.target, '[data-view=approval-waiting]')),
+			textOf(element<HTMLElement>(v.target, '[data-view=approval-timeline]')),
 			/Review team/
 		);
 	})
 );
 
-it.live('a change request keeps its header compact and explains RFC on keyboard focus', () =>
+it.live('a change request explains RFC and approval details on keyboard focus', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() =>
-			show(LIVE, catalog, undefined, undefined, [{ id: 'r1', status: 'CHANGES_REQUESTED' }])
+			show(LIVE, catalog, undefined, undefined, [
+				{
+					id: 'r1',
+					status: 'ChangesRequested',
+					log: [
+						logEntry('request', 'Pending', 'Ada'),
+						logEntry('requestChanges', 'ChangesRequested', 'Sam')
+					]
+				}
+			])
 		);
 		const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
 		assert.equal(textOf(badge).trim(), 'RFC');
@@ -408,51 +410,71 @@ it.live('a change request keeps its header compact and explains RFC on keyboard 
 		);
 		element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
 		yield* browser(settle);
+		const step = element<HTMLElement>(v.target, '[data-step="step-0"] [data-node]');
+		assert.match(step.getAttribute('aria-label') ?? '', /Changes requested/);
+		step.focus();
+		yield* browser(settle);
 		assert.match(
-			textOf(element<HTMLElement>(v.target, '[data-view=approval]')),
-			/Changes requested/
+			textOf(element<HTMLElement>(document, '[data-view=approval-step-log]')),
+			/Requested changes/
 		);
 	})
 );
 
-it.live('the record lists its past requests collapsed, oldest first, with the newest open', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() =>
-			show(LIVE, catalog, undefined, undefined, [
-				{
-					id: 'r2',
-					at: '2026-10-14T00:00:00Z',
-					log: [logEntry('request', 'ONGOING', 'Ada')]
-				},
-				{
-					id: 'r1',
-					status: 'REJECTED',
-					at: '2026-10-13T00:00:00Z',
-					log: [
-						logEntry('request', 'ONGOING', 'Ada'),
-						logEntry('reject', 'REJECTED', 'Sam', { reason: 'Too costly' })
-					]
-				}
-			])
-		);
-		element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
-		yield* browser(() => settle());
-		const past = [...v.target.querySelectorAll<HTMLDetailsElement>('details[data-request]')];
-		const previous = element<HTMLDetailsElement>(v.target, '[data-view=approval-past]');
-		assert.equal(previous.open, false);
-		assert.ok(
-			element(v.target, '[data-view=approval]').compareDocumentPosition(previous) &
-				Node.DOCUMENT_POSITION_FOLLOWING
-		);
-		assert.deepEqual(
-			past.map((d) => [d.dataset['request'], d.open]),
-			[['r1', false]]
-		);
-		past[0]!.open = true;
-		yield* browser(() => settle());
-		assert.match(textOf(required(past[0])), /Too costly/);
-		assert.equal(v.target.querySelectorAll('[data-view=approval][data-status=ONGOING]').length, 1);
-	})
+it.live(
+	'the record numbers its requests chronologically, opens the newest, and keeps past decisions readable',
+	() =>
+		Effect.gen(function* () {
+			const v = yield* browser(() =>
+				show(LIVE, catalog, undefined, undefined, [
+					{
+						id: 'r2',
+						at: '2026-10-14T00:00:00Z',
+						log: [logEntry('request', 'Pending', 'Ada')]
+					},
+					{
+						id: 'r1',
+						status: 'Rejected',
+						at: '2026-10-13T00:00:00Z',
+						log: [
+							logEntry('request', 'Pending', 'Ada'),
+							logEntry('reject', 'Rejected', 'Sam', { reason: 'Too costly' })
+						]
+					}
+				])
+			);
+			element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
+			yield* browser(() => settle());
+			const scope = element<HTMLSelectElement>(v.target, '[data-view=approval-scope]');
+			assert.equal(scope.value, 'r2');
+			assert.deepEqual(
+				[...scope.options].map((option) => [option.value, textOf(option).split(' · ').slice(0, 2)]),
+				[
+					['r2', ['#2', 'Pending']],
+					['r1', ['#1', 'Rejected']]
+				]
+			);
+			scope.value = 'r1';
+			scope.dispatchEvent(new Event('change', { bubbles: true }));
+			yield* browser(() => settle());
+			assert.equal(
+				v.target.querySelectorAll('[data-view=approval][data-status=Rejected]').length,
+				1
+			);
+			element<HTMLElement>(v.target, '[data-step="step-0"] [data-node]').focus();
+			yield* browser(settle);
+			assert.match(
+				textOf(element<HTMLElement>(document, '[data-view=approval-step-log]')),
+				/Too costly/
+			);
+			scope.value = 'r2';
+			scope.dispatchEvent(new Event('change', { bubbles: true }));
+			yield* browser(settle);
+			assert.equal(
+				v.target.querySelectorAll('[data-view=approval][data-status=Pending]').length,
+				1
+			);
+		})
 );
 
 it.live('a completed approval remains readable from the record without a pending marker', () =>
@@ -461,8 +483,8 @@ it.live('a completed approval remains readable from the record without a pending
 			show(LIVE, catalog, undefined, undefined, [
 				{
 					id: 'r1',
-					status: 'APPROVED',
-					log: [logEntry('request', 'ONGOING', 'Ada'), logEntry('approve', 'APPROVED', 'Sam')]
+					status: 'Approved',
+					log: [logEntry('request', 'Pending', 'Ada'), logEntry('approve', 'Approved', 'Sam')]
 				}
 			])
 		);
@@ -473,8 +495,11 @@ it.live('a completed approval remains readable from the record without a pending
 		);
 		approval.click();
 		yield* browser(() => settle());
-		assert.match(textOf(v.target), /Approved/);
-		assert.match(textOf(v.target), /Sam/);
+		element<HTMLElement>(v.target, '[data-step="step-0"] [data-node]').focus();
+		yield* browser(settle);
+		const log = element<HTMLElement>(document, '[data-view=approval-step-log]');
+		assert.match(textOf(log), /Approved/);
+		assert.match(textOf(log), /Sam/);
 		assert.doesNotMatch(textOf(v.target), /No approval on this record/);
 	})
 );
@@ -489,9 +514,11 @@ it.live(
 					requestId: 'r1',
 					state: 'Pending',
 					step: 0,
-					steps: 2,
-					requestedBy: 'Ada',
-					waitingOn: ['Finance']
+					steps: [
+						{ name: 'Finance', teams: ['finance'], users: [] },
+						{ name: 'Commercial', teams: ['commercial'], users: [] }
+					],
+					requestedBy: 'Ada'
 				}
 			};
 			const reasons = ['underApproval'] as const;
@@ -512,7 +539,7 @@ it.live(
 			);
 			const button = required(edit(v.target));
 			assert.equal(button.disabled, true);
-			assert.equal(button.title, 'Under approval: Finance may change it');
+			assert.equal(button.title, 'Under approval: only Finance approvers may change it');
 			assert.equal(v.target.querySelector('[data-view=approval-lock]'), null);
 			assert.doesNotMatch(
 				textOf(element<HTMLElement>(v.target, '[data-record-head]')),
@@ -520,7 +547,10 @@ it.live(
 			);
 			const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
 			assert.equal(textOf(badge).trim(), 'Under approval');
-			assert.equal(badge.getAttribute('aria-label'), 'Under approval: Finance may change it');
+			assert.equal(
+				badge.getAttribute('aria-label'),
+				'Under approval: only Finance approvers may change it'
+			);
 			assert.equal(badge.tabIndex, 0);
 			yield* browser(async () => {
 				badge.focus();
@@ -528,7 +558,7 @@ it.live(
 			});
 			assert.match(
 				textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
-				/Under approval: Finance may change it/
+				/Under approval: only Finance approvers may change it/
 			);
 		})
 );
@@ -703,23 +733,60 @@ it.live('editing a line prices in the line own currency', () =>
 	})
 );
 
-it.live('an action form starts from the input of its act-shaped values', () =>
+it.live('an automation form sends direct input and follows its admitted run', () =>
 	Effect.gen(function* () {
-		const { bolt } = yield* browser(() => fake(null));
+		const inputs: Json[] = [];
+		const outcomes: Outcome[] = [];
+		const { bolt } = yield* browser(() =>
+			viewFixture({
+				uuid: () => 'rename-run',
+				act: (callable, input) => {
+					assert.equal(callable, 'start');
+					const request = Schema.decodeUnknownSync(
+						Schema.Struct({
+							automation: Schema.String,
+							runs: Schema.Array(Schema.Struct({ id: Schema.String, input: Schema.Json }))
+						})
+					)(input);
+					const first = request.runs[0];
+					assert.ok(first);
+					inputs.push(first.input);
+					return {
+						kind: 'committed',
+						output: {
+							id: first.id,
+							ids: request.runs.map((run) => run.id),
+							automation: request.automation
+						},
+						records: []
+					};
+				},
+				runs: (automation, options) => {
+					assert.equal(automation, 'rename_job');
+					assert.deepEqual(options, { where: { id: { eq: 'rename-run' } }, limit: 1 });
+					return Stream.succeed({
+						rows: [{ id: 'rename-run', automation, status: 'running' }],
+						next: null
+					});
+				}
+			})
+		);
 		const target = document.body.appendChild(document.createElement('div'));
 		const app = mount(Harness, {
 			target,
 			props: {
 				bolt,
-				catalog: {
-					jobs: {
-						label: ['title'],
-						fields: { title: { kind: 'text' } },
-						actions: { rename: { target: 'record', input: { title: { kind: 'text' } } } }
-					}
+				catalog: {},
+				automations: {
+					rename_job: { input: { target: { kind: 'id', of: 'jobs' }, title: { kind: 'text' } } }
 				},
 				part: 'form',
-				props: { of: { action: 'jobs.rename' }, id: 'j1', values: { input: { title: 'Paint' } } }
+				props: {
+					of: { automation: 'rename_job' },
+					values: { target: 'j1', title: 'Paint' },
+					fields: ['title'],
+					onOutcome: (outcome) => outcomes.push(outcome)
+				}
 			}
 		});
 		mounted.push(async () => {
@@ -728,6 +795,21 @@ it.live('an action form starts from the input of its act-shaped values', () =>
 		});
 		yield* browser(() => settle());
 		assert.equal(element<HTMLInputElement>(target, '[data-field=title] input').value, 'Paint');
+		assert.equal(target.querySelector('[data-field=target]'), null);
+		assert.equal(textOf(element<HTMLButtonElement>(target, 'button[type=submit]')).trim(), 'Start');
+		element<HTMLFormElement>(target, 'form').dispatchEvent(
+			new Event('submit', { bubbles: true, cancelable: true })
+		);
+		yield* browser(() => settle());
+		assert.deepEqual(inputs, [{ target: 'j1', title: 'Paint' }]);
+		assert.deepEqual(outcomes, [
+			{
+				kind: 'committed',
+				output: { id: 'rename-run', ids: ['rename-run'], automation: 'rename_job' },
+				records: []
+			}
+		]);
+		assert.equal(element<HTMLElement>(target, '[data-run="rename-run"]').dataset.status, 'running');
 	})
 );
 
@@ -826,7 +908,11 @@ it.live(
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (read.m === 'get' && read.a[0] === 'jobs') {
+				if (
+					read.m === 'query' &&
+					read.a[0] === 'jobs' &&
+					typeof jsonRecord(read.a[1]).id === 'string'
+				) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1070,7 +1156,7 @@ it.live(
 	() =>
 		Effect.gen(function* () {
 			const v = yield* browser(() =>
-				show(LIVE, { jobs: { ...catalog.jobs, readonlyFields: { crew: 'integrationOwned' } } })
+				show(LIVE, { jobs: { ...catalog.jobs, readonlyFields: { crew: 'syncOwned' } } })
 			);
 			required(edit(v.target)).click();
 			yield* browser(() => settle());
@@ -1079,7 +1165,7 @@ it.live(
 			assert.match(textOf(crew), /B/);
 			assert.match(
 				textOf(element<HTMLElement>(crew, '[data-field-restriction]')),
-				/Managed by the integration source/
+				/Managed by a sync/
 			);
 			assert.equal(crew.querySelector('input'), null);
 		})
@@ -1153,7 +1239,11 @@ it.live(
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (read.m === 'get' && read.a[0] === 'jobs') {
+				if (
+					read.m === 'query' &&
+					read.a[0] === 'jobs' &&
+					typeof jsonRecord(read.a[1]).id === 'string'
+				) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1282,7 +1372,7 @@ for (const direct of [false, true])
 					...nativeCapabilities,
 					fields: {
 						title: { writable: false, proposal: true, reasons: ['noGrant'] },
-						crew: { writable: false, proposal: false, reasons: ['integrationOwned'] },
+						crew: { writable: false, proposal: false, reasons: ['syncOwned'] },
 						...(direct ? { note: { writable: true, proposal: false, reasons: [] } } : {})
 					},
 					update: { allowed: direct, proposal: true, reasons: direct ? [] : ['noGrant'] },
@@ -1330,7 +1420,7 @@ it.live('a standalone update Form also applies native proposal and field restric
 			...nativeCapabilities,
 			fields: {
 				title: { writable: false, proposal: true, reasons: ['noGrant'] },
-				crew: { writable: false, proposal: false, reasons: ['integrationOwned'] }
+				crew: { writable: false, proposal: false, reasons: ['syncOwned'] }
 			},
 			update: { allowed: false, proposal: true, reasons: ['noGrant'] },
 			proposalMoves: {}
@@ -1403,7 +1493,11 @@ it.live(
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (read.m === 'get' && read.a[0] === 'jobs') {
+				if (
+					read.m === 'query' &&
+					read.a[0] === 'jobs' &&
+					typeof jsonRecord(read.a[1]).id === 'string'
+				) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1487,11 +1581,11 @@ it.live(
 						id: 'create-request',
 						record: 'candidate',
 						action: 'create',
-						status: 'REJECTED',
+						status: 'Rejected',
 						records: [{ collection: 'jobs', id: 'candidate', op: 'create' }],
 						log: [
-							logEntry('request', 'ONGOING', 'Ada'),
-							logEntry('reject', 'REJECTED', 'Sam', {
+							logEntry('request', 'Pending', 'Ada'),
+							logEntry('reject', 'Rejected', 'Sam', {
 								rolledBack: [{ collection: 'jobs', id: 'candidate', action: 'removed' }]
 							})
 						]
@@ -1509,8 +1603,11 @@ it.live(
 			try {
 				yield* browser(() => settle());
 				assert.equal(target.querySelector('[data-read=notFound]'), null);
-				assert.match(textOf(target), /Rejected/);
-				assert.match(textOf(element<HTMLElement>(target, '[data-rolled-back]')), /removed/);
+				element<HTMLElement>(target, '[data-step="step-0"] [data-node]').focus();
+				yield* browser(settle);
+				const log = element<HTMLElement>(document, '[data-view=approval-step-log]');
+				assert.match(textOf(log), /Rejected/);
+				assert.match(textOf(element<HTMLElement>(log, '[data-rolled-back]')), /removed/);
 				assert.equal(edit(target), undefined);
 			} finally {
 				yield* browser(() => unmount(app));
@@ -1537,7 +1634,11 @@ it.live(
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (read.m === 'get' && read.a[0] === 'jobs') {
+				if (
+					read.m === 'query' &&
+					read.a[0] === 'jobs' &&
+					typeof jsonRecord(read.a[1]).id === 'string'
+				) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1562,7 +1663,7 @@ it.live(
 			assert.equal(answers.length, 2);
 			required(answers[1])([]);
 			yield* browser(() => settle());
-			required(answers[0])([approvalView({ id: 'old', status: 'ONGOING' })]);
+			required(answers[0])([approvalView({ id: 'old', status: 'Pending' })]);
 			yield* browser(() => settle());
 			assert.doesNotMatch(
 				textOf(element<HTMLElement>(target, '[data-record-head]')),

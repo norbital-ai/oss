@@ -4,7 +4,7 @@
 	lets newcomers sign up, the same two steps join them.
 -->
 <script lang="ts">
-	import { query, fork } from '@norbital-ai/ui/effect';
+	import { observeOnce, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import { Grid, Stack } from '@norbital-ai/ui/layout';
 	import { Button, Input, Label, PinInput, Spinner } from '@norbital-ai/ui';
@@ -29,7 +29,7 @@
 		handle?: string | undefined;
 	} = $props();
 
-	const methods = query(() => api.methods());
+	const methods = observeOnce(() => api.methods());
 	// An old host, or a failed methods read, still signs in by email.
 	const byEmail = $derived(methods.current?.email ?? true);
 	const byPhone = $derived(methods.current?.phone ?? false);

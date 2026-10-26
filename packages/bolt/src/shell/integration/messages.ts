@@ -3,10 +3,10 @@ import { Effect, Schema } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { TenantDbShape } from '../../engine/db/tenant-db.ts';
-import type { DeliveryEntry } from '../../engine/conversations/status.ts';
 import { filesOf } from '../../engine/conversations/store.ts';
 import { requireAdmin } from '../../engine/identity/session.ts';
 import type { Json } from '../../decl/values.ts';
+import { InstanceMessage } from '../api-types.ts';
 
 const q = (text: string, ...params: Json[]) => ({ text, params });
 
@@ -15,65 +15,6 @@ const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
 		Effect.mapError((e) => BoltError.make('internal', 'decode', String(e)))
 	);
 
-/** One raw conversation message as an instance's Messages tab lists it: either direction, as stored. */
-export type InstanceMessage = {
-	id: string;
-	seq: string;
-	direction: 'inbound' | 'outbound';
-	at: string;
-	thread: string | null;
-	kind: string | null;
-	title: string | null;
-	sender: string | null;
-	sender_name: string | null;
-	text: string | null;
-	files: number;
-	status: string | null;
-	error: string | null;
-	/** Outbound: the delivery timeline (§5.9), oldest first; `[]` inbound. */
-	delivery: DeliveryEntry[];
-};
-const InstanceMessage = Schema.Struct({
-	id: Schema.String,
-	seq: Schema.String,
-	direction: Schema.Literals(['inbound', 'outbound']),
-	at: Schema.String,
-	thread: Schema.NullOr(Schema.String),
-	kind: Schema.NullOr(Schema.String),
-	title: Schema.NullOr(Schema.String),
-	sender: Schema.NullOr(Schema.String),
-	sender_name: Schema.NullOr(Schema.String),
-	text: Schema.NullOr(Schema.String),
-	files: Schema.Number,
-	status: Schema.NullOr(Schema.String),
-	error: Schema.NullOr(Schema.String),
-	delivery: Schema.Array(
-		Schema.Struct({
-			kind: Schema.Literals([
-				'queued',
-				'sent',
-				'deferred',
-				'delivered',
-				'read',
-				'opened',
-				'bounced',
-				'failed',
-				'complained',
-				'replied',
-				'auto_replied'
-			]),
-			at: Schema.String,
-			provider: Schema.String,
-			code: Schema.optionalKey(Schema.String),
-			reason: Schema.optionalKey(Schema.String),
-			permanent: Schema.optionalKey(Schema.Boolean),
-			presumed: Schema.optionalKey(Schema.Boolean),
-			approximate: Schema.optionalKey(Schema.Boolean),
-			raw: Schema.optionalKey(Schema.Json),
-			reply: Schema.optionalKey(Schema.String)
-		})
-	)
-});
 /**
  * An instance's raw messages (§5.9 built-in reads): every inbound and outbound `sys_message` on it, newest first, a page of
  * 100 before `seq`; an administrator's, like the rest of Settings.

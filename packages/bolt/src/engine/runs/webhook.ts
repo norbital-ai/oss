@@ -1,11 +1,11 @@
-/// <reference types="node" />
 // Webhooks (rule 56a): the signature is verified by the declared scheme over the raw body before the body is read (a
 // failure is 401 and records nothing); a body that does not decode is 400 and a refused delivery; deliveries are
 // deduplicated by the provider's delivery id (or the body digest); Slack and Meta challenges are answered without a run;
 // a valid delivery is acknowledged only after its run row is committed.
 import { Option, Schema } from 'effect';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { Json } from '../../decl/values.ts';
+import { fromBase64, hmacSha256, timingSafeEqual, toBase64 } from '../crypto.ts';
+import { sha256, toHex } from '@norbital-ai/store';
 
 export type WebhookRequest = {
 	method: string;
@@ -16,17 +16,19 @@ export type WebhookRequest = {
 export type WebhookResponse = { status: number; body?: string };
 const TOLERANCE_S = 300;
 
-const same = (a: string, b: string): boolean => {
-	const x = Buffer.from(a),
-		y = Buffer.from(b);
-	return x.length === y.length && timingSafeEqual(x, y);
-};
-const hmac = (key: string | Buffer, text: Buffer, encoding: 'hex' | 'base64') =>
-	createHmac('sha256', key).update(text).digest(encoding);
+const utf8 = new TextEncoder();
+const same = (a: string, b: string): boolean => timingSafeEqual(utf8.encode(a), utf8.encode(b));
+const hmac = (key: string | Uint8Array, text: Uint8Array, encoding: 'hex' | 'base64') =>
+	(encoding === 'hex' ? toHex : toBase64)(hmacSha256(key, text));
 const fresh = (ts: string | undefined, now: number) =>
 	ts !== undefined && /^\d+$/.test(ts) && Math.abs(now / 1000 - Number(ts)) <= TOLERANCE_S;
-const cat = (...parts: (string | Buffer)[]) =>
-	Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p) : p)));
+const cat = (prefix: string, body: Uint8Array) => {
+	const head = utf8.encode(prefix),
+		out = new Uint8Array(head.length + body.length);
+	out.set(head);
+	out.set(body, head.length);
+	return out;
+};
 
 /** Whether `request` carries a valid signature under `scheme` with `secret`. */
 export function verifySignature(
@@ -36,7 +38,7 @@ export function verifySignature(
 	now: number
 ): boolean {
 	const h = r.headers,
-		body = Buffer.from(r.body);
+		body = r.body;
 	switch (scheme) {
 		case 'bearer':
 			return same(h['authorization'] ?? '', `Bearer ${secret}`);
@@ -59,18 +61,19 @@ export function verifySignature(
 			const want = hmac(secret, cat(`${t}.`, body), 'hex');
 			return fresh(t, now) && parts.some(([k, v]) => k === 'v1' && same(v ?? '', want));
 		}
-		case 'svix': {
-			const id = h['svix-id'],
-				ts = h['svix-timestamp'];
+		// Standard Webhooks: `webhook-*` headers, or Svix's `svix-*` (the same scheme under its first name)
+		case 'standard': {
+			const id = h['webhook-id'] ?? h['svix-id'],
+				ts = h['webhook-timestamp'] ?? h['svix-timestamp'];
 			const want = hmac(
-				Buffer.from(secret.replace(/^whsec_/, ''), 'base64'),
+				fromBase64(secret.replace(/^whsec_/, '')),
 				cat(`${id}.${ts}.`, body),
 				'base64'
 			);
 			return (
 				id !== undefined &&
 				fresh(ts, now) &&
-				(h['svix-signature'] ?? '')
+				(h['webhook-signature'] ?? h['svix-signature'] ?? '')
 					.split(' ')
 					.some((s) => s.startsWith('v1,') && same(s.slice(3), want))
 			);
@@ -82,7 +85,7 @@ export function verifySignature(
 /**
  * One delivery under `scheme` with `secret`, before anything is recorded: Meta's subscription check and Slack's URL
  * verification are answered, a bad signature is 401; else its body (an object, `undefined` when it does not decode) and
- * its delivery id (the provider's, else the body digest). Automation webhooks and custom conversations share it.
+ * its delivery id (the provider's, else the body digest). Automation webhooks and sync hints share it.
  */
 export function verifiedWebhook(
 	scheme: string,
@@ -103,18 +106,18 @@ export function verifiedWebhook(
 
 	const decoded = Schema.decodeUnknownOption(
 		Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
-	)(Buffer.from(r.body).toString('utf8'));
+	)(new TextDecoder().decode(r.body));
 	const obj = Option.getOrUndefined(decoded);
 	if (scheme === 'slack' && obj?.['type'] === 'url_verification')
 		return { answer: { status: 200, body: String(obj['challenge'] ?? '') } };
 
 	const delivery =
-		(scheme === 'svix'
-			? r.headers['svix-id']
+		(scheme === 'standard'
+			? (r.headers['webhook-id'] ?? r.headers['svix-id'])
 			: scheme === 'stripe'
 				? obj?.['id']
 				: scheme === 'slack'
 					? obj?.['event_id']
-					: undefined) ?? createHash('sha256').update(r.body).digest('hex');
+					: undefined) ?? toHex(sha256(r.body));
 	return { body: obj, delivery: String(delivery) };
 }

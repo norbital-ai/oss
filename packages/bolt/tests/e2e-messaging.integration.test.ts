@@ -1,6 +1,6 @@
 // End to end through the engine entry and the test kit (§4.2–§4.4, P22, rules 57–61, §3.8): inbound messages reach the
-// engine's conversations by instance, its envoys run the agent's real turn loop over a scripted model, record-driven
-// outbound ships through the engine's own `integrations.deliver` run, and an approval proposal notifies the approvers' inbox.
+// engine's conversations by instance, its envoys run the agent's real turn loop over a scripted model, a model sync
+// sends through `integrations.deliver`, and notification callbacks reach the approvers' inbox and conversation links.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Predicate, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
@@ -9,7 +9,7 @@ import { Conversations } from '../src/engine/services.ts';
 import { program } from './support/guest-fixture.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse, Outcome } from '../src/engine/contracts.ts';
+import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace, respondSystem1 } from '../src/test/index.ts'; // hook:decisions
 
@@ -51,41 +51,26 @@ const manifest = {
 		sent_emails: {
 			read: { fields: 'all' },
 			create: { input: { columns: ['to', 'subject', 'body'] } },
-			update: { input: { columns: ['sent_at', 'delivered_at', 'failed_reason'] } }
+			update: { input: { columns: ['sent_at', 'delivered_at', 'failed_reason'] } },
+			syncs: { mail: { with: 'customer_notices', read: true, write: true } }
 		},
 		orders: {
 			read: { fields: 'all' },
 			create: { input: { columns: ['title'] } },
-			notifications: {
-				approvalStepRequested: [
-					{ channel: 'inbox', to: ['step_approvers'], title: 'Awaiting your decision' }
-				]
-			}
+			notify: true
 		},
 		tickets: {
 			read: { fields: 'all' },
 			create: { input: { columns: ['title'] } },
-			notifications: {
-				committed: [
-					{
-						channel: 'customer_mail',
-						to: [{ team: 't-con' }, 'requestor'],
-						title: 'New ticket',
-						body: 'A ticket was opened.'
-					},
-					{ channel: 'field_wa', to: [{ team: 't-con' }], title: 'New ticket' }
-				]
-			}
+			notify: true
 		}
 	},
 	integrations: {
 		customer_notices: {
 			description: 'Customer notices',
-			driver: 'email',
-			outbound: { notice: { from: 'sent_emails', via: 'customer_mail' } }
+			driver: 'email'
 		}
 	},
-	pipelines: {},
 	policies: {
 		desk: { description: 'What the envoys may do', grants: { jobs: { read: true } } },
 		contractor: { description: 'Contractors', grants: { jobs: { read: true } } },
@@ -95,7 +80,7 @@ const manifest = {
 		},
 		sales: {
 			description: 'Sales',
-			grants: { orders: { read: true, approval: { create: [{ steps: [['t-fin']] }] } } }
+			grants: { orders: { read: true, create: { approval: true } } }
 		},
 		finance: { description: 'Finance', grants: { orders: { read: true } } }
 	},
@@ -136,11 +121,35 @@ const manifest = {
 	agent: { skills: {} }
 } satisfies EngineManifest;
 
-const guest =
-	program(`export default { integration_definition: { customer_notices: { bodies: { feeds: {}, outbound: { notice: {
-	build: (record) => ({ to: [record.to], subject: record.subject, text: record.body, thread: record.id }),
-	events: { sent: (e) => ({ sent_at: e.at }), delivered: (e) => ({ delivered_at: e.at }), bounced: (e) => ({ failed_reason: e.reason }) },
-} } } } } };`);
+const guest = program(`export default {
+	collection: {
+		sent_emails: { bodies: { syncs: { mail: {
+			write: function* ({op,row},ctx) {
+				if(op!=='create')return null;
+				return {$id:yield* ctx.send({to:[row.to],subject:row.subject,text:row.body,thread:row.id})};
+			},
+			read: function* ({deliveries}) {
+				const rows=new Map();
+				for(const event of deliveries)if(event.kind!=='message')rows.set(event.message,{
+					...(rows.get(event.message)??{$id:event.message}),
+					...(event.kind==='sent'?{sent_at:event.at}:event.kind==='delivered'?{delivered_at:event.at}:{failed_reason:event.reason})
+				});
+				return {rows:[...rows.values()]};
+			}
+		} } } },
+		orders: { bodies: { notify: function* (event) {
+			return event.kind==='approval'&&event.move==='request'?[{title:'Awaiting your decision',to:['approvers']}]:[];
+		} } },
+		tickets: { bodies: { notify: function* (event) {
+			if(event.kind!=='write'||event.action!=='create')return [];
+			return [
+				{title:'New ticket',description:'A ticket was opened.',to:[{team:'t-con'},...(event.actor.kind==='member'?[{user:event.actor.id}]:[])],via:['customer_mail']},
+				{title:'New ticket',to:[{team:'t-con'}],via:['field_wa']}
+			];
+		} } }
+	},
+	policy: { sales: { grants: { orders: { create: { approval: (_write,flow)=>flow.step('Finance',{teams:['t-fin']}) } } } } }
+};`);
 
 /** "close <id>" asks for `act jobs.update`; a tool result is answered with the result; anything else is echoed. */
 const text = (c: Json) =>
@@ -233,7 +242,7 @@ const setup = Effect.gen(function* () {
 			issuedAt: t.clock.now()
 		}).pipe(Effect.map((reply) => ok(reply.outcome)));
 	const status = (id: string) =>
-		qReply(route, t.as(t.admin).authority, { reads: [{ m: 'get', a: ['jobs', id] }] }).pipe(
+		qReply(route, t.as(t.admin).authority, { reads: [{ m: 'query', a: ['jobs', { id }] }] }).pipe(
 			Effect.flatMap((reply) =>
 				Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(reply.answers[0])
 			),
@@ -414,12 +423,11 @@ describe('envoys through the engine entry (P22, rules 57–60)', () => {
 
 describe('connections through the engine entry (rule 61)', () => {
 	it.live(
-		'a record-driven email is queued in the writing statement, sent once by the delivery run, and delivery events patch the row',
+		'a model sync queues email in the writing statement, sends once, and imports delivery events onto the row',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, conversations, route, sent, ok } = yield* setup;
-					t.count.reset();
 					const id = ok(
 						(yield* actReply(route, t.as(t.member(['staff'])).authority, {
 							callable: 'sent_emails.create',
@@ -427,7 +435,7 @@ describe('connections through the engine entry (rule 61)', () => {
 							issuedAt: t.clock.now()
 						})).outcome
 					);
-					expect(t.count.writes).toBe(1);
+					const sentAt = t.clock.now();
 					yield* t.runDue();
 					yield* t.runDue();
 					expect(sent('customer_mail')).toHaveLength(1);
@@ -441,22 +449,23 @@ describe('connections through the engine entry (rule 61)', () => {
 						providerId: 'customer_mail:1',
 						report: { kind: 'delivered', at: '2026-09-25T10:01:00.000Z', provider: 'fake' }
 					});
+					t.clock.advance('3s');
+					yield* t.runDue();
 					expect(
 						(yield* qReply(route, t.as(t.admin).authority, {
-							reads: [{ m: 'get', a: ['sent_emails', id] }]
+							reads: [{ m: 'query', a: ['sent_emails', { id }] }]
 						})).answers[0]
-					).toMatchObject({ sent_at: t.clock.now(), delivered_at: '2026-09-25T10:01:00.000Z' });
+					).toMatchObject({ sent_at: sentAt, delivered_at: '2026-09-25T10:01:00.000Z' });
 				})
 			)
 	);
 
 	it.live(
-		"a notice on a conversation connection is queued by the writing statement and reaches each named member's handle there (rule 47)",
+		"a notification callback is queued by the writing statement and reaches each named member's inbox and conversation handle",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, route, sent, ok } = yield* setup;
-					t.count.reset();
 					ok(
 						(yield* actReply(route, t.as(t.member(['staff'], { id: ADA })).authority, {
 							callable: 'tickets.create',
@@ -464,7 +473,14 @@ describe('connections through the engine entry (rule 61)', () => {
 							issuedAt: t.clock.now()
 						})).outcome
 					);
-					expect(t.count.writes).toBe(1);
+					const [callbacks] = yield* t.db.read([
+						{
+							text: "SELECT count(*)::int AS n FROM sys_run WHERE automation = 'bolt.notify' AND state = 'queued'",
+							params: []
+						}
+					]);
+					expect(callbacks?.rows).toEqual([{ n: 1 }]);
+					yield* t.runDue();
 					const [queued] = yield* t.db.read([
 						{
 							text: `SELECT n.recipient->>'channel' AS channel, (SELECT count(*)::int FROM sys_run r WHERE r.automation = 'notifications.deliver') AS runs
@@ -535,6 +551,7 @@ describe('connections through the engine entry (rule 61)', () => {
 						(yield* t.db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0]
 							?.rows
 					).toEqual([{ n: 1 }]);
+					yield* t.runDue();
 					const [rows] = yield* t.db.read([
 						{
 							text: `SELECT member, title, link->>'collection' AS c, read_at FROM sys_notification ORDER BY member`,

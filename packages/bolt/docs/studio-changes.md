@@ -48,7 +48,8 @@ says "This version has no checkpoint to roll back to". Norbius lists the same ch
 times in the workspace's own timezone) and refuses the same ones. The confirmation shows the checkpoint's
 time and description, and says either that all data is kept or, when the schema changed since, that data written after
 that time will be lost. The same progress strip follows. Everyone stays signed in, including people who signed in
-after the checkpoint: a rollback restores business data, never sign-ins.
+after the checkpoint. Current permissions, deactivations, sign-outs and agent-session identity also survive:
+a rollback restores business data while retaining current identity state.
 
 ![The rollback confirmation](./images/studio-flow-5.jpg)
 
@@ -57,8 +58,6 @@ after the checkpoint: a rollback restores business data, never sign-ins.
 During the few seconds of a switch-over, other people's pages wait instead of failing; a small "Updating to a new
 version…" notice shows at the bottom. Afterwards their pages reload into the new version, or offer **Reload** when they
 have unsaved work.
-
-![The updating notice](./images/studio-flow-6.jpg)
 
 ## Screenshots to capture
 

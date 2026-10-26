@@ -6,12 +6,12 @@ when shown; one OpenStreetMap link in a dense line.
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import CopyText from '../../primitives/copy-text/copy-text.svelte';
-	import type { CustomFieldView } from '../context.js';
+	import type { KindView } from '../context.js';
 	import { formatPoint, isPoint } from '../kind.js';
 	import PointInput from '../point-input.svelte';
 	import PointMap from '../point-map.svelte';
 
-	let { view }: { view: CustomFieldView } = $props();
+	let { view }: { view: KindView } = $props();
 	const v = $derived(isPoint(view.value) ? view.value : null);
 	const where = $derived(view.address?.value ?? null);
 </script>

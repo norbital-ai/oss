@@ -9,7 +9,9 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, FileSystem, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { artifactHash, CONTRACT, readArtifact, treeHash } from '../src/engine/artifact/read.ts';
-import { sha256Hex } from '../src/engine/write/sql.ts';
+import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { Pristine } from '../src/node/db/pglite.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import type { Outcome as EngineOutcome } from '../src/engine/contracts.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
@@ -37,7 +39,8 @@ import {
 	Usage,
 	WireError,
 	WireRead,
-	type Outcome
+	type Outcome,
+	type WriteOutcome
 } from '../src/protocol/schema.ts';
 import { clientPage } from '../src/protocol/static.ts';
 import { refusalOfStatus, statusOf, wireError } from '../src/protocol/wire.ts';
@@ -54,8 +57,9 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 describe('the wire Schemas', () => {
 	it('round-trips every body and frame', () => {
-		const read = { m: 'read', a: ['orders', { where: { status: 'open' } }] };
+		const read = { m: 'query', a: ['orders', { where: { status: 'open' } }] };
 		trip(WireRead, read);
+		for (const m of ['read', 'get', 'similar']) refuses(WireRead, { m, a: ['orders', {}] });
 		trip(QBody, { reads: [read, { m: 'transcript', a: ['c1', { tail: 20 }] }] });
 		trip(QReply, { answers: [[{ id: 'o1' }], null] });
 		trip(ActBody, {
@@ -89,7 +93,7 @@ describe('the wire Schemas', () => {
 		trip(WireError, { error: { code: 'invalid', message: 'the body is { reads }' } });
 		trip(LiveBody, {
 			conn: 'c',
-			add: [{ view: 'v', read, every: '1min', on: ['orders'] }],
+			add: [{ view: 'v', read }],
 			drop: ['w']
 		});
 		trip(LiveReply, { errors: [{ view: 'v', code: 'tooManySubscriptions', message: 'too many' }] });
@@ -174,8 +178,8 @@ describe('the wire Schemas', () => {
 		refuses(SessionRequest, { path: 'code', body: { address: 'a', via: 'pigeon' } });
 	});
 
-	it('types the outcome as the engine does', () => {
-		const same: Same<Outcome, EngineOutcome> = true;
+	it('types a write outcome as the engine does; the wire adds `running`', () => {
+		const same: Same<WriteOutcome, EngineOutcome> = true;
 		expect(same).toBe(true);
 	});
 });
@@ -247,12 +251,14 @@ describe('the own callables', () => {
 		);
 		expect(
 			decode({
-				callable: 'approvals.process',
-				input: { requestId: 'r', status: 'APPROVED', reason: 7 }
+				callable: 'approvals.decide',
+				input: { requestId: 'r', decision: 'approve', reason: 'Reviewed.' }
 			})
-		).toMatchObject({ value: { input: { requestId: 'r', status: 'APPROVED' } } });
+		).toMatchObject({
+			value: { input: { requestId: 'r', decision: 'approve', reason: 'Reviewed.' } }
+		});
 		expect(
-			decode({ callable: 'approvals.process', input: { requestId: 'r', status: 'MAYBE' } })._tag
+			decode({ callable: 'approvals.decide', input: { requestId: 'r', decision: 'maybe' } })._tag
 		).toBe('None');
 		// a post needs text or an attachment
 		expect(
@@ -336,7 +342,7 @@ describe('norbital.template.json', () => {
 		industry: 'Construction',
 		description: 'Projects.',
 		visibility: 'public',
-		counts: { collections: 16, apps: 3, automations: 4 },
+		counts: { models: 16, apps: 3, automations: 4 },
 		tags: ['Operations'],
 		name_zh: '施工',
 		seed: {
@@ -353,7 +359,7 @@ describe('norbital.template.json', () => {
 		refuses(TemplateManifest, { ...manifest, name: '  ' });
 		refuses(TemplateManifest, {
 			...manifest,
-			counts: { collections: -1, apps: 0, automations: 0 }
+			counts: { models: -1, apps: 0, automations: 0 }
 		});
 		refuses(TemplateManifest, { ...manifest, visibility: 'private' });
 	});
@@ -366,7 +372,6 @@ const workspace: EngineManifest = {
 	relationships: {},
 	collections: {},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -390,14 +395,13 @@ const built = Effect.gen(function* () {
 	writeFileSync(join(dir, 'client', 'app.js'), 'export {};');
 	mkdirSync(join(dir, 'assets'));
 	writeFileSync(join(dir, 'assets', 'logo.png'), 'png');
+	yield* prepareMigrations(dir, workspace, 'generate');
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
 		handle: 'norbital_test',
 		name: 'Test',
 		schema: fingerprint(schemaSlice(workspace)),
-		transforms: [],
-		projections: [],
 		client: { entry: 'app.js', css: [] },
 		pages: {},
 		hashes: {
@@ -412,7 +416,7 @@ const built = Effect.gen(function* () {
 		JSON.stringify({ ...body, hash: yield* artifactHash(dir, body) })
 	);
 	return dir;
-});
+}).pipe(Effect.provide(Pristine.layer));
 
 describe('the artifact a host reads', () => {
 	it.effect('reads the native artifact once with its manifest and descriptor', () =>

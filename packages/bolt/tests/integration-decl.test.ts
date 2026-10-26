@@ -7,10 +7,8 @@ import { Effect } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { check } from '../src/compiler/check/index.ts';
 
-// `bolt check` evaluates definitions in the isolate: the attached bodies reach the load checks only as markers, so a
-// declared feed without its body is refused there exactly as `load` refuses it.
 it.effect(
-	'bolt check reads integration definitions, their attached bodies, envoys and connections from the isolate',
+	'bolt check keeps integration tests and model sync bodies inline',
 	() =>
 		Effect.gen(function* () {
 			const fixtures = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -26,62 +24,48 @@ it.effect(
 			writeFileSync(
 				join(root, 'src/integration/books/+integration.ts'),
 				`import { integration } from '../../../../../../src/index.ts';
-const books = integration('books', { description: 'Books', driver: 'sqlserver',
-	feeds: { lines: { into: 'lines', key: ['code'], cron: '@hourly' } }, outbound: { push: { from: 'orders', via: 'ledger' } } });
-books.outbound('push', { build: (order) => ({ number: order.number }), run: function* (_, ctx) { return { id: ctx.key }; } });
-export default books;`
+export default integration('books', { description: 'Books', driver: 'sqlserver', credential: { connection: { kind: 'text' } },
+ test: function* (ctx) { yield* ctx.request({ op: 'values', values: { n: 1 } }); } });`
 			);
+			mkdirSync(join(root, 'src/data/model/lines'), { recursive: true });
 			writeFileSync(
-				join(root, 'src/data/model/+lines.model.ts'),
-				`import { model } from '../../../../../../src/index.ts';
-export default model({ description: 'Ledger lines', label: 'code', key: ['source', 'code'], fields: { code: { kind: 'text' } } });`
-			);
-			mkdirSync(join(root, 'src/data/collection/lines'), { recursive: true });
-			writeFileSync(
-				join(root, 'src/data/collection/lines/+collection.ts'),
-				`import { collection } from '../../../../../../../src/index.ts';
-export default collection('lines', { read: { fields: 'all' } });`
-			);
-			const relationships = join(root, 'src/data/+relationship.ts');
-			writeFileSync(
-				relationships,
-				readFileSync(relationships, 'utf8').replace(
-					/,?\s*}\);\s*$/,
-					`,
-	'lines.source': { to: 'sys_integration', where: { integration: { eq: 'books' } } },
-	'orders.ledger': { to: 'sys_integration', optional: true, where: { integration: { eq: 'books' } } },
-});`
-				)
+				join(root, 'src/data/model/lines/+model.ts'),
+				`import { model } from '../../../../../../../src/index.ts';
+export default model('lines', { description: 'Ledger lines', label: 'code', key: ['source', 'code'],
+ fields: { code: { kind: 'text' }, source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'books' } } } },
+ read: 'all', syncs: { ledger: { with: 'books', every: '1h',
+  read: function* () { return { rows: [], more: false }; },
+  write: function* ({ row }) { return { $id: row.code }; }
+ } } });`
 			);
 			const result = yield* check(root, { bolt: '../../../../src/index.ts' });
-			expect(result.errors.map((e) => `${e.code} ${e.message}`)).toEqual([
-				"load/missing-body src/integration/books/+integration.ts: feed 'lines' has no body: attach books.feed('lines', { read })"
-			]);
-			const m = result.manifest;
-			expect(m).toBeDefined();
-			if (m === undefined) throw new Error('Expected checked integration manifest');
-			expect(Object.keys(m.integrations).sort()).toEqual(['books', 'erp', 'mail']);
-			expect(m.integrations['mail']).toEqual({
+			expect(result.errors.map((error) => `${error.code} ${error.message}`)).toEqual([]);
+			const manifest = result.manifest;
+			if (manifest === undefined) throw new Error('Expected checked integration manifest');
+			expect(Object.keys(manifest.integrations).sort()).toEqual(['books', 'erp', 'mail']);
+			expect(manifest.integrations['mail']).toEqual({
 				description: 'The notices mailbox',
-				driver: 'email',
-				feeds: { notices: { into: 'notices', from: 'messages', key: ['message_id'] } }
+				driver: 'email'
 			});
-			expect(m.integrations['books']?.outbound).toEqual({
-				push: { from: 'orders', via: 'ledger' }
+			expect(manifest.collections['lines']?.syncs?.['ledger']).toEqual({
+				with: 'books',
+				every: '1h',
+				read: true,
+				write: true
 			});
-			expect(m.connections).toEqual({
+			expect(manifest.relationships['lines.source']).toEqual({
+				to: 'sys_integration',
+				where: { integration: { eq: 'books' } }
+			});
+			expect(manifest.connections).toEqual({
 				erp: { integration: 'erp' },
 				support: { integration: 'mail', envoy: 'desk' }
 			});
-			expect(m.envoys['desk']).toEqual({
-				name: 'Norbius',
-				audience: 'private',
-				policies: ['sales_rep'],
-				delegation: 'disabled',
-				task: 'Answer order questions.'
-			});
 			const names = readFileSync(join(root, '.norbital/names.ts'), 'utf8');
-			expect(names).toContain('fed: { "lines": "books.lines"; "notices": "mail.notices" };');
+			expect(names).toContain('"ledger"');
+			expect(names).toContain('"read": true');
+			expect(names).toContain('"write": true');
+			expect(names).not.toContain('typeof import');
 		}).pipe(Effect.provide(NodeServices.layer)),
 	30_000
 );

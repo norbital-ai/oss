@@ -57,7 +57,7 @@
 	import { encodeWire } from '@norbital-ai/std/wire';
 	import { fork } from '../effect/index.js';
 	import { Button } from '../primitives/button/index.js';
-	import { Checkbox } from '../primitives/checkbox/index.js';
+	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import { watch as watchRead } from '../read/live.svelte.js';
 	// Each lane loads infinitely: live keyset pages read by its lane condition, the next one as the lane scrolls near its end
 	// (final-ui rule 9); lane counts are one aggregate. A drop is one generated `update` of `by`,
@@ -68,7 +68,7 @@
 	import { provideCollection, useEnumText } from '../collection/context.js';
 	import { useBolt } from '../client/context.js';
 	import { orderOf, sortable } from '../filter/filter.js';
-	import { actOutcome } from '../actions/outcome.js';
+	import { actOutcome, notify } from '../actions/outcome.js';
 	import { and, compact } from '../filter/scope.js';
 	import { COUNT_EVERY_MS } from '../read/paging.js';
 	import { flat } from '../read/aggregate.js';
@@ -76,7 +76,6 @@
 	import { label, lowerLead, msg } from '../text/messages.js';
 	import { listSelect } from '../relations/select.js';
 	import { type ReadState } from '../read/state.js';
-	import { notify } from '../actions/notify.js';
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar, { selectionEnabled } from '../collection/ViewToolbar.svelte';
 	import BoardLane from './BoardLane.svelte';
@@ -162,7 +161,7 @@
 		fields,
 		labels: fields.map((f) => label(bolt, of, f)),
 		read: () =>
-			bolt.read(
+			bolt.query(
 				of,
 				compact({
 					where: scope,
@@ -277,7 +276,7 @@
 		selectionNotice = '';
 		fork(
 			bolt
-				.read<Page<Pick<RowOf<C>, 'id'>>>(
+				.query<Page<Pick<RowOf<C>, 'id'>>>(
 					of,
 					compact({
 						where: and(scope, laneScope),

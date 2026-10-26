@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { it as test, afterEach } from '@effect/vitest';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { PackagingPart } from './packaging-harness.svelte';
-import { scriptedBolt } from './scripted-bolt.ts';
+import { viewFixture } from './view-fixture.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./packaging-harness.svelte');
 const { default: Renderer } = await import('./packaging-renderer.svelte');
@@ -38,17 +38,10 @@ afterEach(async () => {
 	while (mounted.length > 0) await mounted.pop()?.();
 });
 async function show(props: PackagingPart & { customFields?: KindsHost['customFields'] }) {
-	const client = await scriptedBolt({
-		answer: ({ m }) =>
-			m === 'read'
-				? { rows: [JOB], next: null }
-				: m === 'get'
-					? JOB
-					: m === 'aggregate'
-						? [{ count: 1 }]
-						: m === 'history'
-							? []
-							: null
+	const client = await viewFixture({
+		read: () => ({ rows: [JOB], next: null }),
+		get: () => JOB,
+		aggregate: () => [{ count: 1 }]
 	});
 	const target = document.createElement('div');
 	document.body.append(target);
@@ -56,7 +49,6 @@ async function show(props: PackagingPart & { customFields?: KindsHost['customFie
 	mounted.push(async () => {
 		await unmount(app);
 		target.remove();
-		await client.dispose();
 	});
 	flushSync();
 	for (let i = 0; i < 5; i++) {

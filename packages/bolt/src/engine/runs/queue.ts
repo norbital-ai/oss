@@ -1,16 +1,18 @@
 // The one queue (rules 48–52a): `sys_run` rows with a `due_at`. Event-triggered runs are a piece of the causing act's
 // statement, their `where` evaluated there once; a due time 5 minutes or more ahead is rounded up to a 5-minute bucket.
+// Crons are not queued: the host's clock fires them (`Runs.fire`), automations' and remote syncs' reads alike
+// (`syncTriggers`, engine/sync/index.ts).
 import { Result, Schema } from 'effect';
-import { BoltError } from '../../protocol/errors.ts';
+import { BoltError, storeSync } from '../../protocol/errors.ts';
 import type { Json } from '../../decl/values.ts';
-import type { QueuedRun } from '../contracts.ts';
-import type { Pred } from '../../protocol/ir-types.ts';
+import type { CronEntry, QueuedRun } from '../contracts.ts';
+import type { Pred } from '@norbital-ai/store';
 import type { EngineManifest } from '../manifest.ts';
 import { catalogOf, toPred } from '../access/pred.ts';
-import { q, SYSTEM_COLUMNS } from '../../protocol/catalog.ts';
-import { ownPredSql, type Chain } from '../write/sql.ts';
+import { nullRowSql, SYSTEM_COLUMNS } from '@norbital-ai/store';
+import { ownPredSql } from '@norbital-ai/store';
+import { type Chain } from '../write/sql.ts';
 import { duration, dueAt, iso } from './time.ts';
-import { parseCron, periodAtLeast5Min, type Cron } from './cron.ts';
 
 /** Every run INSERT belongs to this builder; the registry also supplies the commit's exact wake time. */
 const pieces = new WeakMap<Chain, string[]>();
@@ -40,10 +42,11 @@ export function enqueue(
 				: '';
 	return c.cte(
 		name,
-		`INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth, actor, starter, state, error, finished_at)
+		`INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth, actor, starter, state, attempts, started_at, error, finished_at)
 	SELECT coalesce(r.j->>'id', gen_random_uuid()::text), r.j->>'automation', coalesce(r.j->'input', '{}'::jsonb),
 		coalesce(r.j->>'due_at', r.j->>'dueAt', 'now')::timestamptz, r.j->>'key', r.j->>'cause', coalesce((r.j->>'depth')::int, 0),
-		r.j->>'actor', r.j->'starter', coalesce(r.j->>'state', 'queued'), r.j->'error', (r.j->>'finished_at')::timestamptz
+		r.j->>'actor', r.j->'starter', coalesce(r.j->>'state', 'queued'), coalesce((r.j->>'attempts')::int, 0),
+		(r.j->>'started_at')::timestamptz, r.j->'error', (r.j->>'finished_at')::timestamptz
 	FROM (${source}) v CROSS JOIN LATERAL (SELECT ${json} AS j) r
 	${options.when === undefined ? '' : `WHERE ${options.when}`} ${conflict}
 	RETURNING id, CASE WHEN state = 'queued' THEN due_at ELSE NULL END AS due_at`
@@ -82,27 +85,30 @@ export type EventTrigger = {
 	fields?: readonly string[] | undefined;
 	delayMs?: number | undefined;
 };
-export type CronTrigger = {
-	automation: string;
-	key: string;
-	cron: Cron;
-	tz: string;
-	bucket: boolean;
-};
 export type WebhookTrigger = { automation: string; path: string; scheme: string; secret: string };
 export type Triggers = {
 	events: readonly EventTrigger[];
-	crons: readonly CronTrigger[];
+	crons: readonly CronEntry[];
 	webhooks: readonly WebhookTrigger[];
 };
 
+// Effect's `Cron` takes fields only: a declared macro is its five fields
+const MACROS: { readonly [macro: string]: string } = {
+	'@yearly': '0 0 1 1 *',
+	'@annually': '0 0 1 1 *',
+	'@monthly': '0 0 1 * *',
+	'@weekly': '0 0 * * 0',
+	'@daily': '0 0 * * *',
+	'@hourly': '0 * * * *'
+};
+const fields = (cron: string) => MACROS[cron.trim()] ?? cron;
 const cache = new WeakMap<EngineManifest, Triggers>();
-/** Every declared trigger, compiled once per manifest (`where` → Pred, cron parsed); a pulled feed's cron is a slot of its run. */
+/** Every declared trigger, compiled once per manifest (`where` → Pred); the host's clock computes the crons' slots. */
 export function triggersOf(m: EngineManifest): Triggers {
 	const cached = cache.get(m);
 	if (cached !== undefined) return cached;
 	const events: EventTrigger[] = [],
-		crons: CronTrigger[] = [],
+		crons: CronEntry[] = [],
 		webhooks: WebhookTrigger[] = [];
 	for (const [automation, spec] of Object.entries(m.automations)) {
 		const decoded = Schema.decodeUnknownResult(Schema.Array(TriggerSpec))(
@@ -117,15 +123,7 @@ export function triggersOf(m: EngineManifest): Triggers {
 		const on = decoded.success;
 		for (const x of on) {
 			if ('cron' in x) {
-				const cron = parseCron(x['cron']),
-					tz = x.tz !== undefined ? x.tz : m.workspace.tz;
-				crons.push({
-					automation,
-					key: `cron:${automation}:${x['cron']}@${tz}`,
-					cron,
-					tz,
-					bucket: periodAtLeast5Min(cron)
-				});
+				crons.push({ id: automation, cron: fields(x.cron), zone: x.tz ?? m.workspace.tz });
 				continue;
 			}
 			if ('webhook' in x) {
@@ -145,19 +143,6 @@ export function triggersOf(m: EngineManifest): Triggers {
 			});
 		}
 	}
-	// a pulled feed (`from: 'read'`) runs `<def>.<feed>` on its cron, in the workspace's zone
-	for (const [definition, def] of Object.entries(m.integrations))
-		for (const [feed, spec] of Object.entries(def.feeds ?? {})) {
-			if ((spec.from ?? 'read') !== 'read' || spec.cron === undefined) continue;
-			const cron = parseCron(spec.cron);
-			crons.push({
-				automation: `${definition}.${feed}`,
-				key: `feed:${definition}.${feed}:${spec.cron}@${m.workspace.tz}`,
-				cron,
-				tz: m.workspace.tz,
-				bucket: periodAtLeast5Min(cron)
-			});
-		}
 	const triggers = { events, crons, webhooks };
 	cache.set(m, triggers);
 	return triggers;
@@ -199,7 +184,7 @@ export function queueTriggered(
 	const at = Date.parse(now);
 	const selects = triggersOf(m).events.map((t) => {
 		const image = t.event === 'deleted' ? 'x.o' : 'x.n';
-		const row = `jsonb_populate_record(null::${q(t.collection)}, ${image})`;
+		const row = `jsonb_populate_record(${nullRowSql(t.collection, catalogOf(m).models.get(t.collection)?.fields.keys() ?? [])}, ${image})`;
 		const changed =
 			t.event !== 'updated'
 				? 'true'
@@ -209,7 +194,7 @@ export function queueTriggered(
 		const where =
 			t.where === undefined
 				? 'true'
-				: `CASE WHEN x.c = ${c.p(t.collection)} THEN ${ownPredSql(t.where, row, c)} ELSE false END`;
+				: `CASE WHEN x.c = ${c.p(t.collection)} THEN ${storeSync(ownPredSql(t.where, row, c))} ELSE false END`;
 		const event = `'collection', ${c.p(t.collection)}::text`;
 		const input =
 			t.event === 'deleted'

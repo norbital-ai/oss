@@ -129,12 +129,7 @@ it.live(
 			).toBe(false);
 			const proposer = authority({
 				orders: grants({
-					update: [],
-					approval: {
-						create: [],
-						update: [{ fields: ['lines'], steps: [['reviewers']] }],
-						delete: []
-					}
+					update: [{ ...arm(undefined, ['lines']), approval: true }]
 				}),
 				lines: readOnly
 			});
@@ -392,11 +387,11 @@ it.live('ordinary writable masks remain precise without provisional approval sta
 	})
 );
 
-it.live('source-owned fields stay readable and local fields remain writable', () =>
+it.live('sync-owned fields stay readable and local fields remain writable', () =>
 	Effect.gen(function* () {
 		const { create, capabilities } = yield* setup();
 		const { parent } = yield* create();
-		// orders fed by an ERP: its update columns are its local fields, every other field the feed's
+		// A read-only ERP sync owns every field outside the local update columns.
 		const orders = required(manifest.collections['orders']);
 		const source: EngineManifest = {
 			...manifest,
@@ -404,14 +399,14 @@ it.live('source-owned fields stay readable and local fields remain writable', ()
 				...manifest.collections,
 				orders: {
 					...orders,
-					update: { input: { ...required(orders.update).input, columns: ['note', 'status'] } }
+					update: { input: { ...required(orders.update).input, columns: ['note', 'status'] } },
+					syncs: { erp: { with: 'erp', read: true } }
 				}
 			},
 			integrations: {
 				erp: {
 					description: 'An ERP',
-					driver: 'sqlserver',
-					feeds: { orders: { into: 'orders', key: ['title'] } }
+					driver: 'sqlserver'
 				}
 			}
 		};
@@ -419,9 +414,18 @@ it.live('source-owned fields stay readable and local fields remain writable', ()
 		expect(caps?.fields['title']).toEqual({
 			writable: false,
 			proposal: false,
-			reasons: ['noGrant', 'integrationOwned']
+			reasons: ['noGrant', 'syncOwned']
 		});
 		expect(caps?.fields['note']).toEqual({ writable: true, proposal: false, reasons: [] });
+		expect(exposure(source, admin)['orders']).toMatchObject({
+			readonlyFields: { title: 'syncOwned' },
+			syncs: { erp: { kind: 'remote', with: 'erp' } }
+		});
+		const reader = authority({ orders: grants() });
+		expect(exposure(source, reader)['orders']?.syncs).toBeUndefined();
+		expect(
+			exposure(source, { ...reader, automations: ['orders.sync.erp'] })['orders']?.syncs
+		).toEqual({ erp: { kind: 'remote', with: 'erp' } });
 	})
 );
 

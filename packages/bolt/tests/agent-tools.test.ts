@@ -1,28 +1,36 @@
-// The agent catalogue over typed native ports: batching, approvals, workspace search, run waits and sandbox files.
-import { readFileSync } from 'node:fs';
+// The agent catalogue over typed native ports: batching, approvals, workspace search and run waits.
 import { memberCap } from '../src/engine/agent/settings.ts';
+import { createHash } from 'node:crypto';
 import { getEventListeners } from 'node:events';
 import { describe, expect, it } from '@effect/vitest';
 import { Clock, Context, Deferred, Effect, Fiber, Layer, Predicate, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, LogRow, Sql } from '../src/engine/contracts.ts';
+import type {
+	Authority,
+	HttpFetchOptions,
+	HttpRequest,
+	HttpResponse,
+	LogRow
+} from '../src/engine/contracts.ts';
 import { DbError } from '../src/engine/errors.ts';
 import type { AgentEngine } from '../src/engine/agent/index.ts';
-import type { MessageRow } from '../src/engine/agent/schema.ts';
 import {
 	catalogue,
 	jobs,
 	type HostTool,
 	type HostToolContext,
-	type SandboxPort,
 	type ToolContext,
 	type WorkspacePort
 } from '../src/engine/agent/tools.ts';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
-import { Files, Logs, type LogsShape } from '../src/engine/ports.ts';
+import { Bundler, Files, GuestIsolates, Http, Logs } from '../src/engine/ports.ts';
+import { bundler } from '../src/node/bundler/index.ts';
+import { BROKEN, filesOf, RENDER, REPORT, SALES, skillOf } from './support/run-file-trees.ts';
+import { REFERENCE } from '../src/engine/agent/run-js.ts';
+import { treeDigest } from '../src/engine/artifact/read.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
 import { actorRef } from '../src/engine/write/commit.ts';
@@ -61,12 +69,11 @@ const manifest: EngineManifest = {
 	policies: {
 		staff: {
 			description: '',
-			grants: { tasks: { approval: { create: [{ steps: [['Leads']] }] } } }
+			grants: { tasks: { create: { approval: true } } }
 		}
 	},
 	teams: { Leads: [] },
 	automations: {},
-	pipelines: {},
 	connections: {},
 	envoys: {},
 	mcp: {},
@@ -79,8 +86,10 @@ type EngineOverrides = Omit<Partial<AgentEngine>, 'db' | 'calls' | 'approvals' |
 	approvals?: Partial<AgentEngine['approvals']>;
 	files?: Partial<Files['Service']>;
 };
-/** Each context's kit host runtime log: its rows (oldest first) and the port its tools read. */
-const kitLogs = new WeakMap<ToolContext, { rows: LogRow[]; port: LogsShape }>();
+/** Each context's kit host runtime log: its rows (oldest first). */
+const kitLogs = new WeakMap<ToolContext, LogRow[]>();
+/** Each context's kit files origin: what `download` fetches. */
+const kitOrigins = new WeakMap<ToolContext, Map<string, Uint8Array>>();
 const ctx = (
 	over: Partial<Omit<ToolContext, 'engine' | 'jobs'>> = {},
 	engine: EngineOverrides = {}
@@ -104,7 +113,10 @@ const ctx = (
 				files: { ...files, ...engine.files },
 				...(engine.read === undefined ? {} : { read: engine.read }),
 				...(engine.act === undefined ? {} : { act: engine.act }),
-				...(engine.convert === undefined ? {} : { convert: engine.convert })
+				...(engine.convert === undefined ? {} : { convert: engine.convert }),
+				guest: engine.guest ?? Context.get(native, GuestIsolates),
+				...(engine.http === undefined ? {} : { http: engine.http }),
+				...(engine.bundler === undefined ? {} : { bundler: engine.bundler })
 			},
 			authority: member({ admin: true }),
 			bindings: { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'UTC', params: {} },
@@ -128,6 +140,7 @@ const ctx = (
 			skills: {},
 			agents: [],
 			mcp: { tools: () => Effect.succeed([]), call: () => Port.unavailable('mcp') },
+			logs: Context.get(native, Logs),
 			mcpTools: [],
 			hostTools: [],
 			receipts: [],
@@ -140,7 +153,6 @@ const ctx = (
 			messages: () => Effect.succeed([]),
 			row: () => Effect.succeed(undefined),
 			output: () => Effect.succeed(undefined),
-			outputs: () => Effect.succeed([]),
 			history: () => Effect.succeed([]),
 			subagent: {
 				spawn: () => Effect.succeed(null),
@@ -153,10 +165,8 @@ const ctx = (
 			},
 			...over
 		};
-		kitLogs.set(x, {
-			rows: Context.get(native, TestWorkspace).fakes.logs,
-			port: Context.get(native, Logs)
-		});
+		kitOrigins.set(x, Context.get(native, TestWorkspace).fakes.files.origin);
+		kitLogs.set(x, Context.get(native, TestWorkspace).fakes.logs);
 		return x;
 	});
 /** Rows pushed into a context's runtime log, `id` their position. */
@@ -165,7 +175,7 @@ const logRows = (
 	rows: readonly (Pick<LogRow, 'at' | 'severity' | 'event' | 'invocation' | 'attributes'> &
 		Partial<Pick<LogRow, 'run'>>)[]
 ) => {
-	const log = kitLogs.get(x)?.rows;
+	const log = kitLogs.get(x);
 	if (log === undefined) throw new Error('no kit log for this context');
 	for (const row of rows)
 		log.push({ run: null, conversation: null, turn: null, ...row, id: String(log.length + 1) });
@@ -176,33 +186,13 @@ const requiredTool = (x: ToolContext, name: string) => {
 	if (t === undefined) throw new Error(`missing tool ${name}`);
 	return t;
 };
-const result = (x: ToolContext, name: string, input: Json) => {
-	const port = kitLogs.get(x)?.port;
-	const run = requiredTool(x, name).run(input, 'call');
-	return port === undefined ? run : run.pipe(Effect.provideService(Logs, port));
-};
+const result = (x: ToolContext, name: string, input: Json) =>
+	requiredTool(x, name).run(input, 'call');
 const first = <A>(items: readonly A[]): A => {
 	const item = items[0];
 	if (item === undefined) throw new Error('fixture produced no item');
 	return item;
 };
-const message = (seq: number, files: Json): MessageRow => ({
-	id: `m${seq}`,
-	conversation: 'c1',
-	seq,
-	role: 'user',
-	content: '',
-	text: '',
-	state: null,
-	mode: null,
-	as: null,
-	author: 'ann',
-	meta: null,
-	supersedes: null,
-	turn: null,
-	files
-});
-
 describe('tool schemas', () => {
 	it.effect(
 		'every parameter declares its type: an untyped one reaches a routed model as { item: … } (Jev, staging)',
@@ -226,15 +216,14 @@ describe('tool schemas', () => {
 				};
 				const workspace: WorkspacePort = {
 					files: async () => [],
-					read: async () => null,
-					types: async () => null
+					read: async () => null
 				};
 				const tools = [
 					...catalogue(yield* ctx({ inApp: false })),
 					...catalogue(yield* ctx({ workspace, authority: member() }))
 				];
 				expect(tools.map((t) => t.name)).toEqual(
-					expect.arrayContaining(['read', 'act', 'workspace_search'])
+					expect.arrayContaining(['query', 'act', 'workspace_search'])
 				);
 				for (const t of tools) {
 					const document = Schema.toJsonSchemaDocument(t.input);
@@ -251,7 +240,7 @@ describe('tool schemas', () => {
 });
 describe('fewer calls for the common paths', () => {
 	it.effect(
-		'read takes several reads in one call, each answered in order and refused on its own',
+		'query takes several reads in one call, each answered in order and refused on its own',
 		() =>
 			Effect.gen(function* () {
 				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
@@ -266,7 +255,7 @@ describe('fewer calls for the common paths', () => {
 					}
 				);
 				expect(
-					yield* result(x, 'read', {
+					yield* result(x, 'query', {
 						reads: [
 							{ collection: 'tasks', id: '1', asOf: '2026-09-01T00:00:00Z' },
 							{ collection: 'secrets' }
@@ -317,21 +306,21 @@ describe('fewer calls for the common paths', () => {
 });
 describe('approval decisions through act', () => {
 	it.effect(
-		'offered to a member whose team a route names; they decide as themselves, confirming first in the app',
+		'offered to staff when writes need approval; they decide as themselves, confirming first in the app',
 		() =>
 			Effect.gen(function* () {
-				expect(tool(yield* ctx({ authority: member() }), 'act')).toBeUndefined();
-				const decided: Parameters<AgentEngine['approvals']['process']>[0][] = [];
+				expect(tool(yield* ctx({ authority: member({ external: true }) }), 'act')).toBeUndefined();
+				const decided: Parameters<AgentEngine['approvals']['decide']>[0][] = [];
 				const approvals: Partial<AgentEngine['approvals']> = {
-					process: (d) =>
+					decide: (d) =>
 						Effect.sync(() => {
 							decided.push(d);
-							return { kind: 'decided', requestId: d.requestId, status: d.status };
+							return { kind: 'decided', requestId: d.requestId, status: 'Approved' };
 						})
 				};
 				const input = {
-					callable: 'approvals.process',
-					input: { requestId: 'r1', status: 'APPROVED', reason: 'ok' }
+					callable: 'approvals.decide',
+					input: { requestId: 'r1', decision: 'approve', reason: 'ok' }
 				};
 				expect(
 					yield* result(
@@ -346,10 +335,10 @@ describe('approval decisions through act', () => {
 						'act',
 						input
 					)
-				).toEqual({ result: { kind: 'decided', requestId: 'r1', status: 'APPROVED' } });
+				).toEqual({ result: { kind: 'decided', requestId: 'r1', status: 'Approved' } });
 				expect(decided[0]).toMatchObject({
 					requestId: 'r1',
-					status: 'APPROVED',
+					decision: 'approve',
 					reason: 'ok',
 					authority: { actor: { id: 'ann' } }
 				});
@@ -363,9 +352,11 @@ describe('skill', () => {
 			Effect.gen(function* () {
 				const big = (n: number) => `## Part ${n}\n${'word '.repeat(1200)}\n`;
 				const text = `---\ndescription: How to author\n---\n${[1, 2, 3, 4, 5].map(big).join('')}`;
-				const answer = yield* result(yield* ctx({ skills: { authoring: text } }), 'skill', {
-					name: 'authoring'
-				});
+				const answer = yield* result(
+					yield* ctx({ skills: { authoring: skillOf({ 'SKILL.md': text }) } }),
+					'skill',
+					{ name: 'authoring' }
+				);
 				const r = Schema.decodeUnknownSync(
 					Schema.Struct({
 						body: Schema.String,
@@ -387,11 +378,10 @@ describe('workspace_search', () => {
 	};
 	const workspace: WorkspacePort = {
 		files: async () => Object.keys(source),
-		read: async (path) => source[path] ?? null,
-		types: async () => null
+		read: async (path) => source[path] ?? null
 	};
 	it.effect(
-		'finds lines by text, code by an ast-grep rule (the whole match), reads a file by path, and searches a draft; external members get no tool',
+		'finds lines by text, reads a file by path, and searches a draft; external members get no tool',
 		() =>
 			Effect.gen(function* () {
 				const x = yield* ctx({ workspace, authority: member() });
@@ -408,21 +398,6 @@ describe('workspace_search', () => {
 					yield* result(x, 'workspace_search', { text: 'bolt.read', paths: ['src/app/'] })
 				).toMatchObject({ result: { total: 1 } });
 				expect(
-					yield* result(x, 'workspace_search', { rule: 'export function $F($$$) { $$$ }' })
-				).toEqual({
-					result: {
-						total: 1,
-						matches: [
-							{
-								path: 'src/a.ts',
-								line: 3,
-								code: 'export function total(a: number) {\n\treturn a;\n}',
-								bound: expect.stringContaining('$F=total')
-							}
-						]
-					}
-				});
-				expect(
 					yield* result(x, 'workspace_search', { path: 'src/a.ts', from: 2, to: 2 })
 				).toMatchObject({ result: { path: 'src/a.ts', lines: ['2: bolt.read(tasks)'] } });
 				expect(yield* result(x, 'workspace_search', { path: 'a.ts' })).toEqual({
@@ -433,8 +408,7 @@ describe('workspace_search', () => {
 				});
 				const draft: WorkspacePort = {
 					files: async () => ['src/new.ts'],
-					read: async () => 'draft',
-					types: async () => null
+					read: async () => 'draft'
 				};
 				expect(
 					yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_search', {
@@ -452,9 +426,9 @@ describe('workspace_search', () => {
 			})
 	);
 });
-describe('read runs queries and act starts automations', () => {
+describe('query runs queries and act starts automations', () => {
 	it.effect(
-		"a collection query is { query, input } on read; act starts automation.<name> and a collection's <c>.pipeline the actor may start",
+		"query calls a collection query; act starts an automation or the collection's named file and remote syncs",
 		() =>
 			Effect.gen(function* () {
 				const queried: Parameters<AgentEngine['calls']['query']>[0][] = [],
@@ -465,6 +439,7 @@ describe('read runs queries and act starts automations', () => {
 					collections: {
 						tasks: {
 							read: { fields: 'all' },
+							syncs: { sheet: { with: 'file', parser: ['json'], schema: { a: { kind: 'int' } } } },
 							queries: {
 								open: {
 									description: 'Open tasks',
@@ -480,8 +455,7 @@ describe('read runs queries and act starts automations', () => {
 							runAs: 'trigger',
 							input: { day: { kind: 'date', optional: true } }
 						}
-					},
-					pipelines: { tasks: { import: { description: '', input: {} } } }
+					}
 				};
 				const calls: Partial<AgentEngine['calls']> = {
 					query: (q) =>
@@ -502,14 +476,14 @@ describe('read runs queries and act starts automations', () => {
 				};
 				const authority = { ...member({ admin: true }), automations: ['tidy'] };
 				const x = yield* ctx({ authority, inApp: false }, { manifest: m, calls, db });
-				expect(requiredTool(x, 'read').description).toContain('tasks.open (Open tasks)');
-				expect(yield* result(x, 'read', { query: 'tasks.open', input: {} })).toEqual({
+				expect(requiredTool(x, 'query').description).toContain('tasks.open (Open tasks)');
+				expect(yield* result(x, 'query', { query: 'tasks.open', input: {} })).toEqual({
 					result: { count: 2 }
 				});
 				expect(queried[0]).toMatchObject({ collection: 'tasks', query: 'open' });
-				expect(yield* result(x, 'read', { collection: 'tasks', query: 'open', input: {} })).toEqual(
-					{ result: { count: 2 } }
-				);
+				expect(
+					yield* result(x, 'query', { collection: 'tasks', query: 'open', input: {} })
+				).toEqual({ result: { count: 2 } });
 				expect(queried[1]).toMatchObject({ collection: 'tasks', query: 'open' });
 				expect(requiredTool(x, 'act').description).toContain('tidy(day?: date)');
 				expect(
@@ -523,30 +497,32 @@ describe('read runs queries and act starts automations', () => {
 					result: { error: "You may not run 'automation.purge'." }
 				});
 				expect(requiredTool(x, 'act').description).toContain(
-					'runs as <collection>.pipeline with { mode, file? }'
+					'A file sync runs as <collection>.sync.<sync>'
 				);
-				expect(requiredTool(x, 'act').description).toContain('tasks.pipeline(mode: import)');
+				expect(requiredTool(x, 'act').description).toContain(
+					'tasks.sync.sheet(mode: import | export)'
+				);
 				expect(
 					yield* result(x, 'act', {
-						callable: 'automation.tasks.pipeline',
+						callable: 'automation.tasks.sync.sheet',
 						input: { mode: 'import' }
 					})
-				).toEqual({ result: { error: "You may not run 'automation.tasks.pipeline'." } });
+				).toEqual({ result: { error: "You may not run 'automation.tasks.sync.sheet'." } });
 				yield* result(x, 'act', {
-					callable: 'tasks.pipeline',
+					callable: 'tasks.sync.sheet',
 					input: { mode: 'import', file: 'f1' }
 				});
 				expect(started[1]).toMatchObject({
-					automation: 'tasks.pipeline',
+					automation: 'tasks.sync.sheet',
 					runs: [{ input: { mode: 'import', file: 'f1' } }]
 				});
 				yield* result(x, 'act', {
-					callable: 'tasks.pipeline',
-					input: { mode: 'import', rows: [{ a: 1 }] }
+					callable: 'tasks.sync.sheet',
+					input: { mode: 'export', to: 'json' }
 				});
-				expect(started[2]).toMatchObject({ runs: [{ input: { rows: [{ a: 1 }] } }] });
+				expect(started[2]).toMatchObject({ runs: [{ input: { mode: 'export', to: 'json' } }] });
 				started.pop();
-				const big = { mode: 'import', rows: [{ a: 1 }, { a: 2 }] };
+				const big = { mode: 'import', file: 'uploaded-sheet', context: { company: 'demo' } };
 				const withFiles = yield* ctx(
 					{ authority, inApp: false },
 					{
@@ -570,24 +546,37 @@ describe('read runs queries and act starts automations', () => {
 						files: { get: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(big))) }
 					}
 				);
-				yield* result(withFiles, 'act', { callable: 'tasks.pipeline', inputFile: 'f-json' });
-				expect(started[2]).toMatchObject({ automation: 'tasks.pipeline', runs: [{ input: big }] });
+				yield* result(withFiles, 'act', { callable: 'tasks.sync.sheet', inputFile: 'f-json' });
+				expect(started[2]).toMatchObject({
+					automation: 'tasks.sync.sheet',
+					runs: [{ input: big }]
+				});
 				started.pop();
 				expect(
-					yield* result(withFiles, 'act', { callable: 'tasks.pipeline', inputFile: 'someone-else' })
+					yield* result(withFiles, 'act', {
+						callable: 'tasks.sync.sheet',
+						inputFile: 'someone-else'
+					})
 				).toMatchObject({
 					result: { error: expect.stringContaining('No file someone-else of yours') }
 				});
 				const synced = yield* ctx(
-					{ authority: { ...member(), automations: ['tidy', 'erp.tasks'] }, inApp: false },
+					{ authority: { ...member(), automations: ['tidy', 'tasks.sync.erp'] }, inApp: false },
 					{
 						manifest: {
 							...m,
+							collections: {
+								tasks: {
+									...m.collections['tasks'],
+									read: { fields: 'all' },
+									syncs: { erp: { with: 'erp', read: true, every: '1min' } }
+								}
+							},
 							integrations: {
 								erp: {
 									description: 'An ERP',
-									driver: 'sqlserver',
-									feeds: { tasks: { into: 'tasks', key: ['title'], cron: '* * * * *' } }
+									driver: 'http',
+									http: { baseUrl: 'https://erp.example' }
 								}
 							}
 						},
@@ -596,15 +585,18 @@ describe('read runs queries and act starts automations', () => {
 					}
 				);
 				expect(requiredTool(synced, 'act').description).toContain(
-					'A feed pulls its source now as <definition>.<feed> with {}: erp.tasks'
+					'A remote sync reads its source now as <collection>.sync.<sync> with {}: tasks.sync.erp'
 				);
-				expect(requiredTool(synced, 'act').description).not.toContain('erp.tasks()');
-				yield* result(synced, 'act', { callable: 'erp.tasks', input: {} });
-				expect(started.at(-1)).toMatchObject({ automation: 'erp.tasks', runs: [{ input: {} }] });
+				expect(requiredTool(synced, 'act').description).not.toContain('tasks.sync.erp()');
+				yield* result(synced, 'act', { callable: 'tasks.sync.erp', input: {} });
+				expect(started.at(-1)).toMatchObject({
+					automation: 'tasks.sync.erp',
+					runs: [{ input: {} }]
+				});
 				started.pop();
 				expect(
-					yield* result(synced, 'act', { callable: 'automation.erp.tasks', input: {} })
-				).toEqual({ result: { error: "You may not run 'automation.erp.tasks'." } });
+					yield* result(synced, 'act', { callable: 'automation.tasks.sync.erp', input: {} })
+				).toEqual({ result: { error: "You may not run 'automation.tasks.sync.erp'." } });
 				active = 'run-1';
 				expect(
 					yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
@@ -725,6 +717,502 @@ describe('document', () => {
 		})
 	);
 });
+describe('download', () => {
+	const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+	it.effect("keeps a media URL as the person's output file, with the host's key and sha256", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			kitOrigins.get(x)?.set('https://law.example/seal.png?v=2', png);
+			const answer = yield* result(x, 'download', { url: 'https://law.example/seal.png?v=2' });
+			expect(answer).toMatchObject({
+				result: {
+					saved: 'seal.png',
+					mime: 'image/png',
+					bytes: png.byteLength,
+					file: { name: 'seal.png', mime: 'image/png', size: png.byteLength }
+				}
+			});
+			const file = Schema.decodeUnknownSync(
+				Schema.Struct({ result: Schema.Struct({ file: Schema.Struct({ id: Schema.String }) }) })
+			)(answer).result.file;
+			const row = first(
+				yield* x.engine.db.rows(
+					Schema.Struct({ key: Schema.String, sha256: Schema.String, field: Schema.String }),
+					{ text: 'SELECT key, sha256, field FROM sys_file WHERE id = $1', params: [file.id] }
+				)
+			);
+			expect(row).toMatchObject({
+				sha256: createHash('sha256').update(png).digest('hex'),
+				field: 'sys_conversation.outputs'
+			});
+			// the row names the blob the host stored: the engine never held the bytes
+			const files = x.engine.files;
+			if (files === undefined) throw new Error('the kit stores files');
+			expect([...(yield* files.get(row.key, 100))]).toEqual([...png]);
+		})
+	);
+	it.effect("answers the host's refusal as the tool's error, and stores nothing", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			kitOrigins.get(x)?.set('https://law.example/index.ts', new TextEncoder().encode('export {}'));
+			expect(yield* result(x, 'download', { url: 'https://law.example/index.ts' })).toEqual({
+				result: { error: expect.stringContaining('not media') }
+			});
+			expect(yield* result(x, 'download', { url: 'https://law.example/gone.png' })).toEqual({
+				result: { error: 'The URL answered 404.' }
+			});
+			expect(
+				yield* x.engine.db.rows(Schema.Struct({ id: Schema.String }), {
+					text: 'SELECT id FROM sys_file',
+					params: []
+				})
+			).toEqual([]);
+		})
+	);
+	it.effect('is offered only to a person in the app', () =>
+		Effect.gen(function* () {
+			const names = (x: ToolContext) => catalogue(x).map((t) => t.name);
+			expect(names(yield* ctx())).toContain('download');
+			expect(names(yield* ctx({ inApp: false }))).not.toContain('download');
+			expect(
+				names(
+					yield* ctx({
+						authority: {
+							...member({ admin: true }),
+							actor: { kind: 'system', run: 'r1', by: { automation: 'drift' } }
+						}
+					})
+				)
+			).not.toContain('download');
+		})
+	);
+});
+describe('run_js', () => {
+	const rows = Array.from({ length: 200 }, (_, i) => ({
+		sku: `s${i}`,
+		qty: i % 7,
+		price: i * 1.5
+	}));
+	const run = (x: ToolContext, input: Json) => result(x, 'run_js', input);
+	/** A local test origin: the engine's `Http`, answering one API path and recording every request. */
+	const origin = () => {
+		const asked: (readonly [HttpRequest, HttpFetchOptions])[] = [];
+		const stock: HttpResponse = {
+			status: 200,
+			headers: [['content-type', 'application/json']],
+			body: new TextEncoder().encode(JSON.stringify(rows))
+		};
+		const http: Http['Service'] = {
+			fetch: (request, options) =>
+				Effect.sync(() => {
+					asked.push([request, options]);
+					return stock;
+				})
+		};
+		return { asked, http };
+	};
+	it.live('calls an API through the engine over http: no redirects, at most 4 MiB', () =>
+		Effect.gen(function* () {
+			const { asked, http } = origin();
+			const x = yield* ctx({}, { http });
+			expect(
+				yield* run(x, {
+					http: true,
+					code:
+						"const r = await http({ url: 'https://api.test/stock', headers: { accept: 'application/json' } });\n" +
+						'const rows = JSON.parse(r.text);\n' +
+						"return { status: r.status, type: r.headers['content-type'], lines: rows.length, value: rows.reduce((a, x) => a + x.qty * x.price, 0) };"
+				})
+			).toEqual({
+				result: {
+					answer: {
+						status: 200,
+						type: 'application/json',
+						lines: 200,
+						value: rows.reduce((a, r) => a + r.qty * r.price, 0)
+					}
+				}
+			});
+			expect(asked).toEqual([
+				[
+					{
+						method: 'GET',
+						url: 'https://api.test/stock',
+						headers: [['accept', 'application/json']]
+					},
+					{ redirects: 0, maxBytes: 4 * 1024 * 1024 }
+				]
+			]);
+		})
+	);
+	it.live('transforms 200 rows of input, its console lines beside the answer', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			const totals: Record<string, number> = {};
+			for (const r of rows) totals[r.qty] = (totals[r.qty] ?? 0) + r.price;
+			expect(
+				yield* run(x, {
+					input: rows,
+					code:
+						'const by = {};\n' +
+						'for (const r of input) by[r.qty] = (by[r.qty] ?? 0) + r.price;\n' +
+						"console.log(input.length, 'rows');\n" +
+						'return by;'
+				})
+			).toEqual({ result: { answer: totals, console: ['200 rows'] } });
+		})
+	);
+	it.live("keeps a returned CSV and PNG as the person's outputs and refuses an ELF", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+			const elf = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0, 0, 0, 0]);
+			const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+			const answer = yield* run(x, {
+				input: [
+					{ name: 'totals.csv', text: 'sku,qty\ns1,2\n' },
+					{ name: 'dot.png', base64: base64(png) },
+					{ name: 'tool', base64: base64(elf) }
+				],
+				code: "return { note: 'done', files: input };"
+			});
+			expect(answer).toEqual({
+				result: {
+					answer: {
+						note: 'done',
+						files: [
+							{ id: expect.any(String), name: 'totals.csv', mime: 'text/csv', size: 13 },
+							{ id: expect.any(String), name: 'dot.png', mime: 'image/png', size: png.byteLength }
+						]
+					},
+					refused: [{ name: 'tool', reason: 'an executable' }]
+				}
+			});
+			expect(
+				yield* x.engine.db.rows(
+					Schema.Struct({ name: Schema.String, mime: Schema.String, field: Schema.String }),
+					{ text: 'SELECT name, mime, field FROM sys_file ORDER BY name', params: [] }
+				)
+			).toEqual([
+				{ name: 'dot.png', mime: 'image/png', field: 'sys_conversation.outputs' },
+				{ name: 'totals.csv', mime: 'text/csv', field: 'sys_conversation.outputs' }
+			]);
+		})
+	);
+	it.live('has no require, process, fetch, delayed timers or http', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			expect(
+				yield* run(x, {
+					code:
+						'let delayed;\n' +
+						"try { setTimeout(() => {}, 10); delayed = 'ran'; } catch (e) { delayed = e.message; }\n" +
+						'return { require: typeof require, process: typeof process, fetch: typeof fetch, setInterval: typeof setInterval, http: typeof http, delayed };'
+				})
+			).toEqual({
+				result: {
+					answer: {
+						require: 'undefined',
+						process: 'undefined',
+						fetch: 'undefined',
+						setInterval: 'undefined',
+						http: 'undefined',
+						delayed: expect.stringContaining('no clock')
+					}
+				}
+			});
+		})
+	);
+	it.live(
+		'ends an endless loop at its CPU budget',
+		() =>
+			Effect.gen(function* () {
+				const x = yield* ctx();
+				expect(yield* run(x, { code: 'for (;;) {}' })).toEqual({
+					result: { error: 'the script used its 2 s of CPU' }
+				});
+			}),
+		30_000
+	);
+	it.live("reports a throw and a syntax error at the script's line", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			expect(yield* run(x, { code: "const a = 1;\nthrow new Error('boom ' + a);" })).toEqual({
+				result: { error: 'Error: boom 1 (line 2:7)' }
+			});
+			expect(yield* run(x, { code: 'const x = ;' })).toEqual({
+				result: { error: "SyntaxError: Unexpected token ';' (line 1:11)" }
+			});
+		})
+	);
+	it.live('has http only when asked for and granted', () =>
+		Effect.gen(function* () {
+			const { asked, http } = origin();
+			const x = yield* ctx({ authority: member() }, { http });
+			expect(yield* run(x, { http: true, code: 'return 1;' })).toEqual({
+				result: { error: expect.stringContaining('do not grant') }
+			});
+			// the bridge itself answers no http to a script that reaches past the missing global
+			expect(
+				yield* run(x, {
+					code:
+						"try { await globalThis[Symbol.for('norbital.bolt.call')]('http', [{ url: 'https://api.test/stock' }]); return 'reached'; }\n" +
+						'catch (e) { return e.message; }'
+				})
+			).toEqual({ result: { answer: 'this run has no http' } });
+			expect(asked).toEqual([]);
+			const granted = yield* ctx({ authority: member({ tools: ['http'] }) }, { http });
+			expect(yield* run(granted, { code: 'return typeof http;' })).toEqual({
+				result: { answer: 'undefined' }
+			});
+			expect(yield* run(granted, { http: true, code: 'return typeof http;' })).toEqual({
+				result: { answer: 'function' }
+			});
+		})
+	);
+});
+describe('run_js over a file', () => {
+	const run = (x: ToolContext, input: Json) => result(x, 'run_js', input);
+	/** A context whose skills run through a real confined bundler. */
+	const files = (skills: ToolContext['skills']) =>
+		Effect.gen(function* () {
+			const host = yield* bundler();
+			const service = Context.get(yield* Layer.build(Bundler.fromAbi(host.port('acme'))), Bundler);
+			return { host, x: yield* ctx({ skills }, { bundler: service }) };
+		});
+	const Ref = Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String });
+	const Kept = Schema.Struct({
+		result: Schema.Struct({ answer: Schema.Struct({ files: Schema.Array(Ref) }) })
+	});
+	it.live(
+		"runs a skill's CommonJS script as written: siblings, a vendored package, a conversation file at /in, argv, Buffer, and /out kept as the person's file",
+		() =>
+			Effect.gen(function* () {
+				const { x } = yield* files({ report: skillOf(REPORT) });
+				// the conversation's CSV: a file the person holds here (an output of an earlier run)
+				const [csv] = Schema.decodeUnknownSync(Kept)(
+					yield* run(x, {
+						input: [{ name: 'sales.csv', text: SALES }],
+						code: 'return { files: input };'
+					})
+				).result.answer.files;
+				if (csv === undefined) throw new Error('no CSV kept');
+				expect(
+					yield* run(x, {
+						file: 'report/scripts/report.js',
+						args: ['/in/sales.csv', '/out/summary.json'],
+						files: [{ id: csv.id }]
+					})
+				).toEqual({
+					result: {
+						exitCode: 0,
+						files: [
+							{
+								id: expect.any(String),
+								name: 'summary.json',
+								mime: 'application/json',
+								size: expect.any(Number)
+							}
+						],
+						console: ['wrote summary.json: 4 rows']
+					}
+				});
+				const [stored] = yield* x.engine.db.rows(Schema.Struct({ key: Schema.String }), {
+					text: "SELECT key FROM sys_file WHERE name = 'summary.json'",
+					params: []
+				});
+				if (stored === undefined || x.engine.files === undefined) throw new Error('no summary');
+				const totals = { north: 140, south: 80.25, east: 42 };
+				expect(
+					JSON.parse(new TextDecoder().decode(yield* x.engine.files.get(stored.key, 1 << 20)))
+				).toEqual({
+					count: 4,
+					totals,
+					month: 'October 2026',
+					digest: Buffer.from(JSON.stringify(totals)).toString('base64')
+				});
+				// the skill names its own files to run, never the packages it vendors
+				expect(yield* result(x, 'skill', { name: 'report' })).toMatchObject({
+					result: { files: ['scripts/lib/summarize.js', 'scripts/report.js', 'shared/index.js'] }
+				});
+			}),
+		60_000
+	);
+	it.live(
+		'runs an ES module with top-level await, node:fs/promises, sibling .mjs and .cjs and an ES-module-only package; a repeat bundles nothing',
+		() =>
+			Effect.gen(function* () {
+				const { host, x } = yield* files({ render: skillOf(RENDER) });
+				const page = {
+					result: {
+						exitCode: 0,
+						files: [{ id: expect.any(String), name: 'page.html', mime: 'text/plain', size: 54 }],
+						console: ['October review']
+					}
+				};
+				expect(yield* run(x, { file: 'render/scripts/render.mjs' })).toEqual(page);
+				expect(yield* run(x, { file: 'render/scripts/render.mjs' })).toEqual(page);
+				expect(host.counts().built).toBe(1);
+			}),
+		60_000
+	);
+	it.live(
+		"reports each failure at the author's file: a bundle's errors, a throw mapped back, a refused built-in by its requirer, an exit code",
+		() =>
+			Effect.gen(function* () {
+				const { x } = yield* files({ broken: skillOf(BROKEN) });
+				const error = (file: string) =>
+					run(x, { file }).pipe(
+						Effect.map(
+							(answer) =>
+								Schema.decodeUnknownSync(
+									Schema.Struct({ result: Schema.Struct({ error: Schema.String }) })
+								)(answer).result.error
+						)
+					);
+				expect(yield* error('broken/scripts/missing.mjs')).toMatch(
+					/^scripts\/missing\.mjs:2:25: Cannot find module '\.\/lib\/nowhere\.mjs'/
+				);
+				expect(yield* error('broken/scripts/spawn.mjs')).toMatch(
+					/^scripts\/spawn\.mjs:1:26: 'node:child_process' is not available in run_js/
+				);
+				const thrown = yield* error('broken/scripts/throws.js');
+				expect(thrown).toMatch(/^Error: failed at stage E1\n/);
+				expect(thrown).toContain('scripts/lib/explode.js:4:11');
+				expect(thrown).not.toContain('guest.mjs');
+				expect(yield* error('broken/scripts/os.js')).toMatch(
+					/^Error: 'os' is not available in run_js \(required by scripts\/os\.js\)/
+				);
+				expect(yield* run(x, { file: 'broken/scripts/exit.js' })).toEqual({
+					result: { exitCode: 3, console: ['leaving'] }
+				});
+				expect(yield* run(x, { file: 'broken/scripts/none.js' })).toEqual({
+					result: { error: "The skill broken has no file 'scripts/none.js'." }
+				});
+				expect(yield* run(x, { file: 'nobody/x.js' })).toEqual({
+					result: { error: "No skill 'nobody' is available: file is '<skill>/<path>'." }
+				});
+			}),
+		60_000
+	);
+	it.live(
+		'sees only its mounts: no host file, no writes to its tree, an empty env, no fetch unless granted',
+		() =>
+			Effect.gen(function* () {
+				const { x } = yield* files({
+					probe: skillOf({
+						'SKILL.md': '---\ndescription: probe\n---\n',
+						'probe.js':
+							"const fs = require('fs');\n" +
+							'const tried = (f) => { try { f(); return "allowed"; } catch (e) { return e.code; } };\n' +
+							"console.log(JSON.stringify({ host: tried(() => fs.readFileSync('/etc/passwd')), escape: tried(() => fs.readFileSync('../../etc/passwd')), tree: tried(() => fs.writeFileSync('/app/probe.js', 'x')), env: Object.keys(process.env).length, fetch: typeof fetch, list: fs.readdirSync('/') }));\n"
+					})
+				});
+				expect(yield* run(x, { file: 'probe/probe.js' })).toEqual({
+					result: {
+						exitCode: 0,
+						console: [
+							JSON.stringify({
+								host: 'ENOENT',
+								escape: 'ENOENT',
+								tree: 'EROFS',
+								env: 0,
+								fetch: 'undefined',
+								list: ['app', 'in', 'out']
+							})
+						]
+					}
+				});
+			}),
+		60_000
+	);
+});
+describe('run_js over a repository reference', () => {
+	const COMMIT = '446c7ac5b0b7d74ae03e546ef2ab3f3a0844f04b',
+		NAME = `calc@${COMMIT.slice(0, 12)}`;
+	const tree = filesOf({
+		'src/main.js':
+			"const { add } = require('./lib/add');\nconsole.log(JSON.stringify({ sum: add(2, 3), fetch: typeof fetch }));\n",
+		'src/lib/add.js': 'module.exports.add = (a, b) => a + b;\n'
+	});
+	it.live(
+		"runs a reference's file from its index as pure computation: no fetch, http refused",
+		() =>
+			Effect.gen(function* () {
+				const asked: HttpRequest[] = [];
+				const http: Http['Service'] = {
+					fetch: (request) =>
+						Effect.sync(() => {
+							asked.push(request);
+							return { status: 200, headers: [], body: new Uint8Array() };
+						})
+				};
+				// the host's reference tool as Colony's keeps one: each file by its address, the index as the person's file
+				let store: Files['Service'] | undefined;
+				const reference: HostTool = {
+					name: 'reference',
+					description: 'a repository reference',
+					input: { type: 'object', properties: {} },
+					call: (_input, context) =>
+						Effect.runPromise(
+							Effect.gen(function* () {
+								const files = store;
+								if (files === undefined) return yield* Effect.die(new Error('no files'));
+								const listed = yield* Effect.forEach(tree, ([path, bytes]) =>
+									Effect.map(files.put(bytes, { name: path, mime: 'text/plain' }), (blob) => ({
+										path,
+										key: blob.key,
+										bytes: blob.bytes
+									}))
+								);
+								const index = {
+									repository: 'https://github.com/acme/calc',
+									commit: COMMIT,
+									digest: treeDigest(tree),
+									files: listed
+								};
+								const blob = yield* files.put(new TextEncoder().encode(JSON.stringify(index)), {
+									name: NAME,
+									mime: REFERENCE.mime
+								});
+								context.keep?.({ ...blob, name: NAME });
+								return { reference: NAME };
+							})
+						)
+				};
+				const host = yield* bundler();
+				const service = Context.get(
+					yield* Layer.build(Bundler.fromAbi(host.port('acme'))),
+					Bundler
+				);
+				const x = yield* ctx({ hostTools: [reference] }, { bundler: service, http });
+				store = x.engine.files;
+				expect(yield* result(x, 'reference', {})).toMatchObject({
+					result: { reference: NAME, files: [{ name: NAME, mime: REFERENCE.mime }] }
+				});
+				const run = (input: Json) => result(x, 'run_js', input);
+				expect(yield* run({ file: `${NAME}/src/main.js` })).toEqual({
+					result: { exitCode: 0, console: [JSON.stringify({ sum: 5, fetch: 'undefined' })] }
+				});
+				expect(yield* run({ file: `${NAME}/src/main.js`, http: true })).toEqual({
+					result: {
+						error: "A repository reference's file runs without fetch: run it without http."
+					}
+				});
+				expect(yield* run({ file: `${NAME}/src/none.js` })).toEqual({
+					result: { error: `The reference ${NAME} has no text file 'src/none.js'.` }
+				});
+				expect(yield* run({ file: 'other@0123456789ab/src/main.js' })).toEqual({
+					result: {
+						error:
+							"No repository reference 'other@0123456789ab' is yours: bring it in with reference first."
+					}
+				});
+				expect(asked).toEqual([]);
+			}),
+		60_000
+	);
+});
 describe('a sub-agent', () => {
 	it.effect('keeps its checklist but has no plan or sub-agents of its own: one level deep', () =>
 		Effect.gen(function* () {
@@ -741,217 +1229,13 @@ describe('a sub-agent', () => {
 				...names(yield* ctx({ child: true }))
 			];
 			for (const n of ['update_plan', 'subagent']) expect(child).not.toContain(n);
-			expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'goals', 'ask_parent']));
+			expect(child).toEqual(
+				expect.arrayContaining(['query', 'act', 'wait', 'goals', 'ask_parent'])
+			);
 			expect(names(yield* ctx({ delegation: true, agents: ['workspace'] }))).not.toContain(
 				'ask_parent'
 			);
 		})
-	);
-});
-describe('sandbox_run', () => {
-	const setup = (authority: Authority) =>
-		Effect.gen(function* () {
-			const jobsRun: Parameters<SandboxPort['run']>[0][] = [],
-				written: Sql['params'][] = [];
-			const sandbox: SandboxPort = {
-				async run(job) {
-					jobsRun.push(job);
-					return {
-						code: 0,
-						stdout: 'ok',
-						stderr: '',
-						files: [{ name: 'chart.png', mime: 'image/png', bytes: new Uint8Array([1, 2]) }]
-					};
-				}
-			};
-			const x = yield* ctx(
-				{
-					authority,
-					sandbox,
-					row: (seq) =>
-						Effect.succeed(
-							seq === 3
-								? message(seq, [{ id: 'f-in', name: 'sales.csv', mime: 'text/csv' }])
-								: undefined
-						)
-				},
-				{
-					files: {
-						get: () => Effect.succeed(new Uint8Array([7])),
-						put: (bytes) =>
-							Effect.succeed({
-								key: 'k-out',
-								bytes: bytes.byteLength,
-								sha256: 'h',
-								mime: 'image/png'
-							})
-					},
-					db: {
-						read: () =>
-							Effect.succeed([{ rows: [{ key: 'k-in', name: 'sales.csv' }], affected: 0 }]),
-						write: (statement) =>
-							Effect.sync(() => {
-								written.push(statement.params);
-								return { rows: [], affected: 0 };
-							})
-					}
-				}
-			);
-			return { x, jobsRun, written };
-		});
-	it.effect(
-		'is a capability: offered to in-app staff who hold it (or admins), never to others',
-		() =>
-			Effect.gen(function* () {
-				const { x } = yield* setup(member());
-				expect(tool(x, 'sandbox_run')).toBeUndefined();
-				expect(
-					tool({ ...x, authority: member({ tools: ['sandbox_run'] }) }, 'sandbox_run')
-				).toBeDefined();
-				expect(tool({ ...x, authority: member({ admin: true }) }, 'sandbox_run')).toBeDefined();
-				expect(
-					tool(
-						{ ...x, authority: member({ external: true, admin: false, tools: ['sandbox_run'] }) },
-						'sandbox_run'
-					)
-				).toBeUndefined();
-				expect(
-					tool({ ...x, authority: member({ admin: true }), inApp: false }, 'sandbox_run')
-				).toBeUndefined();
-			})
-	);
-	it.effect(
-		"mounts this conversation's attachment, stores what it produced as the member's file and shows the image",
-		() =>
-			Effect.gen(function* () {
-				const { x, jobsRun, written } = yield* setup(member({ tools: ['sandbox_run'] }));
-				const got = yield* Schema.decodeUnknownEffect(
-					Schema.Struct({
-						result: Schema.Struct({
-							code: Schema.Number,
-							stdout: Schema.String,
-							files: Schema.Array(
-								Schema.Struct({
-									id: Schema.String,
-									name: Schema.String,
-									mime: Schema.String,
-									size: Schema.Number
-								})
-							)
-						})
-					})
-				)(
-					yield* result(x, 'sandbox_run', {
-						command: 'node',
-						args: ['-e', '1'],
-						files: [{ seq: 3 }]
-					})
-				);
-				expect(jobsRun[0]).toMatchObject({
-					command: 'node',
-					args: ['-e', '1'],
-					files: [{ name: 'sales.csv', bytes: new Uint8Array([7]) }]
-				});
-				expect(got.result).toMatchObject({
-					code: 0,
-					stdout: 'ok',
-					files: [{ name: 'chart.png', mime: 'image/png', size: 2 }]
-				});
-				expect(written[0]).toEqual([
-					first(got.result.files).id,
-					'chart.png',
-					'image/png',
-					2,
-					'k-out',
-					'h',
-					'2026-09-26T00:00:00.000Z',
-					'ann',
-					JSON.stringify([
-						{ id: first(got.result.files).id, name: 'chart.png', mime: 'image/png', size: 2 }
-					]),
-					'c1'
-				]);
-				expect(x.files).toHaveLength(1);
-				expect(yield* result(x, 'sandbox_run', { command: 'node', files: [{ seq: 9 }] })).toEqual({
-					result: { error: 'Message 9 has no stored file 0.' }
-				});
-			})
-	);
-	it.effect(
-		'workspace: true runs on a copy of the draft with every clipped result of the conversation as a scratch file',
-		() =>
-			Effect.gen(function* () {
-				const { x, jobsRun } = yield* setup(member({ tools: ['sandbox_run'] }));
-				const files: Record<string, string> = { 'package.json': '{}', 'src/a.ts': 'export {}' };
-				yield* result(
-					{
-						...x,
-						draft: {
-							files: async () => Object.keys(files),
-							read: async (path) => files[path] ?? null,
-							types: async () => null
-						},
-						outputs: () =>
-							Effect.succeed([{ call: 'c1', tool: 'read', full: { rows: [{ n: 1 }] } }])
-					},
-					'sandbox_run',
-					{
-						command: '/bin/sh',
-						args: ['-c', 'grep -c n .scratch/tool-output/*/*'],
-						workspace: true
-					}
-				);
-				const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
-				expect(jobsRun[0]?.workspace?.map((file) => [file.path, text(file.bytes)])).toEqual([
-					['package.json', '{}'],
-					['src/a.ts', 'export {}'],
-					[
-						`.scratch/tool-output/${x.conv.id}/c1-read.txt`,
-						JSON.stringify({ rows: [{ n: 1 }] }, null, 2)
-					]
-				]);
-				yield* result(x, 'sandbox_run', { command: 'node' });
-				expect(jobsRun[1]).not.toHaveProperty('workspace');
-			})
-	);
-	it.effect(
-		'hands a workbook with one CSV per worksheet beside it, so a program never unzips it',
-		() =>
-			Effect.gen(function* () {
-				const book = new Uint8Array(
-						readFileSync(new URL('./fixtures/files/items.xlsx', import.meta.url))
-					),
-					jobsRun: Parameters<SandboxPort['run']>[0][] = [];
-				const sandbox: SandboxPort = {
-					async run(job) {
-						jobsRun.push(job);
-						return { code: 0, stdout: '', stderr: '', files: [] };
-					}
-				};
-				const x = yield* ctx(
-					{
-						authority: member({ admin: true }),
-						sandbox,
-						row: () => Effect.succeed(message(1, [{ id: 'f', name: 'items.xlsx' }]))
-					},
-					{
-						files: { get: () => Effect.succeed(book) },
-						db: {
-							read: () =>
-								Effect.succeed([{ rows: [{ key: 'k', name: 'items.xlsx' }], affected: 0 }]),
-							write: () => Effect.succeed({ rows: [], affected: 0 })
-						}
-					}
-				);
-				yield* result(x, 'sandbox_run', { command: 'node', files: [{ seq: 1 }] });
-				const run = first(jobsRun),
-					names = run.files.map((file) => file.name);
-				expect(names[0]).toBe('items.xlsx');
-				const csv = run.files.find((file) => /^items\.xlsx\.0\..+\.csv$/.test(file.name));
-				expect(csv, names.join()).toBeDefined();
-				if (csv === undefined) return yield* Effect.die(new Error('workbook CSV missing'));
-				expect(new TextDecoder().decode(csv.bytes).split('\n')[0]).toContain(',');
-			})
 	);
 });
 describe('job waits', () => {

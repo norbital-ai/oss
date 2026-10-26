@@ -2,7 +2,21 @@
 // Every member fails typed — the facility's failure or `Unavailable` — and every service has `unavailable`, the layer
 // a host without that capability provides (no optional ports). Walls are the caller's (`Port.call`). The tenant
 // database is `TenantDb` (`db/tenant-db.ts`).
-import { Context, Effect, FiberSet, Layer, Match, Queue, Schema, Stream } from 'effect';
+import {
+	Context,
+	Effect,
+	FiberSet,
+	FileSystem,
+	Layer,
+	Match,
+	Option,
+	Path,
+	PlatformError,
+	Queue,
+	Schema,
+	Stream,
+	type Scope
+} from 'effect';
 import { Unavailable } from '../decl/errors.ts';
 import type {
 	ConvertTarget,
@@ -14,27 +28,51 @@ import type {
 } from '../decl/runtime/facilities.ts';
 import type { Json, Point } from '../decl/values.ts';
 import type {
+	DocsPort,
 	AiModel,
 	AiPort,
 	AiRequest,
 	AiResponse,
+	ArtifactPort,
+	ArtifactStat,
 	Blob,
+	Bundled,
+	BundlerPort,
+	BundleRequest,
 	BrowserPort,
-	BrowserFile,
 	BrowserStep,
 	BrowserTarget,
 	ConvertPort,
 	DeadlinesPort,
+	Downloaded,
 	DriverPage,
 	EmbedInput,
 	EmbeddingsPort,
 	FilesPort,
 	GeocoderPort,
+	GuestAnswers,
+	GuestIsolatesPort,
+	GuestSessionOptions,
+	GuestStart,
+	GuestTurn,
+	HttpFetchOptions,
+	HttpPort,
+	HttpRequest,
+	HttpResponse,
+	ImageFacts,
+	ImagePreview,
+	ImagePreviewMime,
+	ImagePreviewSize,
+	ImagesPort,
+	KeysPort,
 	LinksPort,
 	LogEvent,
 	LogPort,
 	LogQuery,
 	LogRow,
+	McpPort,
+	McpServer,
+	McpToolInfo,
 	MeteringPort,
 	SpeechPort,
 	TransportPort,
@@ -44,8 +82,11 @@ import { SendRefused, sendRefusal } from './conversations/status.ts';
 import type { DecisionResult, System1Request } from './decisions/index.ts';
 import type { OutboundFile } from './services.ts';
 import type { Fenced } from './errors.ts';
+import type { GuestProgram } from './guest/runner.ts';
+import { BoltError, CODES } from '../protocol/errors.ts';
 import { linkFailure } from './integrations/abi.ts';
 import { Port, type PortFailure } from './port.ts';
+import { corpus, type DocsCorpus } from './docs-corpus.ts';
 
 // ── files ──
 /** Stored blobs; the `sys_file` row is the engine's (rule 18). `get` answers at most `max` bytes (more is `invalid`). */
@@ -59,13 +100,16 @@ export class Files extends Context.Service<
 		readonly get: (key: string, max: number) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly url: (key: string, expiresInS: number) => Effect.Effect<string, PortFailure>;
 		readonly remove: (key: string) => Effect.Effect<void, PortFailure>;
+		/** The host fetches a public media URL and stores it (`FilesPort.download`); no bytes cross. */
+		readonly download: (url: string) => Effect.Effect<Downloaded, PortFailure>;
 	}
 >()('bolt/Files') {
 	static readonly unavailable: Layer.Layer<Files> = Layer.succeed(Files, {
 		put: () => Port.unavailable('files'),
 		get: () => Port.unavailable('files'),
 		url: () => Port.unavailable('files'),
-		remove: () => Port.unavailable('files')
+		remove: () => Port.unavailable('files'),
+		download: () => Port.unavailable('files')
 	});
 	static fromAbi(port: FilesPort | undefined): Layer.Layer<Files> {
 		return port === undefined
@@ -75,7 +119,8 @@ export class Files extends Context.Service<
 					get: (key, max) => Port.attempt('files', (signal) => port.get(key, max, signal)),
 					url: (key, expiresInS) =>
 						Port.attempt('files', (signal) => port.url(key, expiresInS, signal)),
-					remove: (key) => Port.attempt('files', (signal) => port.remove(key, signal))
+					remove: (key) => Port.attempt('files', (signal) => port.remove(key, signal)),
+					download: (url) => Port.attempt('files', (signal) => port.download(url, signal))
 				});
 	}
 }
@@ -213,7 +258,7 @@ export class Browser extends Context.Service<
 		) => Effect.Effect<Json, PortFailure>;
 		readonly evaluate: (profile: string, expression: string) => Effect.Effect<Json, PortFailure>;
 		readonly screenshot: (profile: string) => Effect.Effect<Uint8Array, PortFailure>;
-		readonly download: (profile: string, url: string) => Effect.Effect<BrowserFile, PortFailure>;
+		readonly download: (profile: string, url: string) => Effect.Effect<Downloaded, PortFailure>;
 	}
 >()('bolt/Browser') {
 	static readonly unavailable: Layer.Layer<Browser> = Layer.sync(Browser, () => {
@@ -425,7 +470,7 @@ export class DeadlinePort extends Context.Service<
 /**
  * The live links' driver calls, by instance (§4.5): a conversation driver sends (a provider refusal is `SendRefused`,
  * permanent or retried) and shows typing, a request driver answers `request` with the instance's credential host-side, a
- * pushing driver reads a feed page; `changed` reopens a link from its row as it is now.
+ * pushing driver (a calendar) reads a page of items for a sync; `changed` reopens a link from its row as it is now.
  */
 export class Drivers extends Context.Service<
 	Drivers,
@@ -444,7 +489,7 @@ export class Drivers extends Context.Service<
 		readonly request: (instance: string, op: Json) => Effect.Effect<Json, PortFailure | Fenced>;
 		readonly read: (
 			instance: string,
-			feed: string,
+			sync: string,
 			partition: string,
 			cursor: Json | null
 		) => Effect.Effect<DriverPage, PortFailure>;
@@ -516,8 +561,8 @@ export class Drivers extends Context.Service<
 					read:
 						read === undefined
 							? () => Port.unavailable('link')
-							: (instance, feed, partition, cursor) =>
-									Port.attempt('link', (signal) => read(instance, feed, partition, cursor, signal)),
+							: (instance, sync, partition, cursor) =>
+									Port.attempt('link', (signal) => read(instance, sync, partition, cursor, signal)),
 					changed:
 						changed === undefined
 							? () => Port.unavailable('link')
@@ -612,5 +657,387 @@ export class Ai extends Context.Service<
 					: (inputs, model, dimensions) =>
 							Port.attempt('ai.embed', (signal) => embed(inputs, model, signal, dimensions))
 		});
+	}
+}
+
+// ── kernel ports (compute model §14, wave 1) ──
+/** The release's files, read-only (`ArtifactPort`): the engine's `FileSystem` is built over it. */
+export class ArtifactFiles extends Context.Service<
+	ArtifactFiles,
+	{
+		readonly read: (path: string) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly list: (dir: string) => Effect.Effect<readonly string[], PortFailure>;
+		readonly stat: (path: string) => Effect.Effect<ArtifactStat | null, PortFailure>;
+	}
+>()('bolt/ArtifactFiles') {
+	static fromAbi(port: ArtifactPort): Layer.Layer<ArtifactFiles> {
+		return Layer.succeed(ArtifactFiles, {
+			read: (path) => Port.attempt('artifact', (signal) => port.read(path, signal)),
+			list: (dir) => Port.attempt('artifact', (signal) => port.list(dir, signal)),
+			stat: (path) => Port.attempt('artifact', (signal) => port.stat(path, signal))
+		});
+	}
+	/**
+	 * The engine's `FileSystem` and `Path` over the release: `''` is its root, reads only. The host resolves symlinks
+	 * and refuses paths outside the release and its seed packs, so `realPath` is the identity.
+	 */
+	static fileSystem(port: ArtifactPort): Layer.Layer<FileSystem.FileSystem | Path.Path> {
+		return Layer.effect(
+			FileSystem.FileSystem,
+			Effect.gen(function* () {
+				const files = yield* ArtifactFiles,
+					path = yield* Path.Path;
+				const clean = (at: string) => {
+					const normal = path.normalize(at).replace(/\/+$/, '');
+					return normal === '.' ? '' : normal;
+				};
+				const failed = (method: string, at: string) => (cause: PortFailure) =>
+					PlatformError.systemError({
+						_tag: 'Unknown',
+						module: 'FileSystem',
+						method,
+						pathOrDescriptor: at,
+						cause
+					});
+				const stat = (at: string) =>
+					files.stat(clean(at)).pipe(Effect.mapError(failed('stat', at)));
+				const readFile = (at: string) =>
+					files.read(clean(at)).pipe(Effect.mapError(failed('readFile', at)));
+				return FileSystem.makeNoop({
+					readFile,
+					readFileString: (at, encoding) =>
+						Effect.flatMap(readFile(at), (bytes) =>
+							Effect.try({
+								try: () => new TextDecoder(encoding).decode(bytes),
+								catch: (cause) =>
+									PlatformError.badArgument({
+										module: 'FileSystem',
+										method: 'readFileString',
+										description: 'invalid encoding',
+										cause
+									})
+							})
+						),
+					exists: (at) => Effect.map(stat(at), (info) => info !== null),
+					realPath: (at) => Effect.succeed(clean(at)),
+					stat: (at) =>
+						Effect.flatMap(stat(at), (info) =>
+							info === null
+								? Effect.fail(
+										PlatformError.systemError({
+											_tag: 'NotFound',
+											module: 'FileSystem',
+											method: 'stat',
+											pathOrDescriptor: at
+										})
+									)
+								: Effect.succeed({
+										type: info.kind === 'file' ? 'File' : 'Directory',
+										mtime: Option.none(),
+										atime: Option.none(),
+										birthtime: Option.none(),
+										dev: 0,
+										ino: Option.none(),
+										mode: 0o444,
+										nlink: Option.none(),
+										uid: Option.none(),
+										gid: Option.none(),
+										rdev: Option.none(),
+										size: FileSystem.Size(info.size),
+										blksize: Option.none(),
+										blocks: Option.none()
+									} satisfies FileSystem.File.Info)
+						),
+					// `list` is recursive; one level is its distinct first segments
+					readDirectory: (at, options) =>
+						files.list(clean(at)).pipe(
+							Effect.mapError(failed('readDirectory', at)),
+							Effect.map((names) =>
+								options?.recursive === true
+									? [...names]
+									: [...new Set(names.map((name) => name.split('/')[0] ?? name))]
+							)
+						)
+				});
+			})
+		).pipe(Layer.provide(ArtifactFiles.fromAbi(port)), Layer.provideMerge(Path.layer));
+	}
+}
+
+/**
+ * The tenant's secrets key, held by the host (`KeysPort`): `open` is `None` for an envelope that does not open under
+ * this key and `aad`. Without a key nothing seals or opens, and `available` is false.
+ */
+export class Keys extends Context.Service<
+	Keys,
+	{
+		readonly available: boolean;
+		readonly seal: (plain: Uint8Array, aad: Uint8Array) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly open: (
+			sealed: Uint8Array,
+			aad: Uint8Array
+		) => Effect.Effect<Option.Option<Uint8Array>, PortFailure>;
+	}
+>()('bolt/Keys') {
+	static readonly unavailable: Layer.Layer<Keys> = Layer.succeed(Keys, {
+		available: false,
+		seal: () => Port.unavailable('keys', 'this activation has no secrets key'),
+		open: () => Port.unavailable('keys', 'this activation has no secrets key')
+	});
+	static fromAbi(port: KeysPort | undefined): Layer.Layer<Keys> {
+		return port === undefined
+			? Keys.unavailable
+			: Layer.succeed(Keys, {
+					available: true,
+					seal: (plain, aad) => Port.attempt('keys', (signal) => port.seal(plain, aad, signal)),
+					open: (sealed, aad) =>
+						Port.attempt('keys', (signal) => port.open(sealed, aad, signal)).pipe(
+							Effect.map(Option.fromNullOr)
+						)
+				});
+	}
+}
+
+// The turn comes from a tenant-controlled isolate through the host untouched: it is decoded here, once.
+const GuestFinal = Schema.Union([
+	Schema.Tuple([Schema.Literal('ok'), Schema.String]),
+	Schema.Tuple([
+		Schema.Literal('refused'),
+		Schema.String,
+		Schema.NullOr(Schema.String),
+		Schema.NullOr(Schema.Int),
+		Schema.String
+	]),
+	Schema.Tuple([Schema.Literal('missing'), Schema.String]),
+	Schema.Tuple([Schema.Literal('error'), Schema.String, Schema.String, Schema.String]),
+	Schema.Tuple([
+		Schema.Literal('error'),
+		Schema.String,
+		Schema.String,
+		Schema.String,
+		Schema.String
+	])
+]);
+const decodeTurn: (turn: unknown) => Effect.Effect<GuestTurn, Schema.SchemaError> =
+	Schema.decodeUnknownEffect(
+		Schema.Struct({
+			taken: Schema.Tuple([
+				Schema.NullOr(GuestFinal),
+				Schema.Array(Schema.Tuple([Schema.String, Schema.String, Schema.String, Schema.Number])),
+				Schema.Array(Schema.Array(Schema.Uint8Array)),
+				Schema.Boolean
+			]),
+			lines: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+			dropped: Schema.Number
+		})
+	);
+const decodeHostFailure = Schema.decodeUnknownOption(
+	Schema.Struct({
+		_tag: Schema.Literal('HostFailure'),
+		code: Schema.Literals(CODES),
+		message: Schema.String
+	})
+);
+/** A session's rejection: the host's encoded code (`cpuBudget`, `memory`) as the guest's failure, else `internal`. */
+const guestFailure = (error: unknown): BoltError =>
+	Option.match(decodeHostFailure(error), {
+		onSome: (f) => BoltError.make(f.code, 'guest', f.message),
+		onNone: () => BoltError.make('internal', 'guest', 'the guest isolate failed', error)
+	});
+/** One open guest session: each member is one native slice answering its turn. */
+export type GuestSession = {
+	readonly start: (start: GuestStart) => Effect.Effect<GuestTurn, BoltError>;
+	readonly take: Effect.Effect<GuestTurn, BoltError>;
+	readonly give: (answers: GuestAnswers) => Effect.Effect<GuestTurn, BoltError>;
+};
+/** Guest isolates, made and metered by the host (`GuestIsolatesPort`); a session is disposed with its scope. */
+export class GuestIsolates extends Context.Service<
+	GuestIsolates,
+	{
+		readonly open: (
+			program: GuestProgram,
+			options: GuestSessionOptions
+		) => Effect.Effect<GuestSession, BoltError, Scope.Scope>;
+	}
+>()('bolt/GuestIsolates') {
+	static fromAbi(port: GuestIsolatesPort): Layer.Layer<GuestIsolates> {
+		const slice = (f: (signal: AbortSignal) => Promise<GuestTurn>) =>
+			Effect.tryPromise({ try: f, catch: guestFailure }).pipe(
+				Effect.flatMap((turn) =>
+					decodeTurn(turn).pipe(
+						Effect.mapError((error) => BoltError.make('invalidInput', 'guest', error.message))
+					)
+				)
+			);
+		return Layer.succeed(GuestIsolates, {
+			open: (program, options) =>
+				Effect.acquireRelease(
+					Effect.tryPromise({
+						try: (signal) => port.open(program, options, signal),
+						catch: guestFailure
+					}),
+					(session) =>
+						Port.attempt('guest', () => port.close(session)).pipe(
+							Effect.tapCause(Effect.logWarning),
+							Effect.ignore
+						),
+					{ interruptible: true }
+				).pipe(
+					Effect.map((session): GuestSession => ({
+						start: (start) => slice((signal) => port.start(session, start, signal)),
+						take: slice((signal) => port.take(session, signal)),
+						give: (answers) => slice((signal) => port.give(session, answers, signal))
+					}))
+				)
+		});
+	}
+}
+
+/** Outbound HTTP under the public-network policy (`HttpPort`); the wall is the caller's. */
+export class Http extends Context.Service<
+	Http,
+	{
+		readonly fetch: (
+			request: HttpRequest,
+			options: HttpFetchOptions
+		) => Effect.Effect<HttpResponse, PortFailure>;
+	}
+>()('bolt/Http') {
+	static readonly unavailable: Layer.Layer<Http> = Layer.succeed(Http, {
+		fetch: () => Port.unavailable('http')
+	});
+	static fromAbi(port: HttpPort | undefined): Layer.Layer<Http> {
+		return port === undefined
+			? Http.unavailable
+			: Layer.succeed(Http, {
+					fetch: (request, options) =>
+						Port.attempt('http', (signal) => port.fetch(request, options, signal))
+				});
+	}
+}
+
+/**
+ * The confined bundler for file runs (`BundlerPort`). Unlike the other ports it is optional: the agent runs files only
+ * where a host provides it. The wall is the caller's.
+ */
+export class Bundler extends Context.Service<
+	Bundler,
+	{ readonly bundle: (request: BundleRequest) => Effect.Effect<Bundled, PortFailure> }
+>()('bolt/Bundler') {
+	static fromAbi(port: BundlerPort): Layer.Layer<Bundler> {
+		return Layer.succeed(Bundler, {
+			bundle: (request) => Port.attempt('bundler', (signal) => port.bundle(request, signal))
+		});
+	}
+}
+
+/** Image decoding off the engine (`ImagesPort`): facts, a bounded JPEG, a preview. */
+export class Images extends Context.Service<
+	Images,
+	{
+		readonly facts: (bytes: Uint8Array) => Effect.Effect<ImageFacts, PortFailure>;
+		readonly jpeg: (bytes: Uint8Array, maxEdge: number) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly preview: (
+			bytes: Uint8Array,
+			mime: ImagePreviewMime,
+			maxEdge: ImagePreviewSize
+		) => Effect.Effect<ImagePreview, PortFailure>;
+	}
+>()('bolt/Images') {
+	static readonly unavailable: Layer.Layer<Images> = Layer.succeed(Images, {
+		facts: () => Port.unavailable('files.image'),
+		jpeg: () => Port.unavailable('files.image'),
+		preview: () => Port.unavailable('files.image')
+	});
+	static fromAbi(port: ImagesPort | undefined): Layer.Layer<Images> {
+		return port === undefined
+			? Images.unavailable
+			: Layer.succeed(Images, {
+					facts: (bytes) => Port.attempt('files.image', (signal) => port.facts(bytes, signal)),
+					jpeg: (bytes, maxEdge) =>
+						Port.attempt('files.image', (signal) => port.jpeg(bytes, maxEdge, signal)),
+					preview: (bytes, mime, maxEdge) =>
+						Port.attempt('files.image', (signal) => port.preview(bytes, mime, maxEdge, signal))
+				});
+	}
+}
+
+/** One connected MCP server's session; closed with its scope. */
+export type McpSession = {
+	readonly tools: Effect.Effect<readonly McpToolInfo[], PortFailure>;
+	readonly call: (tool: string, input: Json) => Effect.Effect<Json, PortFailure>;
+};
+/** MCP over streamable HTTP (`McpPort`), the server resolved by the engine; the wall is the caller's. */
+export class Mcp extends Context.Service<
+	Mcp,
+	{
+		readonly connect: (server: McpServer) => Effect.Effect<McpSession, PortFailure, Scope.Scope>;
+	}
+>()('bolt/Mcp') {
+	static readonly unavailable: Layer.Layer<Mcp> = Layer.succeed(Mcp, {
+		connect: () => Port.unavailable('mcp')
+	});
+	static fromAbi(port: McpPort | undefined): Layer.Layer<Mcp> {
+		return port === undefined
+			? Mcp.unavailable
+			: Layer.succeed(Mcp, {
+					connect: (server) =>
+						Effect.acquireRelease(
+							Port.attempt('mcp', (signal) => port.connect(server, signal)),
+							(session) =>
+								Port.attempt('mcp.close', () => port.close(session)).pipe(
+									Effect.tapCause(Effect.logWarning),
+									Effect.ignore
+								),
+							{ interruptible: true }
+						).pipe(
+							Effect.map((session): McpSession => ({
+								tools: Port.attempt('mcp', (signal) => port.tools(session, signal)),
+								call: (tool, input) =>
+									Port.attempt('mcp', (signal) => port.call(session, tool, input, signal))
+							}))
+						)
+				});
+	}
+}
+/**
+ * The release's API reference for the agent's `docs` tool, loaded from the host once per activation on first use: the
+ * index, then every namespace it lists.
+ */
+export class Docs extends Context.Service<
+	Docs,
+	{ readonly corpus: Effect.Effect<DocsCorpus, PortFailure> }
+>()('bolt/Docs') {
+	static readonly unavailable: Layer.Layer<Docs> = Layer.succeed(Docs, {
+		corpus: Port.unavailable('docs')
+	});
+	static fromAbi(port: DocsPort | undefined): Layer.Layer<Docs> {
+		if (port === undefined) return Docs.unavailable;
+		const read = (file: string) =>
+			Port.attempt('docs', (signal) => port.read(file, signal)).pipe(
+				Effect.flatMap((text) =>
+					Effect.try({
+						try: (): unknown => JSON.parse(text),
+						catch: Port.failure('docs')
+					})
+				)
+			);
+		return Layer.effect(
+			Docs,
+			Effect.map(
+				Effect.cached(
+					Effect.gen(function* () {
+						const files = new Map<string, unknown>([['index.json', yield* read('index.json')]]);
+						const index = corpus(<T>(file: string) => files.get(file) as T).index();
+						for (const n of index.namespaces) {
+							const file = `${n.namespace.replaceAll('/', '.')}.json`;
+							files.set(file, yield* read(file));
+						}
+						return corpus(<T>(file: string) => files.get(file) as T);
+					})
+				),
+				(loaded) => ({ corpus: loaded })
+			)
+		);
 	}
 }

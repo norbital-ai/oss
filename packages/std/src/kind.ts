@@ -22,6 +22,8 @@ type Common = {
 	readonly label?: string;
 	readonly help?: string;
 	readonly hidden?: true;
+	/** The name this field had before: a migration renames the column instead of dropping it. */
+	readonly was?: string;
 };
 type Range = { readonly min?: number; readonly max?: number };
 /** A kind literal: every stored and input kind with its options, one arm per `kind`. */
@@ -46,7 +48,13 @@ export type Kind = Common &
 		| { readonly kind: 'time'; readonly precision?: TimePrecision }
 		| { readonly kind: 'period'; readonly of: 'date'; readonly precision?: DatePrecision }
 		| { readonly kind: 'period'; readonly of: 'instant'; readonly precision?: Precision }
-		| { readonly kind: 'enum'; readonly values: readonly string[]; readonly many?: true }
+		| {
+				readonly kind: 'enum';
+				readonly values: readonly string[];
+				readonly many?: true;
+				/** The states one value may move to; a write naming another transition is refused. */
+				readonly transitions?: Readonly<Record<string, readonly string[]>>;
+		  }
 		| {
 				readonly kind: 'state';
 				readonly initial: string;
@@ -74,8 +82,17 @@ export type Kind = Common &
 		  }
 		| { readonly kind: 'vector'; readonly dim: number; readonly metric: 'l2' | 'cosine' | 'ip' }
 		| { readonly kind: 'custom'; readonly of: string; readonly many?: true }
+		/** A relation: an id of one table, or `{ collection, id }` of one of several (polymorphic). */
+		| {
+				readonly kind: 'ref';
+				readonly to: string | readonly string[];
+				readonly inverse?: string;
+				readonly owned?: true;
+				readonly onDelete?: 'restrict' | 'cascade' | 'setNull';
+				readonly where?: object;
+		  }
 		| { readonly kind: 'id'; readonly of: string; readonly where?: Where }
-		| ({ readonly kind: 'list'; readonly of: Kind } & Range)
+		| ({ readonly kind: 'list'; readonly of: Kind; readonly key?: string } & Range)
 		| { readonly kind: 'object'; readonly fields: Fields; readonly rest?: Kind }
 		| {
 				readonly kind: 'union';
@@ -92,6 +109,30 @@ export type Fields = { readonly [name: string]: Kind };
 export type FieldKind = Kind['kind'];
 /** The literal of one kind. */
 export type KindOf<K extends FieldKind> = Extract<Kind, { readonly kind: K }>;
+/** Output metadata may name rows. The owning workspace resolves row descriptors before using an input codec. */
+export type OutputKind =
+	| Kind
+	| (Common &
+			(
+				| { readonly kind: 'row'; readonly of: string }
+				| {
+						readonly kind: 'list';
+						readonly of: OutputKind;
+						readonly min?: number;
+						readonly max?: number;
+				  }
+				| {
+						readonly kind: 'object';
+						readonly fields: { readonly [name: string]: OutputKind };
+						readonly rest?: OutputKind;
+				  }
+				| { readonly kind: 'record'; readonly of: OutputKind }
+				| {
+						readonly kind: 'union';
+						readonly by: string;
+						readonly arms: { readonly [tag: string]: { readonly [name: string]: OutputKind } };
+				  }
+			));
 /** A stored file's handle: id, name, MIME type, and its size when known. */
 export type FileRef = {
 	readonly id: string;
@@ -313,6 +354,13 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 	},
 	/** A custom field's shape is its declaration's (the caller resolves `of`); bare, any JSON. */
 	custom: { schema: () => Schema.Json, traits: OPAQUE },
+	ref: {
+		schema: (k) =>
+			typeof k.to === 'string'
+				? Schema.String
+				: Schema.Struct({ collection: Schema.Literals(k.to), id: Schema.String }),
+		traits: PLAIN
+	},
 	file: {
 		schema: () =>
 			Schema.Struct({

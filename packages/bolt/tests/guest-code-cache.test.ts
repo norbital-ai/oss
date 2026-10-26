@@ -4,8 +4,10 @@ import { Context, Effect, Exit, Fiber, Layer, Result, Schedule, Scope } from 'ef
 import type ivm from 'isolated-vm';
 import { vi } from 'vitest';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
-import { GuestConfig, IsolatesLive, type GuestProgram } from '../src/engine/guest/runner.ts';
-import { Guest, GuestLimits, Isolates, type Bridge } from '../src/engine/services.ts';
+import type { GuestProgram } from '../src/engine/guest/runner.ts';
+import { GuestIsolates } from '../src/engine/ports.ts';
+import { Guest, type Bridge } from '../src/engine/services.ts';
+import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 
 type Gate = {
@@ -84,7 +86,6 @@ const invocation = (id: string): Invocation => ({
 		seed: id
 	},
 	budget: {
-		cpuMs: LIMITS.guestCpuMs,
 		crossings: LIMITS.crossings.sync,
 		readBytes: LIMITS.readBytes
 	}
@@ -95,28 +96,19 @@ const bridge: Bridge = {
 const program = (value: string): GuestProgram => ({
 	source: `let count = 0; export default { automation: { a: { body: () => [${JSON.stringify(value)}, ++count] } } };`
 });
+/** The Node host's isolates; its pool reads `warm` live. */
 const harness = Effect.gen(function* () {
-	const defaults = yield* GuestLimits;
-	const warm = { ...defaults.warm };
-	const limits = { ...defaults, warm };
-	const base = yield* Layer.build(
-		IsolatesLive.pipe(
-			Layer.provide(
-				Layer.mergeAll(Layer.succeed(GuestLimits, limits), Layer.succeed(GuestConfig, {}))
-			)
-		)
-	);
-	const isolates = Context.get(base, Isolates);
+	const warm = { maxMiB: 512, depth: 2, idleMs: 60_000 };
+	const port = yield* guestIsolates({ cpuMs: LIMITS.guestCpuMs, warm });
+	const counts = Effect.sync(port.counts);
 	return {
 		warm,
-		isolates,
+		counts,
 		runner: (source: GuestProgram) =>
-			Layer.build(
-				guestLayer(source, {}, undefined, Layer.succeedContext(base)).pipe(
-					Layer.provide(Layer.succeed(GuestLimits, limits))
-				)
-			).pipe(Effect.map((context) => Context.get(context, Guest))),
-		settled: isolates.counts.pipe(
+			Layer.build(guestLayer(source, {}, undefined, GuestIsolates.fromAbi(port))).pipe(
+				Effect.map((context) => Context.get(context, Guest))
+			),
+		settled: counts.pipe(
 			Effect.repeat({
 				schedule: Schedule.spaced('5 millis'),
 				until: (counts) => counts.preparing === 0,
@@ -170,7 +162,7 @@ describe('host-produced module code cache', () => {
 					}
 					expect(observed.produced).toBe(0);
 					expect(observed.consumed.size).toBe(0);
-					expect((yield* test.isolates.counts).warmBytes).toBe(0);
+					expect((yield* test.counts).warmBytes).toBe(0);
 				}
 			})
 	);
@@ -218,7 +210,7 @@ describe('host-produced module code cache', () => {
 		})
 	);
 	it.live(
-		'counts retained native cache bytes within the original warm cap and releases them at generation close',
+		'counts retained native cache bytes within the original warm cap and releases them when the host closes',
 		() =>
 			Effect.gen(function* () {
 				reset();
@@ -243,13 +235,13 @@ describe('host-produced module code cache', () => {
 						if (bytes.success instanceof ArrayBuffer) nativeBytes += bytes.success.byteLength;
 					}
 				}
-				const counts = yield* test.isolates.counts;
+				const counts = yield* test.counts;
 				expect(observed.consumed.size).toBeGreaterThan(0);
 				expect(nativeBytes).toBeGreaterThan(0);
 				expect(counts.warmBytes).toBeGreaterThanOrEqual(nativeBytes);
 				expect(counts.warmBytes).toBeLessThanOrEqual(test.warm.maxMiB * 2 ** 20);
 				yield* Scope.close(generation, Exit.void);
-				expect((yield* test.isolates.counts).warmBytes).toBe(0);
+				expect((yield* test.counts).warmBytes).toBe(0);
 				for (const handle of observed.consumed) expect(() => handle.copy()).toThrow();
 			})
 	);
@@ -290,7 +282,7 @@ describe('host-produced module code cache', () => {
 				held.allow();
 				yield* Fiber.join(closing);
 				yield* Fiber.await(calls);
-				expect((yield* test.isolates.counts).warmBytes).toBe(0);
+				expect((yield* test.counts).warmBytes).toBe(0);
 				for (const handle of observed.consumed) expect(() => handle.copy()).toThrow();
 			})
 	);

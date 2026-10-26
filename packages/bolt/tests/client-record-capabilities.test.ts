@@ -6,7 +6,7 @@ const capabilities = {
 	id: 'j1',
 	revision: 3,
 	fields: {
-		title: { writable: false, proposal: false, reasons: ['integrationOwned'] },
+		title: { writable: false, proposal: false, reasons: ['syncOwned'] },
 		note: { writable: true, proposal: false, reasons: [] }
 	},
 	update: { allowed: true, proposal: false, reasons: [] },

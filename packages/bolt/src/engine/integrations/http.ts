@@ -3,16 +3,18 @@
 // from the instance's sealed `credential` fields (bearer, header, basic) or, for a definition declaring `oauth`, its
 // OAuth `token` (refreshed before expiry with that client and written back through the instance's credentials; only a
 // refused grant deletes it, and only while no concurrent refresh stored a newer one), and the call goes through
-// the native public network guard (HTTPS, pinned DNS, private ranges refused) unless the host binds its own fetch.
+// the host's `Http` port under its public-network policy (HTTPS, pinned DNS, private ranges refused). A `429` or `503`
+// answers its `Retry-After` beside `{ status, body }`.
 // Credentials never reach the guest; a path that leaves the base is refused before any credential is read.
 import { Clock, Effect, Option, Predicate, Result, Schema } from 'effect';
 import { Port, type PortFailure } from '../port.ts';
 import type { EngineError } from '../errors.ts';
 import type { IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
-import { Fenced } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { publicRequest } from '../net.ts';
+import { LIMITS } from '../contracts.ts';
+import { Http } from '../ports.ts';
+import { toBase64 } from '../crypto.ts';
 
 /**
  * `path` under `base`, never outside it: one leading `/` is the base itself; an absolute or `//host` path, `..`/`.`
@@ -55,22 +57,25 @@ const SKEW_MS = 60_000;
 const REVOKED = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client']);
 const fenced = (error: EngineError | PortFailure) =>
 	error._tag === 'Fenced' || (error._tag === 'BoltError' && error.code === 'fenced');
-const decodeFence = Schema.decodeUnknownOption(Fenced);
-const requestFailure = (error: unknown): PortFailure | Fenced => {
-	const fence = decodeFence(error);
-	return Option.isSome(fence) ? fence.value : Port.failure('request')(error);
-};
-const requestResponse = (
-	fetcher: typeof fetch | undefined,
-	input: Parameters<typeof fetch>[0],
-	init: RequestInit
-) =>
-	fetcher === undefined
-		? publicRequest(input, init).pipe(Effect.mapError(requestFailure))
-		: Effect.tryPromise({
-				try: (signal) => fetcher(input, { ...init, signal }),
-				catch: requestFailure
-			});
+/** One request through the host's network policy: five redirects, a 2 MiB body; the answer's body as text. */
+const send = (url: string, method: string, headers: Record<string, string>, body?: string) =>
+	Effect.gen(function* () {
+		const http = yield* Http;
+		const response = yield* http.fetch(
+			{
+				method,
+				url,
+				headers: Object.entries(headers),
+				...(body === undefined ? {} : { body: new TextEncoder().encode(body) })
+			},
+			{ redirects: 5, maxBytes: 2 * 1024 * 1024 }
+		);
+		return {
+			status: response.status,
+			text: new TextDecoder().decode(response.body),
+			retryAfter: response.headers.find(([name]) => name === 'retry-after')?.[1]
+		};
+	}).pipe(Port.call('request', LIMITS.callMs.http));
 export type HttpInstance = {
 	readonly configuration: Json;
 	readonly credentials: ReadonlyMap<string, Json>;
@@ -81,7 +86,6 @@ export type HttpInstance = {
 		| undefined;
 };
 export type HttpOptions = {
-	readonly fetch?: typeof fetch | undefined;
 	readonly secrets?: Readonly<Record<string, string>> | undefined;
 };
 export const httpOAuth = (
@@ -154,17 +158,28 @@ export const httpRequest = (
 			headers['authorization'] = `Bearer ${yield* field(auth.bearer)}`;
 		else if (auth !== undefined && 'basic' in auth)
 			headers['authorization'] =
-				`Basic ${Buffer.from(`${yield* field(auth.basic.user)}:${yield* field(auth.basic.password)}`).toString('base64')}`;
+				`Basic ${toBase64(new TextEncoder().encode(`${yield* field(auth.basic.user)}:${yield* field(auth.basic.password)}`))}`;
 		else if (auth !== undefined && 'header' in auth)
 			headers[auth.header.name.toLowerCase()] = yield* field(auth.header.value);
-		const response = yield* requestResponse(options.fetch, url, {
+		const response = yield* send(
+			url.href,
 			method,
 			headers,
-			...(op['body'] === undefined ? {} : { body: JSON.stringify(op['body']) })
-		});
-		const text = yield* Port.attempt('request', () => response.text());
-		const json = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text);
-		return { status: response.status, body: Option.isSome(json) ? json.value : text };
+			op['body'] === undefined ? undefined : JSON.stringify(op['body'])
+		);
+		const json = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(response.text);
+		// a 429's or 503's `Retry-After` (seconds, or an HTTP date) paces the instance's next request (instances.ts)
+		const wait =
+			response.retryAfter === undefined || (response.status !== 429 && response.status !== 503)
+				? undefined
+				: /^\d+$/.test(response.retryAfter)
+					? Number(response.retryAfter)
+					: Math.ceil((Date.parse(response.retryAfter) - (yield* Clock.currentTimeMillis)) / 1000);
+		return {
+			status: response.status,
+			body: Option.isSome(json) ? json.value : response.text,
+			...(wait === undefined || !Number.isFinite(wait) || wait <= 0 ? {} : { retryAfter: wait })
+		};
 	});
 const token = (
 	client: { client: string; secret: string; token: string },
@@ -189,23 +204,21 @@ const token = (
 			});
 		const clientId = yield* secret(client.client),
 			clientSecret = yield* secret(client.secret);
-		const response = yield* requestResponse(options.fetch, client.token, {
-			method: 'POST',
-			headers: {
-				'content-type': 'application/x-www-form-urlencoded',
-				accept: 'application/json'
-			},
-			body: new URLSearchParams({
+		const response = yield* send(
+			client.token,
+			'POST',
+			{ 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+			new URLSearchParams({
 				grant_type: 'refresh_token',
 				refresh_token: refresh,
 				client_id: clientId,
 				client_secret: clientSecret
-			})
-		});
-		const text = yield* Port.attempt('request', () => response.text());
-		const raw = Schema.decodeUnknownOption(Schema.fromJsonString(TokenResponse))(text);
+			}).toString()
+		);
+		const raw = Schema.decodeUnknownOption(Schema.fromJsonString(TokenResponse))(response.text);
 		const answer = Option.isSome(raw) ? raw.value : {};
-		if (!response.ok || answer.access_token === undefined) {
+		const ok = response.status >= 200 && response.status < 300;
+		if (!ok || answer.access_token === undefined) {
 			if (
 				(response.status !== 400 && response.status !== 401) ||
 				answer.error === undefined ||

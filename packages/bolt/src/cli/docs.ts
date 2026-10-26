@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // The API reference generator (§7.3), run by bolt's build after the package compiles: `node src/cli/docs.ts`.
-// It walks the `exports` of bolt and of the packages it builds on (ui, std, doctor), reads each entry's built
+// It walks the `exports` of bolt and of the packages it builds on (ui, std), reads each entry's built
 // declarations with the TypeScript checker (no TypeDoc) and writes one JSON document per namespace plus `index.json`
 // to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. Output is sorted and carries no time, so a build of
 // the same sources is byte-identical. Svelte components are read through svelte-package's `.svelte.d.ts`: their
@@ -22,7 +22,7 @@ import type {
 	DocSymbol
 } from '../docs/index.ts';
 
-const PACKAGES = ['bolt', 'ui', 'std', 'doctor'];
+const PACKAGES = ['bolt', 'ui', 'std'];
 /** The reference a workspace author reads (§7.3): bolt's root, `/client` and `/test`, ui's authoring entries and std. */
 const REFERENCE = (ns: string) =>
 	['bolt', 'bolt/page', 'bolt/test', 'ui', 'ui/layout', 'ui/capture'].includes(ns) ||

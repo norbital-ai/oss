@@ -4,7 +4,7 @@
 // definition's own `integration/<name>/+integration.svelte` draws in its place when the workspace has one.
 import { Effect, Schema } from 'effect';
 import { ActRefused } from '../../decl/errors.ts';
-import type { Outcome } from '../../engine/contracts.ts';
+import type { ActOutcome } from '../../engine/contracts.ts';
 import type { Component } from 'svelte';
 import type { Json } from '../../decl/values.ts';
 import {
@@ -76,7 +76,7 @@ export const pairsAtOnce = (p: ProviderChoice | undefined): boolean =>
 
 /** The instance a `sys_integration.create` made, or its refusal (`otherwise` when it did not commit for another reason). */
 export const instanceMade = (
-	outcome: Outcome,
+	outcome: ActOutcome,
 	otherwise: string
 ): Effect.Effect<string, ActRefused> => {
 	const row =

@@ -6,7 +6,7 @@ keys pick a revision; `End`/`Escape` return to the current one.
 <script lang="ts">
 	import { formatValue as show } from '../kinds/kind.js';
 	import { Effect } from 'effect';
-	import { query, run } from '../effect/index.js';
+	import { observeOnce, run } from '../effect/index.js';
 	import { format } from '../kinds/kind.js';
 	import { useKinds } from '../kinds/context.js';
 	import type { RecordHistoryConfig } from './history.js';
@@ -115,7 +115,7 @@ keys pick a revision; `End`/`Escape` return to the current one.
 		const known = names.get(actor.id);
 		return known !== undefined
 			? Effect.succeed(known)
-			: bolt.get<{ readonly [field: string]: unknown } | null>('sys_user', actor.id).pipe(
+			: bolt.query<{ readonly [field: string]: unknown } | null>('sys_user', { id: actor.id }).pipe(
 					Effect.map((user) => String(user?.['name'] ?? user?.['email'] ?? actor.id)),
 					Effect.catch(() => Effect.succeed(actor.id)),
 					Effect.tap((name) =>
@@ -169,8 +169,8 @@ keys pick a revision; `End`/`Escape` return to the current one.
 			)
 		};
 	}
-	const rootHistory = query<readonly Checkpoint[], Error>(() => (open ? history : null));
-	const loaded = query<LoadedHistory, Error>(() => {
+	const rootHistory = observeOnce<readonly Checkpoint[], Error>(() => (open ? history : null));
+	const loaded = observeOnce<LoadedHistory, Error>(() => {
 		if (!open || history === null) return null;
 		void refresh;
 		if (rootHistory.loading || rootHistory.error !== undefined) return null;
@@ -182,7 +182,7 @@ keys pick a revision; `End`/`Escape` return to the current one.
 				(source) =>
 					Effect.result(
 						Effect.gen(function* () {
-							const records = rowsOf(yield* bolt.read(source.of, source.query));
+							const records = rowsOf(yield* bolt.query(source.of, source.query));
 							const groups = yield* Effect.forEach(
 								records,
 								(row) =>

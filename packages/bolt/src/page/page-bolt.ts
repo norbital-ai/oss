@@ -1,8 +1,9 @@
-// `PageBolt` (D9): `$bolt` as pages see it, over the same names, rows and inputs as `ctx`. A read is `Read<A>`, an Effect
-// that carries its wire form so `live` can register it server-side; `live` is a Stream; acts, starts, uploads, record
-// capabilities and the session are Effects failing with the D3 tags; `fileUrl`, `t` and `actor` stay plain. Pages run
-// them on the ui edge (`run`, `fork`, `live`, `attach` from `$bolt`).
-import type { Effect, Stream } from 'effect';
+// `PageBolt` (D9): `$bolt` as pages see it, over the same names, rows and inputs as `ctx`. A read is `query` (and
+// `aggregate`, `history`), the same name and arguments as server code's `ctx.query`, answering a `Query<T>`: live where a
+// component reads it, one read where it is awaited outside one, and an Effect to `yield*`. Acts, starts, uploads, record
+// capabilities, conversions, approval decisions and the session are Effects failing with the D3 tags; `clock`, `fileUrl`,
+// `t` and `actor` stay plain. Pages run Effects on the ui edge (`run`, `fork`, `attach` from `$bolt`).
+import type { Effect } from 'effect';
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
 import type { Actor } from '../decl/access/actor.ts';
 import type { StartableName } from '../decl/access/policy.ts';
@@ -10,12 +11,16 @@ import type {
 	ActInput,
 	ActOutput,
 	AggRow,
+	Bucket,
+	BucketField,
 	Callable,
 	Committed,
 	DeclaredQuery,
 	DeclaredRow,
-	In,
+	HistoryOptions,
+	IndexSearch,
 	ListResult,
+	Measures,
 	MessageKey,
 	Outcome,
 	Page,
@@ -23,12 +28,14 @@ import type {
 	PendingApproval,
 	QueryCallable,
 	QueryInput,
+	QueryMember,
 	QueryOutput,
+	QuerySet,
+	QuerySetAnswer,
 	ReadResult,
 	Revision,
-	Select,
-	SimilaritiesOfC,
-	SimilarityName
+	Running,
+	Select
 } from '../decl/ctx.ts';
 import type {
 	ActConflict,
@@ -37,33 +44,62 @@ import type {
 	ProtocolFailed,
 	ReadFailed,
 	Refusal,
-	TransportFailed
+	TransportFailed,
+	Unavailable
 } from '../decl/errors.ts';
 import type {
 	CollectionName,
 	FileField,
+	FileSyncName,
 	Is,
 	ReadableName,
-	ReadField,
 	StoredRow
 } from '../decl/names.ts';
-import type { StartInput } from '../decl/runtime/facilities.ts';
-import type { FileRef, Id, Instant, RequestId } from '../decl/values.ts';
+import type {
+	ConvertRequest,
+	ConvertSource,
+	StartInput,
+	StartOutput
+} from '../decl/runtime/facilities.ts';
+import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
 import type { OrderBy, Where } from '../decl/where.ts';
+import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
 import type { WireRead } from '../protocol/wire.ts';
 
-/** Run once for an answer, or pass to `live` for current answers. */
-export type Read<A> = Effect.Effect<A, ReadFailed | TransportFailed> & { readonly read: WireRead };
-/** Current answers from a subscribed read; consuming the Stream owns the subscription, and read failures are `ReadFailed`. */
-export type LiveRead<A> = Stream.Stream<A, ReadFailed>;
-/** A caller-authorized write: committed output or a held approval proposal succeeds; refusal, conflict and uncertain settlement are typed failures. */
+/**
+ * A page's read (`bolt.query`, `bolt.aggregate`, `bolt.history`). Read in a component (`.current`, `.loading`, `.error`,
+ * or `await` inside `$derived` or markup), it is live: it subscribes on the first reactive read and unsubscribes 30 s after
+ * its last reader is destroyed, and identical calls share one subscription. Awaited outside a reactive context (a click
+ * handler), it reads once. It is also an Effect, so it `yield*`s in a page's Effect code. `read` is its wire form.
+ */
+export interface Query<out T>
+	extends Effect.Effect<T, ReadFailed | TransportFailed>, PromiseLike<T> {
+	/** The latest answer; `undefined` until the first arrives. */
+	readonly current: T | undefined;
+	/** `true` until the first answer, and while the arguments' new answer is on its way. */
+	readonly loading: boolean;
+	/** The read's failure, if the latest answer failed. */
+	readonly error: ReadFailed | TransportFailed | undefined;
+	readonly read: WireRead;
+}
+/**
+ * A caller-authorized write: committed output, a held approval proposal, or `running` (the write outlived the person-wait
+ * and continues as a run, followed through `bolt.runs`) succeeds; refusal, conflict and uncertain settlement are typed
+ * failures.
+ */
 export type PageAct<O, N = string> = Effect.Effect<
-	Committed<O, N> | PendingApproval<N>,
+	Committed<O, N> | PendingApproval<N> | Running,
 	ActRefused | ActConflict | ActUnknown
 >;
-/** An automation's eventual outcome, carrying its run id and automation name before the caller waits for settlement. */
-export type PageStart<A extends string = string> = Effect.Effect<Outcome<unknown>> & {
+/** Admission of queued runs; a committed output is the queue receipt. `runs` follows execution and its declared result. */
+export type PageStart<A extends string = string> = Effect.Effect<
+	Outcome<{
+		readonly id: Id<'sys_run'>;
+		readonly ids: readonly Id<'sys_run'>[];
+		readonly automation: A;
+	}>
+> & {
 	/** The first run's id; `ids` holds every run's, one per input. */
 	readonly id: Id<'sys_run'>;
 	readonly ids: readonly Id<'sys_run'>[];
@@ -71,101 +107,94 @@ export type PageStart<A extends string = string> = Effect.Effect<Outcome<unknown
 };
 /** A page operation with its own typed failure channel, executed by the mounted UI runtime through `run`, `fork` or `attach`. */
 export type PageCall<A, E> = Effect.Effect<A, E>;
+/** The page's clock: today in the workspace zone and the instant. */
+export type PageClock = { readonly today: PlainDate; readonly now: Instant };
 
-type UploadField = { [C in CollectionName]: `${C}.${FileField<C>}` }[CollectionName];
-type Bucket<C> =
-	| ReadField<C>
-	| { [U in 'day' | 'week' | 'month' | 'quarter' | 'year']: { [P in U]: ReadField<C> } }[
-			'day' | 'week' | 'month' | 'quarter' | 'year'];
-type Measure<C> = readonly NoInfer<ReadField<C>>[];
-type Measures<C> = {
-	count?: true;
-	sum?: Measure<C>;
-	avg?: Measure<C>;
-	min?: Measure<C>;
-	max?: Measure<C>;
-	where?: NoInfer<Where<C>>;
+type UploadField = {
+	[C in CollectionName]: `${C}.${FileField<C>}` | `${C}.$import.${FileSyncName<C>}`;
+}[CollectionName];
+/** The approval requests a page lists: open ones unless `all`, by model, records or request ids. */
+type ApprovalFilter = {
+	collection?: CollectionName;
+	records?: readonly string[];
+	ids?: readonly RequestId[];
+	all?: boolean;
 };
 
 /** The typed members of `$bolt` (§3.5); a page reads and acts as its viewer, so rows are caller rows. */
 export interface PageBolt {
 	/** Dynamic declarations use the viewer's native read policies and retain any masked selected values. */
-	read<C extends string>(
-		collection: Is<C, ReadableName>,
-		query: DeclaredQuery
-	): Read<Page<DeclaredRow<C>>>;
-	/** The record's field and operation permissions for its current revision; `null` when it is absent or not readable. */
-	recordCapabilities<C extends string>(
-		collection: Is<C, ReadableName>,
-		id: NoInfer<Id<C>>,
-		parent?: RecordParentContext
-	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
+	query<C extends string>(
+		model: Is<C, ReadableName>,
+		args: DeclaredQuery
+	): Query<Page<DeclaredRow<C>>>;
+	/** The record as of `revision`, folded from its history (L-BOLT-181); `null` when its create was pruned or history is not readable. */
+	query<C extends string>(
+		model: Is<C, ReadableName>,
+		args: { id: NoInfer<Id<C>>; revision: number }
+	): Query<StoredRow<C> | null>;
+	/** One record by id as the viewer reads it, with an optional `select`; `null` when it is absent or not readable. */
+	query<C extends string, const S extends Select<C> = {}>(
+		model: Is<C, ReadableName>,
+		args: { id: NoInfer<Id<C>>; select?: S }
+	): Query<ReadResult<C, S> | null>;
+	/** A search over a custom index (`{ search: { colour: input } }`) or `search.semantic`: the nearest rows, each with `$distance`. */
+	query<C extends string, const S extends Select<C> = {}>(
+		model: Is<C, ReadableName>,
+		args: { search: NoInfer<IndexSearch<C>>; where?: NoInfer<Where<C>>; select?: S; limit: number }
+	): Query<Page<ListResult<C, S> & { readonly $distance: number }>>;
 	/**
-	 * A page of rows the caller may read: `where`, `select`, `orderBy`, a text `search`, and `limit` (or `all: true`).
+	 * A page of rows the viewer may read: `where`, `select`, `orderBy`, a text `search`, and `limit` (or `all: true`).
+	 * Time is an argument like any other: pass `bolt.clock(unit)`'s values to roll over with it.
 	 * @example
-	 * const open = live(() => bolt.live(bolt.read('jobs', { where: { status: { eq: 'open' } }, orderBy: { due_on: 'asc' }, limit: 50 })));
+	 * const day = bolt.clock('day');
+	 * const overdue = $derived(bolt.query('invoices', { where: { due_on: { lt: day.today }, paid: { eq: false } }, all: true }));
 	 */
-	read<C extends string, const S extends Select<C> = {}>(
-		collection: Is<C, ReadableName>,
-		q: {
+	query<C extends string, const S extends Select<C> = {}>(
+		model: Is<C, ReadableName>,
+		args: {
 			where?: NoInfer<Where<C>>;
 			select?: S;
 			orderBy?: NoInfer<OrderBy<C>>;
 			search?: string;
 		} & Paged
-	): Read<Page<ListResult<C, S>>>;
-	/** One record by id as the caller reads it, with an optional `select`; `null` when it is absent or not readable. */
-	get<C extends string, const S extends Select<C> = {}>(
-		collection: Is<C, ReadableName>,
-		id: NoInfer<Id<C>>,
-		select?: S
-	): Read<ReadResult<C, S> | null>;
-	/** The record as of `revision`, folded from its history (L-BOLT-181); `null` when its create was pruned or history is not readable. */
-	get<C extends string>(
-		collection: Is<C, ReadableName>,
-		id: NoInfer<Id<C>>,
-		select: undefined,
-		options: { revision: number }
-	): Read<StoredRow<C> | null>;
-	/** Without `by`, one row over the whole scope; with `by`, a page of buckets (rule 9). */
-	aggregate<C extends string>(
-		collection: Is<C, ReadableName>,
-		q: Measures<C> & { by?: never }
-	): Read<AggRow>;
-	aggregate<C extends string>(
-		collection: Is<C, ReadableName>,
-		q: Measures<C> & { by: NoInfer<Bucket<C>> | readonly NoInfer<Bucket<C>>[] } & Paged
-	): Read<Page<AggRow>>;
-	/** A named similarity search (§3.3.4): nearest first, each row with its `$distance`. */
-	similar<C extends string, N extends SimilarityName<C>, const S extends Select<C> = {}>(
-		collection: Is<C, ReadableName>,
-		search: N,
-		input: NoInfer<In<SimilaritiesOfC<C>[N]>>,
-		q: { where?: NoInfer<Where<C>>; select?: S; limit: number }
-	): Read<readonly (ListResult<C, S> & { readonly $distance: number })[]>;
-	/** Over `search.semantic` (L-BOLT-123): nearest by meaning to a text, or to a record's own embedding (the record itself left out). */
-	similar<C extends string, const S extends Select<C> = {}>(
-		collection: Is<C, ReadableName>,
-		q: {
-			to: string | { record: { id: NoInfer<Id<C>> } };
-			where?: NoInfer<Where<C>>;
-			select?: S;
-			limit: number;
-		}
-	): Read<readonly (ListResult<C, S> & { readonly $distance: number })[]>;
-	/** A record's revisions, newest first, or as of an instant, a revision or before an approval request. */
-	history<C extends string>(
-		collection: Is<C, ReadableName>,
-		id: NoInfer<Id<C>>,
-		options?: { at?: { instant: Instant } | { revision: number } | { before: RequestId } }
-	): Read<readonly Revision<C>[]>;
-	/** Runs a collection query (`'<c>.<q>'`) with its typed input. */
+	): Query<Page<ListResult<C, S>>>;
+	/** Runs a declared query (`'<model>.<query>'`) with its typed input; live by the rows its run read. */
 	query<const N extends string>(
 		name: Is<N, QueryCallable>,
 		input: NoInfer<QueryInput<N>>
-	): Read<QueryOutput<N>>;
-	/** Keeps a read current: re-read when the rows it depends on change (or `on` those collections, or `every` interval). */
-	live<A>(read: Read<A>, options?: { every?: string; on?: readonly CollectionName[] }): LiveRead<A>;
+	): Query<QueryOutput<N>>;
+	/** A keyed set of reads answered together, as server code's keyed `ctx.query`. */
+	query<const M extends QuerySet>(
+		set: M & { readonly [K in keyof M]: QueryMember<M[K]['from']> }
+	): Query<QuerySetAnswer<M>>;
+	/** Without `by`, one row over the whole scope. */
+	aggregate<C extends string>(
+		model: Is<C, ReadableName>,
+		args: Measures<C> & { by?: never }
+	): Query<AggRow<C>>;
+	/** With `by`, a page of buckets (rule 9), each keyed by its bucket values. */
+	aggregate<C extends string, const B extends Bucket<C> | readonly Bucket<C>[]>(
+		model: Is<C, ReadableName>,
+		args: Measures<C> & { by: B } & Paged
+	): Query<Page<AggRow<C, BucketField<B>>>>;
+	/** A record's revisions, newest first, or from an instant, a revision or just before an approval request. */
+	history<C extends string>(
+		model: Is<C, ReadableName>,
+		id: NoInfer<Id<C>>,
+		options?: HistoryOptions
+	): Query<readonly Revision<C>[]>;
+	/**
+	 * The page's clock. With a unit, reactive: `today` and `now` change at each minute, hour or day boundary in the
+	 * workspace zone, ticking only while the page is visible. Without one, a fixed snapshot taken when the page opened.
+	 */
+	clock(unit?: 'minute' | 'hour' | 'day'): PageClock;
+	/** The record's field and operation permissions for its current revision; `null` when it is absent or not readable. */
+	recordCapabilities<C extends string>(
+		model: Is<C, ReadableName>,
+		id: NoInfer<Id<C>>,
+		parent?: RecordParentContext
+	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
 	/** Runs a callable with its typed input; a held write is a success. */
 	act<const N extends string>(
 		callable: Is<N, Callable>,
@@ -185,8 +214,34 @@ export interface PageBolt {
 		file: Blob & { name?: string },
 		field: UploadField
 	): PageCall<FileRef, ActRefused | TransportFailed>;
+	/**
+	 * Converts content the page already has (Markdown or HTML) to a target `+workspace.ts` declares under `convert.to`,
+	 * on the host: a short-lived file the viewer owns (download it with `fileUrl`). Rate-limited by the policy limit key
+	 * `convert` (default `30/min`); an undeclared or unserved target fails `Unavailable`.
+	 */
+	convert(
+		source: ConvertSource,
+		request: ConvertRequest
+	): PageCall<FileRef, ActRefused | TransportFailed | Unavailable>;
 	/** The URL a page shows or downloads a stored file from. */
 	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
+	/** Approval requests: decide the current step, read one request's view, or list the requests the viewer may see. */
+	approvals: {
+		/**
+		 * Decides the request's current step as the viewer: `approve` (a superseder's approve supersedes, reason
+		 * required), `reject` (rolls the held change back), or `requestChanges` (the requester edits and saves to
+		 * resubmit); `reason` is required for the last two.
+		 */
+		decide(
+			id: RequestId,
+			decision: { decision: 'approve' | 'reject' | 'requestChanges'; reason?: string }
+		): PageAct<undefined>;
+		/** One request's view (its steps, timeline and the viewer's moves); `null` when not visible. */
+		get(id: RequestId): PageCall<ApprovalView | null, TransportFailed | ProtocolFailed>;
+		list(
+			filter?: ApprovalFilter
+		): PageCall<readonly ApprovalView[], TransportFailed | ProtocolFailed>;
+	};
 	/** A message of `+messages.ts` in the page's locale, `{name}` placeholders filled from `vars`. */
 	t(key: MessageKey, vars?: { readonly [name: string]: string | number }): string;
 	/**

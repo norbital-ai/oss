@@ -2,13 +2,16 @@ import { Effect } from 'effect';
 // Committed history is scoped and masked by current reader authority; pending proposals append no revisions.
 import type { Json } from '../../decl/values.ts';
 import type { Bindings, Reader, Sql } from '../contracts.ts';
-import type { Pred, ReadIR } from '../../protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
+import type { ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { catalogOf } from '../access/pred.ts';
 import { readScope } from '../access/authority.ts';
-import { collectionOf, exposedField, q } from '../../protocol/catalog.ts';
-import { grantSql } from './sql.ts';
+import { collectionOf, exposedField, q } from '@norbital-ai/store';
+import { grantSql } from '@norbital-ai/store';
+import { resolverOf } from './reader.ts';
+import { fromStore } from '../../protocol/errors.ts';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
 const MASKED: Json = { $masked: true };
@@ -26,7 +29,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	bindings: Bindings
 ) {
 	const cat = catalogOf(m),
-		c = collectionOf(cat, read.collection),
+		c = yield* collectionOf(cat, read.collection).pipe(Effect.mapError(fromStore)),
 		id = read.id;
 	if (!UUID.test(id)) return read.full === true ? null : [];
 	const at = read.at;
@@ -43,10 +46,16 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 						`AND h.revision <= coalesce((SELECT (r->>'before')::int FROM bolt_approvals x CROSS JOIN LATERAL jsonb_array_elements(x.records) r WHERE x.id = $3::uuid AND r->>'collection' = $1 AND r->>'id' = $2::text LIMIT 1), 0)`);
 	const statements: Sql[] = [
 		{
-			text: `SELECT h.revision, to_char(h.at AT TIME ZONE 'UTC', ${ISO}) AS at, h.actor, h.op, h.cause, h.restored_from, h.changes,
+			text: `WITH visible AS (SELECT source.*,source.changes-ARRAY(
+				SELECT DISTINCT unnest(p.purge) FROM bolt_audit_erase p WHERE p.mode='anonymise'
+				AND p.collection=source.collection AND p.record=source.record AND source.revision<p.revision) AS sanitised
+			FROM bolt_history source WHERE source.collection=$1 AND source.record=$2::uuid AND NOT EXISTS (
+				SELECT 1 FROM bolt_audit_erase p WHERE p.mode='remove' AND p.collection=source.collection AND p.record=source.record
+				AND source.revision<=p.revision AND NOT (p.keep_marker AND source.revision=p.revision)))
+			SELECT h.revision, to_char(h.at AT TIME ZONE 'UTC', ${ISO}) AS at, h.actor, h.op, h.cause, h.restored_from, h.sanitised AS changes,
 			h.request::text AS request, ap.state AS request_state
-		FROM bolt_history h LEFT JOIN bolt_approvals ap ON ap.id = h.request
-		WHERE h.collection = $1 AND h.record = $2::uuid ${cut} ORDER BY h.revision`,
+		FROM visible h LEFT JOIN bolt_approvals ap ON ap.id = h.request
+		WHERE (h.sanitised<>'{}'::jsonb OR h.cause='erased' OR h.changes='{}'::jsonb) ${cut} ORDER BY h.revision`,
 			params
 		}
 	];
@@ -58,16 +67,23 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 		// grant predicates, so compiled raw; an `{ actor }` operand in them resolves against the caller
 		statements.push(
 			{ text: `SELECT 1 FROM ${q(c.model.name)} WHERE id = $1::uuid`, params: [id] },
-			grantSql(
+			yield* grantSql(
 				cat,
 				read.collection,
 				{ t: 'and', of: [scope ?? { t: 'const', value: false }, self] },
-				auth,
-				bindings
-			),
-			...masks.map(([, p]) =>
-				grantSql(cat, read.collection, { t: 'and', of: [p, self] }, auth, bindings)
-			)
+				{ resolve: resolverOf(bindings, auth), tz: bindings.tz }
+			).pipe(Effect.mapError(fromStore)),
+			...(yield* Effect.forEach(masks, ([, p]) =>
+				grantSql(
+					cat,
+					read.collection,
+					{ t: 'and', of: [p, self] },
+					{
+						resolve: resolverOf(bindings, auth),
+						tz: bindings.tz
+					}
+				).pipe(Effect.mapError(fromStore))
+			))
 		);
 	}
 	const res = yield* db.read(statements);
@@ -121,7 +137,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 		const op = res[0]!.rows[i]!['op'],
 			prev = record;
 		record =
-			op === 'create'
+			op === 'create' || (op === 'update' && r.cause === 'erased')
 				? { ...r.changed, id, revision: r.revision }
 				: op === 'delete' || prev === null
 					? null
@@ -140,7 +156,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 			);
 });
 /**
- * Keeps the newest committed revisions and all erased audit markers. The oldest kept revision of a pruned record becomes
+ * Keeps open approval checkpoints, unacknowledged audit history, the newest revisions and erased audit markers. The oldest kept revision becomes
  * its anchor: the full row folded from its create, recorded as that create, so every kept revision still rebuilds (and
  * so stays restorable) — never an open restore point.
  */
@@ -148,10 +164,19 @@ export const pruneHistory = Effect.fn('Bolt.pruneHistory')(function* (
 	db: TenantDb,
 	keep: number = 256
 ) {
-	const res = yield* db.write({
-		text: `WITH ranked AS (
+	const res = yield* db.write(
+		{
+			text: `WITH held AS MATERIALIZED (
+	SELECT DISTINCT entry->>'collection' AS collection, entry->>'id' AS record
+	FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) entry
+	WHERE a.state IN ('Pending','ChangesRequested')),
+ranked AS (
 	SELECT collection, record, revision, op, cause, row_number() OVER (PARTITION BY collection, record ORDER BY revision DESC) AS rn
-	FROM bolt_history),
+	FROM bolt_history h WHERE NOT EXISTS (
+		SELECT 1 FROM bolt_history pending LEFT JOIN bolt_audit_receipt r ON r.operation=pending.operation
+		WHERE pending.collection=h.collection AND pending.record=h.record AND pending.operation IS NOT NULL
+		AND r.acknowledged_at IS NULL AND r.expired_at IS NULL)
+	AND NOT EXISTS (SELECT 1 FROM held WHERE held.collection=h.collection AND held.record=h.record::text)),
 oldest AS (SELECT DISTINCT ON (x.collection, x.record) x.collection, x.record, x.revision, x.op FROM ranked x
 	WHERE x.rn <= $1 AND x.cause <> 'erased'
 	AND EXISTS (SELECT 1 FROM ranked y WHERE y.collection = x.collection AND y.record = x.record AND y.rn > $1 AND y.cause <> 'erased')
@@ -169,7 +194,9 @@ gone AS (DELETE FROM bolt_history h USING ranked x
 	WHERE h.collection = x.collection AND h.record = x.record AND h.revision = x.revision
 	AND x.rn > $1 AND x.cause <> 'erased' RETURNING 1)
 SELECT count(*)::int AS n FROM gone`,
-		params: [keep]
-	});
+			params: [keep]
+		},
+		{ tables: ['bolt_history'], mode: 'SHARE ROW EXCLUSIVE' }
+	);
 	return Number(res.rows[0]?.['n'] ?? 0);
 });

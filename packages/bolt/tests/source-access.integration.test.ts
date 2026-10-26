@@ -4,7 +4,7 @@ import { HostIdentity } from '../src/shell/host.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { assignTeam, invite, issueKey } from '../src/engine/identity/members.ts';
-import { decodeIdentity, loadPack, type Pack } from '../src/engine/write/pack.ts';
+import { decodeIdentity, loadPack, sourceOf, type Pack } from '../src/engine/write/pack.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -200,11 +200,9 @@ it.effect(
 					[
 						{
 							id: 'source-notice',
-							to: {
-								channel: 'inbox',
-								recipients: [{ policy: 'sales' }, { team: 'sales-id' }, { user: sales.id }]
-							},
+							to: [{ policy: 'sales' }, { team: 'sales-id' }, { user: sales.id }],
 							title: 'Source holders',
+							attachments: [],
 							once: 'source-notice'
 						}
 					],
@@ -233,8 +231,9 @@ it.effect(
 					[
 						{
 							id: 'signup-notice',
-							to: { policy: 'viewer' },
+							to: [{ policy: 'viewer' }],
 							title: 'Source signup holders',
+							attachments: [],
 							once: 'signup-notice'
 						}
 					],
@@ -315,7 +314,9 @@ it.effect(
 						assets: []
 					}
 				};
-				expect(yield* loadPack(seeded.db, seeded.manifest, pack, t.clock.now())).toBe(true);
+				expect(yield* loadPack(seeded.db, seeded.manifest, sourceOf(pack), t.clock.now())).toBe(
+					true
+				);
 				expect(
 					(yield* new Authorities(seeded.manifest, 'seeded').member(seeded.db, 'seed-user'))
 						?.policies
@@ -345,7 +346,7 @@ it.effect(
 					'viewer-id'
 				);
 				const removed = { ...isolated.manifest, teams: {} };
-				expect(plan(yield* readApplied(isolated.db), removed).steps).toEqual([]);
+				expect((yield* plan(yield* readApplied(isolated.db), removed)).steps).toEqual([]);
 				expect(
 					(yield* new Authorities(isolated.manifest, 'source').member(isolated.db, member.id))
 						?.policies

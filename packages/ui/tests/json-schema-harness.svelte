@@ -4,11 +4,12 @@
 	import { mountEdge } from '../src/effect/index.js';
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
 	import { provideKinds } from '../src/kinds/context.js';
-	import JsonSchemaForm from '../src/kinds/json-schema-form.svelte';
+	import StructuredData from '../src/kinds/structured-data.svelte';
 	import Editor from '../src/kinds/editor.svelte';
 	import type { JsonSchema } from '../src/kinds/json-schema.js';
 	import type { Value, Kind } from '../src/kinds/kind.js';
 	import Show from '../src/kinds/show.svelte';
+	import CellValue from '../src/cell/Value.svelte';
 	let {
 		schema,
 		kind,
@@ -17,17 +18,21 @@
 		errors,
 		readonly = false,
 		editor = false,
+		rawJson = false,
 		view = false,
+		cell = false,
 		changed
 	}: {
 		schema?: JsonSchema;
 		kind?: Kind;
 		view?: boolean;
+		cell?: boolean;
 		initial: Value;
 		host?: Parameters<typeof provideKinds>[0];
 		errors?: ReadonlyMap<string, string>;
 		readonly?: boolean;
 		editor?: boolean;
+		rawJson?: boolean;
 		changed(next: Value): void;
 	} = $props();
 	// Each test mount owns the initial host and draft, which subsequent edits replace locally.
@@ -41,7 +46,8 @@
 	}
 </script>
 
-{#if kind !== undefined && view}<Show readonly {kind} {value} name="input" />
+{#if cell}<CellValue {kind} {value} name="input" dense />
+{:else if kind !== undefined && view}<Show readonly {kind} {value} name="input" />
 {:else if kind !== undefined}<Editor
 		{kind}
 		{value}
@@ -49,6 +55,7 @@
 		name="input"
 		{readonly}
 		{errors}
+		{rawJson}
 	/>
 {:else if editor}<Editor
 		kind={{ kind: 'json' }}
@@ -58,8 +65,10 @@
 		name="input"
 		{readonly}
 		{errors}
+		{rawJson}
 	/>
-{:else if schema !== undefined}<JsonSchemaForm
+{:else if schema !== undefined}<StructuredData
+		mode="edit"
 		{schema}
 		{value}
 		onChange={update}

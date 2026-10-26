@@ -1,54 +1,175 @@
 <!--
 @component
-An approval request: its full timeline (every transition, comment, reason, resubmit and rollback result), the records its
-provisional change holds, and the moves the host's state machine allows this viewer — the buttons are exactly those.
+A record's approval requests (spec §7): a scope selector when there are several, the chosen request's timeline (one
+node for the request, one per step; each node a button whose popover holds that step's back-and-forth) and, for whoever
+may decide now, a two-step form: pick Approve, Reject or Request changes, then give the reason and confirm.
 -->
+<script lang="ts" module>
+	import type { ApprovalView, Outcome } from '../client/contract.js';
+	/** Every request of one record (or one request), and what to do after a decision settles. */
+	export type ApprovalPanelProps = {
+		requests: readonly ApprovalView[];
+		onOutcome?: (outcome: Outcome) => void;
+	};
+</script>
+
 <script lang="ts">
 	import { Effect } from 'effect';
-	import { run, fork } from '../effect/index.js';
+	import { fork } from '../effect/index.js';
 	import { actOutcome, outcomeText } from '../actions/outcome.js';
 	import { Button } from '../primitives/button/index.js';
-	import { Textarea } from '../primitives/textarea/index.js';
+	import Textarea from '../primitives/textarea/textarea.svelte';
+	import * as Popover from '../primitives/popover/index.js';
+	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
 	import { useKinds } from '../kinds/context.js';
 	import { format } from '../kinds/kind.js';
-	import type { ActFailure, ActSuccess, ApprovalView, Outcome } from '../client/contract.js';
 	import { useBolt } from '../client/context.js';
-	import { failed } from '../read/state.js';
 	import { label, msg } from '../text/messages.js';
 	import { skipText } from '../record/history.js';
 	import { approvalStatus } from './row.js';
 
-	/** A new source revision refreshes the request under current permissions. */
-	let {
-		requestId,
-		revision,
-		onOutcome
-	}: { requestId: string; revision?: number; onOutcome?: (outcome: Outcome) => void } = $props();
+	let { requests, onOutcome }: ApprovalPanelProps = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
-	const at = (value: string) =>
-		format({ kind: 'instant' }, value, { locale: kinds.locale ?? bolt.locale, zone: kinds.zone });
-	const noteId = $props.id();
+	const ids = $props.id();
+	type Entry = ApprovalView['log'][number];
+	type Move = ApprovalView['moves'][number];
+	type Look = 'done' | 'active' | 'changes' | 'rejected' | 'later';
+	type Node = {
+		key: string;
+		label: string;
+		caption: string;
+		look: Look;
+		entries: readonly Entry[];
+	};
+
+	const locale = $derived(kinds.locale ?? bolt.locale);
+	const at = (value: string) => format({ kind: 'instant' }, value, { locale, zone: kinds.zone });
+	const day = (value: string) =>
+		new Intl.DateTimeFormat(locale, {
+			day: 'numeric',
+			month: 'short',
+			...(kinds.zone === undefined ? {} : { timeZone: kinds.zone })
+		}).format(new Date(value));
+	const who = (p: { ref: string; name: string | null }) => p.name ?? p.ref.replace(/^[a-z]+:/i, '');
+	const OPEN = new Set(['Pending', 'ChangesRequested']);
+	const DECISIVE = new Set<Entry['move']>(['approve', 'reject', 'requestChanges', 'supersede']);
+
+	// oldest first: a request's number is its place in the record's history
+	const ordered = $derived([...requests].sort((a, b) => a.at.localeCompare(b.at)));
+	let picked = $state<string | null>(null);
+	const current = $derived(
+		requests.find((r) => r.id === picked) ??
+			requests.find((r) => OPEN.has(r.status)) ??
+			ordered[ordered.length - 1] ??
+			null
+	);
+
+	const MOVE_TEXT: Readonly<Record<Entry['move'], string>> = {
+		request: 'Requested',
+		approve: 'Approved',
+		reject: 'Rejected',
+		requestChanges: 'Requested changes',
+		resubmit: 'Resubmitted',
+		supersede: 'Superseded'
+	};
+	const DECISION_TEXT: Readonly<Record<Move['decision'], string>> = {
+		approve: 'Approve',
+		reject: 'Reject',
+		requestChanges: 'Request changes'
+	};
+	const LOOK_TEXT: Readonly<Record<Look, string>> = {
+		done: 'Done',
+		active: 'Waiting',
+		changes: 'Changes requested',
+		rejected: 'Rejected',
+		later: 'Later'
+	};
+	const lookText = (look: Look) => msg(bolt, `approval.look.${look}`, LOOK_TEXT[look]);
+	const decisionText = (d: Move['decision']) =>
+		msg(bolt, `approval.decision.${d}`, DECISION_TEXT[d]);
+
+	function nodes(v: ApprovalView): Node[] {
+		const request = v.log.find((e) => e.move === 'request');
+		const closed = v.status === 'Approved' || v.status === 'Superseded';
+		return [
+			{
+				key: 'request',
+				label: msg(bolt, 'approval.move.request', 'Requested'),
+				caption: `${who(request?.by ?? v.requestor)} · ${day(request?.at ?? v.at)}`,
+				look: 'done',
+				entries: request === undefined ? [] : [request]
+			},
+			...v.steps.map((s, i): Node => {
+				const entries = v.log.filter((e) => e.move !== 'request' && e.step === i);
+				const look: Look =
+					closed || i < v.step
+						? 'done'
+						: i > v.step
+							? 'later'
+							: v.status === 'Pending'
+								? 'active'
+								: v.status === 'ChangesRequested'
+									? 'changes'
+									: 'rejected';
+				const last = [...entries].reverse().find((e) => DECISIVE.has(e.move));
+				return {
+					key: `step-${i}`,
+					label: s.name,
+					caption:
+						look === 'active' || look === 'later'
+							? lookText(look)
+							: last === undefined
+								? ''
+								: `${who(last.by)} · ${day(last.at)}`,
+					look,
+					entries
+				};
+			})
+		];
+	}
+	const NODE: Readonly<Record<Look, string>> = {
+		done: 'border-success bg-success text-success-foreground',
+		active: 'border-brand bg-background text-brand',
+		changes: 'border-warning bg-warning text-warning-foreground',
+		rejected: 'border-destructive bg-destructive text-destructive-foreground',
+		later: 'border-border bg-muted text-muted-foreground'
+	};
+	const glyph = (look: Look): GlyphName | null =>
+		look === 'done' ? 'check' : look === 'changes' ? 'alert' : look === 'rejected' ? 'x' : null;
+	const DECISIONS = ['approve', 'reject', 'requestChanges'] as const;
+	/** The viewer's decisions in the form's order: Approve, Reject, Request changes. */
+	const decisions = (v: ApprovalView) =>
+		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
+	const changedText = (v: ApprovalView, e: Entry) =>
+		(e.changed ?? []).map((f) => label(bolt, v.collection, f)).join(', ');
+
+	// the node whose popover is open: hover, keyboard focus or a tap opens it, Escape or leaving it closes it
+	let shown = $state<string | null>(null);
+	let pointing = false;
+
+	// the form: step 1 picks the decision, step 2 takes the reason and repeats the decision on its confirm
+	let chosen = $state<{ request: string; move: Move } | null>(null);
 	let reason = $state('');
-	let notice = $state<string | null>(null);
 	let busy = $state(false);
-	let decided = $state(0);
-	const view = $derived.by(() => {
-		void decided;
-		void revision;
-		return bolt.approvals.get?.(requestId) ?? Effect.succeed(null);
-	});
-	function settle(action: Effect.Effect<ActSuccess, ActFailure>) {
-		if (busy) return;
+	let notice = $state<string | null>(null);
+	function decide(v: ApprovalView, move: Move) {
+		if (busy || (move.reason === 'required' && reason.trim() === '')) return;
 		busy = true;
+		const note = reason.trim();
 		fork(
-			actOutcome(action).pipe(
+			actOutcome(
+				bolt.approvals.decide(v.id, {
+					decision: move.decision,
+					...(note === '' ? {} : { reason: note })
+				})
+			).pipe(
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						notice = outcomeText(bolt, outcome);
 						if (outcome.kind === 'committed') {
 							reason = '';
-							decided++;
+							chosen = null;
 						}
 						onOutcome?.(outcome);
 					})
@@ -61,234 +182,217 @@ provisional change holds, and the moves the host's state machine allows this vie
 			)
 		);
 	}
-	const act = (move: ApprovalView['moves'][number]) =>
-		settle(
-			bolt.approvals.process(requestId, {
-				status: move.status,
-				...(reason.trim() ? { reason: reason.trim() } : {})
-			})
-		);
-
-	const who = (p: { ref: string; name: string | null }) => p.name ?? p.ref.replace(/^[a-z]+:/i, '');
-	const teams = (v: ApprovalView, ts: readonly string[]) =>
-		ts.map((handle) => v.teamNames[handle] ?? handle).join(` ${msg(bolt, 'approval.or', 'or')} `);
-	const MOVE_TEXT: { readonly [m: string]: string } = {
-		request: 'Requested',
-		approve: 'Approved',
-		reject: 'Rejected',
-		requestChanges: 'Requested changes',
-		resubmit: 'Resubmitted',
-		withdraw: 'Withdrew',
-		supersede: 'Superseded',
-		comment: 'Commented',
-		close: 'Closed (source changed)'
-	};
-	const BUTTON_TEXT: { readonly [s: string]: string } = {
-		APPROVED: 'Approve',
-		REQUEST_FOR_CHANGE: 'Request changes',
-		REJECTED: 'Reject',
-		RESUBMITTED: 'Resubmit',
-		WITHDRAWN: 'Withdraw',
-		SUPERSEDED: 'Supersede',
-		COMMENT: 'Comment',
-		CLOSED: 'Close'
-	};
-	const VARIANT: { readonly [s: string]: 'default' | 'outline' | 'destructive' | 'ghost' } = {
-		APPROVED: 'default',
-		RESUBMITTED: 'default',
-		REJECTED: 'outline',
-		WITHDRAWN: 'ghost',
-		COMMENT: 'ghost'
-	};
-	const DOT: { readonly [m: string]: string } = {
-		request: 'bg-primary',
-		approve: 'bg-success',
-		supersede: 'bg-success',
-		resubmit: 'bg-primary',
-		reject: 'bg-destructive',
-		requestChanges: 'bg-warning',
-		withdraw: 'bg-muted-foreground',
-		close: 'bg-muted-foreground',
-		comment: 'bg-border'
-	};
-	const ACTION_TEXT: { readonly [a: string]: string } = {
-		create: 'created',
-		update: 'changed',
-		delete: 'deleted',
-		restored: 'restored',
-		removed: 'removed',
-		recreated: 'recreated'
-	};
-	const requiredActions = (v: ApprovalView) =>
-		v.moves
-			.filter((m) => m.reason === 'required')
-			.map((m) => msg(bolt, `approval.button.${m.status}`, BUTTON_TEXT[m.status] ?? m.status))
-			.join(', ');
-	const orderedMoves = (v: ApprovalView) =>
-		[...v.moves].sort(
-			(a, b) => Number(VARIANT[b.status] === 'default') - Number(VARIANT[a.status] === 'default')
-		);
 </script>
 
-{#snippet effects(e: ApprovalView['log'][number])}
-	{#if e.rolledBack !== undefined && e.rolledBack.length > 0}
-		<p class="text-caption" data-rolled-back>
-			{msg(bolt, 'approval.rolledBack', 'Rolled back')}: {e.rolledBack
-				.map(
-					(r) =>
-						`${label(bolt, r.collection)} ${msg(bolt, `approval.action.${r.action}`, ACTION_TEXT[r.action] ?? r.action)}`
-				)
-				.join(', ')}
+{#snippet entry(v: ApprovalView, e: Entry)}
+	<li class="flex flex-col gap-0.5" data-move={e.move}>
+		<p class="text-sm font-medium">
+			{msg(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move])} · {who(e.by)}
 		</p>
-	{/if}
-	{#if e.skipped !== undefined && e.skipped.length > 0}
-		<details class="text-caption text-warning-foreground dark:text-warning" data-skipped>
-			<summary class="cursor-pointer"
-				>{msg(bolt, 'approval.skipped', 'Not restored')} ({e.skipped.length})</summary
-			>
-			<ul class="mt-1 list-disc pl-4">
-				{#each e.skipped as s, i (i)}<li>
-						{label(bolt, s.collection, s.field)} ({skipText(bolt, s.reason)})
-					</li>{/each}
-			</ul>
-		</details>
-	{/if}
+		<p class="text-meta"><time datetime={e.at}>{at(e.at)}</time></p>
+		{#if e.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
+				“{e.reason}”
+			</p>{/if}
+		{#if e.move === 'resubmit' && changedText(v, e) !== ''}<p class="text-caption" data-changed>
+				{msg(bolt, 'approval.changed', 'Changed: {fields}', { fields: changedText(v, e) })}
+			</p>{/if}
+		{#if e.rolledBack !== undefined && e.rolledBack.length > 0}
+			<p class="text-caption" data-rolled-back>
+				{msg(bolt, 'approval.rolledBack', 'Rolled back')}: {e.rolledBack
+					.map(
+						(r) =>
+							`${label(bolt, r.collection)} ${msg(bolt, `approval.action.${r.action}`, r.action)}`
+					)
+					.join(', ')}
+			</p>
+		{/if}
+		{#if e.skipped !== undefined && e.skipped.length > 0}
+			<p class="text-caption text-warning-foreground dark:text-warning" data-skipped>
+				{msg(bolt, 'approval.skipped', 'Not restored')}: {e.skipped
+					.map((s) => `${label(bolt, s.collection, s.field)} (${skipText(bolt, s.reason)})`)
+					.join(', ')}
+			</p>
+		{/if}
+	</li>
 {/snippet}
 
-{#await run(view)}
-	<p class="text-muted-foreground text-sm">…</p>
-{:then v}
-	{#if v === null}
-		<p class="text-muted-foreground text-sm" data-read="notFound">
-			{msg(bolt, 'approval.notFound', 'Not found or no access')}
-		</p>
-	{:else}
-		{@const decision =
-			v.status === 'CHANGES_REQUESTED' || v.status === 'REJECTED' || v.status === 'WITHDRAWN'
-				? [...v.log].reverse().find((e) => e.to === v.status && e.from !== e.to)
-				: undefined}
-		<div class="flex flex-col gap-4 text-sm" data-view="approval" data-status={v.status}>
-			<header class="flex flex-col gap-2" data-view="approval-summary">
-				<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-					<h3 class="font-medium">{approvalStatus(bolt, v.status)}</h3>
-					{#if v.status === 'ONGOING' && v.steps.length > 0}<span class="text-meta"
-							>{msg(bolt, 'approval.stepOf', 'Step {step} of {total}', {
-								step: Math.min(v.step + 1, v.steps.length),
-								total: v.steps.length
-							})}</span
+{#if current !== null}
+	{@const v = current}
+	{@const decision = chosen !== null && chosen.request === v.id ? chosen.move : null}
+	{@const steps = nodes(v)}
+	<div class="flex flex-col gap-4 text-sm" data-view="approval" data-status={v.status}>
+		{#if requests.length > 1}
+			<div class="flex flex-wrap items-center gap-2">
+				<label for={`${ids}-scope`} class="text-label"
+					>{msg(bolt, 'approval.request', 'Request')}</label
+				>
+				<select
+					id={`${ids}-scope`}
+					class="border-input bg-background focus-visible:ring-ring/40 h-8 min-w-0 rounded-md border px-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+					value={v.id}
+					onchange={(e) => {
+						picked = e.currentTarget.value;
+						notice = null;
+					}}
+					data-view="approval-scope"
+				>
+					{#each [...ordered.entries()].reverse() as [i, r] (r.id)}<option value={r.id}
+							>#{i + 1} · {approvalStatus(bolt, r.status)} · {day(r.at)}</option
+						>{/each}
+				</select>
+			</div>
+		{/if}
+
+		<ol class="flex overflow-x-auto pb-1" data-view="approval-timeline">
+			{#each steps as node, i (node.key)}
+				{@const last = i === steps.length - 1}
+				<li
+					class="relative flex min-w-24 flex-1 flex-col items-center gap-1 px-1 text-center"
+					data-step={node.key}
+					data-look={node.look}
+				>
+					{#if !last}<span
+							class={[
+								'absolute top-3.5 left-1/2 h-0.5 w-full',
+								node.look === 'done' && steps[i + 1]?.look !== 'later' ? 'bg-success' : 'bg-border'
+							]}
+							aria-hidden="true"
+						></span>{/if}
+					<Popover.Root
+						open={shown === node.key}
+						onOpenChange={(open) => {
+							shown = open ? node.key : shown === node.key ? null : shown;
+						}}
+					>
+						<Popover.Trigger
+							openOnHover
+							openDelay={100}
+							closeDelay={150}
+							aria-label={`${node.label}: ${lookText(node.look)}`}
+							data-node={node.look}
+							class="focus-visible:ring-ring/40 relative z-10 grid size-7 shrink-0 place-items-center rounded-full border-2 focus-visible:ring-2 focus-visible:outline-none max-sm:size-11 {NODE[
+								node.look
+							]}"
+							onpointerdown={() => {
+								pointing = true;
+							}}
+							onclick={() => {
+								pointing = false;
+							}}
+							onfocus={() => {
+								if (!pointing) shown = node.key;
+								pointing = false;
+							}}
+							onblur={() => {
+								if (shown === node.key) shown = null;
+							}}
+						>
+							{#if node.look === 'active'}<span
+									class="bg-brand/30 absolute inset-0 animate-ping rounded-full motion-reduce:animate-none"
+									aria-hidden="true"
+								></span><span class="bg-brand size-2.5 rounded-full" aria-hidden="true"
+								></span>{:else}{@const g = glyph(node.look)}{#if g !== null}<Glyph
+										name={g}
+										class="size-3.5"
+									/>{/if}{/if}
+						</Popover.Trigger>
+						<Popover.Content
+							trapFocus={false}
+							onOpenAutoFocus={(e) => e.preventDefault()}
+							class="flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-2 p-3"
+							data-view="approval-step-log"
+						>
+							<p class="text-sm font-semibold">{node.label}</p>
+							{#if node.entries.length === 0}<p class="text-meta">
+									{node.look === 'active'
+										? msg(bolt, 'approval.noDecision', 'No decision yet')
+										: lookText(node.look)}
+								</p>
+							{:else}<ol class="flex flex-col gap-2">
+									{#each node.entries as e, k (k)}{@render entry(v, e)}{/each}
+								</ol>{/if}
+						</Popover.Content>
+					</Popover.Root>
+					<span class="max-w-full truncate text-sm font-medium" data-label>{node.label}</span>
+					{#if node.caption}<span class="text-meta max-w-full truncate" data-caption
+							>{node.caption}</span
 						>{/if}
-				</div>
-				{#if v.status === 'ONGOING'}
-					<p class="text-meta" data-view="approval-waiting">
-						{msg(bolt, 'approval.awaiting', 'Awaiting a decision from')}:
-						<span class="text-foreground">{teams(v, v.steps[v.step] ?? [])}</span>
-					</p>
-				{:else if v.status === 'CHANGES_REQUESTED'}
-					<p class="text-meta" data-view="approval-waiting">
-						{msg(bolt, 'approval.awaitingRequester', 'Awaiting changes from')}:
-						<span class="text-foreground">{who(v.requestor)}</span>
-					</p>
-				{/if}
-				{#if decision?.reason}
-					<blockquote
-						class="whitespace-pre-wrap wrap-anywhere"
-						data-view="approval-decision-reason"
-					>
-						{decision.reason}
-					</blockquote>
-					<p class="text-meta">
-						{who(decision.by)} · <time datetime={decision.at}>{at(decision.at)}</time>
-					</p>
-				{/if}
-				{#if decision !== undefined}{@render effects(decision)}{/if}
-				{#if v.status === 'ONGOING' && v.superseded_by.length > 0}<p class="text-meta">
-						{msg(bolt, 'approval.supersededBy', 'May supersede')}: {teams(v, v.superseded_by)}
-					</p>{/if}
-			</header>
+				</li>
+			{/each}
+		</ol>
 
-			<ul class="text-meta flex flex-wrap gap-x-3" data-view="approval-records">
-				{#each v.records as r (`${r.collection}:${r.id}`)}
-					<li data-record={r.id} data-op={r.op}>
-						{label(bolt, r.collection)} · {msg(
-							bolt,
-							`approval.action.${r.op}`,
-							ACTION_TEXT[r.op] ?? r.op
-						)}
-					</li>
-				{/each}
-			</ul>
+		{#if v.status === 'ChangesRequested' && v.mine}<p
+				class="text-caption"
+				role="status"
+				data-view="approval-resubmit"
+			>
+				{msg(bolt, 'approval.resubmitOnSave', 'Saving resubmits for approval')}
+			</p>{/if}
 
-			{#if v.moves.length > 0}
-				{@const required = requiredActions(v)}
-				<div class="flex flex-col gap-2" data-view="approval-controls">
-					<label for={noteId} class="text-label"
-						>{msg(bolt, 'approval.reasonLabel', 'Reason or comment')}</label
-					>
-					<Textarea
-						id={noteId}
-						rows={2}
-						disabled={busy}
-						aria-describedby={`${noteId}-help`}
-						bind:value={reason}
-					/>
-					<p id={`${noteId}-help`} class="text-meta">
-						{required
-							? msg(bolt, 'approval.reasonFor', 'Required for {actions}.', { actions: required })
-							: msg(bolt, 'approval.optional', 'Optional.')}
-					</p>
+		{#if v.moves.length > 0}
+			<div class="flex flex-col gap-2" data-view="approval-controls">
+				{#if decision === null}
 					<div class="flex flex-wrap gap-2">
-						{#each orderedMoves(v) as move (move.status)}
+						{#each decisions(v) as move (move.decision)}
 							<Button
 								size="sm"
-								variant={VARIANT[move.status] ?? 'outline'}
-								class={move.status === 'REJECTED' ? 'text-destructive' : undefined}
-								disabled={busy || (move.reason === 'required' && reason.trim() === '')}
-								data-move={move.status}
-								onclick={() => act(move)}
-								>{msg(
-									bolt,
-									`approval.button.${move.status}`,
-									BUTTON_TEXT[move.status] ?? move.status
-								)}</Button
+								variant={move.decision === 'approve' ? 'default' : 'outline'}
+								class={move.decision === 'reject' ? 'text-destructive' : undefined}
+								disabled={busy}
+								data-decision={move.decision}
+								onclick={() => {
+									chosen = { request: v.id, move };
+									reason = '';
+									notice = null;
+								}}>{decisionText(move.decision)}</Button
 							>
 						{/each}
 					</div>
-				</div>
-			{/if}
+				{:else}
+					<form
+						class="flex flex-col gap-2"
+						data-decision={decision.decision}
+						onsubmit={(e) => {
+							e.preventDefault();
+							decide(v, decision);
+						}}
+					>
+						<label for={`${ids}-reason`} class="text-label"
+							>{decisionText(decision.decision)} · {decision.reason === 'required'
+								? msg(bolt, 'approval.reasonRequired', 'reason (required)')
+								: msg(bolt, 'approval.reasonOptional', 'reason (optional)')}</label
+						>
+						<Textarea
+							id={`${ids}-reason`}
+							rows={3}
+							required={decision.reason === 'required'}
+							disabled={busy}
+							bind:value={reason}
+						/>
+						<div class="flex flex-wrap justify-between gap-2">
+							<Button
+								type="button"
+								size="sm"
+								variant="ghost"
+								disabled={busy}
+								data-back
+								onclick={() => {
+									chosen = null;
+								}}>{msg(bolt, 'approval.back', 'Back')}</Button
+							>
+							<Button
+								type="submit"
+								size="sm"
+								variant={decision.decision === 'reject' ? 'destructive' : 'default'}
+								disabled={busy || (decision.reason === 'required' && reason.trim() === '')}
+								data-confirm>{decisionText(decision.decision)}</Button
+							>
+						</div>
+					</form>
+				{/if}
+			</div>
+		{/if}
 
-			<details data-view="approval-history">
-				<summary class="cursor-pointer text-meta"
-					>{msg(bolt, 'approval.decisionHistory', 'Decision history')} ({v.log.length})</summary
-				>
-				<ol class="mt-3 flex flex-col gap-0" data-view="approval-timeline">
-					{#each v.log as e, i (i)}
-						<li class="flex gap-3" data-move={e.move} data-to={e.to}>
-							<span class="mt-1.5 size-2 shrink-0 rounded-full {DOT[e.move] ?? 'bg-border'}"></span>
-							<div class="min-w-0 pb-3">
-								<div class="font-medium">
-									{msg(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move] ?? e.move)}
-									{#if v.steps.length > 1 && e.move !== 'comment' && e.move !== 'request'}
-										· {msg(bolt, 'approval.stepN', `Step ${e.step + 1}`)}{/if}
-								</div>
-								<div class="text-meta">{who(e.by)} · <time datetime={e.at}>{at(e.at)}</time></div>
-								{#if e.reason}<div
-										class="text-caption whitespace-pre-wrap wrap-anywhere"
-										data-reason
-									>
-										“{e.reason}”
-									</div>{/if}
-								{#if e !== decision}{@render effects(e)}{/if}
-							</div>
-						</li>
-					{/each}
-				</ol>
-			</details>
-
-			{#if notice}<p role="status" class="text-muted-foreground">{notice}</p>{/if}
-		</div>
-	{/if}
-{:catch e}
-	<p class="text-muted-foreground text-sm" data-read={failed(e).kind}>
-		{msg(bolt, 'approval.notFound', 'Not found or no access')}
-	</p>
-{/await}
+		{#if notice}<p role="status" class="text-muted-foreground">{notice}</p>{/if}
+	</div>
+{/if}

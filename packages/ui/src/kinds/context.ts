@@ -11,7 +11,7 @@ import {
 import { getContext, setContext, type Component } from 'svelte';
 import type { ActFailure, ReadError } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
-import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
+import type { FileUrlOptions, Where, OutputKind } from '@norbital-ai/std/kind';
 
 export type ChildInput = {
 	collection: string;
@@ -24,7 +24,7 @@ export type ChildInput = {
 	unlink?: true;
 };
 
-/** One collection as a form and a picker need it (generated from `+collection.ts` and the model). */
+/** One model as a form, a picker and a view toolbar need it (generated from its `+model.ts` and the caller's grants). */
 export type CollectionExposure = {
 	/** The model's `label` fields: a record's title and the picker's search fallback. */
 	label: readonly string[];
@@ -32,10 +32,12 @@ export type CollectionExposure = {
 	search?: readonly string[];
 	/** The model declares `search.semantic` (text or file fields on an embedding model): the toolbar offers `/semantic`. */
 	semantic?: true;
-	/** The named similarity searches the caller reads, by their typed `input`: the toolbar offers each as `/<name>`. */
-	similarity?: { readonly [name: string]: { input: Fields; description: string } };
+	/** The model's own search indexes (`search.indexes`), by their typed `input`: the toolbar offers each as `/<index>`. */
+	indexes?: { readonly [index: string]: { input: Fields; description: string } };
 	/** The collection's named queries the caller holds, by their typed `input` and `output`: the toolbar offers each as `/<query>`. */
-	queries?: { readonly [query: string]: { input: Fields; output: Kind; description: string } };
+	queries?: {
+		readonly [query: string]: { input: Fields; output: OutputKind; description: string };
+	};
 	/** Model fields the caller may read (hidden ones included; `hidden` renders nothing). */
 	fields: Fields;
 	/** One-relations as FK columns: `holder` → `employees`. A polymorphic ref lists every target. */
@@ -62,22 +64,37 @@ export type CollectionExposure = {
 		with?: Readonly<Record<string, ChildInput>>;
 	};
 	update?: { columns: readonly string[]; with?: Readonly<Record<string, ChildInput>> };
-	/** Host-declared field restrictions, in addition to ordinary write grants. */
-	readonlyFields?: { readonly [field: string]: 'integrationOwned' | 'ownedParent' };
-	actions?: {
-		readonly [action: string]: { input: Fields; target?: 'record'; description?: string };
-	};
+	/** Host-declared field restrictions, in addition to ordinary write grants: a read-only sync's fields, an owned parent. */
+	readonlyFields?: { readonly [field: string]: 'syncOwned' | 'ownedParent' };
+	/** The model's own-field lock: a matching record is read-only and its record page offers a lock instead of Edit. */
+	locked?: Where;
 	/** The view toolbar's info text: the collection's declared description, else its model's. */
 	description?: string;
 	/** The caller holds a delete arm. */
 	delete?: true;
-	/** The declared feed run (`<definition>.<feed>`) the caller may start for this collection. */
-	integration?: string;
-	/** The `<c>.pipeline` import and export the caller may run, by their declared description. */
-	pipeline?: { import?: string; export?: string };
+	/** The model's syncs the caller may run from the toolbar (`<c>.sync.<name>`). */
+	syncs?: { readonly [sync: string]: SyncExposure };
 };
+/** A declared automation the caller may start, with the fields its native form renders. */
+export type AutomationExposure = { input: Fields; description?: string };
+/** A file parser: a built-in (`xlsx`, `csv`, `tsv`, `json`, `ics`) or a custom one by its media type and extensions. */
+export type ParserExposure = string | { type: string; extensions: readonly string[] };
+/**
+ * A model's sync as the toolbar offers it. A file sync: Import… and Download template when the caller may write the
+ * model (`import`), its file picker accepting exactly `parser` (default `xlsx`, `csv`); Export in each of `export`'s
+ * formats (a records format, `xlsx`/`csv`/…, or the workspace's convert targets when its `write` returns a document).
+ * A remote sync with a `read` the caller may start: "Sync now" pulls from `with`, its integration.
+ */
+export type SyncExposure =
+	| {
+			kind: 'file';
+			parser?: readonly ParserExposure[];
+			import?: true;
+			export?: readonly string[];
+	  }
+	| { kind: 'remote'; with: string };
 /** What a custom field's renderer receives, a tenant's `src/data/custom_field/<f>/+renderer.svelte` and a built-in's
- * (`money`, `file`, `point`, `phone`) alike (§3.2 role 5). `row` is the record's other field values (the form's draft in
+ * (`money`, `file`, `point`, `phone`) alike (spec §6). `row` is the record's other field values (the form's draft in
  * edit mode), absent when a page embeds the renderer; `kind` is the field's literal (a custom reference's `shape`);
  * `dense` asks for one compact line (a table cell, a card); `address` is a `point` field's address sibling. */
 type ViewCommon<V> = {
@@ -88,8 +105,9 @@ type ViewCommon<V> = {
 	id?: string;
 	address?: { value: string | null; onChange?(next: string | null): void };
 };
-/** What a custom field's renderer receives: its value and, in `edit` mode, `onChange`, `disabled` and the field's error. */
-export type CustomFieldView<V = Value> =
+/** What a kind's renderer receives (a built-in custom field's, structurally bolt's `CustomFieldView`): its value and, in
+ * `edit` mode, `onChange`, `disabled` and the field's error. */
+export type KindView<V = Value> =
 	| (ViewCommon<V> & { mode: 'show'; dense?: true })
 	| (ViewCommon<V> & {
 			mode: 'edit';
@@ -101,7 +119,7 @@ export type CustomFieldView<V = Value> =
 export type CustomFieldEntry = {
 	shape: Kind;
 	label?: string;
-	renderer?: Component<{ view: CustomFieldView }>;
+	renderer?: Component<{ view: KindView }>;
 };
 /** The host's address search (and reverse lookup) a `PointInput` uses when present. */
 export type Geocoder = {
@@ -117,6 +135,7 @@ export type Geocoder = {
  */
 export type KindsHost = {
 	catalog?: { readonly [collection: string]: CollectionExposure } | undefined;
+	automations?: { readonly [automation: string]: AutomationExposure } | undefined;
 	customFields?: { readonly [name: string]: CustomFieldEntry } | undefined;
 	/** `bolt.upload`; without it a file field is read-only. */
 	upload?(
@@ -131,8 +150,8 @@ export type KindsHost = {
 	geocoder?: Geocoder;
 	/** A keyless tile template; the host may override the OpenStreetMap default. */
 	basemap?: { url: string; attribution: string };
-	/** The `read` a picker pages through: `bolt.read`. Without it an `id` is typed. */
-	read?(
+	/** The read a picker pages through: `bolt.query` of a model. Without it an `id` is typed. */
+	query?(
 		collection: string,
 		options: Json
 	): Effect.Effect<

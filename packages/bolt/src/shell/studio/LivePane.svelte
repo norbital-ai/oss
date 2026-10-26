@@ -1,211 +1,101 @@
-<!--
-	Live's main pane : the selected recorded commit — its id, message, when, whether it serves now and
-	its restore point — with Roll back (a source rollback: an administrator's, to a commit with a restore point), over the runtime log,
-	Operations (the environments the host routes, live first) and Usage (the host's metering of this workspace, an administrator's).
--->
+<!-- Tenant Studio and Realm render the same operational inspection; Studio keeps source and the preview editor beside it. -->
 <script lang="ts">
-	import { Button, Chart, Icon, Tabs } from '@norbital-ai/ui';
-	import { query } from '@norbital-ai/ui/effect';
-	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import RuntimeLog from './RuntimeLog.svelte';
-	import { routedEnvironment, type StudioRelease, type StudioView } from './model.ts';
+	import {
+		WorkspaceOperations,
+		type WorkspaceOperation,
+		type WorkspaceOperationsData,
+		type WorkspaceRange,
+		type WorkspaceView,
+		type WorkspaceScope
+	} from '@norbital-ai/ui';
+	import { observeOnce } from '@norbital-ai/ui/effect';
+	import { Scroll } from '@norbital-ai/ui/layout';
+	import { watch } from 'runed';
+	import type { Effect } from 'effect';
+	import type { StudioView } from './model.ts';
 	import type { ShellApi } from '../api-types.ts';
-
+	import { based } from '../nav.ts';
 	let {
 		api,
 		view,
-		release,
 		admin,
 		busy,
 		sub,
 		onsub,
-		onrestore,
+		onoperate,
 		t
 	}: {
 		api: ShellApi;
 		view: StudioView;
-		release: StudioRelease | undefined;
 		admin: boolean;
 		busy: boolean;
 		sub: 'runtime' | 'operations' | 'usage';
 		onsub: (sub: 'runtime' | 'operations' | 'usage') => void;
-		onrestore: (commit: string) => void;
+		onoperate: (operation: WorkspaceOperation) => Effect.Effect<unknown, Error>;
 		t: (key: string) => string;
 	} = $props();
-	const routed = $derived(routedEnvironment(view.environments));
-	// the selected deployment's live window: from its time to the next deployment's (open while it serves)
-	const until = $derived(
-		release === undefined || release.current
-			? undefined
-			: view.releases
-					.map((r) => r.at)
-					.filter((at) => Date.parse(at) > Date.parse(release.at))
-					.sort((x, y) => Date.parse(x) - Date.parse(y))[0]
+	let range = $state<WorkspaceRange>('7d');
+	let chosen = $state<WorkspaceView | null>(null);
+	let build = $state<string | null>(null),
+		run = $state<string | null>(null);
+	const route = (value: WorkspaceView) =>
+		value === 'resources' ? 'usage' : value === 'logs' ? 'runtime' : 'operations';
+	const active = $derived(
+		chosen ?? (sub === 'usage' ? 'resources' : sub === 'runtime' ? 'logs' : 'activity')
 	);
-	// why Roll back is off for a version that is not live: none recorded, or its database was replaced by a reset
-	const unreachable = $derived(
-		release === undefined || release.current || release.checkpoint !== null
-			? null
-			: release.replaced
-				? 'Before the last reset — can’t roll back to this'
-				: 'This version has no checkpoint to roll back to'
+	watch(
+		() => sub,
+		(next) => {
+			if (chosen !== null && route(chosen) !== next) chosen = null;
+		}
 	);
-	// read when the Usage view is open; a chart's values are shown in a readable unit
-	const usage = query(() => (sub === 'usage' && admin ? api.studioUsage() : null));
-	const SCALE: { readonly [unit: string]: readonly [string, number] } = {
-		bytes: ['MiB', 1024 * 1024],
-		'micro-SGD': ['SGD', 1_000_000],
-		seconds: ['seconds', 1]
-	};
-	const rows = (unit: string, points: readonly { at: number; value: number }[]) => {
-		const [label, divisor] = SCALE[unit] ?? [unit, 1];
-		return {
-			label,
-			rows: points.map((p) => ({
-				time: new Date(p.at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }),
-				[label]: p.value / divisor
-			}))
-		};
-	};
-	const PANE = 'min-h-0 flex-1 gap-0 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6';
+	// one snapshot serves every sub-tab: switching a pane is a local render, never another read
+	const input = $derived({ range, build, run });
+	const inspection = observeOnce(() => {
+		// Native operations and background merge frames replace view; refresh the shared inspection with that state.
+		void view;
+		return admin ? api.studioInspect(input) : null;
+	});
+	// a new view reads while the last one stays on screen: the shell never empties between sub-tabs
+	let shown = $state<WorkspaceOperationsData | null>(null);
+	watch(
+		() => inspection.current,
+		(next) => {
+			if (next !== undefined) shown = next;
+		}
+	);
+	const data = $derived(inspection.current ?? shown);
+	function change(next: WorkspaceScope) {
+		if (next.range !== undefined) range = next.range;
+		if (next.build !== undefined) build = next.build;
+		if (next.run !== undefined) run = next.run;
+		if (next.view !== undefined) {
+			chosen = next.view;
+			onsub(route(next.view));
+		}
+	}
 </script>
 
-{#snippet runtime()}
-	{#if admin}
-		<RuntimeLog {api} {t} since={release?.at} {until} />
-	{:else}
-		<Stack
-			gap="sm"
-			align="center"
-			justify="center"
-			fill
-			class="px-6 text-center text-muted-foreground"
-		>
-			<Icon name="lucide:lock" class="size-8 opacity-30" />
-			<p class="text-xs">{t('The runtime log is an administrator’s.')}</p>
-		</Stack>
-	{/if}
-{/snippet}
-
-{#snippet operations()}
-	<Scroll name={t('Operations')} class="h-full">
-		<Stack gap="md" class="p-4 sm:p-6">
-			<h3 class="text-overline">{t('Environments')}</h3>
-			{#if routed === undefined}
-				<p class="text-meta">{t('No environment is routed.')}</p>
-			{:else}
-				<Stack as="ul" gap="none" divided class="border-y border-border/50">
-					{#each [routed, ...(view.environments ?? []).filter((e) => e.name !== routed.name)] as e (e.name)}
-						<Cluster as="li" gap="sm" justify="between" class="py-3">
-							<Inline gap="sm" class="min-w-0">
-								<Icon
-									name={e.name === 'live' ? 'lucide:radio-tower' : 'lucide:flask-conical'}
-									class="size-4 shrink-0 text-muted-foreground"
-								/>
-								<Stack gap="xs" class="min-w-0">
-									<strong class="text-xs font-medium text-foreground">{e.name}</strong>
-									{#if e.release === ''}<span class="text-micro text-muted-foreground"
-											>{t('unrouted')}</span
-										>
-									{:else}<code class="truncate font-mono text-micro text-muted-foreground"
-											>{e.release}</code
-										>{/if}
-								</Stack>
-							</Inline>
-							{#if e.url !== null && e.release !== ''}
-								<Button size="sm" variant="outline" class="px-2 text-micro" href={e.url}
-									><Icon name="lucide:external-link" class="size-3" />{t('Open')}</Button
-								>
-							{/if}
-						</Cluster>
-					{/each}
-				</Stack>
-			{/if}
-		</Stack>
-	</Scroll>
-{/snippet}
-
-{#snippet usageView()}
-	<Scroll name={t('Usage')} class="h-full">
-		<Stack gap="md" class="p-4 sm:p-6">
-			{#if !admin}
-				<p class="text-meta">{t('Usage is an administrator’s.')}</p>
-			{:else if usage.error !== undefined}
-				<p class="text-meta">{t('Usage could not be read.')}</p>
-			{:else if usage.current === undefined}
-				<p class="text-meta">{t('Reading usage…')}</p>
-			{:else}
-				<p class="text-meta">
-					{t(
-						'The last seven days: each point is the peak, or for compute and AI the total, of its hour.'
-					)}
+<Scroll name={t('Workspace operations')} class="h-full min-h-0">
+	<div class="grid min-w-0 gap-3 px-4 pb-4 sm:px-6 sm:pb-6">
+		{#if !admin}<p class="text-meta">{t('Workspace operations are an administrator’s.')}</p>
+		{:else}
+			{#if inspection.error !== undefined}<p role="alert" class="text-destructive text-xs">
+					{inspection.error.message}
+				</p>{/if}
+			{#if data === null}<p class="text-meta" role="status">
+					{t('Reading workspace operations…')}
 				</p>
-				<div class="grid gap-6 lg:grid-cols-2">
-					{#each usage.current.charts as chart (chart.title)}
-						{@const data = rows(chart.unit, chart.points)}
-						<Chart of={data.rows} x="time" y={data.label} kind="line" title={chart.title} />
-					{/each}
-				</div>
-			{/if}
-		</Stack>
-	</Scroll>
-{/snippet}
-
-<Stack gap="none" fill class="min-h-0">
-	{#if release !== undefined}
-		<Cluster
-			align="start"
-			gap="sm"
-			shrink={false}
-			class="border-b border-border/60 px-4 py-3 sm:px-6"
-		>
-			<Stack gap="xs" grow class="min-w-0">
-				<Cluster gap="xs">
-					<h2 class="truncate text-sm font-semibold text-foreground" title={release.commit}>
-						{release.message || t('Version')}
-					</h2>
-					{#if release.current}<span
-							class="rounded-full border border-border/70 bg-muted px-2 py-0.5 text-micro"
-							>{t('Serving now')}</span
-						>{/if}
-				</Cluster>
-				<p class="text-micro text-muted-foreground">
-					<time datetime={release.at}>{new Date(release.at).toLocaleString()}</time>
-					{#if release.checkpoint}
-						· {t('checkpoint')}
-						<time datetime={release.checkpoint}
-							>{new Date(release.checkpoint).toLocaleString()}</time
-						>{/if}
-				</p>
-				{#if admin && unreachable !== null}
-					<p class="text-micro text-muted-foreground">{t(unreachable)}</p>
-				{/if}
-			</Stack>
-			{#if admin}
-				<Button
-					size="sm"
-					variant="outline"
-					disabled={busy || release.current || unreachable !== null}
-					disabledMessage={t(
-						release.current
-							? 'This commit is already live.'
-							: (unreachable ?? 'This deployment cannot be rolled back to.')
-					)}
-					onclick={() => onrestore(release.commit)}
-				>
-					<Icon name="lucide:history" class="size-3.5" />{t('Roll back')}
-				</Button>
-			{/if}
-		</Cluster>
-	{/if}
-	<Tabs
-		value={sub}
-		onValueChange={(v) => onsub(v === 'operations' || v === 'usage' ? v : 'runtime')}
-		class={PANE}
-		tabs={[
-			{ name: 'runtime', title: t('Runtime log'), body: runtime },
-			{ name: 'operations', title: t('Operations'), body: operations },
-			{ name: 'usage', title: t('Usage'), body: usageView }
-		]}
-	/>
-</Stack>
+			{:else}<WorkspaceOperations
+					{data}
+					scopeKey={based('')}
+					{range}
+					view={active}
+					busy={busy || inspection.loading}
+					onChange={change}
+					onOperate={onoperate}
+					{t}
+				/>{/if}
+		{/if}
+	</div>
+</Scroll>

@@ -5,7 +5,7 @@ import { element } from './elements.ts';
 const { flushSync, mount, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 
-test('a point shows a compact field and mounts search only when opened', async () => {
+test('point search mounts only when opened', async () => {
 	const target = document.createElement('div');
 	document.body.append(target);
 	const app = mount(Harness, {

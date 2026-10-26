@@ -45,6 +45,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	import { datePrecision, unitEnd, unitNext, unitStart, type DatePrecision } from './precision.js';
 	import Show from './show.svelte';
 	import UnitPicker from './unit-picker.svelte';
+	import { fieldPopoverAlignment } from './popover-alignment.svelte.js';
 
 	let {
 		value,
@@ -60,6 +61,13 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	const controls = useControls();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
 	const t = uiText();
+	let fieldAnchor = $state<HTMLElement | null>(null);
+	let calendarContent = $state<HTMLElement | null>(null);
+	const calendarAlignment = fieldPopoverAlignment(
+		() => fieldAnchor,
+		() => calendarContent,
+		() => (narrowViewport.current ? 0 : 8)
+	);
 	const locale = useKinds().locale;
 	const [a, b] = $derived(of === 'date' ? ['from', 'to'] : ['start', 'end']);
 	const v = $derived.by(() => {
@@ -190,6 +198,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	>
 		{#if picker}
 			<DateRangePicker.Trigger
+				bind:ref={fieldAnchor}
 				{id}
 				class={cn(CONTROL, 'flex w-full min-w-0 items-center gap-2 text-left text-sm font-normal')}
 				aria-invalid={invalid ? 'true' : undefined}
@@ -202,6 +211,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 			</DateRangePicker.Trigger>
 		{:else}
 			<div
+				bind:this={fieldAnchor}
 				class={cn(SEGMENTS, 'pr-1')}
 				aria-invalid={invalid ? 'true' : undefined}
 				data-period-input={of}
@@ -229,9 +239,11 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 		{/if}
 		<DatePicker.Portal>
 			<DateRangePicker.Content
+				bind:ref={calendarContent}
+				customAnchor={fieldAnchor}
 				sideOffset={4}
 				collisionPadding={narrowViewport.current ? 0 : 8}
-				align="start"
+				align={calendarAlignment.current}
 				class="z-50 max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-3 text-popover-foreground shadow-md max-sm:max-w-[100vw] max-sm:p-0"
 			>
 				<DateRangePicker.Calendar>

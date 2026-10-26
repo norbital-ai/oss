@@ -15,7 +15,8 @@ import {
 	Semaphore,
 	Stream
 } from 'effect';
-import { localOf } from '@norbital-ai/std/zone';
+import { bindingsAt } from '../query/reader.ts';
+import { Instant } from '@norbital-ai/std/date';
 import { DRIVERS, type DriverName, type IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { under } from '../../protocol/wire.ts';
@@ -39,14 +40,15 @@ import { Fenced, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Drivers } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
-import { Conversations, Feeds, Links, Live, Manifest, Reads, Wake, Writes } from '../services.ts';
+import { Conversations, Links, Live, Manifest, Reads, Wake, Writes } from '../services.ts';
 import { mayUpdate } from '../write/act.ts';
-import { canonical } from '../write/sql.ts';
+import { canonical } from '@norbital-ai/store';
 import type { Credentials, InstanceRow } from './credentials.ts';
 import { oauthClientOf, type OAuthClient, type OAuthVendor, type Provider } from './driver.ts';
 import { linkCalls, linkFailure, type LinkCalls } from './abi.ts';
 import { conversational, definitionOf, writeStatus } from './instances.ts';
 import { SYSTEM } from '../../system/index.ts';
+import { Syncs, syncsOf } from '../sync/index.ts';
 import { verifiedWebhook } from '../runs/webhook.ts';
 
 export const HOOKS = '/hooks/integration/';
@@ -54,10 +56,15 @@ export const OAUTH_CALLBACK = '/hooks/oauth/callback';
 export const webhookUrl = (publicUrl: string, instance: string): string =>
 	under(publicUrl, `${HOOKS}${encodeURIComponent(instance)}`);
 export type LinkAdmission =
-	TenantDb | Manifest | Conversations | Feeds | Live | Wake | Reads | Writes;
+	TenantDb | Manifest | Conversations | Syncs | Live | Wake | Reads | Writes;
 export type LinksHost = {
 	readonly providers: readonly Provider[];
+	/** A link's own work on the workspace (an ingest, a status), outside the compute envelope. */
 	readonly enter: <A, E>(
+		work: Effect.Effect<A, E, LinkAdmission>
+	) => Effect.Effect<A, E | EngineError>;
+	/** A guest body (a custom conversation's webhook, a test send), admitted under the compute envelope. */
+	readonly admit: <A, E>(
 		work: Effect.Effect<A, E, LinkAdmission>
 	) => Effect.Effect<A, E | EngineError>;
 	readonly credentials: Credentials;
@@ -473,12 +480,7 @@ export const integrationLinks = (
 							issuedAt: at,
 							authority,
 							invocationId: key,
-							bindings: {
-								now: at,
-								today: localOf(now, manifest.workspace.tz).date,
-								tz: manifest.workspace.tz,
-								params: {}
-							}
+							bindings: bindingsAt(now, manifest.workspace.tz)
 						})).outcome;
 					})
 				);
@@ -504,8 +506,24 @@ export const integrationLinks = (
 		const acquire = (instance: string, provider: Provider, o: Opened) =>
 			Effect.gen(function* () {
 				const importStart = yield* checkedStart(provider, o.row.import_start);
+				const syncs = yield* h.enter(
+					Effect.map(Manifest, (manifest) =>
+						[...syncsOf(manifest).values()].flatMap((sync) =>
+							sync.definition === o.row.integration && sync.read
+								? [
+										{
+											name: sync.name,
+											...(sync.partitions === undefined ? {} : { partitions: sync.partitions })
+										}
+									]
+								: []
+						)
+					)
+				);
 				const scope = yield* Scope.Scope;
-				const run = yield* FiberSet.makeRuntimePromise<never, unknown, LinkError>();
+				const tasks = yield* FiberSet.make<unknown, LinkError>();
+				const run = yield* FiberSet.runtimePromise(tasks)();
+				const launch = yield* FiberSet.runtime(tasks)();
 				const signalScope = yield* Effect.acquireRelease(Scope.make(), (owned) =>
 					Scope.close(owned, Exit.void)
 				);
@@ -535,15 +553,17 @@ export const integrationLinks = (
 					provider.open({
 						instance,
 						definition: o.definition,
+						syncs,
 						personal: o.row.owner !== null,
 						configuration: o.row.configuration,
 						importStart,
 						webhookUrl: webhookUrl(h.publicUrl, instance),
 						redirectUrl: under(h.publicUrl, OAUTH_CALLBACK),
 						signal,
-						// Native provider ABI: each synchronous state() call needs a fresh secure nonce.
-						state: () => `${globalThis.crypto.randomUUID()}.${instance}`,
-						oauthClient: (vendor) => oauthClientOf(o.definition, h.secrets, h.oauth, vendor),
+						// each state() call is a fresh secure nonce
+						state: () => Promise.resolve(`${globalThis.crypto.randomUUID()}.${instance}`),
+						oauthClient: (vendor) =>
+							Promise.resolve(oauthClientOf(o.definition, h.secrets, h.oauth, vendor)),
 						fetch: (input, init) =>
 							held.replaced
 								? Promise.reject(new Fenced({ instance, message: REPLACED }))
@@ -585,8 +605,8 @@ export const integrationLinks = (
 									: run(
 											h.enter(
 												event.kind === 'invalidate'
-													? Effect.flatMap(Feeds, (feeds) =>
-															feeds.invalidate(instance, event.feed, event.partition)
+													? Effect.flatMap(Syncs, (syncs) =>
+															syncs.invalidate(instance, event.sync, event.partition)
 														)
 													: Effect.flatMap(Conversations, (conversations) =>
 															conversations.receive(instance, event, importStart)
@@ -598,7 +618,7 @@ export const integrationLinks = (
 						pairing: (pairing) => {
 							if (!held.replaced) {
 								held.pairing = pairing;
-								void run(logged(publish(instance)));
+								launch(logged(publish(instance)));
 							}
 						}
 					})
@@ -748,17 +768,16 @@ export const integrationLinks = (
 					);
 				if (found === undefined) return new Response(null, { status: 404 });
 				const d = yield* definition(found.row);
-				if (d.webhook === undefined || d.conversation === undefined)
-					return new Response(null, { status: 404 });
+				if (d.webhook === undefined) return new Response(null, { status: 404 });
 				if (!found.row.active) return new Response(null, { status: 503 });
 				const credential = found.values.get('credential'),
-					secret = Predicate.isObject(credential) ? credential[d.webhook.secret] : undefined;
+					secret = Predicate.isObject(credential) ? credential[d.webhook.verify.secret] : undefined;
 				if (typeof secret !== 'string' || secret === '') return new Response(null, { status: 401 });
 				const headers = Object.fromEntries(request.headers),
 					body = new Uint8Array(yield* Port.attempt('webhook', () => request.arrayBuffer()));
 				const now = yield* Clock.currentTimeMillis;
 				const verified = verifiedWebhook(
-					d.webhook.scheme,
+					d.webhook.verify.scheme,
 					secret,
 					{
 						method: request.method,
@@ -772,9 +791,15 @@ export const integrationLinks = (
 					return new Response(verified.answer.body ?? null, { status: verified.answer.status });
 				if (verified.body === undefined) return new Response(null, { status: 400 });
 				const { authorization: _, ...shown } = headers;
-				yield* h.enter(
-					Effect.flatMap(Conversations, (conversations) =>
-						conversations.webhook(instance, { body: verified.body ?? null, headers: shown })
+				yield* h.admit(
+					Effect.flatMap(Syncs, (syncs) =>
+						syncs.hint(instance, {
+							kind: 'webhook',
+							id: verified.delivery,
+							at: Instant(new Date(now)),
+							body: verified.body ?? null,
+							headers: shown
+						})
 					)
 				);
 				return new Response(null, { status: 200 });
@@ -1065,7 +1090,7 @@ export const integrationLinks = (
 						} else if (isRequest(x.definition.driver))
 							yield* transient(instance, (held) => held.calls.test(input));
 						else yield* linked(instance).pipe(Effect.flatMap((held) => held.calls.test(input)));
-						yield* h.enter(Effect.flatMap(Feeds, (feeds) => feeds.test(instance)));
+						yield* h.admit(Effect.flatMap(Syncs, (syncs) => syncs.test(instance)));
 					})
 				).pipe(Port.call('link.test', 60_000)),
 			discover: (instance) =>
@@ -1084,14 +1109,7 @@ export const integrationLinks = (
 					Effect.gen(function* () {
 						const manifest = yield* Manifest;
 						const db = yield* TenantDb;
-						const at = yield* Clock.currentTimeMillis,
-							now = new Date(at).toISOString();
-						const bindings = {
-							now,
-							today: localOf(at, manifest.workspace.tz).date,
-							tz: manifest.workspace.tz,
-							params: {}
-						};
+						const bindings = bindingsAt(yield* Clock.currentTimeMillis, manifest.workspace.tz);
 						return yield* mayUpdate(
 							{ manifest, db },
 							'sys_integration',

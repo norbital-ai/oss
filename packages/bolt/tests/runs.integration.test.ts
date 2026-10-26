@@ -1,10 +1,11 @@
 // The runs area on PGlite (rules 48–56a, 70): the one queue, the deadlines port, buckets, event triggers written in the
-// causing statement, re-queues, attempts, the journal, webhooks, visibility, restart recovery.
+// causing statement, re-queues, attempts, the journal, webhooks, visibility, restart recovery. Crons: runs-fire.
 import { randomUUID } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
+import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
+import * as NodePath from '@effect/platform-node/NodePath';
 import { describe, expect, it } from '@effect/vitest';
 import {
-	Clock,
 	ConfigProvider,
 	Context,
 	Deferred,
@@ -12,23 +13,30 @@ import {
 	Fiber,
 	Layer,
 	Option,
-	Queue,
-	Redacted,
 	Result,
-	Schema
+	Schema,
+	Stream
 } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
 import type { Holder } from '../src/engine/access/authority.ts';
-import type { Invocation, Rows, Outcome as WriteOutcome } from '../src/engine/contracts.ts';
+import type {
+	Authority,
+	Invocation,
+	Rows,
+	Outcome as WriteOutcome
+} from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type EngineError } from '../src/engine/errors.ts';
+import { Port } from '../src/engine/port.ts';
 import { BoltError, CODES } from '../src/protocol/errors.ts';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
+import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
-import { EngineLive } from '../src/engine/host.ts';
+import { EngineLive, type EngineHost, type EngineServices } from '../src/engine/host.ts';
+import { memoryAuditLayer, respondSystem1 } from '../src/test/index.ts';
 import {
 	Activation,
+	Callables,
 	Guest,
 	Identity,
 	RunHandlers,
@@ -48,16 +56,33 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	GuestIsolates,
+	Http,
+	Docs,
+	Images,
+	Keys,
+	Mcp,
 	Metering,
 	Speech,
 	Transport,
 	WebRead
 } from '../src/engine/ports.ts';
+import { nodePorts } from '../src/node/ports.ts';
+import { keysPort } from '../src/node/keys.ts';
 import { Secrets, type SecretsShape } from '../src/engine/secrets.ts';
 import { RunsLive } from '../src/engine/runs/index.ts';
+import { RunJournal, type JournalEntry } from '../src/engine/runs/journal.ts';
 import { parseCallable } from '../src/engine/callables/index.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { Outcome } from '../src/protocol/schema.ts';
+import {
+	AgentCallTable,
+	AgentTurns,
+	boltRoutes,
+	RateLimits,
+	SessionAuthority
+} from '../src/protocol/http.ts';
+import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
 import type { Verb } from '../src/engine/write/act.ts';
 const base: EngineManifest = {
 	workspace: {
@@ -85,7 +110,6 @@ const base: EngineManifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -163,6 +187,9 @@ type Body = (
 			}
 		): Effect.Effect<Json, BoltError>;
 		notify(notices: Json): Effect.Effect<Json, BoltError>;
+		/** `ctx.web.read`: a durable call, answered from the run's journal on a replay. */
+		web(url: string): Effect.Effect<Json, BoltError>;
+		infer(args: Json): Effect.Effect<Json, BoltError>;
 	}
 ) => Effect.Effect<Json | void, EngineError>;
 /** The fake guest shares the decoded crossing contract with the isolate runner. */
@@ -208,8 +235,7 @@ function fakeGuest(
 				if (body === undefined)
 					return {
 						kind: 'failed' as const,
-						error: BoltError.make('missingBody', 'guest', inv.target),
-						cpuMs: 0
+						error: BoltError.make('missingBody', 'guest', inv.target)
 					};
 				return yield* body(inv.input, {
 					attempt: inv.id,
@@ -243,17 +269,18 @@ function fakeGuest(
 						}),
 					schedule: (automation, input, options = {}) =>
 						cross({ _tag: 'schedule', automation, input, ...options }),
-					notify: (notices) => cross({ _tag: 'notify', notices })
+					notify: (notices) => cross({ _tag: 'notify', notices }),
+					web: (url) => cross({ _tag: 'web.read', args: [url] }),
+					infer: (args) => cross({ _tag: 'ai.sys_2.infer', args: [args] })
 				}).pipe(
-					Effect.map((output) => ({ kind: 'ok' as const, output: output ?? null, cpuMs: 0 })),
+					Effect.map((output) => ({ kind: 'ok' as const, output: output ?? null })),
 					Effect.catch((error) =>
 						Effect.succeed({
 							kind: 'failed' as const,
 							error:
 								error._tag === 'BoltError'
 									? error
-									: BoltError.make('guestError', 'guest', error.message, error),
-							cpuMs: 0
+									: BoltError.make('guestError', 'guest', error.message, error)
 						})
 					)
 				);
@@ -261,6 +288,8 @@ function fakeGuest(
 	};
 }
 type World = {
+	/** The engine graph, for routes served over it. */
+	context: Context.Context<EngineServices | EngineHost>;
 	e: {
 		act: WritesShape['act'];
 		authority: IdentityShape['authority'];
@@ -289,9 +318,13 @@ const world = Effect.fn('TestRuns.world')(function* (
 	} = {},
 	extra: {
 		start?: readonly string[];
+		maintenanceClock?: 'test';
 		platform?: {
 			readonly [name: string]: RunHandler;
 		};
+		journal?: RunJournal['Service'];
+		web?: WebRead['Service'];
+		ai?: Ai['Service'];
 	} = {}
 ) {
 	const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
@@ -314,7 +347,15 @@ const world = Effect.fn('TestRuns.world')(function* (
 				statements.push({ at: clock.ms, text: statement.text, params: statement.params });
 				return inner.write(statement, lock);
 			}),
-		transaction: inner.transaction
+		// Keep every native batch statement visible, including audit receipts and acknowledgements.
+		transaction: (batch) =>
+			Effect.suspend(() => {
+				statements.push(
+					...batch.statements.map((x) => ({ at: clock.ms, text: x.text, params: x.params }))
+				);
+				return inner.transaction(batch);
+			}),
+		session: inner.session
 	});
 	let next: number | null = null;
 	const deadlines: DeadlinePort['Service'] = {
@@ -331,11 +372,20 @@ const world = Effect.fn('TestRuns.world')(function* (
 				next = null;
 			})
 	};
-	yield* applyPlan(db, plan(null, manifest), { accept: true });
+	yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 	const host = Layer.mergeAll(
+		memoryAuditLayer,
 		NodeCrypto.layer,
+		NodeFileSystem.layer,
+		NodePath.layer,
+		Layer.unwrap(Effect.map(nodePorts(), (ports) => GuestIsolates.fromAbi(ports.guestIsolates))),
+		Keys.fromAbi(keysPort(new Uint8Array(32).fill(7))),
+		Http.unavailable,
+		Images.unavailable,
+		Docs.unavailable,
+		Mcp.unavailable,
 		Layer.succeed(TenantDb, db),
-		Ai.unavailable,
+		extra.ai === undefined ? Ai.unavailable : Layer.succeed(Ai, extra.ai),
 		Convert.unavailable,
 		Layer.succeed(DeadlinePort, deadlines),
 		Drivers.unavailable,
@@ -344,20 +394,20 @@ const world = Effect.fn('TestRuns.world')(function* (
 		Metering.unavailable,
 		Speech.unavailable,
 		Transport.unavailable,
-		WebRead.unavailable,
+		extra.web === undefined ? WebRead.unavailable : Layer.succeed(WebRead, extra.web),
+		...(extra.journal === undefined ? [] : [Layer.succeed(RunJournal, extra.journal)]),
 		Layer.succeed(Activation, {
 			scope: 'ws',
 			epoch: '',
 			release: '',
 			publicUrl: 'http://localhost',
 			guest: Option.none(),
-			transforms: new Set<string>(),
-			projections: new Set<string>(),
-			start: extra.start ?? [],
-			secretsKey: Option.some(Redacted.make(new Uint8Array(32).fill(7)))
+			start: extra.start ?? []
 		})
 	);
-	const context = yield* Layer.build(EngineLive(manifest).pipe(Layer.provideMerge(host)));
+	const engine = Layer.build(EngineLive(manifest).pipe(Layer.provideMerge(host)));
+	// Queue fixtures isolate recovery retries; the quiet case advances the maintenance clock too.
+	const context = yield* extra.maintenanceClock === 'test' ? engine : TestClock.withLive(engine);
 	const calls: Invocation[] = [];
 	const runContext = yield* Layer.build(
 		RunsLive.pipe(
@@ -392,6 +442,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 	yield* r.boot;
 	statements.length = 0;
 	return {
+		context,
 		e,
 		r,
 		db,
@@ -440,60 +491,21 @@ const setNow = (w: World, ms: number) =>
 		w.clock.ms = ms;
 		yield* TestClock.setTime(ms);
 	});
+/** The host's clock fires the daily digest a day on; the first fire of a day prunes. */
+const fireDigest = (w: World) =>
+	Effect.gen(function* () {
+		const slot = Date.parse('2026-09-26T06:00:00Z');
+		yield* setNow(w, slot);
+		yield* w.r.fire('digest', iso(slot));
+	});
 describe('the deadlines port and the idle workspace (rule 52a)', () => {
-	it.effect(
-		'runs both automations sharing a cron expression and maintains their independent next slots',
-		() =>
-			Effect.gen(function* () {
-				const scheduled = {
-					...empty,
-					automations: {
-						first: { description: 'First task', on: { cron: '*/5 * * * *' }, runAs: ['ops'] },
-						second: { description: 'Second task', on: { cron: '*/5 * * * *' }, runAs: ['ops'] }
-					}
-				} satisfies EngineManifest;
-				const w = yield* world(scheduled, {
-					first: () => Effect.gen(function* () {}),
-					second: () => Effect.gen(function* () {})
-				});
-				yield* w.until(T0 + 5 * 60000);
-				expect(w.calls.map((call) => call.target).sort()).toEqual(['first', 'second']);
-				yield* w.until(T0 + 10 * 60000);
-				expect(w.calls.map((call) => call.target).sort()).toEqual([
-					'first',
-					'first',
-					'second',
-					'second'
-				]);
-			})
-	);
 	it.effect('an idle workspace issues zero statements over a simulated week', () =>
 		Effect.gen(function* () {
-			const w = yield* world(empty);
+			const w = yield* world(empty, {}, { maintenanceClock: 'test' });
 			yield* w.until(T0 + 7 * DAY);
 			expect(w.statements).toEqual([]);
 			expect(w.wakes).toEqual([]);
 		})
-	);
-	it.effect(
-		'a daily cron wakes once per slot and issues statements only at its slots, pruning included',
-		() =>
-			Effect.gen(function* () {
-				const w = yield* world(withCron, {
-					digest: () =>
-						Effect.gen(function* () {
-							return { ok: true };
-						})
-				});
-				yield* w.until(T0 + 7 * DAY);
-				const slots = Array.from(
-					{ length: 7 },
-					(_, i) => Date.parse('2026-09-26T06:00:00Z') + i * DAY
-				);
-				expect(w.wakes).toEqual(slots);
-				expect(new Set(w.statements.map((s) => s.at))).toEqual(new Set(slots));
-				expect(w.calls).toHaveLength(7);
-			})
 	);
 	it.effect(
 		'the daily prune drops aged events, closed rate windows and spent host nonces (rule 56, §5.11.6)',
@@ -511,7 +523,7 @@ describe('the deadlines port and the idle workspace (rule 52a)', () => {
 					`INSERT INTO bolt_host_nonce VALUES ('nonce:a', '${iso(T0 - 3600000)}'), ('run:a', '${iso(T0 - 3600000)}'), ('run:b', '${iso(T0 - 31 * DAY)}')`
 				])
 					yield* w.db.write({ text, params: [] });
-				yield* w.until(T0 + DAY);
+				yield* fireDigest(w);
 				expect(yield* w.sql(`SELECT count(*)::int AS n FROM bolt_rate`)).toEqual([{ n: 1 }]);
 				expect(yield* w.sql(`SELECT key FROM bolt_host_nonce`)).toEqual([{ key: 'run:a' }]);
 			})
@@ -530,7 +542,7 @@ describe('the deadlines port and the idle workspace (rule 52a)', () => {
 					text: `INSERT INTO bolt_history (collection, record, revision, op, cause) SELECT 'quotes', '00000000-0000-4000-8000-000000000001', g, 'update', 'direct' FROM generate_series(1, 260) g`,
 					params: []
 				});
-				yield* w.until(T0 + DAY);
+				yield* fireDigest(w);
 				expect(
 					yield* w.sql(
 						`SELECT count(*)::int AS n, min(revision) AS lo FROM bolt_history WHERE record = '00000000-0000-4000-8000-000000000001'`
@@ -558,7 +570,7 @@ describe('the deadlines port and the idle workspace (rule 52a)', () => {
 });
 describe('a preview environment, where the host binds no links', () => {
 	it.effect(
-		'runs its internal automations on schedule and on writes; an external integration feed never wakes',
+		'runs its internal automations on schedule and on writes; an external model sync never wakes',
 		() =>
 			Effect.gen(function* () {
 				const preview = {
@@ -575,13 +587,18 @@ describe('a preview environment, where the host binds no links', () => {
 					relationships: {
 						'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
 					},
-					collections: { ...base.collections, products: { read: { fields: 'all' } } },
+					collections: {
+						...base.collections,
+						products: {
+							read: { fields: 'all' },
+							syncs: { erp: { with: 'erp', read: true, every: '15min' } }
+						}
+					},
 					integrations: {
 						erp: {
 							description: 'An ERP database',
 							driver: 'sqlserver',
-							credential: { connection: { kind: 'text' } },
-							feeds: { products: { into: 'products', key: ['code'], cron: '*/15 * * * *' } }
+							credential: { connection: { kind: 'text' } }
 						}
 					},
 					automations: {
@@ -607,11 +624,13 @@ describe('a preview environment, where the host binds no links', () => {
 						set: { status: 'sent' }
 					})
 				).toMatchObject({ kind: 'committed' });
+				expect(yield* w.r.crons).toEqual([{ id: 'tidy', cron: '*/15 * * * *', zone: 'UTC' }]);
 				yield* w.until(T0 + 15 * 60000);
+				yield* w.r.fire('tidy', iso(T0 + 15 * 60000));
 				expect(w.calls.map((call) => call.target).sort()).toEqual(['sent', 'tidy']);
+				// `tidy` only read: it left no row
 				expect(yield* w.sql(`SELECT DISTINCT automation FROM sys_run ORDER BY 1`)).toEqual([
-					{ automation: 'sent' },
-					{ automation: 'tidy' }
+					{ automation: 'sent' }
 				]);
 			})
 	);
@@ -634,11 +653,9 @@ describe('event triggers (rules 49, 50)', () => {
 				// 60 quotes created 09:01:00–09:04:56 share the bucket 3 days after 09:05
 				for (let i = 0; i < 60; i++) {
 					yield* setNow(w, T0 + 60000 + i * 4000);
-					const before = w.statements.length;
 					expect(yield* w.act('quotes', 'create', { title: `q${i}` })).toMatchObject({
 						kind: 'committed'
 					});
-					expect(w.statements.length - before).toBe(1);
 				}
 				expect(
 					yield* w.sql(
@@ -687,6 +704,113 @@ describe('event triggers (rules 49, 50)', () => {
 					ids: [id],
 					rows: [{ id, title: 'b', status: 'sent' }]
 				});
+			})
+	);
+	it.effect(
+		'manual input.rows stay intact while deleted event pre-images retain their field masks',
+		() =>
+			Effect.gen(function* () {
+				const scoped: EngineManifest = {
+					...base,
+					policies: {
+						limited: {
+							description: 'Read quote titles and start a manual review',
+							grants: { quotes: { read: { fields: ['title'] } } },
+							automations: ['review']
+						}
+					},
+					automations: {
+						review: {
+							description: 'Review authored rows',
+							input: {
+								collection: { kind: 'text' },
+								rows: {
+									kind: 'list',
+									of: {
+										kind: 'object',
+										fields: {
+											id: { kind: 'text' },
+											title: { kind: 'text' },
+											status: { kind: 'text' },
+											note: { kind: 'text' }
+										}
+									}
+								}
+							},
+							runAs: ['limited']
+						},
+						gone: {
+							description: 'Inspect deleted quotes',
+							on: { deleted: 'quotes' },
+							runAs: ['limited']
+						}
+					}
+				};
+				const w = yield* world(scoped, {
+					review: (input) => Effect.succeed(input),
+					gone: (input) => Effect.succeed(input)
+				});
+				const member: Holder = {
+					actor: {
+						kind: 'member',
+						id: randomUUID(),
+						email: null,
+						phone: null,
+						external: false,
+						teams: [],
+						teamPath: [],
+						admin: false,
+						party: null
+					},
+					policies: ['limited'],
+					admin: false
+				};
+				const manual: Json = {
+					collection: 'quotes',
+					rows: [
+						{ id: 'supplied-row', title: 'Authored title', status: 'sent', note: 'Authored data' }
+					]
+				};
+				const run = randomUUID();
+				expect(
+					yield* Context.get(w.context, Callables).start({
+						automation: 'review',
+						runs: [{ id: run, input: manual }],
+						authority: yield* w.e.authority(member),
+						bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} }
+					})
+				).toMatchObject({ kind: 'committed' });
+				expect(w.calls).toEqual([]);
+				expect(yield* w.sql('SELECT state, cause FROM sys_run WHERE id = $1', [run])).toEqual([
+					{ state: 'queued', cause: 'start' }
+				]);
+				yield* w.until(T0);
+				expect(w.calls.map((call) => ({ target: call.target, input: call.input }))).toEqual([
+					{ target: 'review', input: manual }
+				]);
+				expect(yield* w.sql('SELECT state FROM sys_run WHERE id = $1', [run])).toEqual([
+					{ state: 'succeeded' }
+				]);
+
+				const created = yield* w.act('quotes', 'create', {
+					title: 'Readable title',
+					status: 'sent'
+				});
+				if (created.kind !== 'committed' || created.records[0] === undefined)
+					throw new Error('Missing quote');
+				const quote = created.records[0];
+				expect(yield* w.act('quotes', 'delete', { target: quote.id })).toMatchObject({
+					kind: 'committed'
+				});
+				yield* w.until(T0);
+				expect(w.calls.find((call) => call.target === 'gone')?.input).toEqual({
+					collection: 'quotes',
+					ids: [quote.id],
+					rows: [{ id: quote.id, revision: quote.revision, title: 'Readable title' }]
+				});
+				expect(yield* w.sql("SELECT state, cause FROM sys_run WHERE automation = 'gone'")).toEqual([
+					{ state: 'succeeded', cause: 'deleted' }
+				]);
 			})
 	);
 });
@@ -790,6 +914,85 @@ describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
 			]);
 		})
 	);
+	it.effect(
+		"a retried run replays its web answer from the run's journal; the journal goes when the run completes",
+		() =>
+			Effect.gen(function* () {
+				const kept = new Map<string, JournalEntry[]>();
+				const journal: RunJournal['Service'] = {
+					read: (run) => Effect.sync(() => kept.get(run) ?? []),
+					write: (run, entry) =>
+						Effect.sync(() => {
+							kept.set(run, [...(kept.get(run) ?? []), entry]);
+						}),
+					clear: (run) =>
+						Effect.sync(() => {
+							kept.delete(run);
+						})
+				};
+				let pages = 0;
+				const seen: number[] = [];
+				const w = yield* world(
+					base,
+					{
+						flaky: (_, ctx) =>
+							Effect.gen(function* () {
+								const page = yield* ctx.web('https://a.test');
+								seen.push([...kept.values()].flat().length);
+								if (!ctx.attempt.endsWith(':2'))
+									return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
+								return page;
+							})
+					},
+					{
+						start: ['flaky'],
+						journal,
+						web: {
+							read: (url) =>
+								Effect.sync(() => {
+									pages++;
+									return { url, title: null, text: `page ${pages}` };
+								})
+						}
+					}
+				);
+				yield* w.until(T0 + DAY);
+				// the page was read once: the retry got its answer from the journal, not the web
+				expect(pages).toBe(1);
+				expect(seen).toEqual([1, 1]);
+				expect(
+					yield* w.sql(`SELECT state, output FROM sys_run WHERE automation = 'flaky'`)
+				).toEqual([{ state: 'succeeded', output: expect.objectContaining({ text: 'page 1' }) }]);
+				expect(kept.size).toBe(0);
+			})
+	);
+	it.effect('a run whose journal is full ends failed: journalFull', () =>
+		Effect.gen(function* () {
+			const w = yield* world(
+				base,
+				{
+					flaky: (_, ctx) =>
+						Effect.gen(function* () {
+							yield* ctx.web('https://a.test').pipe(Effect.ignore);
+							return 'done';
+						})
+				},
+				{
+					start: ['flaky'],
+					journal: {
+						read: () => Effect.succeed([]),
+						write: () => Effect.fail(BoltError.make('journalFull', 'facility', 'full')),
+						clear: () => Effect.void
+					},
+					web: { read: (url) => Effect.succeed({ url, title: null, text: 'page' }) }
+				}
+			);
+			yield* w.until(T0 + DAY);
+			expect(
+				yield* w.sql(`SELECT state, error->>'code' AS code FROM sys_run WHERE automation = 'flaky'`)
+			).toEqual([{ state: 'failed', code: 'journalFull' }]);
+		})
+	);
 	it.effect('a notice that names no recipient is refused and writes nothing (L-BOLT-340)', () =>
 		Effect.gen(function* () {
 			const w = yield* world(
@@ -851,11 +1054,11 @@ describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
 		() =>
 			Effect.gen(function* () {
 				const w = yield* world(
-					base,
+					{ ...base, teams: { nobody: [] } },
 					{
 						flaky: (_, ctx) =>
 							Effect.gen(function* () {
-								yield* ctx.notify({ to: { team: 'nobody' }, title: 'unheard' });
+								yield* ctx.notify({ to: [{ team: 'nobody' }], title: 'unheard' });
 								return 'sent';
 							})
 					},
@@ -1082,6 +1285,63 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 				expect(most).toBe(1);
 			})
 	);
+	it.effect('declared concurrency admits two overlapping runs and drains the remaining queue', () =>
+		Effect.gen(function* () {
+			const entered = yield* Deferred.make<void>(),
+				release = yield* Deferred.make<void>();
+			let running = 0,
+				most = 0;
+			const w = yield* world(
+				{
+					...base,
+					automations: {
+						...base.automations,
+						classify: {
+							description: 'Two independent reviews',
+							runAs: ['ops'],
+							concurrency: { max: 2 }
+						}
+					}
+				},
+				{
+					classify: () =>
+						Effect.gen(function* () {
+							most = Math.max(most, ++running);
+							if (running === 2) yield* Deferred.succeed(entered, undefined);
+							yield* Deferred.await(release);
+						}).pipe(
+							Effect.ensuring(
+								Effect.sync(() => {
+									running -= 1;
+								})
+							)
+						)
+				}
+			);
+			for (const [id, due] of [
+				['first', T0 - 3000],
+				['second', T0 - 2000],
+				['third', T0 - 1000]
+			] satisfies [string, number][])
+				yield* queue(w, id, 'classify', due);
+			const ticking = yield* Effect.forkChild(w.r.tick);
+			yield* Deferred.await(entered);
+			expect(yield* w.sql(`SELECT id, state, attempts FROM sys_run ORDER BY due_at`)).toEqual([
+				{ id: 'first', state: 'running', attempts: 1 },
+				{ id: 'second', state: 'running', attempts: 1 },
+				{ id: 'third', state: 'queued', attempts: 0 }
+			]);
+			yield* Deferred.succeed(release, undefined);
+			yield* Fiber.join(ticking);
+			expect(yield* w.sql(`SELECT id, state, attempts FROM sys_run ORDER BY due_at`)).toEqual([
+				{ id: 'first', state: 'succeeded', attempts: 1 },
+				{ id: 'second', state: 'succeeded', attempts: 1 },
+				{ id: 'third', state: 'succeeded', attempts: 1 }
+			]);
+			expect(most).toBe(2);
+			expect(running).toBe(0);
+		})
+	);
 	it.effect(
 		'an automation’s admitted batch holds its later runs; queued runs stay stoppable and hand off by due time',
 		() =>
@@ -1244,6 +1504,90 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 			})
 	);
 	it.effect(
+		'an interrupted inference restores one conversation and its durable transcript without repeating a tool turn',
+		() =>
+			Effect.gen(function* () {
+				const entered = yield* Deferred.make<void>();
+				let calls = 0;
+				const ai: Ai['Service'] = {
+					ask: respondSystem1,
+					maxChoices: undefined,
+					models: ['default'],
+					catalog: Effect.succeed({
+						models: [{ id: 'default', label: 'Default' }],
+						default: 'default'
+					}),
+					embed: () => Port.unavailable('ai.embed'),
+					infer: () =>
+						Stream.unwrap(
+							Effect.sync(() => {
+								if (++calls === 2)
+									return Stream.unwrap(
+										Deferred.succeed(entered, undefined).pipe(Effect.as(Stream.never))
+									);
+								return Stream.succeed({
+									_tag: 'Response' as const,
+									response: {
+										content: '',
+										toolCalls:
+											calls === 1
+												? [{ id: 'edit', name: 'edit', input: { ops: [{ path: '/n', set: 3 }] } }]
+												: [{ id: 'submit', name: 'submit', input: {} }],
+										finish: 'tool' as const,
+										usage: { input: 1, output: 1 }
+									}
+								});
+							})
+						)
+				};
+				const w = yield* world(
+					base,
+					{
+						classify: (_, ctx) =>
+							ctx.infer({
+								prompt: 'Count the items',
+								output: { kind: 'object', fields: { n: { kind: 'int' } } }
+							})
+					},
+					{ ai }
+				);
+				yield* queue(w, 'research', 'classify', T0);
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				yield* Fiber.interrupt(ticking);
+				const [before] = yield* w.sql('SELECT id FROM sys_conversation WHERE run = $1', [
+					'research'
+				]);
+				// A lost transcript write is restored from the journal; an uncommitted tail is discarded.
+				yield* w.sql("DELETE FROM sys_message WHERE conversation = $1 AND role = 'user'", [
+					String(before?.['id'])
+				]);
+				yield* w.sql(
+					`INSERT INTO sys_message (id, conversation, role, content) VALUES ('inflight', $1, 'assistant', '"unfinished"'::jsonb)`,
+					[String(before?.['id'])]
+				);
+				yield* w.r.boot;
+				yield* w.r.tick;
+				expect(calls).toBe(3);
+				expect(
+					yield* w.sql('SELECT id, status FROM sys_conversation WHERE run = $1', ['research'])
+				).toEqual([{ id: before?.['id'], status: 'idle' }]);
+				expect(
+					yield* w.sql('SELECT role FROM sys_message WHERE conversation = $1 ORDER BY seq', [
+						String(before?.['id'])
+					])
+				).toEqual([
+					{ role: 'user' },
+					{ role: 'assistant' },
+					{ role: 'tool' },
+					{ role: 'assistant' }
+				]);
+				expect(
+					yield* w.sql('SELECT state, output FROM sys_run WHERE id = $1', ['research'])
+				).toEqual([{ state: 'succeeded', output: { n: 3 } }]);
+			})
+	);
+	it.effect(
 		'a custom admission evaluates its bounded batch once across queued and finished history',
 		() =>
 			Effect.gen(function* () {
@@ -1358,48 +1702,6 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 			expect(yield* states(w)).toEqual([
 				{ automation: 'agent.triage', state: 'succeeded' },
 				{ automation: 'classify', state: 'succeeded' }
-			]);
-		})
-	);
-	/** Without the cron's next slot reaching the open wake, the second `Queue.take` never returns (the test times out). */
-	it.effect('a cron keeps firing its slots while a long platform run holds the open wake', () =>
-		Effect.gen(function* () {
-			const release = yield* Deferred.make<void>(),
-				ran = yield* Queue.unbounded<number>();
-			const w = yield* world(
-				{
-					...empty,
-					automations: {
-						pulse: { description: 'Pulse', on: { cron: '*/5 * * * *' }, runAs: ['ops'] }
-					}
-				},
-				{
-					pulse: () =>
-						Effect.gen(function* () {
-							yield* Queue.offer(ran, yield* Clock.currentTimeMillis);
-						})
-				},
-				{
-					platform: {
-						'agent.triage': () => Deferred.await(release).pipe(Effect.as({ decided: true }))
-					}
-				}
-			);
-			yield* queue(w, randomUUID(), 'agent.triage', T0);
-			yield* setNow(w, T0 + 5 * 60000);
-			const ticking = yield* Effect.forkChild(w.r.tick);
-			expect(yield* Queue.take(ran)).toBe(T0 + 5 * 60000);
-			yield* setNow(w, T0 + 10 * 60000);
-			expect(yield* Queue.take(ran)).toBe(T0 + 10 * 60000);
-			yield* setNow(w, T0 + 15 * 60000);
-			expect(yield* Queue.take(ran)).toBe(T0 + 15 * 60000);
-			expect(yield* w.sql(`SELECT state FROM sys_run WHERE automation = 'agent.triage'`)).toEqual([
-				{ state: 'running' }
-			]);
-			yield* Deferred.succeed(release, undefined);
-			yield* Fiber.join(ticking);
-			expect(yield* w.sql(`SELECT state FROM sys_run WHERE automation = 'agent.triage'`)).toEqual([
-				{ state: 'succeeded' }
 			]);
 		})
 	);

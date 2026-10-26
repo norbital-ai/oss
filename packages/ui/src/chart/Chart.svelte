@@ -1,13 +1,13 @@
 <!--
 @component
-A bar, line, area or donut chart over an aggregate, a read, a collection query or rows: `x` names the category, `y` the
+A bar, line, area or donut chart over an aggregate, a query, a declared query or rows, live while shown: `x` names the category, `y` the
 numbers (`count`, `sum.amount`).
 @example
 <Chart of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
 -->
 <script lang="ts" module>
-	import type { ViewSource } from '../read/source.svelte.js';
-	/** `of` is an aggregate, a read, a collection query or rows; `y` names numbers (`count`, `sum.amount`). */
+	import type { ViewSource } from '../read/source.js';
+	/** `of` is an aggregate, a query, a declared query or rows; `y` names numbers (`count`, `sum.amount`). */
 	export type ChartProps = {
 		of: ViewSource;
 		x: string;
@@ -18,7 +18,6 @@ numbers (`count`, `sum.amount`).
 		orientation?: 'horizontal' | 'vertical';
 		stack?: boolean;
 		title?: string;
-		every?: string;
 	};
 </script>
 
@@ -29,7 +28,7 @@ numbers (`count`, `sum.amount`).
 	import { humanize, msg } from '../text/messages.js';
 	import { series } from './series.js';
 	import ReadGate from '../read/ReadGate.svelte';
-	import { readSource } from '../read/source.svelte.js';
+	import { sourceState } from '../read/source.js';
 
 	let {
 		of,
@@ -39,8 +38,7 @@ numbers (`count`, `sum.amount`).
 		interpolation = 'linear',
 		orientation = 'vertical',
 		stack = false,
-		title,
-		every
+		title
 	}: ChartProps = $props();
 	const bolt = useBolt();
 	// Bottom holds the x tick labels (32) and the legend beneath them (32).
@@ -48,11 +46,7 @@ numbers (`count`, `sum.amount`).
 	// Band/point x scales show every category by default; thin them to one label per 80px like layerchart's continuous axes.
 	const xAxis = { tickSpacing: 80 };
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
-	const read = readSource(
-		bolt,
-		() => of,
-		() => every
-	);
+	const state = $derived(sourceState(of));
 	const COLORS = [
 		'var(--chart-1, #2563eb)',
 		'var(--chart-2, #60a5fa)',
@@ -72,7 +66,7 @@ numbers (`count`, `sum.amount`).
 
 <figure class="flex min-w-0 flex-col gap-2" data-view="chart">
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
-	<ReadGate state={read.state} what={title ?? msg(bolt, 'chart.data', 'this chart')}>
+	<ReadGate {state} what={title ?? msg(bolt, 'chart.data', 'this chart')}>
 		{#snippet children(value)}
 			{@const data = series(value, x, ys)}
 			{#if data.length === 0}

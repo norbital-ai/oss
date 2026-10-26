@@ -31,7 +31,6 @@ const manifest = {
 	policies: {},
 	agent: { internal: 'Staff brief.', external: 'External brief.', skills: {} },
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	automations: {},
 	connections: { whatsapp: { integration: 'whatsapp' } },

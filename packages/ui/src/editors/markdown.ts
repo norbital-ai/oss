@@ -4,10 +4,25 @@ import type { CommandItem } from './command-menu.js';
 // Markdown to HTML for `ReadonlyMarkdown`: GFM; raw HTML in the text is shown as text, and a link or image may only point
 // at http(s), mailto or a relative path, so a stored document can never script the page that shows it.
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const prettyJson = (text: string): string | undefined => {
+	try {
+		return JSON.stringify(JSON.parse(text), null, 2);
+	} catch {
+		return undefined;
+	}
+};
 const marked = new Marked({
 	gfm: true,
 	async: false,
-	renderer: { html: ({ text }) => escape(text) },
+	renderer: {
+		html: ({ text }) => escape(text),
+		// A JSON fence is shown as JSON, not one dense line: the schema/transcript prompts are written to be read.
+		code: ({ text, lang }) => {
+			const json = lang?.toLowerCase() === 'json' ? prettyJson(text) : undefined;
+			const body = escape(json ?? text);
+			return `<pre><code${lang === undefined || lang === '' ? '' : ` class="language-${escape(lang)}"`}>${body}</code></pre>`;
+		}
+	},
 	walkTokens(token) {
 		if (
 			(token.type === 'link' || token.type === 'image') &&

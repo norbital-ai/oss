@@ -22,9 +22,13 @@ import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
 import * as Headers from 'effect/unstable/http/Headers';
 import { Unavailable } from '../decl/errors.ts';
-import { Activation, Manifest, Identity, Runs } from '../engine/services.ts';
+import { Activation, Manifest, Identity, Runs, type Authenticated } from '../engine/services.ts';
+import { Syncs } from '../engine/sync/index.ts';
+import { mayUpdate } from '../engine/write/act.ts';
+import { localOf } from '@norbital-ai/std/zone';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Secrets } from '../engine/secrets.ts';
+import { Logs } from '../engine/ports.ts';
 import {
 	header,
 	invalid,
@@ -32,6 +36,7 @@ import {
 	requestActRate,
 	requestReadRate,
 	readAdmitted,
+	wireReadAdmitted,
 	requestBody,
 	requestUrl,
 	responseError,
@@ -56,10 +61,9 @@ import {
 } from '../engine/identity/members.ts';
 import {
 	authenticate,
-	forget,
 	requireAdmin,
+	revokeSession,
 	sendCode,
-	sha256,
 	SIGNUP_KEY,
 	verifyCode,
 	type IdentityHost
@@ -73,6 +77,8 @@ import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings } from './settings/data.ts';
 import { exposure } from '../engine/access/exposure.ts';
 import { StudioOp, studioView, type StudioPort } from './studio/model.ts';
+import { StudioInspectInput } from './studio/inspection.ts';
+import { AuditRuleSet } from './studio/audit.ts';
 import {
 	audienceOf,
 	canOpen,
@@ -80,6 +86,7 @@ import {
 	holdsPublic,
 	kioskNav,
 	startableAutomations,
+	automationInputs,
 	cookieNames,
 	cookieSite,
 	environmentLabel,
@@ -92,6 +99,10 @@ import {
 	type WorkspaceLink
 } from './nav.ts';
 import { readLog } from '../engine/guest/telemetry.ts';
+import { Audit } from '../engine/audit.ts';
+import { AuditQuery } from '../protocol/audit.ts';
+import { audited, auditActor } from '../engine/audit-operation.ts';
+import { encodeWire } from '@norbital-ai/std/wire';
 
 const SESSION_S = 7 * 86_400,
 	VISITOR_S = 30 * 86_400;
@@ -166,7 +177,8 @@ export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bol
 }
 export type ShellHostConfig = {
 	readonly publicUrl: string;
-	readonly workspace: {
+	/** Read on every request: the host may rename or rebrand the workspace while it serves. */
+	readonly workspace: () => {
 		readonly name: string;
 		readonly handle: string;
 		readonly icons?: readonly {
@@ -227,6 +239,19 @@ export class ShellHandler extends Context.Service<
 	}
 >()('bolt/ShellHandler') {}
 const Body = Schema.Record(Schema.String, Schema.Json);
+const SyncReplay = Schema.Struct({
+	instance: Schema.NonEmptyString,
+	ids: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
+});
+/** Studio's Audit rules: a save over the revision read, and a Try's unsaved set (absent: the saved one). */
+const AuditSave = Schema.Struct({ revision: Schema.Int, ruleSet: AuditRuleSet });
+const AuditTry = Schema.Struct({ ruleSet: Schema.optionalKey(AuditRuleSet) });
+const RunId = Schema.Struct({ id: Schema.String });
+/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL). */
+const Branding = Schema.Struct({
+	name: Schema.String,
+	logo: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
 const getHeader = (request: HttpServerRequest.HttpServerRequest, name: string) =>
 	header(request, name) ?? null;
 const ForeignFailure = Schema.Struct({
@@ -331,6 +356,7 @@ const bootFor = (
 	push: null,
 	visitor: null,
 	catalog: exposure(manifest, authority),
+	automations: automationInputs(manifest, authority),
 	contract: fingerprint(schemaSlice(manifest))
 });
 const makeShell = Effect.gen(function* () {
@@ -340,9 +366,12 @@ const makeShell = Effect.gen(function* () {
 		identity = yield* Identity,
 		db = yield* TenantDb,
 		runs = yield* Runs,
+		syncs = yield* Syncs,
 		secrets = yield* Secrets,
 		turnstile = yield* Turnstile,
-		rateLimits = yield* RateLimits;
+		rateLimits = yield* RateLimits,
+		logs = yield* Logs,
+		audit = yield* Audit;
 	const authorities = new Authorities(m, (yield* Activation).release);
 
 	h.events = {
@@ -411,6 +440,9 @@ const makeShell = Effect.gen(function* () {
 		return request;
 	});
 
+	/** A session minted for the agent's browser marks every authority it yields, a previewed one too (fail closed). */
+	const marked = (s: Pick<Authenticated, 'agent'>, a: Authority): Authority =>
+		s.agent === null ? a : { ...a, agent: s.agent };
 	/** The session the request's cookie names, or `null`. */
 	const signedIn = Effect.fn('shell.signedIn')(function* (
 		request: HttpServerRequest.HttpServerRequest
@@ -457,7 +489,8 @@ const makeShell = Effect.gen(function* () {
 		// policy naming that app (a customer who verified their number on the portal): they run as themselves
 		if (app !== null) {
 			const s = yield* signedIn(request);
-			const me = s === null ? null : yield* authorities.member(h.db, s.user);
+			const member = s === null ? null : yield* authorities.member(h.db, s.user);
+			const me = s === null || member === null ? null : marked(s, member);
 			if (s !== null && me !== null && holdsPublic(me, app))
 				return { authority: me, real: me, token: s.token, preview: null, expiresAt: s.expiresAt };
 			return {
@@ -476,7 +509,8 @@ const makeShell = Effect.gen(function* () {
 		const s = yield* signedIn(request),
 			token = s?.token ?? null;
 		const expiresAt = s === null ? {} : { expiresAt: s.expiresAt };
-		const real = s === null ? null : yield* authorities.member(h.db, s.user);
+		const member = s === null ? null : yield* authorities.member(h.db, s.user);
+		const real = s === null || member === null ? null : marked(s, member);
 		const target = jar.get(names.preview);
 		if (real !== null && target !== undefined && real.admin) {
 			{
@@ -490,7 +524,7 @@ const makeShell = Effect.gen(function* () {
 				);
 				if (p === null) return { authority: real, real, token, preview: null, ...expiresAt };
 				return {
-					authority: p.authority,
+					authority: s === null ? p.authority : marked(s, p.authority),
 					real,
 					token,
 					preview:
@@ -547,11 +581,7 @@ const makeShell = Effect.gen(function* () {
 			);
 			if (!verdict.ok) return refused('rateLimited', 'rateLimited', 429, verdict.retryAfter);
 			const body = yield* requestBody(request, QBody);
-			return body.reads.every((read) =>
-				readAdmitted(auth, { kind: read.m, collection: String(read.a[0]) })
-			)
-				? null
-				: forbidden;
+			return body.reads.every((read) => wireReadAdmitted(auth, read)) ? null : forbidden;
 		}
 		if (path === PATHS.act && request.method === 'POST') {
 			const admission = yield* requestActRate(request, auth).pipe(
@@ -594,11 +624,12 @@ const makeShell = Effect.gen(function* () {
 	): Effect.fn.Return<BootState, EngineError> {
 		const url = requestUrl(request);
 		const app = publicApp(url.searchParams.get('app'));
-		const logo = c.workspace.icons?.[0]?.src;
+		const workspace = c.workspace(),
+			logo = workspace.icons?.[0]?.src;
 		const env = environmentLabel(c.environment);
 		const ws: ShellBoot['workspace'] = {
-			name: c.workspace.name,
-			handle: c.workspace.handle,
+			name: workspace.name,
+			handle: workspace.handle,
 			locale: m.workspace.locale,
 			tz: m.workspace.tz,
 			...(logo === undefined ? {} : { logo }),
@@ -644,7 +675,8 @@ const makeShell = Effect.gen(function* () {
 							})
 						)?.name ?? null,
 					preview: x.preview,
-					catalog: exposure(m, kioskAuth)
+					catalog: exposure(m, kioskAuth),
+					automations: automationInputs(m, kioskAuth)
 				};
 				return ready(b, kioskAuth);
 			}
@@ -825,11 +857,7 @@ const makeShell = Effect.gen(function* () {
 			Effect.gen(function* () {
 				const token = sessionToken(request, names.session);
 				if (token !== null) {
-					yield* h.db.write({
-						text: 'DELETE FROM sys_session WHERE token_hash = $1',
-						params: [sha256(token)]
-					});
-					yield* forget(h, token);
+					yield* revokeSession(h, token);
 				}
 				return HttpServerResponse.empty({ status: 204 }).pipe(
 					HttpServerResponse.setCookiesUnsafe([
@@ -899,6 +927,28 @@ const makeShell = Effect.gen(function* () {
 		const route = sessionRoutes[key];
 		return route === undefined ? Effect.succeed(null) : route(request, current);
 	};
+	const manageInstance = Effect.fn('shell.manageInstance')(function* (
+		auth: Authority,
+		instance: string
+	) {
+		const at = yield* h.now;
+		const allowed = yield* mayUpdate({ manifest: m, db }, 'sys_integration', instance, auth, {
+			now: at.toISOString(),
+			today: localOf(at.getTime(), m.workspace.tz).date,
+			tz: m.workspace.tz,
+			params: {}
+		});
+		if (allowed !== true)
+			return yield* Effect.fail(
+				BoltError.make(
+					allowed === null ? 'notFound' : 'forbidden',
+					'admission',
+					allowed === null
+						? 'No such integration instance.'
+						: 'You may not manage this integration instance.'
+				)
+			);
+	});
 	const shell = Effect.fn('shell.shell')(function* (
 		request: HttpServerRequest.HttpServerRequest,
 		path: string,
@@ -946,7 +996,8 @@ const makeShell = Effect.gen(function* () {
 											files: outputFiles(
 												m.automations[run.automation]?.output,
 												run.result,
-												m.customFields
+												m.customFields,
+												m.models
 											)
 										})
 							}
@@ -954,11 +1005,8 @@ const makeShell = Effect.gen(function* () {
 			}
 			case 'POST /runs/stop': {
 				// hook:runtime — rule 56: whoever reads the run in full may stop it
-				const id = (yield* requestBody(request, Body))['id'];
-				const run =
-					typeof id === 'string'
-						? yield* runs.stop(auth, id).pipe(Effect.map(Option.getOrNull))
-						: null;
+				const { id } = yield* requestBody(request, RunId);
+				const run = yield* runs.stop(auth, id).pipe(Effect.map(Option.getOrNull));
 				return run === null
 					? refused('notFound', 'Not found or no access.', 404)
 					: json({ value: run });
@@ -974,6 +1022,30 @@ const makeShell = Effect.gen(function* () {
 					)
 				});
 			}
+			case 'GET /instance-sync-health': {
+				const instance = url.searchParams.get('instance') ?? '';
+				yield* manageInstance(auth, instance);
+				return json({ value: yield* syncs.health(instance) });
+			}
+			case 'POST /instance-sync-replay': {
+				const { instance, ids } = yield* requestBody(request, SyncReplay);
+				yield* manageInstance(auth, instance);
+				return json({ value: yield* syncs.replay(instance, ids) });
+			}
+			case 'POST /audit/query': {
+				if (!auth.admin || auth.actor.kind !== 'member')
+					return refused('forbidden', 'Only administrators may read the audit trail.', 403);
+				const query = yield* requestBody(request, AuditQuery);
+				return json({ value: yield* audit.query(query) });
+			}
+			case 'GET /audit/detail': {
+				if (!auth.admin || auth.actor.kind !== 'member')
+					return refused('forbidden', 'Only administrators may read the audit trail.', 403);
+				const id = url.searchParams.get('id');
+				if (id === null || id.length === 0)
+					return yield* Effect.fail(invalid('An audit detail requires an event id.'));
+				return json({ value: yield* audit.detail(id) });
+			}
 			case 'GET /settings':
 				return json({ value: yield* settings(h, m, auth, secrets) });
 			case 'POST /settings':
@@ -984,7 +1056,22 @@ const makeShell = Effect.gen(function* () {
 				const op = yield* requestBody(request, SettingsOp);
 				if (c.live !== undefined && !PREVIEW_SETTINGS.has(op.op))
 					return refused('forbidden', NOT_IN_PREVIEW, 403);
-				return json({ value: yield* applySettings(h, m, auth, op, secrets) });
+				return json({
+					value: yield* audited(
+						h.db,
+						{
+							category: 'identity',
+							action: op.op,
+							actor: auditActor(auth.actor),
+							payload: encodeWire(
+								op.op === 'setSecret'
+									? { op: op.op, input: { name: op.input.name, value: '[credential redacted]' } }
+									: op
+							)
+						},
+						applySettings(h, m, auth, op, secrets)
+					).pipe(Effect.provideService(Audit, audit))
+				});
 			case 'POST /organization': {
 				// L-COL-199: the workspace's name and logo, an administrator's (never a previewed member's)
 				if (c.organization === undefined)
@@ -995,18 +1082,13 @@ const makeShell = Effect.gen(function* () {
 					);
 				if (!auth.admin)
 					return refused('forbidden', 'Only an administrator edits the organization.', 403);
-				const b = yield* requestBody(request, Body),
-					logo = b['logo'] ?? null;
-				if (
-					typeof b['name'] !== 'string' ||
-					b['name'].trim() === '' ||
-					(logo !== null && typeof logo !== 'string')
-				)
+				const b = yield* requestBody(request, Branding);
+				if (b.name.trim() === '')
 					return yield* Effect.fail(
 						BoltError.make('invalid', 'decode', 'the body is { name, logo: string | null }')
 					);
 				const organization = c.organization,
-					branding = { name: b['name'].trim(), logo };
+					branding = { name: b.name.trim(), logo: b.logo ?? null };
 				yield* hostCall(() => organization.write(auth, branding));
 				return json({ value: null });
 			}
@@ -1039,7 +1121,7 @@ const makeShell = Effect.gen(function* () {
 					...(text === null ? {} : { text }),
 					...(conversation === null ? {} : { conversation })
 				};
-				return json({ value: yield* readLog(query) });
+				return json({ value: yield* readLog(logs, query) });
 			}
 			case 'GET /studio':
 			case 'POST /studio': {
@@ -1054,6 +1136,17 @@ const makeShell = Effect.gen(function* () {
 				if (Option.isNone(op)) return refused('check', 'The Studio operation is malformed.', 422);
 				return json({ value: studioView(yield* hostCall(() => studio.run(auth, op.value))) });
 			}
+			case 'GET /studio/file': {
+				// one file's text on its own: a state carries the tree's sizes, never its contents
+				const studio = c.studio,
+					commit = url.searchParams.get('commit'),
+					path = url.searchParams.get('path');
+				if (!s.studio || studio === undefined)
+					return refused('forbidden', 'Studio is for staff members on a host that serves it.', 403);
+				if (commit === null || commit === '' || path === null || path === '')
+					return refused('check', 'Give commit and path.', 422);
+				return json({ value: yield* hostCall(() => studio.file(auth, commit, path)) });
+			}
 			case 'GET /studio/build': {
 				const read = c.studio?.build?.bind(c.studio),
 					commit = url.searchParams.get('commit');
@@ -1062,11 +1155,48 @@ const makeShell = Effect.gen(function* () {
 				if (commit === null || commit === '') return refused('check', 'Give commit.', 422);
 				return json({ value: yield* hostCall(() => read(auth, commit)) });
 			}
+			case 'GET /studio/inspect': {
+				const studio = c.studio;
+				if (!s.studio || studio === undefined || !auth.admin)
+					return refused(
+						'forbidden',
+						'Inspection is for administrators on a host that serves it.',
+						403
+					);
+				const input = Schema.decodeUnknownOption(StudioInspectInput)(
+					Object.fromEntries(url.searchParams)
+				);
+				if (Option.isNone(input))
+					return refused('check', 'The inspection scope is malformed.', 422);
+				return json({ value: yield* hostCall(() => studio.inspect(auth, input.value)) });
+			}
 			case 'GET /studio/usage': {
 				const read = c.studio?.usage?.bind(c.studio);
 				if (!s.studio || read === undefined || !auth.admin)
 					return refused('forbidden', 'Usage is for administrators on a host that meters it.', 403);
 				return json({ value: yield* hostCall(() => read(auth)) });
+			}
+			case 'GET /studio/audit':
+			case 'POST /studio/audit':
+			case 'POST /studio/audit/run': {
+				// the organization's audit rules (§5): the host compiles, stores and runs them; this route only decodes
+				const audit = c.studio?.audit;
+				if (!s.studio || audit === undefined || !auth.admin)
+					return refused(
+						'forbidden',
+						'Audit rules are for administrators on a host that audits.',
+						403
+					);
+				if (request.method === 'GET')
+					return json({ value: yield* hostCall(() => audit.rules(auth)) });
+				if (path.slice(SHELL.length) === '/studio/audit') {
+					const body = yield* requestBody(request, AuditSave);
+					return json({
+						value: yield* hostCall(() => audit.save(auth, body.revision, body.ruleSet))
+					});
+				}
+				const body = yield* requestBody(request, AuditTry);
+				return json({ value: yield* hostCall(() => audit.run(auth, body.ruleSet)) });
 			}
 			case 'GET /studio/events': {
 				// pushed authoring frames (build log lines, a moved head); nothing is polled
@@ -1144,16 +1274,17 @@ const makeShell = Effect.gen(function* () {
 	});
 	/** `GET /manifest.webmanifest` (§5.10, L-BOLT-295): scope and start_url from the configured public origin, never `Host`. */
 	function webmanifest(): HttpServerResponse.HttpServerResponse {
-		const scope = under(h.publicUrl, '/');
+		const scope = under(h.publicUrl, '/'),
+			workspace = c.workspace();
 		return HttpServerResponse.text(
 			JSON.stringify({
-				id: c.workspace.handle,
-				name: c.workspace.name,
-				short_name: c.workspace.name,
+				id: workspace.handle,
+				name: workspace.name,
+				short_name: workspace.name,
 				scope,
 				start_url: scope,
 				display: 'standalone',
-				icons: c.workspace.icons ?? []
+				icons: workspace.icons ?? []
 			}),
 			{ headers: { 'content-type': 'application/manifest+json' } }
 		);

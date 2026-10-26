@@ -10,10 +10,11 @@ Starter workspaces live in their own repository:
 - [`@norbital-ai/bolt`](./packages/bolt) — tenant workspace authoring SDK, compiler, runtime, and
   client
 - [`@norbital-ai/bolt-server`](./packages/bolt-server) — self-host server around the Bolt bundle
+- [`@norbital-ai/store`](./packages/store) — typed schema, query, SQL and migration layer shared by workspaces and hosts
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
-- [`@norbital-ai/std`](./packages/std) — common schema, date, CEL, finance, collection contract, and
+- [`@norbital-ai/std`](./packages/std) — common schema, field kinds, date, CEL, finance, and
   utility modules
-- [`@norbital-ai/doctor`](./packages/doctor) — fixed static rule packs used by `bolt check`
+- [`@norbital-ai/doctor`](./packages/doctor) — fixed static rule packs; the host's workspace audit
 - [`@norbital-ai/providers`](./packages/providers) — host-registered integration and inference providers
 - [`@norbital-ai/app-shell`](./packages/app-shell) — native iOS and Android shell and the `norbital-app` CLI
 
@@ -49,7 +50,7 @@ validated before the temporary workspace and archives are removed. Live package 
 Consumers install released packages from the configured registry; no consumer reads this repository
 through a sibling path.
 
-All seven public packages share the workspace release version. Bump the complete set before a release;
+Public packages in a coordinated release share the workspace release version. Bump the complete set before a release;
 the workflow publishes missing immutable versions and skips versions already on the registry.
 Consumers commit their matching manifest and lockfile updates after publication. See
 [`RELEASING.md`](./RELEASING.md) for the release workflow.

@@ -32,7 +32,7 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 			uuid: () => 'request1',
 			contract: 'contract1'
 		});
-		const answer = yield* bolt.read<{ rows: { amount: Decimal }[] }>('jobs', { limit: 1 });
+		const answer = yield* bolt.query<{ rows: { amount: Decimal }[] }>('jobs', { limit: 1 });
 		expect(answer.rows[0]?.amount).toBeInstanceOf(Decimal);
 		yield* bolt.act('jobs.create', {});
 		expect(requests[1]?.headers[HEADERS.key.toLowerCase()]).toBe('request1');
@@ -68,7 +68,7 @@ it.effect(
 				}
 			});
 			const seen: unknown[] = [];
-			yield* bolt.live(bolt.read('jobs', { limit: 1 })).pipe(
+			yield* bolt.observe(bolt.query('jobs', { limit: 1 })).pipe(
 				Stream.runForEach((value) => Effect.sync(() => seen.push(value))),
 				Effect.forkScoped
 			);

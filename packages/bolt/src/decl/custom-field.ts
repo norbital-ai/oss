@@ -1,7 +1,9 @@
-// `customField()` (§3.3.2): a stored kind of the workspace's own, used as `{ kind: 'custom', of: '<f>' }`.
+// `customField('<name>', …)` (§3.3.2): a stored kind of the workspace's own, used as `{ kind: 'custom', of: '<name>' }`.
 import type { Checked, Exact, InputKind, ValidInput, ValueOf } from './fields.ts';
-import type { Msg } from './values.ts';
+import type { CustomFieldName, CustomShape } from './names.ts';
+import type { Json, Msg } from './values.ts';
 
+/** A custom field literal's data: what the manifest holds (`validate` is not data). */
 type CustomFieldBase = {
 	description: string;
 	/** The value's shape: an input kind literal (usually an `object`, `list` or `union`). */
@@ -10,42 +12,48 @@ type CustomFieldBase = {
 	/** Include the value's text in the record's text search. */
 	search?: true;
 };
-export type CustomField<S extends CustomFieldBase> = {
+/** Field `N`'s stored value, from the generated names; any JSON until the first sync knows it. */
+type ValueIn<N> = [CustomShape<N>] extends [never] ? Json : ValueOf<CustomShape<N>>;
+/** Pure (no `ctx`): runs on every write of a value; a returned message refuses the write. */
+type Validate<N> = (value: ValueIn<N>) => string | undefined;
+/** The literal `customField(N, …)` takes: its data and the optional `validate`, typed from the generated names. */
+type CustomFieldLiteral<N> = CustomFieldBase & { validate?: Validate<N> };
+/** What `customField()` returns: the name, the literal, and `validate` as the guest calls it. */
+export type CustomField<N extends string, S extends CustomFieldBase> = {
+	readonly name: N;
 	readonly spec: S;
-	/** At most once; a returned message refuses the write. Pure: no `ctx`. */
-	validate(check: (value: ValueOf<S['shape']>) => string | undefined): void;
-	/** The attached check, read by the compiler. */
-	readonly check: ((value: ValueOf<S['shape']>) => string | undefined) | undefined;
+	readonly check: Validate<N> | undefined;
 };
 
 /**
  * `src/data/custom_field/<f>/+definition.ts`: a reusable structured value (`shape`, an input kind literal) that model fields
- * store as `{ kind: 'custom', of: '<f>' }`, with an optional `f.validate` check and a `+renderer.svelte`.
+ * store as `{ kind: 'custom', of: '<f>' }`, with an optional pure `validate` and a `+renderer.svelte` beside it.
  * @example
- * const address = customField({
+ * export default customField('address', {
  * 	description: 'A postal address.',
- * 	shape: { kind: 'object', fields: { line1: { kind: 'text' }, postcode: { kind: 'text' } } }
+ * 	shape: { kind: 'object', fields: { line1: { kind: 'text' }, postcode: { kind: 'text' } } },
+ * 	validate: (v) => (/^\d{6}$/.test(v.postcode) ? undefined : 'A postcode has six digits.')
  * });
- * export default address;
- * address.validate((v) => (/^\d{6}$/.test(v.postcode) ? undefined : 'A postcode has six digits.'));
  */
-export function customField<const S extends CustomFieldBase>(
+export function customField<const N extends CustomFieldName, const S extends CustomFieldLiteral<N>>(
+	name: N,
 	spec: S &
-		Checked<
-			CustomFieldBase,
-			S,
-			Exact<S, { description: string; shape: ValidInput<S['shape']>; label?: Msg; search?: true }>
+		NoInfer<
+			Checked<
+				CustomFieldLiteral<N>,
+				S,
+				Exact<
+					S,
+					{
+						description: string;
+						shape: ValidInput<S['shape']>;
+						label?: Msg;
+						search?: true;
+						validate?: Validate<N>;
+					}
+				>
+			>
 		>
-): CustomField<S> {
-	let check: CustomField<S>['check'];
-	return {
-		spec,
-		validate(body) {
-			if (check !== undefined) throw new Error('customField: validate is attached twice');
-			check = body;
-		},
-		get check() {
-			return check;
-		}
-	};
+): CustomField<N, S> {
+	return { name, spec, check: spec.validate };
 }

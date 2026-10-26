@@ -1,5 +1,5 @@
 // Google Calendar as the `calendar` driver over a fake fetch: the instance's own OAuth sign-in (the definition's client
-// from env, PKCE, its redirect URI), driver feed pages (a full read a snapshot, a sync token the cursor, 410 a fresh
+// from env, PKCE, its redirect URI), driver sync pages (a full read a snapshot, a sync token the cursor, 410 a fresh
 // snapshot), watches sealed before they register and renewed by replacement, and notifications acknowledged only once
 // the engine queued the read.
 import { describe, expect, it } from '@effect/vitest';
@@ -23,21 +23,14 @@ const TOKEN = {
 const definition: DriverOpen['definition'] = {
 	description: 'Calendars',
 	driver: 'calendar',
-	oauth: { client: 'GOOGLE_CLIENT', secret: 'GOOGLE_SECRET' },
-	feeds: {
-		events: {
-			into: 'calendar_entries',
-			key: ['external_id'],
-			from: 'driver',
-			partitions: 'calendars'
-		}
-	}
+	oauth: { client: 'GOOGLE_CLIENT', secret: 'GOOGLE_SECRET' }
 };
 const fixture = Effect.fn('CalendarTest.fixture')(function* (
 	routes: Route[] = [],
 	stored: { [name: string]: Json } = { token: TOKEN },
 	webhookUrl = HOOK,
-	beforeWrite?: HostOptions['write']
+	beforeWrite?: HostOptions['write'],
+	syncs: DriverOpen['syncs'] = [{ name: 'calendar_entries.sync.events', partitions: 'calendars' }]
 ) {
 	yield* TestClock.setTime(NOW);
 	let queueFails = false,
@@ -47,6 +40,7 @@ const fixture = Effect.fn('CalendarTest.fixture')(function* (
 		webhookUrl,
 		redirectUrl: REDIRECT,
 		definition,
+		syncs,
 		configuration: { calendars: ['visits@example.com'] },
 		secrets: { GOOGLE_CLIENT: 'client-1', GOOGLE_SECRET: 'shh' },
 		write: async (changes) => {
@@ -75,7 +69,7 @@ const read = (
 	cursor: Json | null,
 	partition = 'visits@example.com'
 ): Effect.Effect<DriverPage, import('../src/errors.ts').ProviderFailure> =>
-	f.link.read!('events', partition, cursor);
+	f.link.read!('calendar_entries.sync.events', partition, cursor);
 const invalidations = (h: Host) =>
 	h.events.filter(
 		(e): e is Extract<DriverEvent, { kind: 'invalidate' }> => e.kind === 'invalidate'
@@ -119,6 +113,19 @@ const registration = (
 	const value = Schema.decodeUnknownSync(WatchRequest)(call.body);
 	return { id: value.id, token: value.token };
 };
+const sharedWatches: readonly { calendar: string; syncs: DriverOpen['syncs'] }[] = [
+	{
+		calendar: 'visits@example.com',
+		syncs: [
+			{ name: 'calendar_entries.sync.events', partitions: 'calendars' },
+			{ name: 'calendar_reminders.sync.events', partitions: 'calendars' }
+		]
+	},
+	{
+		calendar: 'primary',
+		syncs: [{ name: 'calendar_entries.sync.events' }, { name: 'calendar_reminders.sync.events' }]
+	}
+];
 
 describe('the Google Calendar link', () => {
 	it.effect('discovers every page of calendars and sends the token only to Google', () =>
@@ -317,11 +324,86 @@ describe('the Google Calendar link', () => {
 			yield* f.link.close ?? Effect.void;
 		})
 	);
-	it.effect('a definition without partitions reads the primary calendar', () =>
+	it.effect('a sync without partitions reads the primary calendar', () =>
 		Effect.gen(function* () {
-			const f = yield* fixture([() => json({ items: [], nextSyncToken: 's' })]);
+			const f = yield* fixture(
+				[() => json({ items: [], nextSyncToken: 's' })],
+				{ token: TOKEN },
+				HOOK,
+				undefined,
+				[{ name: 'calendar_entries.sync.events' }]
+			);
 			yield* read(f, null, '');
 			expect(new URL(f.fetch.calls[0]!.url).pathname).toBe('/calendar/v3/calendars/primary/events');
+			yield* f.link.close ?? Effect.void;
+		})
+	);
+	it.effect.each(sharedWatches)(
+		'shares one watch for model syncs on $calendar and invalidates each full sync name',
+		({ calendar, syncs }) =>
+			Effect.gen(function* () {
+				const f = yield* fixture([watchResponse], { token: TOKEN }, HOOK, undefined, syncs);
+				yield* f.link.renew!();
+				const calls = f.fetch.calls.filter((call) => call.url.endsWith('/events/watch'));
+				expect(calls).toHaveLength(1);
+				expect(new URL(calls[0]!.url).pathname).toBe(
+					`/calendar/v3/calendars/${encodeURIComponent(calendar)}/events/watch`
+				);
+				expect(invalidations(f.h)).toEqual(
+					syncs.map(({ name, partitions }) => ({
+						kind: 'invalidate',
+						sync: name,
+						partition: partitions === undefined ? '' : calendar
+					}))
+				);
+				const before = invalidations(f.h).length;
+				expect(yield* f.link.webhook!(notification(registration(f)))).toMatchObject({
+					status: 204
+				});
+				expect(invalidations(f.h).slice(before)).toEqual(
+					syncs.map(({ name, partitions }) => ({
+						kind: 'invalidate',
+						sync: name,
+						partition: partitions === undefined ? '' : calendar
+					}))
+				);
+				expect(f.fetch.calls.filter((call) => call.url.endsWith('/events/watch'))).toHaveLength(1);
+				yield* f.link.close ?? Effect.void;
+			})
+	);
+	it.effect('invalidates only the model sync whose calendar watch changed', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture([watchResponse], { token: TOKEN }, HOOK, undefined, [
+				{ name: 'calendar_entries.sync.events', partitions: 'calendars' },
+				{ name: 'calendar_defaults.sync.events' }
+			]);
+			yield* f.link.renew!();
+			const watches = f.fetch.calls.filter((call) => call.url.endsWith('/events/watch'));
+			expect(watches).toHaveLength(2);
+			const expected = [
+				{
+					calendar: 'visits@example.com',
+					sync: 'calendar_entries.sync.events',
+					partition: 'visits@example.com'
+				},
+				{ calendar: 'primary', sync: 'calendar_defaults.sync.events', partition: '' }
+			];
+			expect(invalidations(f.h)).toEqual(
+				expected.map(({ sync, partition }) => ({ kind: 'invalidate', sync, partition }))
+			);
+			for (const { calendar, sync, partition } of expected) {
+				const call = watches.find(
+					(call) =>
+						new URL(call.url).pathname ===
+						`/calendar/v3/calendars/${encodeURIComponent(calendar)}/events/watch`
+				);
+				if (call === undefined) throw new Error(`No watch registered for ${calendar}.`);
+				f.h.events.splice(0);
+				expect(
+					yield* f.link.webhook!(notification(Schema.decodeUnknownSync(WatchRequest)(call.body)))
+				).toMatchObject({ status: 204 });
+				expect(invalidations(f.h)).toEqual([{ kind: 'invalidate', sync, partition }]);
+			}
 			yield* f.link.close ?? Effect.void;
 		})
 	);
@@ -352,8 +434,16 @@ describe('the Google Calendar link', () => {
 				expect(yield* f.link.renew!()).toBe(new Date(NOW + 3_300_000).toISOString());
 				// the first notification, then the registration's reconciliation
 				expect(invalidations(f.h)).toEqual([
-					{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' },
-					{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
+					{
+						kind: 'invalidate',
+						sync: 'calendar_entries.sync.events',
+						partition: 'visits@example.com'
+					},
+					{
+						kind: 'invalidate',
+						sync: 'calendar_entries.sync.events',
+						partition: 'visits@example.com'
+					}
 				]);
 				expect(JSON.stringify(f.h.statuses)).not.toMatch(/secret|google-resource|token/);
 				yield* f.link.close ?? Effect.void;
@@ -506,7 +596,11 @@ describe('the Google Calendar link', () => {
 			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
 			expect(JSON.stringify(f.h.values.get('state'))).toContain('pending');
 			expect(invalidations(f.h)).toEqual([
-				{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
+				{
+					kind: 'invalidate',
+					sync: 'calendar_entries.sync.events',
+					partition: 'visits@example.com'
+				}
 			]);
 			yield* f.link.close ?? Effect.void;
 		})
@@ -555,7 +649,11 @@ describe('the Google Calendar link', () => {
 			);
 			expect(yield* local.link.renew!()).toBe(new Date(NOW + 300_000).toISOString());
 			expect(invalidations(local.h)).toEqual([
-				{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
+				{
+					kind: 'invalidate',
+					sync: 'calendar_entries.sync.events',
+					partition: 'visits@example.com'
+				}
 			]);
 			expect(local.fetch.calls).toHaveLength(0);
 			expect(yield* read(local, null)).toMatchObject({
@@ -603,7 +701,11 @@ describe('the Google Calendar link', () => {
 			);
 			expect(yield* local.link.renew!()).toBe(new Date(NOW + 300_000).toISOString());
 			expect(invalidations(local.h)).toEqual([
-				{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
+				{
+					kind: 'invalidate',
+					sync: 'calendar_entries.sync.events',
+					partition: 'visits@example.com'
+				}
 			]);
 			expect(local.fetch.calls).toHaveLength(0);
 			yield* local.link.close ?? Effect.void;
@@ -681,7 +783,11 @@ describe('the Google Calendar sign-in', () => {
 				expect(f.h.values.get('state')).toEqual({ watches: [], account: 'ana@example.com' });
 				expect(f.h.status).toEqual({ state: 'connected', account: 'ana@example.com' });
 				expect(invalidations(f.h)).toEqual([
-					{ kind: 'invalidate', feed: 'events', partition: 'visits@example.com' }
+					{
+						kind: 'invalidate',
+						sync: 'calendar_entries.sync.events',
+						partition: 'visits@example.com'
+					}
 				]);
 				// A consumed callback still reports its completion without exchanging its code again.
 				expect(

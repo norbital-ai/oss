@@ -1,6 +1,6 @@
 // `@norbital-ai/ui/effect` (D9): the one Svelte edge. A page's Effects run on the browser runtime its mount creates
 // (`mountEdge(ManagedRuntime.make(ShellLive))` in the shell, the root layout in a host app): `run` hands `{#await}` a
-// Promise, `fork` runs an event handler's effect, `live` makes a Svelte store of a Stream and `attach` runs a scoped
+// Promise, `fork` runs an event handler's effect, `observe` owns streamed state and `attach` runs a scoped
 // fiber for an element's lifetime. Every fiber runs in the mounted runtime's scope, so unmounting interrupts them all.
 import {
 	Cause,
@@ -18,6 +18,7 @@ import { watch } from 'runed';
 import { untrack } from 'svelte';
 import type { Attachment } from 'svelte/attachments';
 import { createSubscriber } from 'svelte/reactivity';
+import { isTracking } from './tracking.svelte.js';
 
 let edge: ManagedRuntime.ManagedRuntime<never, unknown> | null = null;
 let running = 0;
@@ -91,10 +92,10 @@ export type QueryState<A, E> = {
 };
 /** A server answer may seed the first render and hydration, never a later query scope. */
 export type QueryOptions<A> = { readonly initial?: NoInfer<A> };
-/** `$state` ignores a same-reference assign (memory svelte-state-ignores-same-reference): each value is a new array or object. */
+/** Fresh arrays and plain row objects let Svelte's keyed items observe every frame; native class values retain identity. */
 const fresh = <A>(value: A): A =>
 	(Array.isArray(value)
-		? [...value]
+		? value.map(fresh)
 		: Predicate.isObject(value) && Object.getPrototypeOf(value) === Object.prototype
 			? { ...value }
 			: value) as A;
@@ -103,7 +104,7 @@ const fresh = <A>(value: A): A =>
  * A live read in a component (call it while the component initializes): the stream `source()` names, or none for
  * `null`. A change of its reactive inputs subscribes the new stream from empty; teardown interrupts the fiber.
  */
-export function live<A, E>(
+export function observe<A, E>(
 	source: () => Stream.Stream<A, E> | null,
 	options: QueryOptions<A> = {}
 ): QueryState<A, E> {
@@ -201,14 +202,142 @@ export function live<A, E>(
 }
 
 /** A one-shot read composes into the same state and lifetime as a live query. */
-export function query<A, E>(
+export function observeOnce<A, E>(
 	source: () => Effect.Effect<A, E> | null,
 	options: QueryOptions<A> = {}
 ): QueryState<A, E> {
-	return live(() => {
+	return observe(() => {
 		const effect = source();
 		return effect === null ? null : Stream.fromEffect(effect);
 	}, options);
+}
+
+/** A query's component reads subscribe; its Promise and Effect edges read once outside component reactivity. */
+export function reactiveQuery<A, E>(effect: Effect.Effect<A, E>, stream: Stream.Stream<A, E>) {
+	let value = Option.none<A>();
+	let failure: E | undefined;
+	let loading = true;
+	const waiting = new Set<{ resolve(value: A): void; reject(error: E): void }>();
+	const track = createSubscriber((update) => {
+		const fiber = forked(
+			Stream.runForEach(stream, (answer) =>
+				Effect.sync(() => {
+					value = Option.some(fresh(answer));
+					failure = undefined;
+					loading = false;
+					for (const waiter of waiting) waiter.resolve(answer);
+					waiting.clear();
+					update();
+				})
+			).pipe(
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						failure = error;
+						loading = false;
+						for (const waiter of waiting) waiter.reject(error);
+						waiting.clear();
+						update();
+					})
+				)
+			)
+		);
+		return () => fiber.interruptUnsafe();
+	});
+	const state = {
+		get current() {
+			track();
+			return Option.getOrUndefined(value);
+		},
+		get loading() {
+			track();
+			return loading;
+		},
+		get error() {
+			track();
+			return failure;
+		},
+		get then(): Promise<A>['then'] {
+			const reactive = isTracking();
+			if (reactive) track();
+			return (onfulfilled, onrejected) => {
+				const promise = !reactive
+					? run(effect)
+					: failure !== undefined
+						? Promise.reject<A>(failure)
+						: Option.isSome(value)
+							? Promise.resolve(value.value)
+							: new Promise<A>((resolve, reject) => waiting.add({ resolve, reject }));
+				return promise.then(onfulfilled, onrejected);
+			};
+		}
+	};
+	return Object.defineProperties(
+		Effect.suspend(() => effect),
+		Object.getOwnPropertyDescriptors(state)
+	) as Effect.Effect<A, E> & typeof state;
+}
+
+/** A visible-page clock ticks at calendar boundaries in the workspace's zone; no unit is a fixed snapshot. */
+export function reactiveClock<T extends object>(
+	snapshot: (at: Date) => T,
+	unit?: 'minute' | 'hour' | 'day',
+	zone = 'UTC',
+	now = () => new Date()
+) {
+	const opened = now();
+	if (unit === undefined) return snapshot(opened);
+	let current = snapshot(opened);
+	const parts = new Intl.DateTimeFormat('en-CA', {
+		timeZone: zone,
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		hourCycle: 'h23'
+	});
+	const key = (at: Date) =>
+		parts
+			.formatToParts(at)
+			.filter(
+				(p) =>
+					p.type === 'year' ||
+					p.type === 'month' ||
+					p.type === 'day' ||
+					(unit !== 'day' && p.type === 'hour') ||
+					(unit === 'minute' && p.type === 'minute')
+			)
+			.map((p) => p.value)
+			.join('-');
+	let stamp = key(opened);
+	const track = createSubscriber((update) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const tick = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+			const at = now(),
+				next = key(at);
+			if (next !== stamp) {
+				stamp = next;
+				current = snapshot(at);
+				update();
+			}
+			// IANA offsets and daylight-saving transitions are minute-aligned. Recheck the zone at each minute boundary.
+			timer = setTimeout(tick, 60_000 - (at.getTime() % 60_000));
+		};
+		tick();
+		if (typeof document !== 'undefined') document.addEventListener('visibilitychange', tick);
+		return () => {
+			if (timer !== undefined) clearTimeout(timer);
+			if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', tick);
+		};
+	});
+	return new Proxy(current, {
+		get: (_target, property) => {
+			track();
+			return Reflect.get(current, property);
+		}
+	});
 }
 
 /** `{@attach attach((node) => effect)}`: the effect runs scoped for the element's lifetime, interrupted when it leaves. */

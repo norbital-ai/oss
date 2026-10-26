@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { Stream } from 'effect';
-	import { live } from '../src/effect/index.js';
+	import { observe } from '../src/effect/index.js';
 	let { source }: { source: () => Stream.Stream<string | undefined, Error> | null } = $props();
-	const view = live(() => source());
+	const view = observe(() => source());
 </script>
 
 <output>{view.current ?? 'empty'}</output>

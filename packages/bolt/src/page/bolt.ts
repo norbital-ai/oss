@@ -14,6 +14,8 @@ import {
 } from 'effect';
 import type { HttpClient } from 'effect/unstable/http';
 import type { FileRef, Json } from '../decl/values.ts';
+import { Instant, PlainDate } from '@norbital-ai/std/date';
+import { reactiveClock, reactiveQuery } from '@norbital-ai/ui/effect';
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
 import {
 	ActConflict,
@@ -23,15 +25,16 @@ import {
 	ProtocolFailed,
 	ReadFailed,
 	Refusal,
-	TransportFailed
+	TransportFailed,
+	Unavailable
 } from '../decl/errors.ts';
-import type { Outcome } from '../engine/contracts.ts';
+import type { ActOutcome } from '../engine/contracts.ts';
 import {
 	RecordCapabilitiesSchema,
 	RestorePreviewSchema,
 	type RecordParentContext
 } from '../protocol/record-contracts.ts';
-import type { ApprovalView, DecisionStatus } from '../engine/approvals/approvals.ts';
+import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import {
 	HEADERS,
 	PATHS,
@@ -43,17 +46,20 @@ import {
 	type WireRead
 } from '../protocol/wire.ts';
 import { ActReply, LiveReply, QReply, WireError } from '../protocol/schema.ts';
-import { liveStream, type EventSourceLike, type Signals } from './stream.ts';
-import { browserCatalog, type BrowserCatalog, type Catalog } from '../protocol/catalog.ts';
-import { decodeView } from '../protocol/ir.ts';
-import type { LiveRead, Read } from './page-bolt.ts';
+import { liveStream, pageSignals, type EventSourceLike, type Signals } from './stream.ts';
+import { browserCatalog, type BrowserCatalog } from '../protocol/catalog.ts';
+import { decodeView, type Catalog } from '@norbital-ai/store';
+import { storeSync } from '../protocol/errors.ts';
+import type { Query } from './page-bolt.ts';
+import type { ConvertRequest, ConvertSource } from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
-import { fileRef, storedFileUrl } from './file-ref.ts';
+import { FileRefSchema, storedFileUrl } from './file-ref.ts';
 import { encodeWire, reviveWire, type Wired } from '@norbital-ai/std/wire';
 
 export type BoltConfig = {
 	actor: Json;
 	locale: string;
+	tz?: string;
 	messages?: Readonly<Record<string, string>>;
 	base?: string;
 	fetch?: typeof fetch;
@@ -70,7 +76,8 @@ export type BoltConfig = {
 	onNotice?: (notice: Row) => void;
 };
 type Row = { readonly [field: string]: Json };
-type Paint = { collection: string; apply(value: Json, m: WireRead['m']): Json };
+const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
+type Paint = { collection: string; apply(value: Json, read: WireRead): Json };
 type ViewState = { value: Json | undefined; error: ReadFailed | undefined; sequence: number };
 type ViewConsumer = {
 	readonly fiberId: number;
@@ -80,8 +87,6 @@ type View = {
 	id: string;
 	key: string;
 	read: WireRead;
-	every?: string;
-	on?: readonly string[];
 	server: Json | undefined;
 	v: number;
 	consumers: Set<ViewConsumer>;
@@ -91,14 +96,16 @@ type View = {
 const typed = (v: Json): Json =>
 	reviveWire(
 		'',
-		Array.isArray(v)
+		jsonArray(v)
 			? v.map(typed)
 			: isRow(v)
-				? Object.fromEntries(Object.entries(v).map(([key, item]) => [key, typed(item)]))
+				? Object.fromEntries(
+						Object.entries(v).map(([key, item]): [string, Json] => [key, typed(item)])
+					)
 				: v
 	) as Json;
 const CapabilitiesAnswer = Schema.Struct({ value: RecordCapabilitiesSchema });
-const FileAnswer = Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String });
+const FileAnswer = FileRefSchema;
 const FilterStep = Schema.Union([
 	Schema.Struct({ k: Schema.Literal('field'), name: Schema.String }),
 	Schema.Struct({ k: Schema.Literal('is'), rel: Schema.String }),
@@ -118,12 +125,6 @@ const FilterArg = Schema.Union([
 	Schema.Struct({
 		range: Schema.Tuple([Schema.Json, Schema.Json]),
 		label: Schema.optionalKey(Schema.String)
-	}),
-	Schema.Struct({ today: Schema.String }),
-	Schema.Struct({ now: Schema.String }),
-	Schema.Struct({
-		startOf: Schema.Literals(['week', 'month', 'quarter', 'year']),
-		shift: Schema.optionalKey(Schema.Number)
 	}),
 	Schema.Struct({ actor: Schema.Literals(['id', 'party', 'teams']) })
 ]);
@@ -147,15 +148,17 @@ const decode = <A>(schema: Schema.Codec<A, unknown>, body: unknown) =>
 	Schema.decodeUnknownEffect(schema)(body).pipe(
 		Effect.mapError(() => new ProtocolFailed({ message: 'The host returned an invalid answer.' }))
 	);
+/** A held write and one past the person-wait (`running`, followed through `runs`) are answers; the rest fail. */
 function settled(
-	outcome: Outcome
+	outcome: ActOutcome
 ): Effect.Effect<
-	Extract<Outcome, { kind: 'committed' | 'pendingApproval' }>,
+	Extract<ActOutcome, { kind: 'committed' | 'pendingApproval' | 'running' }>,
 	ActRefused | ActConflict | ActUnknown
 > {
 	switch (outcome.kind) {
 		case 'committed':
 		case 'pendingApproval':
+		case 'running':
 			return Effect.succeed(outcome);
 		case 'refused':
 			return Effect.fail(new ActRefused(outcome));
@@ -166,16 +169,16 @@ function settled(
 	}
 }
 const isRow = (v: unknown): v is Row => typeof v === 'object' && v !== null && !Array.isArray(v);
-const list = <T>(x: T | readonly T[]): readonly T[] => (Array.isArray(x) ? x : [x as T]);
+const list = (value: Json): readonly Json[] => (jsonArray(value) ? value : [value]);
 const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
 const PAINTED = new Set(['create', 'update', 'delete']);
 
 /** Rule 65: a patch applied to a view's value (a page's `rows`, or a `get`'s row); `undefined` when it does not fit it. */
 export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json | undefined {
 	if (value === undefined) return undefined;
-	let page = isRow(value) && Array.isArray(value['rows']) ? value : null;
-	let rows: Json[] =
-		page === null ? (value === null ? [] : [value]) : [...(page['rows'] as Json[])];
+	const pageRows = isRow(value) ? value['rows'] : undefined;
+	let page = isRow(value) && jsonArray(pageRows) ? value : null;
+	let rows: Json[] = jsonArray(pageRows) ? [...pageRows] : value === null ? [] : [value];
 	for (const o of ops) {
 		if (o.op === 'meta') {
 			if (page === null) return undefined;
@@ -194,14 +197,17 @@ export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json 
 	return rows.length > 1 ? undefined : (rows[0] ?? null);
 }
 
-/** The paint of one generated write over the live reads of its collection (rule 67); actions and queries do not paint. */
+/** The paint of one generated write over the live reads of its collection (rule 67); queries do not paint. */
 function paintOf(collection: string, verb: string, input: Json, key: string): Paint {
-	const rows = (v: Json, m: WireRead['m'], each: (rows: readonly Row[]) => readonly Row[]): Json =>
-		m === 'read' && isRow(v) && Array.isArray(v['rows'])
-			? { ...v, rows: each(v['rows'] as Row[]) as Json }
-			: m === 'get' && isRow(v)
-				? (each([v])[0] ?? null)
-				: v;
+	const rows = (v: Json, read: WireRead, each: (rows: readonly Row[]) => readonly Row[]): Json => {
+		if (read.m !== 'query') return v;
+		const values = isRow(v) ? v['rows'] : undefined;
+		if (isRow(v) && jsonArray(values))
+			return values.every(isRow) ? { ...v, rows: each(values) } : v;
+		return isRow(read.a[1]) && read.a[1]['id'] !== undefined && isRow(v)
+			? (each([v])[0] ?? null)
+			: v;
+	};
 	if (verb === 'create') {
 		const created = list(input).map((x, i): Row => ({
 			id: `pending:${key}:${i}`,
@@ -209,7 +215,8 @@ function paintOf(collection: string, verb: string, input: Json, key: string): Pa
 		}));
 		return {
 			collection,
-			apply: (v, m) => (m === 'read' ? rows(v, m, (rs) => [...created, ...rs]) : v)
+			apply: (v, read) =>
+				isRow(v) && jsonArray(v['rows']) ? rows(v, read, (rs) => [...created, ...rs]) : v
 		};
 	}
 	if (verb === 'delete') {
@@ -260,9 +267,9 @@ export const createBolt = (config: BoltConfig) =>
 		let noticeVersion = -1;
 		const noticeIds = new Set<string>();
 		const track = (value: Json | undefined) => {
-			for (const row of Array.isArray(value)
+			for (const row of jsonArray(value)
 				? value
-				: isRow(value) && Array.isArray(value['rows'])
+				: isRow(value) && jsonArray(value['rows'])
 					? value['rows']
 					: [value ?? null])
 				if (isRow(row) && typeof row['id'] === 'string' && typeof row['revision'] === 'number')
@@ -272,7 +279,7 @@ export const createBolt = (config: BoltConfig) =>
 			let value = view.server;
 			if (value !== undefined)
 				for (const paint of paints)
-					if (paint.collection === view.read.a[0]) value = paint.apply(value, view.read.m);
+					if (paint.collection === view.read.a[0]) value = paint.apply(value, view.read);
 			return value;
 		};
 		const notify = (view: View, error?: ReadFailed) =>
@@ -335,9 +342,7 @@ export const createBolt = (config: BoltConfig) =>
 					drop,
 					add: add.map((view) => ({
 						view: view.id,
-						read: view.read,
-						...(view.every === undefined ? {} : { every: view.every }),
-						...(view.on === undefined ? {} : { on: view.on })
+						read: view.read
 					}))
 				};
 				const response = yield* transport.request('POST', PATHS.live, body).pipe(Effect.result);
@@ -456,7 +461,7 @@ export const createBolt = (config: BoltConfig) =>
 					closed !== null ? 'closed' : views.size === 0 ? 'idle' : 'connecting'
 				);
 			}),
-			config.signals,
+			config.signals ?? pageSignals(),
 			Queue.take(reconnects)
 		).pipe(
 			Stream.tap(onFrame),
@@ -504,25 +509,22 @@ export const createBolt = (config: BoltConfig) =>
 					);
 				return typed(first);
 			});
-		const q = <T>(method: WireRead['m'], args: readonly Wired[]): Read<T> => {
+		const q = <T>(method: WireRead['m'], args: readonly Wired[]): Query<T> => {
 			const read: WireRead = { m: method, a: args.map(encodeWire) };
-			return Object.assign(
-				answer(read).pipe(
-					Effect.tap((value) =>
-						Effect.sync(() => {
-							if (!(method === 'get' && isRow(args[2]) && args[2]['revision'] !== undefined))
-								track(value);
-						})
-					),
-					Effect.map((value) => value as T)
+			const once = answer(read).pipe(
+				Effect.tap((value) =>
+					Effect.sync(() => {
+						if (!(method === 'query' && isRow(args[1]) && args[1]['revision'] !== undefined))
+							track(value);
+					})
 				),
-				{ read }
+				Effect.map((value) => value as T)
 			);
+			return Object.assign(reactiveQuery(once, observe<T>({ read })), { read });
 		};
-		function live<T>(
-			query: { readonly read: WireRead },
-			options: { every?: string; on?: readonly string[] } = {}
-		): LiveRead<T> {
+		function observe<T>(query: {
+			readonly read: WireRead;
+		}): Stream.Stream<T, ReadFailed | TransportFailed> {
 			if (config.poll !== undefined)
 				// a dropped request is asked again on the next tick, as a stream reconnects
 				return Stream.fromEffectSchedule(
@@ -538,7 +540,7 @@ export const createBolt = (config: BoltConfig) =>
 					Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
 					Stream.map((value) => value as T)
 				);
-			const key = JSON.stringify([query.read, options.every ?? null, options.on ?? null]);
+			const key = JSON.stringify(query.read);
 			return Stream.unwrap(
 				Effect.gen(function* () {
 					let view = [...views.values()].find((item) => item.key === key);
@@ -547,7 +549,6 @@ export const createBolt = (config: BoltConfig) =>
 							id: `v${++n}`,
 							key,
 							read: query.read,
-							...options,
 							server: undefined,
 							v: 0,
 							consumers: new Set(),
@@ -718,49 +719,31 @@ export const createBolt = (config: BoltConfig) =>
 				})
 			);
 		return {
-			read: <T = { rows: Row[]; next: string | null }>(collection: string, options: Wired) =>
-				q<T>('read', [collection, options]),
-			get: <T = Row | null>(
-				collection: string,
-				id: string,
-				select?: Json,
-				options: { revision?: number } = {}
-			) =>
-				q<T>('get', [
-					collection,
-					id,
-					...(select === undefined && options.revision === undefined
-						? []
-						: [
-								{
-									...(select === undefined ? {} : { select }),
-									...(options.revision === undefined ? {} : { revision: options.revision })
-								}
-							])
-				]),
 			aggregate: <T = Row[]>(collection: string, options: Wired) =>
 				q<T>('aggregate', [collection, options]),
-			similar: <T = Row[]>(
-				collection: string,
-				search: string | Wired,
-				input?: Wired,
-				options?: Wired
-			) =>
-				q<T>(
-					'similar',
-					typeof search === 'string'
-						? [collection, search, input ?? null, options ?? {}]
-						: [collection, search]
-				),
 			history: <T = Json>(collection: string, id: string, options: { at?: Json } = {}) =>
 				q<T>('history', [collection, id, ...(options.at === undefined ? [] : [options.at])]),
-			query: <T = Json>(name: string, input: Wired) =>
-				q<T>('query', [
-					name.slice(0, name.lastIndexOf('.')),
-					name.slice(name.lastIndexOf('.') + 1),
-					input
-				]),
-			live,
+			query: <T = Json>(name: string | Readonly<Record<string, Wired>>, input?: Wired) =>
+				q<T>('query', typeof name === 'string' ? [name, input ?? {}] : [name]),
+			/** Internal stream edge for shell surfaces. Pages read Query properties directly. */
+			observe,
+			clock: (unit?: 'minute' | 'hour' | 'day') =>
+				reactiveClock(
+					(at) => ({
+						now: Instant(at),
+						today: PlainDate(
+							new Intl.DateTimeFormat('en-CA', {
+								timeZone: config.tz ?? 'UTC',
+								year: 'numeric',
+								month: '2-digit',
+								day: '2-digit'
+							}).format(at)
+						)
+					}),
+					unit,
+					config.tz,
+					() => (config.now === undefined ? new Date() : new Date(config.now()))
+				),
 			act,
 			recordCapabilities: (collection: string, id: string, parent?: RecordParentContext) =>
 				getValue(
@@ -783,7 +766,9 @@ export const createBolt = (config: BoltConfig) =>
 			decode(collection: string, view: { where?: Json; orderBy?: Json }) {
 				if (config.catalog === undefined)
 					throw new Error('This client has no catalog to decode against.');
-				return decodeView((decoder ??= browserCatalog(config.catalog)), collection, view);
+				return storeSync(
+					decodeView((decoder ??= browserCatalog(config.catalog)), collection, view)
+				);
 			},
 			...(config.describe === true
 				? {
@@ -842,7 +827,8 @@ export const createBolt = (config: BoltConfig) =>
 				),
 			// many inputs are one request queueing one run each (a bulk action), not one request per record
 			start(automation: string, input: Wired | readonly Wired[]) {
-				const runs = (Array.isArray(input) ? input : [input]).map((one) => ({
+				const inputs: readonly Wired[] = Array.isArray(input) ? input : [input];
+				const runs = inputs.map((one) => ({
 					input: one,
 					id: uuid()
 				}));
@@ -867,7 +853,7 @@ export const createBolt = (config: BoltConfig) =>
 								: decode(FileAnswer, response.body).pipe(
 										Effect.map((file) => ({
 											...(isRow(response.body) ? (typed(response.body) as Row) : {}),
-											...fileRef(file)
+											...file
 										}))
 									);
 						}),
@@ -877,6 +863,58 @@ export const createBolt = (config: BoltConfig) =>
 					),
 			fileUrl: (ref: { readonly id: string }, options: FileUrlOptions = {}) =>
 				storedFileUrl(base, ref.id, options),
+			convert: (
+				source: ConvertSource,
+				request: ConvertRequest
+			): Effect.Effect<FileRef, ActRefused | TransportFailed | Unavailable> =>
+				Effect.gen(function* () {
+					const issuedAt =
+						config.now === undefined
+							? yield* Effect.map(Clock.currentTimeMillis, (millis) =>
+									new Date(millis).toISOString()
+								)
+							: config.now();
+					const response = yield* transport.request(
+						'POST',
+						PATHS.act,
+						{
+							callable: 'convert.document',
+							input: encodeWire({ source, request }),
+							issuedAt
+						},
+						{
+							[HEADERS.key]: uuid(),
+							...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
+						}
+					);
+					const refusal = errorOf(response.body);
+					if (Option.isSome(refusal)) {
+						if (refusal.value.error.code === 'unavailable')
+							return yield* Effect.fail(
+								new Unavailable({
+									facility: 'convert.document',
+									reason: refusal.value.error.message
+								})
+							);
+						const code = refusalOfStatus(response.status);
+						return yield* Effect.fail(
+							code === null
+								? new TransportFailed({ status: response.status })
+								: new ActRefused({ code, message: refusal.value.error.message })
+						);
+					}
+					const { outcome } = yield* decode(ActReply, response.body);
+					if (outcome.kind === 'refused') return yield* Effect.fail(new ActRefused(outcome));
+					if (outcome.kind !== 'committed')
+						return yield* Effect.fail(
+							new ProtocolFailed({ message: 'The document could not be converted.' })
+						);
+					return yield* decode(FileAnswer, encodeWire(outcome.output));
+				}).pipe(
+					Effect.mapError((error) =>
+						error instanceof ProtocolFailed ? new TransportFailed({ status: 0 }) : error
+					)
+				),
 			// a per-record restore (rule 17), never point-in-time recovery or a source rollback
 			restore: {
 				preview: (collection: string, record: string, revision: number) =>
@@ -907,8 +945,10 @@ export const createBolt = (config: BoltConfig) =>
 					act('history.restore', { collection, record, revision }, { observed: { [record]: live } })
 			},
 			approvals: {
-				process: (requestId: string, decision: { status: DecisionStatus; reason?: string }) =>
-					act('approvals.process', { requestId, ...decision }),
+				decide: (
+					requestId: string,
+					decision: { decision: 'approve' | 'reject' | 'requestChanges'; reason?: string }
+				) => act('approvals.decide', { requestId, ...decision }),
 				get: (requestId: string) =>
 					getValue(
 						`${PATHS.approval}?id=${encodeURIComponent(requestId)}`,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach } from '@effect/vitest';
 import { Cause, Effect, Queue, Schema, Stream } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
+import type { Value } from '@norbital-ai/std/kind';
 import type { ActBody, Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { ViewBolt } from '../src/client/contract.ts';
@@ -47,7 +48,7 @@ export const ReadOptions = Schema.Struct({
 	by: Schema.optionalKey(Schema.Json),
 	limit: Schema.optionalKey(Schema.Number),
 	after: Schema.optionalKey(Schema.String),
-	search: Schema.optionalKey(Schema.String),
+	search: Schema.optionalKey(Schema.Json),
 	all: Schema.optionalKey(Schema.Boolean)
 });
 export type ReadOptions = typeof ReadOptions.Type;
@@ -63,7 +64,6 @@ export type ViewScript = {
 	aggregate(collection: string, options: ReadOptions): ReadReply;
 	history(collection: string, id: string): ReadReply;
 	query(name: string, input: Json): ReadReply;
-	similar(collection: string, name: string, input: Json, options: ReadOptions): ReadReply;
 	act(
 		callable: string,
 		input: ActBody['input'],
@@ -94,36 +94,48 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 		aggregate: () => [],
 		history: () => [],
 		query: () => [],
-		similar: () => [],
 		act: () => ({ kind: 'committed', output: null, records: [] }),
 		...extra
 	};
+	const query = (target: Json | undefined, args: Json | undefined): ReadReply => {
+		if (typeof target !== 'string') {
+			const members = jsonRecord(target);
+			return (async () => {
+				const answers: Record<string, Value> = {};
+				for (const [key, member] of Object.entries(members)) {
+					const { from, ...input } = jsonRecord(member);
+					const answer = await query(strings(from), input);
+					if (answer instanceof Response) return answer;
+					answers[key] = answer;
+				}
+				return answers;
+			})();
+		}
+		if (target.includes('.')) return script.query(target, args ?? null);
+		const input = jsonRecord(args ?? {});
+		if (typeof input.id === 'string') {
+			const details = Schema.decodeUnknownSync(
+				Schema.Struct({
+					select: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+					revision: Schema.optionalKey(Schema.Number)
+				})
+			)(input);
+			return script.get(target, input.id, details.select, {
+				...(details.revision === undefined ? {} : { revision: details.revision })
+			});
+		}
+		return script.read(target, options(input));
+	};
 	const fixture = await scriptedBolt({
 		answer: (read) => {
-			const [collection, arg, third, fourth] = read.a;
-			const c = strings(collection);
+			const [target, arg] = read.a;
 			switch (read.m) {
-				case 'read':
-					return script.read(c, options(arg));
-				case 'aggregate':
-					return script.aggregate(c, options(arg));
-				case 'get': {
-					const details = Schema.decodeUnknownSync(
-						Schema.Struct({
-							select: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-							revision: Schema.optionalKey(Schema.Number)
-						})
-					)(third ?? {});
-					return script.get(c, strings(arg), details.select, {
-						...(details.revision === undefined ? {} : { revision: details.revision })
-					});
-				}
-				case 'history':
-					return script.history(c, strings(arg));
 				case 'query':
-					return script.query(`${c}.${strings(arg)}`, third ?? null);
-				case 'similar':
-					return script.similar(c, strings(arg), third ?? null, options(fourth));
+					return query(target, arg);
+				case 'aggregate':
+					return script.aggregate(strings(target), options(arg));
+				case 'history':
+					return script.history(strings(target), strings(arg));
 				default:
 					throw new Error(`Unexpected ${read.m} in view fixture`);
 			}

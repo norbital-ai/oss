@@ -10,7 +10,12 @@
 		"scripts/build-package.ts",
 		"scripts/lib/declaration-emit.mjs"
 	],
-	"globalPassThroughEnv": ["CI"],
+	"globalPassThroughEnv": [
+		"CI",
+		"VITEST_MAX_WORKERS",
+		"BOLT_TEST_MAX_WORKERS",
+		"BOLT_TEST_WORKERS"
+	],
 	"tasks": {
 		"build": {
 			"dependsOn": ["^build"],
@@ -42,8 +47,8 @@
 				"$TURBO_ROOT$/packages/*/package.json"
 			]
 		},
-		// The database-backed half of bolt's suite. Kept off `test` so a merge is not gated on
-		// twenty-five minutes of Postgres boots; run on its own schedule, and on demand.
+		// The database-backed half of bolt's suite, on owned PGlite workspaces. Kept off `test` so a
+		// merge is not gated on the full integration wall; run on its own schedule, and on demand.
 		"test:integration": {
 			"dependsOn": ["^build"]
 		},

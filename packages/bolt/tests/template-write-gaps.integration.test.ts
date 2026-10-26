@@ -1,9 +1,9 @@
 // Gaps the template migration found in the write area, one reproduction each: collection
-// notifications on an ordinary commit (rule 47), writing an exclusive arc (polymorphic ref), json `shape` on write, a
-// model check's authored message, `accept: ['*/*']` at upload, an automation calling a collection action, `revision`
+// notifications after an ordinary commit (rule 47), writing an exclusive arc (polymorphic ref), json `shape` on write, a
+// model check's authored message, `accept: ['*/*']` at upload, a queued automation's generated write, `revision`
 // as a model field, and an FK to `sys_user` read back through its relation.
 import { describe, expect, it } from '@effect/vitest';
-import type { Authority, Outcome } from '../src/engine/contracts.ts';
+import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { load, manifestErrors } from '../src/compiler/load.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 
@@ -20,7 +20,6 @@ import { uuidv7 } from '../src/protocol/wire.ts';
 const U = '019fc6bb-7f21-76fd-8597-7de44181da68';
 const empty = {
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -85,22 +84,7 @@ const manifest = Result.getOrThrow(
 				read: { fields: 'all', relations: 'all' },
 				create: { input: { columns: ['title', 'profile', 'stock', 'doc', 'owner'] } },
 				update: { input: { columns: ['title', 'profile', 'stock', 'owner'] } },
-				notifications: {
-					committed: [
-						{
-							channel: 'inbox',
-							to: [{ team: 't-rd' }],
-							on: { action: ['create'] },
-							title: { one: 'New project', many: '{count} new projects' }
-						},
-						{
-							channel: 'inbox',
-							to: [{ user: 'owner' }, 'requestor'],
-							on: { action: ['update'] },
-							title: 'Project changed'
-						}
-					]
-				}
+				notify: true
 			},
 			quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } },
 			activities: {
@@ -110,17 +94,13 @@ const manifest = Result.getOrThrow(
 			},
 			cases: {
 				read: { fields: 'all' },
-				create: { input: { columns: ['title'] } },
-				notifications: {
-					committed: [{ channel: 'inbox', to: [{ team: 't-qa' }], title: 'Case raised' }]
-				},
-				actions: {
-					raise: {
-						description: 'Raise a case with its classification',
-						input: { title: { kind: 'text' } },
-						output: { kind: 'text' }
+				create: {
+					input: {
+						columns: ['title'],
+						with: { classifications: { create: { columns: ['note'] } } }
 					}
-				}
+				},
+				notify: true
 			},
 			classifications: { read: { fields: 'all' }, create: { input: { columns: ['note', 'case'] } } }
 		},
@@ -129,26 +109,44 @@ const manifest = Result.getOrThrow(
 				description: 'Ops',
 				automations: ['file'],
 				grants: {
-					cases: { read: true, create: true, actions: ['raise'] },
+					cases: { read: true, create: true },
 					classifications: { read: true, create: true },
 					projects: { read: { owner: { eq: { actor: 'id' } } }, create: true, update: 'read' }
 				}
 			}
 		},
 		automations: {
-			file: { description: 'Files a scan', input: { title: { kind: 'text' } }, runAs: ['ops'] }
+			file: {
+				description: 'Files a scan',
+				input: { title: { kind: 'text' } },
+				output: { kind: 'id', of: 'cases' },
+				runAs: ['ops']
+			}
 		}
 	})
 );
 const guest = program(`export default {
-	collection: { cases: { bodies: { queries: {}, actions: {
-		raise: function* (input, ctx) {
-			const c = yield* ctx.act('cases.create', { title: input.title });
-			yield* ctx.act('classifications.create', { note: 'auto', case: c.records[0].id });
-			return c.records[0].id;
-		},
-	} } } },
-	automation: { file: { body: function* (input, ctx) { yield* ctx.act('cases.raise', { title: input.title }); } } },
+	collection: {
+		projects: { bodies: { notify: function*(event) {
+			if(event.kind!=='write')return [];
+			if(event.action==='create')return [{to:[{team:'t-rd'}],title:event.records.length===1?'New project':event.records.length+' new projects'}];
+			if(event.action!=='update')return [];
+			return event.records.map((record)=>{
+				const owner=typeof record.owner==='string'?record.owner:record.owner?.id;
+				return {to:[...(owner?[{user:owner}]:[]),...(event.actor.kind==='member'?[{user:event.actor.id}]:[])],title:'Project changed',link:{collection:'projects',id:record.id}};
+			});
+		} } },
+		cases: { bodies: { notify: function*(event) {
+			return event.kind==='write'&&event.action==='create'?[{to:[{team:'t-qa'}],title:'Case raised'}]:[];
+		} } }
+	},
+	automation: { file: { body: function* (input, ctx) {
+		const created=yield* ctx.act('cases.create',{title:input.title,classifications:{create:[{note:'auto'}]}});
+		if(created.kind!=='committed')throw Error('Expected direct permission');
+		const record=created.records.find((record)=>record.collection==='cases');
+		if(!record)throw Error('Missing created case');
+		return record.id;
+	} } }
 };`);
 
 const ok = (o: Outcome) => {
@@ -184,12 +182,14 @@ const setup = () =>
 							: Effect.succeed(reply.outcome);
 					})
 				),
-			get: (collection: string, id: string, query: Json = {}) =>
-				qReply(route, authority, { reads: [{ m: 'get', a: [collection, id, query] }] }).pipe(
+			get: (collection: string, id: string, query: { readonly [key: string]: Json } = {}) =>
+				qReply(route, authority, {
+					reads: [{ m: 'query', a: [collection, { ...query, id }] }]
+				}).pipe(
 					Effect.flatMap((reply) => Schema.decodeUnknownEffect(Schema.Json)(reply.answers[0]))
 				),
 			read: (collection: string, query: Json) =>
-				qReply(route, authority, { reads: [{ m: 'read', a: [collection, query] }] }).pipe(
+				qReply(route, authority, { reads: [{ m: 'query', a: [collection, query] }] }).pipe(
 					Effect.flatMap((reply) => Schema.decodeUnknownEffect(Page)(reply.answers[0]))
 				),
 			upload: t.as(authority).upload
@@ -199,7 +199,7 @@ const setup = () =>
 
 describe('write gaps found by the template migration', () => {
 	it.live(
-		"an ordinary commit writes the collection's `committed` notices in its statement (rule 47)",
+		'an ordinary commit queues model notices with the committed images and recipient fanout',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -210,6 +210,8 @@ describe('write gaps found by the template migration', () => {
 							{ title: 'b', owner: U }
 						])
 					);
+					expect(yield* rows('SELECT id FROM sys_notification')).toEqual([]);
+					yield* t.runDue();
 					expect(yield* rows(`SELECT recipient, title, link FROM sys_notification`)).toEqual([
 						{
 							recipient: { channel: 'inbox', recipients: [{ team: 't-rd' }] },
@@ -218,6 +220,7 @@ describe('write gaps found by the template migration', () => {
 						}
 					]);
 					const id = recordId(yield* A.act('projects.create', { title: 'c' }));
+					yield* t.runDue();
 					expect(
 						(yield* rows(`SELECT title, link FROM sys_notification ORDER BY at, title`)).map(
 							(r) => r['title']
@@ -226,6 +229,7 @@ describe('write gaps found by the template migration', () => {
 					if (t.admin.actor.kind !== 'member') throw new Error('admin actor is not a member');
 					const actor = t.admin.actor.id;
 					ok(yield* A.act('projects.update', { target: id, set: { title: 'c2', owner: U } }));
+					yield* t.runDue();
 					expect(
 						yield* rows(
 							`SELECT DISTINCT recipient, link FROM sys_notification WHERE title = 'Project changed'`
@@ -259,14 +263,45 @@ describe('write gaps found by the template migration', () => {
 		)
 	);
 
-	it.live("an action's recorded writes carry their notices into the action's statement", () =>
+	it.live('a generated parent and child create is atomic and queues its model notification', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { rows, A } = yield* setup();
-				ok(yield* A.act('cases.raise', { title: 'x' }));
+				const { t, rows, A } = yield* setup();
+				const created = ok(
+					yield* A.act('cases.create', {
+						title: 'x',
+						classifications: { create: [{ note: 'auto' }] }
+					})
+				);
+				expect(created.records).toHaveLength(2);
+				expect(
+					yield* rows('SELECT c.title,k.note FROM cases c JOIN classifications k ON k."case"=c.id')
+				).toEqual([{ title: 'x', note: 'auto' }]);
+				expect(yield* rows('SELECT id FROM sys_notification')).toEqual([]);
+				yield* t.runDue();
 				expect(yield* rows(`SELECT title FROM sys_notification`)).toEqual([
 					{ title: 'Case raised' }
 				]);
+			})
+		)
+	);
+
+	it.live('a refused nested child leaves the parent, child and notification queue unchanged', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { rows, A } = yield* setup();
+				expect(
+					yield* Effect.flip(
+						A.act('cases.create', {
+							title: 'refused',
+							classifications: { create: [{ note: null }] }
+						})
+					)
+				).toMatchObject({ code: 'required' });
+				expect(yield* rows('SELECT id FROM cases')).toEqual([]);
+				expect(yield* rows('SELECT id FROM classifications')).toEqual([]);
+				expect(yield* rows('SELECT id FROM sys_run')).toEqual([]);
+				expect(yield* rows('SELECT id FROM sys_notification')).toEqual([]);
 			})
 		)
 	);
@@ -363,26 +398,33 @@ describe('write gaps found by the template migration', () => {
 		)
 	);
 
-	it.live('an automation calls a collection action through ctx.act, its writes in one act', () =>
+	it.live('a queued automation calls a generated verb and records the created case identity', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { t, rows, route } = yield* setup();
+				const id = uuidv7(Date.parse(t.clock.now()));
 				ok(
 					(yield* actReply(route, t.as(t.member(['ops'])).authority, {
 						callable: 'start',
 						input: {
 							automation: 'file',
 							input: { title: 'scan' },
-							id: uuidv7(Date.parse(t.clock.now()))
+							id
 						},
 						issuedAt: t.clock.now()
 					})).outcome
 				);
+				expect(yield* rows('SELECT id FROM cases')).toEqual([]);
+				expect(yield* rows("SELECT state FROM sys_run WHERE automation='file'")).toEqual([
+					{ state: 'queued' }
+				]);
 				yield* t.runDue();
-				expect(yield* rows(`SELECT state FROM sys_run`)).toEqual([{ state: 'succeeded' }]);
+				expect(yield* rows("SELECT state,output FROM sys_run WHERE automation='file'")).toEqual([
+					{ state: 'succeeded', output: expect.any(String) }
+				]);
 				expect(
 					yield* rows(
-						`SELECT c.title, k.note FROM cases c JOIN classifications k ON k."case" = c.id`
+						`SELECT c.title, k.note FROM cases c JOIN classifications k ON k."case" = c.id JOIN sys_run r ON r.output #>> '{}' = c.id::text WHERE r.id='${id}'`
 					)
 				).toEqual([{ title: 'scan', note: 'auto' }]);
 			})
@@ -396,14 +438,18 @@ describe('write gaps found by the template migration', () => {
 				const M = caller(yield* t.signIn('a@x.test'));
 				const id = recordId(yield* M.act('projects.create', { title: 'mine' }));
 				expect(
-					yield* A.get('projects', id, { select: { title: true, owner: { name: true } } })
+					yield* A.get('projects', id, {
+						select: { title: true, owner: { select: { name: true } } }
+					})
 				).toMatchObject({ title: 'mine', owner: { name: 'Ana' } });
 				expect(
-					yield* M.get('projects', id, { select: { title: true, owner: { name: true } } })
+					yield* M.get('projects', id, {
+						select: { title: true, owner: { select: { name: true } } }
+					})
 				).toMatchObject({ title: 'mine', owner: { name: 'Ana' } });
 				expect(
 					(yield* M.read('projects', {
-						select: { title: true, owner: { name: true } },
+						select: { title: true, owner: { select: { name: true } } },
 						where: { owner: { eq: U } },
 						all: true
 					})).rows
@@ -431,6 +477,7 @@ describe('write gaps found by the template migration', () => {
 					Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer))
 				);
 				m.model['docs'] = {
+					name: 'docs',
 					description: 'd',
 					label: 'title',
 					fields: { title: { kind: 'text' }, revision: { kind: 'text' } }
@@ -438,7 +485,7 @@ describe('write gaps found by the template migration', () => {
 				expect(manifestErrors(m)).toEqual([
 					expect.objectContaining({
 						code: 'load/reserved-field',
-						path: 'src/data/model/+docs.model.ts',
+						path: 'src/data/model/docs/+model.ts',
 						message: expect.stringContaining("'revision' is a system column")
 					})
 				]);

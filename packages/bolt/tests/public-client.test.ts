@@ -15,7 +15,8 @@ const boot: PublicBoot = {
 	contract: 'fixture-contract',
 	describe: false,
 	messages: {},
-	catalog: {}
+	catalog: {},
+	automations: {}
 };
 const data = Schema.Struct({ title: Schema.String, amount: Schema.Number });
 const body = {
@@ -97,6 +98,7 @@ it.effect(
 				push: null,
 				visitor: { app: 'portal' },
 				catalog: {},
+				automations: {},
 				contract: boot.contract
 			};
 			const projected = yield* toPublicBoot(source, { base: boot.base, kiosk: null });
@@ -125,5 +127,30 @@ it.effect('hydrates native decimal values through the same codec used to encode 
 		);
 		expect(decoded.data.total).toBeInstanceOf(Decimal);
 		expect(yield* Schema.encodeEffect(codec)(decoded.data)).toEqual(encoded);
+	})
+);
+
+it.effect('retains declared query and search-index metadata in public hydration', () =>
+	Effect.gen(function* () {
+		const catalog = {
+			orders: {
+				label: ['title'],
+				fields: { title: { kind: 'text' as const } },
+				indexes: { hue: { description: 'Hue', input: { r: { kind: 'number' as const } } } },
+				queries: {
+					titled: {
+						description: 'Titles',
+						input: { prefix: { kind: 'text' as const } },
+						output: { kind: 'json' as const }
+					}
+				}
+			}
+		};
+		const decoded = yield* decodePublicHydration(
+			JSON.stringify({ ...body, boot: { ...boot, catalog } }),
+			data,
+			{ route: body.route, release: body.release }
+		);
+		expect(decoded.boot.catalog).toEqual(catalog);
 	})
 );

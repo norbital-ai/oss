@@ -1,12 +1,12 @@
 // Rule 35 through `act` on PGlite (its pre- and post-image judges): each arm's scope over the stored and the written row,
 // `previous` on the stored row alone, every supplied field admitted by a scoped arm, and a direct grant committing past a
-// configured source approval route.
+// policy's approval callback.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import type { Authority } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
@@ -64,8 +64,7 @@ const m = Result.getOrThrow(
 				grants: {
 					orders: {
 						read: { where: { region: { eq: 'north' } } },
-						update: { where: 'read', fields: ['note'] },
-						approval: { update: { steps: [['Finance']] } }
+						update: { where: 'read', fields: ['note'], approval: true }
 					}
 				}
 			},
@@ -101,7 +100,6 @@ const m = Result.getOrThrow(
 		},
 		teams: { Finance: [] },
 		integrations: {},
-		pipelines: {},
 		automations: {},
 		connections: {},
 		envoys: {},
@@ -116,7 +114,7 @@ const as = (policies: string[]): Authority =>
 	compileAuthority(m, { actor: member, admin: false, policies }, policies.join());
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, plan(null, m), { accept: true });
+	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	let n = 0;
 	const run = (
 		collection: string,
@@ -167,8 +165,8 @@ describe('engine/write: the caller judged on the stored and the written row (rul
 				expect(yield* update('orders', north, { note: 'x' }, rep)).toMatchObject({
 					kind: 'committed'
 				});
-				// a direct grant commits: the configured Finance route is never consulted (no approval flow is wired here)
-				expect(yield* update('orders', north, { note: 'z' }, as(['routed']))).toMatchObject({
+				// the direct arm wins even when the approval arm's policy comes first; no guest callback is needed
+				expect(yield* update('orders', north, { note: 'z' }, as(['routed', 'rep']))).toMatchObject({
 					kind: 'committed'
 				});
 				expect(yield* update('orders', north, { amount: '5' }, rep)).toMatchObject({

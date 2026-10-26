@@ -20,7 +20,9 @@
 	} = $props();
 	// svelte-ignore state_referenced_locally -- each mounted cell belongs to one native row controller.
 	provideForm(form);
-	provideCollection(() => form.spec.target.collection);
+	provideCollection(() =>
+		form.spec.target.of === 'collection' ? form.spec.target.collection : ''
+	);
 	const bolt = useBolt();
 </script>
 

@@ -19,12 +19,8 @@ node_modules/
 **/build.staging-*/
 **/.svelte-kit/
 **/.generated/
-# Generated workspace state. Migrations and doctor configuration are authored and stay tracked.
-**/.norbital/*
-!**/.norbital/migrations/
-!**/.norbital/migrations/**
-!**/.norbital/config/
-!**/.norbital/config/**
+# Generated workspace state.
+**/.norbital/
 *.tsbuildinfo
 
 # Tool caches and reports

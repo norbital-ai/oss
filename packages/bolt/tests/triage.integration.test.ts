@@ -33,7 +33,6 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		pipelines: {},
 		policies: {
 			desk: { description: 'Desk', grants: { jobs: { read: true } } },
 			contractor: { description: 'Contractors', grants: { jobs: { read: true } } }
@@ -336,7 +335,7 @@ const debounce = () =>
 		yield* t.runDue();
 	});
 const statusOf = (id: string) =>
-	qReply(route, t.as(t.admin).authority, { reads: [{ m: 'get', a: ['jobs', id, {}] }] }).pipe(
+	qReply(route, t.as(t.admin).authority, { reads: [{ m: 'query', a: ['jobs', { id: id }] }] }).pipe(
 		Effect.flatMap((reply) =>
 			Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(reply.answers[0])
 		),

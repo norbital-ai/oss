@@ -12,12 +12,13 @@ import type {
 	CollectionAuthority,
 	EngineActor
 } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
-import type { Pred } from '../src/protocol/ir-types.ts';
-import { whereSql } from '../src/engine/query/sql.ts';
+import { whereSql, type Pred } from '@norbital-ai/store';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { readOptions } from '../src/engine/query/reader.ts';
+import { fromStore } from '../src/protocol/errors.ts';
 
 const d = { description: 'x', label: 'name' };
 const name = { name: { kind: 'text', optional: true } };
@@ -69,7 +70,6 @@ const manifest = Result.getOrThrow(
 			Object.keys(models).map((c) => [c, { read: { fields: 'all' } }])
 		),
 		integrations: {},
-		pipelines: {},
 		policies: {},
 		teams: {},
 		automations: {},
@@ -251,9 +251,7 @@ const ALL: CollectionAuthority = {
 	create: [],
 	update: [],
 	delete: [],
-	approval: { create: [], update: [], delete: [] },
 	queries: [],
-	actions: [],
 	moves: {},
 	masks: {}
 };
@@ -288,9 +286,14 @@ const owner = who();
 const IdRow = Schema.Struct({ id: Schema.String });
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, plan(null, manifest), { accept: true });
+	yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 	const visible = Effect.fnUntraced(function* (root: string, pred: Pred, as: Authority = owner) {
-		const s = whereSql(catalogOf(manifest), root, pred, { as: 'caller', authority: as }, b);
+		const s = yield* whereSql(
+			catalogOf(manifest),
+			root,
+			pred,
+			readOptions({ as: 'caller', authority: as }, b)
+		).pipe(Effect.mapError(fromStore));
 		return { sql: s.text, ids: (yield* db.rows(IdRow, s)).map((r) => names.get(r.id) ?? r.id) };
 	});
 	const ins = Effect.fnUntraced(function* (

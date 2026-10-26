@@ -1,4 +1,4 @@
-// A catalogue workspace: crm's ERP item import and a CSV export as pipelines over `products`, a `sales` writer and a
+// A catalogue workspace: an ERP item file import and a CSV catalogue export as product syncs, a `sales` writer and a
 // `viewer` reader; a suite that needs a plain workspace with a few policies boots it.
 import { Result } from 'effect';
 import { decodeManifest } from '../src/engine/manifest.ts';
@@ -23,37 +23,31 @@ export const manifest = Result.getOrThrow(
 			products: {
 				read: { fields: 'all' },
 				create: { input: { columns: ['external_code', 'name', 'price'] } },
-				update: { input: { columns: ['name', 'price'] } }
-			}
-		},
-		integrations: {},
-		pipelines: {
-			products: {
-				import: {
-					description: 'Mirrors the ERP item feed, skipping codes already on file.',
-					known: true,
-					onConflict: 'keep',
-					input: {
-						items: {
-							kind: 'list',
-							of: {
-								kind: 'object',
-								fields: {
-									external_code: { kind: 'text' },
-									name: { kind: 'text' },
-									unit_price: { kind: 'decimal', optional: true }
-								}
-							}
+				update: { input: { columns: ['name', 'price'] } },
+				syncs: {
+					erp: {
+						with: 'file',
+						parser: ['json'],
+						schema: {
+							external_code: { kind: 'text' },
+							name: { kind: 'text' },
+							unit_price: { kind: 'decimal', optional: true }
+						},
+						read: true
+					},
+					catalogue: {
+						with: 'file',
+						parser: ['csv'],
+						schema: {
+							external_code: { kind: 'text' },
+							name: { kind: 'text' },
+							price: { kind: 'decimal', scale: 2, optional: true }
 						}
 					}
-				},
-				export: {
-					description: 'The catalogue as CSV.',
-					select: ['external_code', 'name', 'price'],
-					format: 'csv'
 				}
 			}
 		},
+		integrations: {},
 		policies: {
 			viewer: { description: 'Reads the catalogue', grants: { products: { read: true } } },
 			integration: { description: 'Holds no catalogue grant', grants: {} },
@@ -73,13 +67,16 @@ export const manifest = Result.getOrThrow(
 	})
 );
 
-/** `guest.mjs` for crm's item import. */
+/** `guest.mjs` for ERP items, skipping product codes already on file. */
 export const guestSource = `
 export default {
-	pipeline: { products: { spec: { import: {
-		records: (input) => input.items.map((i) => ({ ...i, external_code: i.external_code.trim(), name: i.name.trim() })),
-		// ponytail: { in: codes } binds a list the PGlite adapter cannot pass (query/sql.ts 'in'); filtered here until it can
-		known: function* (ctx, items) { return Object.fromEntries((yield* ctx.read('products', { all: true })).rows.filter((r) => items.some((i) => i.external_code === r.external_code)).map((r) => [r.external_code, r])); },
-		map: (item, { known }) => known[item.external_code] ? null : { external_code: item.external_code, name: item.name, price: item.unit_price ?? null },
-	} } } },
+	collection: { products: { bodies: { syncs: { erp: {
+		read: function* ({ records }, ctx) {
+			if (records.length === 0) return { rows: [] };
+			const items = records.map((item) => ({ ...item, external_code: item.external_code.trim(), name: item.name.trim() }));
+			const page = yield* ctx.db.query('products', { all: true, where: { external_code: { in: items.map((item) => item.external_code) } } });
+			const known = new Set(page.rows.map((row) => row.external_code));
+			return { rows: items.flatMap((item) => known.has(item.external_code) ? [] : [{ external_code: item.external_code, name: item.name, price: item.unit_price ?? null }]) };
+		}
+	} } } } },
 };`;

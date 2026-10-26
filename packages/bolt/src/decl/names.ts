@@ -1,9 +1,11 @@
-// The names index (§3.1, rule 8). `.norbital/names.ts` augments `Names` with each path-derived name mapped to
-// `typeof import('<path>').default`; every cross-file type below is read from it, so it is never stale for content.
+// The names index (§3.1, rule 8). `bolt sync` evaluates the declarations and prints each part's data into
+// `.norbital/names.ts` as literal type text (functions dropped), augmenting `Names`; every cross-file type below is read
+// from it. No part reads its own file, so a body typed from it is never circular; it is one sync behind an edit.
 import type { SystemNames } from '../system/index.ts';
 import type { BuiltinFields } from './builtin-fields.ts';
-import type { FieldKind, KeyFor, Simplify, ValueOf } from './fields.ts';
-import type { NullableOfExpr } from './model.ts';
+import type { KeyFor, Simplify, ValueOf } from './fields.ts';
+import type { CollectionSpec, ModelSpec, NullableOfExpr } from './model.ts';
+import type { ApprovalStep } from './access/policy.ts';
 import type { CurrencyCode, Id, RecordRef } from './values.ts';
 
 /** Augmented by the generated `.norbital/names.ts`: `declare module '@norbital-ai/bolt' { interface Names { … } }`. */
@@ -19,20 +21,14 @@ type NamesShape = {
 	};
 	/** `src/+secrets.ts`: the workspace's secret names. */
 	secrets: { readonly [name: string]: unknown };
-	models: {
-		[model: string]: {
-			fields: { readonly [f: string]: FieldKind };
-			computed?: object;
-			key?: readonly string[];
-			unique?: readonly object[];
-		};
-	};
+	/** Each model's storage (`splitModel(name, literal).model`). */
+	models: { [model: string]: ModelSpec };
+	/** Each ref field, keyed `'<model>.<field>'` (`splitModel(name, literal).relationships`). */
 	relationships: { [key: `${string}.${string}`]: RelationshipSpec };
-	collections: { [collection: string]: { spec: object } };
+	/** Each exposed model's exposure (`splitModel(name, literal).collection`); a model without `read` has none. */
+	collections: { [collection: string]: CollectionSpec };
 	/** Each `src/integration/<name>/+integration.ts`: the workspace's definitions (bolt's own are `SystemNames`). */
 	integrations: { [integration: string]: unknown };
-	/** Each feed target → the feed that writes it (`<definition>.<feed>`), a generated literal. */
-	fed: { [collection: string]: string };
 	/** Each `src/agent/envoy/+<id>.envoy.ts`. */
 	envoys: { [envoy: string]: unknown };
 	customFields: { [field: string]: { spec: { shape: unknown } } };
@@ -61,8 +57,8 @@ type NamesShape = {
 export type NamesPart<K extends keyof NamesShape> = K extends keyof Names ? Names[K] : {};
 
 /**
- * One relationship in `+relationship.ts`: its target (`to`), the `inverse` many-relation name, `optional`, a default from the actor,
- * `onDelete`, `owned` children and a `where` on the target.
+ * One ref field as the relationships part holds it (`'<model>.<field>'`): its target (`to`), the `inverse` many-relation
+ * name, `optional`, a default from the actor, `onDelete`, `owned` children and a `where` on the target.
  */
 export type RelationshipSpec = {
 	to: string | readonly string[];
@@ -74,9 +70,9 @@ export type RelationshipSpec = {
 	where?: object;
 };
 
-// The built-in layer (`src/system/**`, X-18): its models and relationships are declared as a workspace's are and typed
-// from their declarations. Its collections are the system collection names; its private models (sys_session,
-// sys_challenge, sys_config) are no collection, so no author position names them.
+// The built-in layer (`src/system/**`, X-18): its models are declared as a workspace's are and its index holds the same
+// three parts. Its collections are the exposed system models; its private models (sys_session, sys_challenge,
+// sys_config) declare no `read`, so no author position names them.
 type SystemModels = SystemNames['models'];
 /** A built-in layer model: a system collection's, or one of the engine's private models. */
 export type SystemModelName = keyof SystemModels & string;
@@ -86,9 +82,9 @@ export type SystemName = keyof SystemNames['collections'] & string;
 type Models = NamesPart<'models'>;
 type Colls = NamesPart<'collections'>;
 
-/** An authored model (`src/data/model/+<m>.model.ts`). */
+/** An authored model (`src/data/model/<m>/+model.ts`). */
 export type ModelName = keyof Models & string;
-/** Anything a relationship or an `Id<>` may name: authored models and system collections. */
+/** Anything a ref field or an `Id<>` may name: authored models and system collections. */
 export type TargetName = ModelName | SystemName;
 /** Every surface addresses collections (P9): authored ones, plus the system collections. */
 export type CollectionName = (keyof Colls & string) | SystemName;
@@ -126,11 +122,9 @@ declare const definition: unique symbol;
 export type InstanceId<D extends string = IntegrationName> = Id<'sys_integration'> & {
 	readonly [definition]: D;
 };
-/** The collections a feed writes. */
-export type FedName = keyof NamesPart<'fed'> & string;
 /** The MCP server names (`src/agent/mcp/+<n>.mcp.ts`). */
 export type McpName = keyof NamesPart<'mcp'> & string;
-/** The agent skill names (`src/agent/skill/+<n>.skill.md`). */
+/** The agent skill names (`src/agent/skill/<n>/+skill.md`). */
 export type SkillName = keyof NamesPart<'skills'> & string;
 /** The host tools a policy's `capabilities.tools` may name (the host's Studio and browser tools). */
 export type HostToolName = keyof NamesPart<'hostTools'> & string;
@@ -180,9 +174,7 @@ export type TargetsOf<R> = R extends { to: infer T }
 // 16M instantiations). Two global scans group the relationship keys by source and by target; each model's view is a
 // property of `RelIndex`, instantiated once and kept (an alias re-instantiates its defaults on every reference). A view
 // is a mapped type over a key union, so `keyof` it is that union: `keyof` a mapped type with an `as` clause re-scans its
-// source on every read. Each view is conditional on `M`, so a generic `M` defers it: model literals feed the
-// relationships file, whose literal is checked against models, and an eager read of the relationships here would close
-// that loop.
+// source on every read. Each view is conditional on `M`, so a generic `M` defers it.
 type AllRels = NamesPart<'relationships'> & SystemNames['relationships'];
 type BySource = { [K in keyof AllRels as K extends `${infer S}.${string}` ? S : never]: K };
 type ByTarget = {
@@ -241,7 +233,7 @@ export type RelTarget<M, R> = R extends keyof OneRels<M>
 	: R extends keyof ManyRels<M>
 		? ManyRels<M>[R]
 		: never;
-/** Inverse names declared by more than one relationship onto `M` (checked by `Verify`). */
+/** Inverse names declared by more than one ref field onto `M` (checked by `Verify`). */
 export type DuplicateInverse<M> = DuplicateInverseOf<M>;
 // Capture keys separately to preserve union and never results.
 type DuplicateInverseOf<M, R = ManyRelKeys<M>, Keys extends keyof R = keyof R> = {
@@ -357,16 +349,12 @@ type WritableFieldOf<M, F = FieldsOf<M>, Keys extends keyof F & string = keyof F
 ) &
 	string;
 
-// ── collection exposure (R1): what a collection's `read` admits ──
+// ── exposure (R1): what a model's `read` admits ──
 // a system collection is typed by its declaration too (sys_integration's create and update allowlists)
 type SpecOf<C> = C extends keyof Colls
-	? Colls[C] extends { spec: infer S }
-		? S
-		: never
+	? Colls[C]
 	: C extends SystemName
-		? SystemNames['collections'][C] extends { spec: infer S }
-			? S
-			: never
+		? SystemNames['collections'][C]
 		: { read: { fields: 'all' } };
 type ReadSpec<C> = SpecOf<C> extends { read: infer R } ? R : never;
 /** Fields of `C` any grant can ever see (system columns always). */
@@ -387,6 +375,37 @@ export type ReadRelation<C> =
 				? RelNameOf<C>
 				: never;
 export type CollectionSpecOf<C> = SpecOf<C>;
+type SyncsOf<C> = SpecOf<C> extends { syncs: infer S } ? S : {};
+/** The syncs model `C` declares. */
+export type SyncName<C> = keyof SyncsOf<C> & string;
+/** File syncs offer import, template and export runs even when they use the built-in adapters. */
+export type FileSyncName<C, S = SyncsOf<C>> = {
+	[N in keyof S]: S[N] extends { with: 'file' } ? N : never;
+}[keyof S] &
+	string;
+type ReadSyncName<C, S = SyncsOf<C>> = {
+	[N in keyof S]: S[N] extends { with: infer W; read: true }
+		? W extends 'file'
+			? never
+			: N
+		: never;
+}[keyof S] &
+	string;
+/** A remote sync that reads, as a run a policy's `automations` may start and `bolt.start` runs: `'<model>.sync.<name>'`. */
+export type SyncCallable = {
+	[C in CollectionName]: `${C}.sync.${ReadSyncName<C> | FileSyncName<C>}`;
+}[CollectionName];
+
+// ── search indexes (`search.indexes` of the models part) ──
+type IndexesOf<M> = ModelOf<M> extends { search: { indexes: infer X } } ? X : {};
+/** The custom search indexes of model `M`. */
+export type IndexName<M> = keyof IndexesOf<M> & string;
+/** The fields index `I` of `M` takes as its probe input (`query(m, { search: { [I]: input } })`). */
+export type IndexInput<M, I> = IndexesOf<M>[I & keyof IndexesOf<M>] extends { input: infer F }
+	? F
+	: {};
+/** Whether `M` declares `search.semantic`. */
+export type HasSemantic<M> = ModelOf<M> extends { search: { semantic: object } } ? true : false;
 
 // ── rows ──
 /** The value of one column or FK of `M`. */
@@ -410,9 +429,10 @@ type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
 } & { readonly [K in P & keyof Rels]: FkValue<Rels[K]> };
 declare const masked: unique symbol;
 /** A value the reading caller's grants do not admit (rules 10, 14). */
-export interface Masked {
+export type Masked = {
 	readonly [masked]: true;
-}
+	readonly $masked: true;
+};
 /** The canonical wire marker for a field omitted by the reading caller's grants. */
 export const isMasked = (value: unknown): value is Masked =>
 	typeof value === 'object' && value !== null && '$masked' in value && value.$masked === true;
@@ -446,32 +466,32 @@ export type CallerValue<C, P> =
 export type Row<C> = RowOf<C> & RowState;
 /** What a caller's read attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {
-	readonly $outbound?: { readonly [rule: string]: OutboundState };
+	readonly $sync?: { readonly [sync: string]: SyncState };
 	readonly $approval?: RowApproval;
 };
 /**
- * A record an open approval request holds (rule 46b): its request, `Pending` at `step` (from 0) of `steps` or
- * `ChangesRequested`, who asked and whom it waits on. Absent once the request closes.
+ * A record an open approval request holds (rule 46b): its request, `Pending` at `step` (from 0) of its named `steps` (each
+ * decided by its teams or users) or `ChangesRequested`, and who asked. Absent once the request closes.
  */
 export type RowApproval = {
 	readonly requestId: string;
 	readonly state: 'Pending' | 'ChangesRequested';
 	readonly step: number;
-	readonly steps: number;
+	readonly steps: readonly ApprovalStep[];
 	readonly requestedBy: string;
-	readonly waitingOn: readonly string[];
 };
-/** Where the latest send of an outbound rule (`<definition>.<rule>`) for a row stands. */
-export type OutboundState = {
-	readonly status: 'queued' | 'sending' | 'sent' | 'skipped' | 'failed' | 'uncertain';
-	readonly error: string | null;
+/** Where a row's latest change stands with one write sync (`$sync.<name>`): queued, acknowledged, or refused with `message`. */
+export type SyncState = {
+	readonly status: 'pending' | 'ok' | 'failed';
+	readonly message?: string;
 };
 type RowOf<C, Mask = Maskable<C>> = Simplify<{
 	readonly [P in ReadField<C> & (keyof Columns<C> | keyof OneRels<C>)]: P extends Mask
 		? ColumnValue<C, P> | Masked
 		: ColumnValue<C, P>;
 }>;
-/** A transform's row (`ctx.existing`, `ctx.db`): never masked, all stored fields, no seq, roll-up or computed (rule 10). */
+/** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.db`): never masked, every stored field,
+ * no seq, roll-up or computed (rule 10). */
 export type StoredRow<M> = Simplify<ColumnValues<M, WritableField<M> | keyof SystemColumns<M>>>;
 export type WorkspaceReadField<M> = (
 	WritableField<M> | OfKind<M, { kind: 'seq' }> | keyof SystemColumns<M>

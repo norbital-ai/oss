@@ -6,12 +6,16 @@ import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { shellApi } from '../src/shell/runtime.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
+import { program } from './support/guest-fixture.ts';
 import { founderBootstrap } from '../src/engine/identity/session.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { HostIdentity } from '../src/shell/host.ts';
 import type { StudioOp, StudioPort, StudioState } from '../src/shell/studio/model.ts';
+import { StudioInspection, type StudioInspectInput } from '../src/shell/studio/inspection.ts';
+import type { AuditRuleSet, StudioAuditRules } from '../src/shell/studio/audit.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import type { LogRow } from '../src/engine/contracts.ts';
+import type { NoticeInsert } from '../src/engine/notifications/notify.ts';
 import { SW } from '../src/protocol/wire.ts';
 import { KitInvalid, TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
 
@@ -37,7 +41,6 @@ const manifest = Result.getOrThrow(
 			applications: { read: { fields: 'all' }, create: { input: { columns: ['opening', 'name'] } } }
 		},
 		integrations: {},
-		pipelines: {},
 		policies: {
 			applicant: {
 				description: 'Apply',
@@ -67,14 +70,7 @@ const manifest = Result.getOrThrow(
 				description: 'Propose an application',
 				grants: {
 					openings: { read: true },
-					applications: {
-						approval: {
-							create: [
-								{ match: { record: { name: { eq: 'Sales proposal' } } }, steps: [['Sales']] },
-								{ steps: [['Finance']] }
-							]
-						}
-					}
+					applications: { create: { approval: true } }
 				}
 			}
 		},
@@ -116,7 +112,7 @@ const manifest = Result.getOrThrow(
 		},
 		teams: { Sales: ['rep'], Finance: [], Proposer: ['proposer'] },
 		automations: {},
-		connections: {},
+		connections: { mail: { integration: 'email' } },
 		envoys: {},
 		mcp: {},
 		customFields: {},
@@ -126,8 +122,8 @@ const manifest = Result.getOrThrow(
 
 // a host's Studio: one workbench head; a save over a stale head is refused
 const sources = [
-	'src/data/collection/openings/+collection.ts',
-	'src/data/collection/applications/+collection.ts',
+	'src/data/model/openings/+model.ts',
+	'src/data/model/applications/+model.ts',
 	'src/access_control/policy/+proposer.policy.ts',
 	'src/access_control/policy/+applicant.policy.ts',
 	'src/access_control/policy/+lobby.policy.ts',
@@ -140,7 +136,7 @@ const sources = [
 ];
 const studioState: StudioState = {
 	commit: 'c2',
-	files: { 'src/a.ts': 'x', ...Object.fromEntries(sources.map((p) => [p, ''])) },
+	files: { 'src/a.ts': { bytes: 1 }, ...Object.fromEntries(sources.map((p) => [p, { bytes: 0 }])) },
 	changes: [],
 	manifest,
 	log: [],
@@ -151,6 +147,16 @@ const studioState: StudioState = {
 	]
 };
 const studioOps: StudioOp[] = [];
+const inspectionScopes: StudioInspectInput[] = [];
+const auditRules: StudioAuditRules = {
+	revision: 0,
+	ruleSet: { states: {}, ignore: [], rules: [] },
+	rules: [],
+	errors: [],
+	digest: 'd0',
+	version: '0.0.1'
+};
+const auditSaves: { revision: number; ruleSet: AuditRuleSet }[] = [];
 // the host's branding port (L-COL-199): what an administrator wrote
 const branded: { name: string; logo: string | null }[] = [];
 const studio: StudioPort = {
@@ -161,13 +167,67 @@ const studio: StudioPort = {
 		studioOps.push(op);
 		return studioState;
 	},
+	file: async (_auth, commit, path) =>
+		commit !== studioState.commit
+			? null
+			: path === 'src/a.ts'
+				? { text: 'x' }
+				: path in studioState.files
+					? { text: '' }
+					: null,
 	watch: (_auth, send) => {
 		send({ kind: 'log', line: { at: 't', level: 'info', message: 'build started' } });
 		return () => {};
 	},
 	usage: async () => ({
-		charts: [{ title: 'Memory held', unit: 'MiB', points: [{ at: 0, value: 512 }] }]
-	})
+		charts: [
+			{
+				title: 'Memory held',
+				unit: 'MiB',
+				points: [
+					{ at: 0, value: null },
+					{ at: 1, value: 512 }
+				]
+			}
+		]
+	}),
+	inspect: async (_auth, input) => {
+		inspectionScopes.push(input);
+		return {
+			canInspect: true,
+			asOf: '2026-10-26T08:00:00.000Z',
+			usage: [],
+			members: [],
+			studio: null,
+			logs: [],
+			bundles: null,
+			cache: null,
+			errors: null,
+			filters: {
+				level: input.level ?? null,
+				text: input.text ?? '',
+				run: input.run ?? '',
+				build: input.build ?? null
+			}
+		};
+	},
+	// the host's audit: a save compiles the rule set first and refuses one that does not compile
+	audit: {
+		rules: async () => auditRules,
+		save: async (_auth, revision, ruleSet) => {
+			if (ruleSet.rules.some((rule) => rule['id'] === 'Broken'))
+				throw BoltError.make('invalid', 'decode', 'Broken: "rule" is required');
+			auditSaves.push({ revision, ruleSet });
+			return { ...auditRules, revision: revision + 1, ruleSet };
+		},
+		run: async (_auth, ruleSet) => ({
+			commit: 'c2',
+			findings: [],
+			errors: [],
+			digest: ruleSet === undefined ? 'saved' : 'tried',
+			version: '0.0.1'
+		})
+	}
 };
 const ORIGIN = 'https://acme.example';
 type Jar = Map<string, string>;
@@ -206,7 +266,11 @@ const Reply = Schema.Struct({
 	outcome: Schema.optionalKey(Schema.Unknown),
 	answers: Schema.optionalKey(Schema.Array(Schema.Unknown)),
 	error: Schema.optionalKey(
-		Schema.Struct({ code: Schema.String, workspace: Schema.optionalKey(Schema.Unknown) })
+		Schema.Struct({
+			code: Schema.String,
+			message: Schema.optionalKey(Schema.String),
+			workspace: Schema.optionalKey(Schema.Unknown)
+		})
 	),
 	openapi: Schema.optionalKey(Schema.String),
 	paths: Schema.optionalKey(Schema.Unknown)
@@ -287,10 +351,15 @@ const workspace = Layer.effectContext(
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest,
+				guest: yield* program(`export default { policy: { proposer: { grants: { applications: {
+					create: { approval: (write, flow) => write.record.name === 'Sales proposal'
+						? flow.step('Sales review', {teams:['Sales']})
+						: flow.step('Finance review', {teams:['Finance']}) }
+				} } } } };`),
 				seed: { openings: [{ id: OPEN, title: 'Engineer', status: 'open' }] },
 				host: {
 					publicUrl: ORIGIN,
-					workspace: { name: 'Acme', handle: 'acme' },
+					workspace: () => ({ name: 'Acme', handle: 'acme' }),
 					studio,
 					ai: false,
 					apex: 'https://example.test/pick',
@@ -530,26 +599,36 @@ layer(workspace)('shell routes', (it) => {
 						[
 							{
 								id: 'n1',
-								to: { channel: 'inbox', recipients: [{ user: repId }] },
+								to: [{ user: repId }],
+								via: [],
 								title: 'To you'
 							},
 							{
 								id: 'n2',
-								to: { channel: 'inbox', recipients: [{ team: ownTeam }] },
+								to: [{ team: ownTeam }],
+								via: [],
 								title: 'To the team'
 							},
 							{
 								id: 'n3',
-								to: { channel: 'inbox', recipients: [{ team: 'Finance' }] },
+								to: [{ team: 'Finance' }],
+								via: [],
 								title: 'Not you'
 							},
 							{
 								id: 'n4',
-								to: { channel: 'email', recipients: [{ user: repId }] },
+								to: [{ user: repId }],
+								via: ['mail'],
 								title: 'By email'
 							},
-							{ id: 'n5', to: { policy: 'rep' }, title: 'To the policy' }
-						],
+							{ id: 'n5', to: [{ policy: 'rep' }], via: [], title: 'To the policy' }
+						].map((notice): NoticeInsert => ({
+							...notice,
+							body: null,
+							link: null,
+							once: notice.id,
+							attachments: []
+						})),
 						t.clock.now(),
 						'true',
 						t.manifest.teams
@@ -563,8 +642,8 @@ layer(workspace)('shell routes', (it) => {
 					).toEqual([
 						{ id: `n1:${repId}`, member: repId },
 						{ id: `n2:${repId}`, member: repId },
-						{ id: 'n4', member: null },
 						{ id: `n4:${repId}`, member: repId },
+						{ id: 'n4:mail', member: null },
 						{ id: `n5:${repId}`, member: repId }
 					]);
 					const notices = () =>
@@ -592,7 +671,7 @@ layer(workspace)('shell routes', (it) => {
 							{ callable: 'sys_notification.markRead', input: { ids }, issuedAt: t.clock.now() },
 							{ 'Idempotency-Key': crypto.randomUUID() }
 						);
-					expect((yield* read([`n1:${repId}`, 'n4'])).body?.['outcome']).toMatchObject({
+					expect((yield* read([`n1:${repId}`, 'n4:mail'])).body?.['outcome']).toMatchObject({
 						kind: 'committed'
 					});
 					expect((yield* notices()).filter((n) => n.read).map((n) => n.title)).toEqual(['To you']);
@@ -789,13 +868,95 @@ layer(workspace)('shell routes', (it) => {
 						op: { op: 'save', expected: 'c1', files: { 'src/a.ts': 'y' } }
 					});
 					expect([stale.status, stale.body?.error?.code]).toEqual([409, 'conflict']);
+					// one file's text at a commit, read on its own: the state carries only the tree's sizes
+					expect(
+						(yield* call(admin, 'GET', '/__bolt/shell/studio/file?commit=c2&path=src%2Fa.ts')).body
+							?.value
+					).toEqual({ text: 'x' });
+					expect(
+						(yield* call(admin, 'GET', '/__bolt/shell/studio/file?commit=c1&path=src%2Fa.ts')).body
+							?.value
+					).toBeNull();
+					expect((yield* call(admin, 'GET', '/__bolt/shell/studio/file?commit=c2')).status).toBe(
+						422
+					);
 					// a staff member who is not an administrator opens Studio too; the host port decides what they may do
 					expect((yield* call(rep, 'GET', '/__bolt/shell/studio')).status).toBe(200);
 					// the host's metering of this workspace is an administrator's
 					expect((yield* call(admin, 'GET', '/__bolt/shell/studio/usage')).body?.value).toEqual({
-						charts: [{ title: 'Memory held', unit: 'MiB', points: [{ at: 0, value: 512 }] }]
+						charts: [
+							{
+								title: 'Memory held',
+								unit: 'MiB',
+								points: [
+									{ at: 0, value: null },
+									{ at: 1, value: 512 }
+								]
+							}
+						]
 					});
 					expect((yield* call(rep, 'GET', '/__bolt/shell/studio/usage')).status).toBe(403);
+					const inspected = yield* call(
+						admin,
+						'GET',
+						'/__bolt/shell/studio/inspect?range=24h&view=logs&run=run-1&level=warn'
+					);
+					expect(inspected.status).toBe(200);
+					expect(
+						(yield* Schema.decodeUnknownEffect(StudioInspection)(inspected.body?.value)).filters
+					).toMatchObject({ run: 'run-1', level: 'warn' });
+					expect(inspectionScopes.at(-1)).toMatchObject({
+						range: '24h',
+						view: 'logs',
+						run: 'run-1',
+						level: 'warn'
+					});
+					expect(
+						(yield* call(rep, 'GET', '/__bolt/shell/studio/inspect?range=7d&view=resources')).status
+					).toBe(403);
+					expect(
+						(yield* call(admin, 'GET', '/__bolt/shell/studio/inspect?range=forever&view=source'))
+							.status
+					).toBe(422);
+					expect(
+						(yield* call(
+							admin,
+							'GET',
+							`/__bolt/shell/studio/inspect?range=7d&view=logs&run=${'x'.repeat(201)}`
+						)).status
+					).toBe(422);
+					// the organization's audit rules: read, saved over a revision, tried unsaved; an administrator's
+					expect((yield* call(admin, 'GET', '/__bolt/shell/studio/audit')).body?.value).toEqual(
+						auditRules
+					);
+					const relaxed = { states: { UI12: 'hint' }, ignore: [], rules: [] };
+					expect(
+						(yield* call(admin, 'POST', '/__bolt/shell/studio/audit', {
+							revision: 0,
+							ruleSet: relaxed
+						})).body?.value
+					).toMatchObject({ revision: 1, ruleSet: relaxed });
+					expect(auditSaves).toEqual([{ revision: 0, ruleSet: relaxed }]);
+					const broken = yield* call(admin, 'POST', '/__bolt/shell/studio/audit', {
+						revision: 1,
+						ruleSet: { ...relaxed, rules: [{ id: 'Broken' }] }
+					});
+					expect(broken.status).toBe(400);
+					expect(broken.body?.error?.message).toBe('Broken: "rule" is required');
+					expect(
+						(yield* call(admin, 'POST', '/__bolt/shell/studio/audit', {
+							revision: 1,
+							ruleSet: { states: { UI12: 'loud' }, ignore: [], rules: [] }
+						})).status
+					).toBe(400);
+					expect(
+						(yield* call(admin, 'POST', '/__bolt/shell/studio/audit/run', { ruleSet: relaxed }))
+							.body?.value
+					).toMatchObject({ digest: 'tried' });
+					expect(
+						(yield* call(admin, 'POST', '/__bolt/shell/studio/audit/run', {})).body?.value
+					).toMatchObject({ digest: 'saved' });
+					expect((yield* call(rep, 'GET', '/__bolt/shell/studio/audit')).status).toBe(403);
 					// an administrator's authoring stream: the host's pushed frames as server-sent events
 					const events = yield* handle(
 						new Request(`${ORIGIN}/__bolt/shell/studio/events`, {
@@ -878,7 +1039,7 @@ layer(workspace)('shell routes', (it) => {
 							manifest,
 							host: {
 								publicUrl: `${ORIGIN}/acme`,
-								workspace: { name: 'Acme', handle: 'acme' },
+								workspace: () => ({ name: 'Acme', handle: 'acme' }),
 								ai: false
 							}
 						})
@@ -931,7 +1092,7 @@ layer(workspace)('shell routes', (it) => {
 						j,
 						'POST',
 						'/__bolt/q',
-						{ reads: [{ m: 'read', a: ['openings', { all: true }] }] },
+						{ reads: [{ m: 'query', a: ['openings', { all: true }] }] },
 						V
 					);
 					expect(q.status).toBe(200);
@@ -954,7 +1115,7 @@ layer(workspace)('shell routes', (it) => {
 							j,
 							'POST',
 							'/__bolt/q',
-							{ reads: [{ m: 'read', a: ['applications', { all: true }] }] },
+							{ reads: [{ m: 'query', a: ['applications', { all: true }] }] },
 							V
 						)).status
 					).toBe(403);
@@ -971,7 +1132,7 @@ layer(workspace)('shell routes', (it) => {
 						admin,
 						'POST',
 						'/__bolt/q',
-						{ reads: [{ m: 'read', a: ['applications', { all: true }] }] },
+						{ reads: [{ m: 'query', a: ['applications', { all: true }] }] },
 						V
 					)).status
 				).toBe(403);
@@ -1030,7 +1191,7 @@ layer(workspace)('shell routes', (it) => {
 				j,
 				'POST',
 				'/__bolt/q',
-				{ reads: [{ m: 'read', a: [collection, { all: true }] }] },
+				{ reads: [{ m: 'query', a: [collection, { all: true }] }] },
 				headers
 			);
 		const act = (j: Jar, callable: string, input: unknown, headers: Record<string, string> = {}) =>

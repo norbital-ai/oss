@@ -1,8 +1,9 @@
 // P2-INTEGRATE end to end on PGlite: the kit → engine entry → access, write, query, schema and guest areas together.
 import { describe, expect, it } from '@effect/vitest';
+import { vi } from 'vitest';
 import { Effect, Layer, Schema } from 'effect';
 import { program } from './support/guest-fixture.ts';
-import type { Authority, Outcome } from '../src/engine/contracts.ts';
+import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
@@ -15,7 +16,9 @@ const present = <A>(value: A | null | undefined): A => {
 
 const workspace = Layer.unwrap(
 	program(guest.source).pipe(
-		Effect.map((guest) => TestWorkspace.layer({ manifest, guest, transforms: ['orders'], seed }))
+		Effect.map((guest) =>
+			TestWorkspace.layer({ manifest, guest, transforms: ['orders.create', 'orders.update'], seed })
+		)
 	)
 );
 const act = (
@@ -38,11 +41,11 @@ const act = (
 const Row = Schema.Record(Schema.String, Schema.Json);
 const Page = Schema.Struct({ rows: Schema.Array(Row), next: Schema.NullOr(Schema.String) });
 const read = (route: FixtureRoute, authority: Authority, collection: string, query: Json) =>
-	qReply(route, authority, { reads: [{ m: 'read', a: [collection, query] }] }).pipe(
+	qReply(route, authority, { reads: [{ m: 'query', a: [collection, query] }] }).pipe(
 		Effect.flatMap((reply) => Schema.decodeUnknownEffect(Page)(reply.answers[0]))
 	);
 const get = (route: FixtureRoute, authority: Authority, collection: string, id: string) =>
-	qReply(route, authority, { reads: [{ m: 'get', a: [collection, id] }] }).pipe(
+	qReply(route, authority, { reads: [{ m: 'query', a: [collection, { id }] }] }).pipe(
 		Effect.flatMap((reply) => Schema.decodeUnknownEffect(Schema.NullOr(Row))(reply.answers[0]))
 	);
 const ok = (o: Outcome) => {
@@ -53,14 +56,28 @@ const idOf = (o: Outcome, c = 'orders') =>
 	present(ok(o).records.find((r) => r.collection === c)).id;
 const writes = <A, E, R>(t: Kit, n: number, run: Effect.Effect<A, E, R>) =>
 	Effect.gen(function* () {
-		t.count.reset();
-		const out = yield* run;
-		expect(t.count.writes).toBe(n);
-		return out;
+		const commits = vi.spyOn(t.db, 'transaction'),
+			outcomes = vi.spyOn(t.db, 'returning');
+		return yield* Effect.gen(function* () {
+			const out = yield* run;
+			const batches = commits.mock.calls.filter(([batch]) => batch.rollback !== true).length;
+			const records = outcomes.mock.calls.filter(([, statement]) =>
+				/\bAS outcome\b/.test(statement.text)
+			).length;
+			expect(batches + records).toBe(n);
+			return out;
+		}).pipe(
+			Effect.ensuring(
+				Effect.sync(() => {
+					commits.mockRestore();
+					outcomes.mockRestore();
+				})
+			)
+		);
 	});
 
 describe('engine: create → read → update → delete through the full pipeline', () => {
-	it.live('each act is one write statement; seq, roll-up, transform and state rules hold', () =>
+	it.live('each act is one native batch; seq, roll-up, transform and state rules hold', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
@@ -164,7 +181,7 @@ describe('engine: create → read → update → delete through the full pipelin
 				code: 'refused',
 				message: 'Shady is blocked',
 				field: 'customer',
-				rule: 'orders.transform'
+				rule: 'orders.create'
 			});
 			expect(
 				yield* writes(
@@ -400,5 +417,75 @@ describe('engine: guest walls (rules 71, 72)', () => {
 				);
 			}).pipe(Effect.scoped, Effect.provide(workspace)),
 		10_000
+	);
+});
+
+describe('engine: one atomic act stays inside the cell input budget', () => {
+	it.live('refuses past the row and byte caps before it materializes the rows', () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
+			const rows = Array.from({ length: 4_001 }, (_, n) => ({
+				title: `bulk-${n}`,
+				region: 'north',
+				customer: ACME
+			}));
+			expect(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.create', rows)
+			).toMatchObject({ kind: 'refused', code: 'overflow' });
+			expect(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.create', {
+					title: 'x'.repeat(9 * 1024 * 1024),
+					region: 'north',
+					customer: ACME
+				})
+			).toMatchObject({ kind: 'refused', code: 'overflow' });
+			expect((yield* read(route, t.as(t.admin).authority, 'orders', { all: true })).rows).toEqual(
+				[]
+			);
+		}).pipe(Effect.scoped, Effect.provide(workspace))
+	);
+});
+
+describe('engine: declared record locks and enum transitions', () => {
+	it.live('refuses an invalid enum move, then every write to a locked record', () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
+			const id = idOf(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.create', {
+					title: 'lock-check',
+					region: 'north',
+					customer: ACME
+				})
+			);
+			expect(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.update', {
+					target: id,
+					set: { stage: 'lost' }
+				})
+			).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'stage' });
+			ok(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.update', {
+					target: id,
+					set: { stage: 'won' }
+				})
+			);
+			ok(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.update', {
+					target: id,
+					set: { archived: true }
+				})
+			);
+			expect(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.update', {
+					target: id,
+					set: { title: 'changed' }
+				})
+			).toMatchObject({ kind: 'refused', code: 'locked' });
+			expect(
+				yield* act(route, t, t.as(t.admin).authority, 'orders.delete', { target: id })
+			).toMatchObject({ kind: 'refused', code: 'locked' });
+		}).pipe(Effect.scoped, Effect.provide(workspace))
 	);
 });

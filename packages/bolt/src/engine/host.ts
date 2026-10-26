@@ -1,5 +1,5 @@
 // One immutable activation graph. Every shared bottom service is built once in this generation's layer scope.
-import { ConfigProvider, Crypto, Effect, Layer } from 'effect';
+import { ConfigProvider, Crypto, Effect, FileSystem, Layer, Path, PubSub } from 'effect';
 import { declaredSecrets, layered, type EngineManifest } from './manifest.ts';
 import type { EngineError } from './errors.ts';
 import {
@@ -12,15 +12,12 @@ import {
 	Decisions,
 	Envoys,
 	Facilities,
-	Feeds,
 	Guest,
 	Identity,
-	Isolates,
 	Links,
 	Live,
 	Manifest,
 	Outbound,
-	Pipelines,
 	Reads,
 	RunHandlers,
 	Runs,
@@ -35,19 +32,26 @@ import {
 	DeadlinePort,
 	Drivers,
 	Files,
+	Docs,
 	Geo,
+	GuestIsolates,
+	Http,
+	Images,
+	Keys,
+	Mcp,
 	Metering,
 	Speech,
 	Transport,
 	WebRead
 } from './ports.ts';
 import { TenantDb } from './db/tenant-db.ts';
+import { Audit, auditChanges } from './audit.ts';
+import { recoverAudit } from './audit-operation.ts';
 import { Secrets } from './secrets.ts';
 import { ReadsLive } from './query/engine.ts';
 import { WritesLive } from './write/act.ts';
 import { CallablesLive } from './callables/index.ts';
 import { ApprovalsLive } from './approvals/approvals.ts';
-import { PipelinesLive } from './pipelines/pipeline.ts';
 import { DecisionsLive } from './decisions/index.ts';
 import { IdentityLive } from './identity/session.ts';
 import { LiveHubLive } from './live/hub.ts';
@@ -59,10 +63,10 @@ import { TurnHandlers, TurnsLive } from './agent/turns.ts';
 import { TriageLive, TriageService } from './agent/triage.ts';
 import { AgentDrains, AgentsLive } from './agent/index.ts';
 import { LinksLive } from './integrations/links.ts';
-import { FeedsLive } from './integrations/feeds.ts';
+import { Syncs, SyncsLive } from './sync/index.ts';
 import { OutboundLive } from './integrations/outbound.ts';
 import { FacilitiesLive } from './facilities.ts';
-import { GuestLive, IsolatesLive, PreparedIsolates } from './guest/runner.ts';
+import { GuestLive } from './guest/runner.ts';
 import { TelemetryLive } from './guest/telemetry.ts';
 
 export type EngineServices =
@@ -72,7 +76,6 @@ export type EngineServices =
 	| Writes
 	| Callables
 	| Approvals
-	| Pipelines
 	| Decisions
 	| Identity
 	| Live
@@ -85,13 +88,11 @@ export type EngineServices =
 	| Turns
 	| Agents
 	| Links
-	| Feeds
+	| Syncs
 	| Outbound
 	| Facilities
 	| Guest
-	| Isolates
 	| Telemetry
-	| PreparedIsolates
 	| Nudges
 	| TurnHandlers
 	| TriageService
@@ -105,32 +106,67 @@ export type EngineHost =
 	| Speech
 	| WebRead
 	| Geo
+	| Docs
 	| Metering
 	| Transport
 	| DeadlinePort
 	| Drivers
-	| Ai;
+	| Ai
+	| GuestIsolates
+	| Keys
+	| Http
+	| Images
+	| Mcp
+	| FileSystem.FileSystem
+	| Path.Path;
 
 export function EngineLive(
 	manifest: EngineManifest
 ): Layer.Layer<EngineServices, EngineError, EngineHost> {
 	const values = Layer.succeed(Manifest, layered(manifest));
-	const secrets = Layer.unwrap(
-		Effect.map(Activation, (activation) =>
-			Secrets.layer(declaredSecrets(manifest), activation.secretsKey)
-		)
-	).pipe(Layer.provideMerge(values));
+	const secrets = Secrets.layer(declaredSecrets(manifest)).pipe(Layer.provideMerge(values));
 	const config = ConfigProvider.layer(Effect.map(Secrets, (secrets) => secrets.config)).pipe(
 		Layer.provide(secrets)
 	);
 	const bottom = Layer.mergeAll(
+		Layer.effectDiscard(
+			Effect.gen(function* () {
+				const db = yield* TenantDb;
+				const audit = yield* Audit;
+				if (audit.mode === 'disabled') return;
+				// Subscribe before the startup scan so an append during recovery cannot lose its wake.
+				const changes = yield* auditChanges(audit);
+				const recover = recoverAudit(db).pipe(
+					Effect.catch((error) => Effect.logWarning(error).pipe(Effect.as(true)))
+				);
+				// Startup failures remain retryable, including a tenant whose schema is not installed yet.
+				let unresolved = yield* recover;
+				yield* Effect.forkScoped(
+					Effect.forever(
+						Effect.suspend(() =>
+							unresolved
+								? PubSub.take(changes).pipe(
+										Effect.raceFirst(Effect.void.pipe(Effect.delay('5 seconds')))
+									)
+								: PubSub.take(changes)
+						).pipe(
+							Effect.andThen(recover),
+							Effect.tap((pending) =>
+								Effect.sync(() => {
+									unresolved = pending;
+								})
+							)
+						)
+					)
+				);
+			})
+		),
 		IdentityLive,
 		DecisionsLive,
 		TelemetryLive,
-		IsolatesLive,
 		TurnsLive,
 		DeadlinesLive,
-		RunHandlersLive
+		RunHandlersLive,
 	).pipe(Layer.provideMerge(values));
 	const wake = WakeLive.pipe(Layer.provideMerge(bottom));
 	const guest = GuestLive.pipe(Layer.provideMerge(wake));
@@ -140,9 +176,8 @@ export function EngineLive(
 	const writes = WritesLive.pipe(Layer.provideMerge(links));
 	const callables = CallablesLive.pipe(Layer.provideMerge(writes));
 	const approvals = ApprovalsLive.pipe(Layer.provideMerge(callables));
-	const pipelines = PipelinesLive.pipe(Layer.provideMerge(approvals));
-	const facilities = Layer.mergeAll(FacilitiesLive, FeedsLive, OutboundLive).pipe(
-		Layer.provideMerge(pipelines)
+	const facilities = Layer.mergeAll(FacilitiesLive, SyncsLive, OutboundLive).pipe(
+		Layer.provideMerge(approvals)
 	);
 	const conversations = ConversationsLive.pipe(Layer.provideMerge(facilities));
 	const triage = TriageLive.pipe(Layer.provideMerge(conversations));

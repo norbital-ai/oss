@@ -6,12 +6,13 @@ import type { LiveView } from '../src/engine/services.ts';
 import { json, routeFixture } from './support/route-fixture.ts';
 import { patched } from '../src/page/bolt.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, Outcome } from '../src/engine/contracts.ts';
+import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { lowerRead } from '../src/engine/query/engine.ts';
 import { ActReply, type Frame } from '../src/protocol/schema.ts';
 import { TestWorkspace } from '../src/test/index.ts';
+import { program } from './support/guest-fixture.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -41,21 +42,24 @@ const manifest: EngineManifest = {
 			grants: {
 				orders: {
 					read: true,
-					update: { fields: ['title'] },
-					approval: {
-						create: [{ steps: [['Finance']] }],
-						update: [
-							{ fields: ['title', 'note'], match: { changed: ['note'] }, steps: [['Finance']] }
-						]
-					}
+					update: { fields: ['title'] }
+				}
+			}
+		},
+		sales_approval: {
+			description: 'Sales approval',
+			grants: {
+				orders: {
+					read: true,
+					create: { approval: true },
+					update: { fields: ['title', 'note'], approval: true }
 				}
 			}
 		},
 		finance: { description: 'Finance', grants: { orders: { read: true } } }
 	},
 	integrations: {},
-	pipelines: {},
-	teams: { Sales: ['sales'], Finance: ['finance'], Ops: [] },
+	teams: { sales: ['sales', 'sales_approval'], finance: ['finance'], ops: [] },
 	automations: {},
 	connections: {},
 	envoys: {},
@@ -66,17 +70,24 @@ const manifest: EngineManifest = {
 };
 
 const setup = Effect.gen(function* () {
-	const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
+	const context = yield* Layer.build(
+		TestWorkspace.layer({
+			manifest,
+			guest: yield* program(
+				`export default { policy: { sales_approval: { grants: { orders: { create: { approval: (write, flow) => write.record.title === 'refuse' ? flow.deny('This title is refused.') : flow.step('Finance', { teams: ['finance'] }) }, update: { approval: (write, flow) => flow.step('Finance', { teams: ['finance'] }) } } } } } };`
+			)
+		})
+	);
 	const t = Context.get(context, TestWorkspace),
 		live = Context.get(context, Live),
 		approvals = Context.get(context, Approvals),
 		reads = Context.get(context, Reads),
 		route = yield* routeFixture(context);
-	const rep = t.member(['sales']),
+	const rep = t.member(['sales', 'sales_approval']),
 		fin = t.member(['finance']);
 	yield* t.db.write({
 		text: 'UPDATE sys_user SET team=CASE WHEN id=$1 THEN $3 ELSE $4 END WHERE id IN ($1,$2)',
-		params: [rep.id, fin.id, 'Sales', 'Finance']
+		params: [rep.id, fin.id, 'sales', 'finance']
 	});
 	const authorities = new Authorities(manifest, 'e2e');
 	const salesAuthority = yield* authorities.member(t.db, rep.id),
@@ -94,8 +105,14 @@ const setup = Effect.gen(function* () {
 			text: 'SELECT record_id FROM approval_request WHERE id=$1',
 			params: [id]
 		});
-	const decide = (requestId: string, status: 'APPROVED' | 'REJECTED') =>
-		approvals.process({ requestId, status, authority: finance(), now: t.clock.now() });
+	const decide = (requestId: string, decision: 'approve' | 'reject' | 'requestChanges') =>
+		approvals.decide({
+			requestId,
+			decision,
+			...(decision === 'approve' ? {} : { reason: 'Please revise.' }),
+			authority: finance(),
+			now: t.clock.now()
+		});
 	const post = (who: () => Authority, callable: string, input: Json) =>
 		Effect.gen(function* () {
 			const response = yield* route.handle(
@@ -146,7 +163,7 @@ const setup = Effect.gen(function* () {
 	const committedView = () =>
 		Effect.gen(function* () {
 			const { frames } = yield* connect(sales(), 'v', {
-				read: lowerRead(t.manifest, 'read', ['orders', { all: true, select: { title: true } }])
+				read: lowerRead(t.manifest, 'query', ['orders', { all: true, select: { title: true } }])
 			});
 			return () =>
 				settled.pipe(
@@ -214,6 +231,22 @@ const created = (outcome: Outcome) => {
 };
 
 describe('an approval flow in the policy grant', () => {
+	it.live('records a pure approval callback refusal even when no write callback runs', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { t, sales, post } = yield* setup;
+				expect(
+					(yield* post(sales, 'orders.create', { title: 'refuse' })).reply.outcome
+				).toMatchObject({ kind: 'refused', code: 'refused', message: 'This title is refused.' });
+				expect(
+					yield* t.db.value(Schema.Number, {
+						text: 'SELECT count(*)::int FROM bolt_idem_outcome',
+						params: []
+					})
+				).toBe(1);
+			})
+		)
+	);
 	it.live(
 		'a create commits at once, held by its request until the configured approver approves',
 		() =>
@@ -227,12 +260,12 @@ describe('an approval flow in the policy grant', () => {
 					expect(yield* held(id)).toEqual({ title: 'desk', note: null });
 					expect(
 						(yield* post(
-							() => t.as(t.member(['sales'], { teams: ['Ops'], teamPath: ['Ops'] })).authority,
+							() => t.as(t.member(['sales'], { teams: ['ops'], teamPath: ['ops'] })).authority,
 							'orders.update',
 							{ target: id, set: { title: 'x' } }
 						)).reply.outcome
 					).toMatchObject({ kind: 'refused', code: 'locked', data: { requestId } });
-					expect(yield* decide(requestId, 'APPROVED')).toMatchObject({ kind: 'decided' });
+					expect(yield* decide(requestId, 'approve')).toMatchObject({ kind: 'decided' });
 					expect(yield* held(id)).toEqual({ title: 'desk', note: null });
 				})
 			)
@@ -281,7 +314,7 @@ describe('an approval flow in the policy grant', () => {
 						(yield* post(sales, 'orders.update', { target: id, set: { note: 'b' } })).reply.outcome
 					);
 					expect(yield* held(id)).toEqual({ title: 'chair', note: 'b' });
-					expect(yield* decide(requestId, 'REJECTED')).toMatchObject({ kind: 'decided' });
+					expect(yield* decide(requestId, 'reject')).toMatchObject({ kind: 'decided' });
 					expect(yield* held(id)).toEqual({ title: 'chair', note: 'a' });
 				})
 			)
@@ -298,15 +331,14 @@ describe('an approval flow in the policy grant', () => {
 					requestId,
 					state: 'Pending',
 					step: 0,
-					steps: 1,
-					requestedBy: expect.any(String),
-					waitingOn: ['Finance']
+					steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
+					requestedBy: expect.any(String)
 				};
 				const reader = t.as(t.member(['finance']));
-				expect((yield* reader.read('orders', { all: true })).rows).toEqual([
+				expect((yield* reader.query('orders', { all: true })).rows).toEqual([
 					expect.objectContaining({ title: 'desk', $approval })
 				]);
-				const picked = (yield* reader.read('orders', {
+				const picked = (yield* reader.query('orders', {
 					mode: 'declared',
 					select: ['title'],
 					all: true
@@ -363,7 +395,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 					const own = yield* inboxView(sales()),
 						reviewer = yield* inboxView(finance());
 					const stranger = yield* inboxView(
-						t.as(t.member([], { teams: ['Ops'], teamPath: ['Ops'] })).authority
+						t.as(t.member([], { teams: ['ops'], teamPath: ['ops'] })).authority
 					);
 					try {
 						expect(reviewer.value()).toEqual({ rows: [], unread: 0, requests: [] });
@@ -402,7 +434,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 							]))[0]?.rows
 						).toEqual([{ n: 0 }]);
 						expect(
-							yield* post(finance, 'approvals.process', { requestId, status: 'APPROVED' })
+							yield* post(finance, 'approvals.decide', { requestId, decision: 'approve' })
 						).toMatchObject({ status: 200 });
 						yield* settled;
 						expect(own.value()).toEqual({ rows: [], unread: 0, requests: [] });
@@ -415,33 +447,30 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 			)
 	);
 
-	it.live('rejection and requestor withdrawal refresh open inboxes and roll the create back', () =>
+	it.live('rejection refreshes open inboxes and rolls the provisional create back', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { sales, finance, held, target, post, settled, inboxView } = yield* setup;
 				const own = yield* inboxView(sales()),
 					reviewer = yield* inboxView(finance());
 				try {
-					for (const close of ['REJECTED', 'WITHDRAWN'] as const) {
-						const submitted = yield* post(sales, 'orders.create', { title: close });
-						const requestId = request(submitted.reply.outcome);
-						yield* settled;
-						expect(reviewer.value()).toMatchObject({ requests: [{ id: requestId }] });
-						expect(yield* held(yield* target(requestId))).toEqual({ title: close, note: null });
-						const response = yield* post(
-							close === 'WITHDRAWN' ? sales : finance,
-							'approvals.process',
-							{
-								requestId,
-								status: close
-							}
-						);
-						expect(response.status).toBe(200);
-						yield* settled;
-						expect(own.value()).toEqual({ rows: [], unread: 0, requests: [] });
-						expect(reviewer.value()).toEqual({ rows: [], unread: 0, requests: [] });
-						expect(yield* held(yield* target(requestId))).toBeUndefined();
-					}
+					const submitted = yield* post(sales, 'orders.create', { title: 'reject' });
+					const requestId = request(submitted.reply.outcome),
+						id = yield* target(requestId);
+					yield* settled;
+					expect(reviewer.value()).toMatchObject({ requests: [{ id: requestId }] });
+					expect(yield* held(id)).toEqual({ title: 'reject', note: null });
+					expect(
+						(yield* post(finance, 'approvals.decide', {
+							requestId,
+							decision: 'reject',
+							reason: 'Not accepted.'
+						})).status
+					).toBe(200);
+					yield* settled;
+					expect(own.value()).toEqual({ rows: [], unread: 0, requests: [] });
+					expect(reviewer.value()).toEqual({ rows: [], unread: 0, requests: [] });
+					expect(yield* held(id)).toBeUndefined();
 				} finally {
 					for (const view of [own, reviewer]) yield* Fiber.interrupt(view.fiber);
 				}
@@ -503,19 +532,19 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 					const requestId = request(held.reply.outcome);
 					const id = yield* target(requestId);
 					const ops = () =>
-						t.as(t.member(['sales'], { teams: ['Ops'], teamPath: ['Ops'] })).authority;
+						t.as(t.member(['sales'], { teams: ['ops'], teamPath: ['ops'] })).authority;
 					const refused = yield* post(ops, 'orders.update', { target: id, set: { title: 'x' } });
 					expect(refused).toMatchObject({
 						reply: { outcome: { kind: 'refused', code: 'locked' } }
 					});
 					expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
-					const decided = yield* post(finance, 'approvals.process', {
+					const decided = yield* post(finance, 'approvals.decide', {
 						requestId,
-						status: 'APPROVED'
+						decision: 'approve'
 					});
 					expect(decided).toMatchObject({
 						status: 200,
-						reply: { outcome: { kind: 'committed', output: { requestId, status: 'APPROVED' } } }
+						reply: { outcome: { kind: 'committed', output: { requestId, status: 'Approved' } } }
 					});
 					const frame = yield* last();
 					expect(frame.value).toMatchObject({ rows: [{ title: 'desk' }] });
@@ -524,49 +553,64 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 			)
 	);
 
-	it.live(
-		'rejection rolls the change back; a second decision is refused; withdraw belongs to the requester',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { t, sales, finance, held, post, committedView } = yield* setup;
-					const id = created(
-						(yield* post(() => t.as(t.admin).authority, 'orders.create', {
-							title: 'desk',
-							note: 'a'
-						})).reply.outcome
-					);
-					const last = yield* committedView();
-					const requestId = request(
-						(yield* post(sales, 'orders.update', { target: id, set: { note: 'b' } })).reply.outcome
-					);
-					expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
-					expect(
-						(yield* post(finance, 'approvals.process', { requestId, status: 'REJECTED' })).reply
-							.outcome
-					).toMatchObject({ output: { status: 'REJECTED' } });
-					expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
-					expect(
-						(yield* post(finance, 'approvals.process', { requestId, status: 'APPROVED' })).reply
-							.outcome
-					).toMatchObject({ kind: 'refused', code: 'invalidInput' });
-					expect(yield* held(id)).toEqual({ title: 'desk', note: 'a' });
-					const rep = sales();
-					const again = request(
-						(yield* post(() => rep, 'orders.update', { target: id, set: { note: 'c' } })).reply
-							.outcome
-					);
-					expect(
-						(yield* post(finance, 'approvals.process', { requestId: again, status: 'WITHDRAWN' }))
-							.reply.outcome
-					).toMatchObject({ code: 'forbidden' });
-					expect(
-						(yield* post(() => rep, 'approvals.process', { requestId: again, status: 'WITHDRAWN' }))
-							.reply.outcome
-					).toMatchObject({ output: { status: 'WITHDRAWN' } });
-					expect(yield* held(id)).toEqual({ title: 'desk', note: 'a' });
-				})
-			)
+	it.live('rejection rolls back once; a requester resubmits requested changes by saving', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { t, sales, finance, held, post, committedView } = yield* setup;
+				const id = created(
+					(yield* post(() => t.as(t.admin).authority, 'orders.create', {
+						title: 'desk',
+						note: 'a'
+					})).reply.outcome
+				);
+				const last = yield* committedView();
+				const requestId = request(
+					(yield* post(sales, 'orders.update', { target: id, set: { note: 'b' } })).reply.outcome
+				);
+				expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
+				expect(
+					(yield* post(finance, 'approvals.decide', {
+						requestId,
+						decision: 'reject',
+						reason: 'Not accepted.'
+					})).reply.outcome
+				).toMatchObject({ output: { status: 'Rejected' } });
+				expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
+				expect(
+					(yield* post(finance, 'approvals.decide', { requestId, decision: 'approve' })).reply
+						.outcome
+				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
+				expect(yield* held(id)).toEqual({ title: 'desk', note: 'a' });
+				const rep = sales();
+				const again = request(
+					(yield* post(() => rep, 'orders.update', { target: id, set: { note: 'c' } })).reply
+						.outcome
+				);
+				expect(
+					(yield* post(() => rep, 'approvals.decide', {
+						requestId: again,
+						decision: 'reject',
+						reason: 'Not accepted.'
+					})).reply.outcome
+				).toMatchObject({ code: 'forbidden' });
+				expect(
+					(yield* post(finance, 'approvals.decide', {
+						requestId: again,
+						decision: 'requestChanges',
+						reason: 'Revise the note.'
+					})).reply.outcome
+				).toMatchObject({ output: { status: 'ChangesRequested' } });
+				expect(
+					(yield* post(() => rep, 'orders.update', { target: id, set: { note: 'revised' } })).reply
+						.outcome
+				).toMatchObject({ kind: 'pendingApproval', requestId: again });
+				expect(
+					(yield* post(finance, 'approvals.decide', { requestId: again, decision: 'approve' }))
+						.reply.outcome
+				).toMatchObject({ output: { status: 'Approved' } });
+				expect(yield* held(id)).toEqual({ title: 'desk', note: 'revised' });
+			})
+		)
 	);
 
 	it.live(
@@ -578,8 +622,8 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 					const requestId = request(
 						(yield* post(sales, 'orders.create', { title: 'desk' })).reply.outcome
 					);
-					expect(yield* decide(requestId, 'APPROVED')).toMatchObject({ kind: 'decided' });
-					expect(yield* decide(requestId, 'APPROVED')).toMatchObject({
+					expect(yield* decide(requestId, 'approve')).toMatchObject({ kind: 'decided' });
+					expect(yield* decide(requestId, 'approve')).toMatchObject({
 						kind: 'refused',
 						code: 'invalidInput'
 					});

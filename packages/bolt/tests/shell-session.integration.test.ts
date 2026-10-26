@@ -6,9 +6,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
 import { decodeManifest } from '../src/engine/manifest.ts';
-import { mint } from '../src/engine/identity/session.ts';
-import { HostIdentity } from '../src/shell/host.ts';
+import { mint, sha256 } from '../src/engine/identity/session.ts';
+import { authorityOf, HostIdentity } from '../src/shell/host.ts';
+import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
 import { COOKIES, SHELL } from '../src/shell/nav.ts';
+import { RateLimits } from '../src/protocol/http.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { storedFileUrl } from '../src/page/file-ref.ts';
 
@@ -22,7 +24,6 @@ const manifest = Result.getOrThrow(
 		apps: {},
 		agent: { skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -43,7 +44,7 @@ describe('the session cookie', () => {
 							manifest,
 							host: {
 								publicUrl: 'http://127.0.0.1:4180',
-								workspace: { name: 'Local', handle: 'local' }
+								workspace: () => ({ name: 'Local', handle: 'local' })
 							}
 						})
 					);
@@ -77,6 +78,21 @@ describe('the session cookie', () => {
 						expect(header).not.toMatch(/(?:^|;)\s*(?:Secure|Partitioned)(?:;|$)/i);
 					}
 					expect((yield* request(SHELL, session)).status).toBe(401);
+					const audited = [...t.fakes.audit.values()];
+					expect(
+						audited.filter(
+							(event) => event.action === 'session.revoke' && event.id.endsWith(':terminal')
+						)
+					).toMatchObject([
+						{
+							status: 'committed',
+							actor: { kind: 'member', id },
+							payload: { outcome: { output: { count: 1 } } }
+						}
+					]);
+					const bearer = decodeURIComponent(session.slice(session.indexOf('=') + 1));
+					for (const secret of [bearer, sha256(bearer)])
+						expect(JSON.stringify(audited)).not.toContain(secret);
 				})
 			)
 	);
@@ -271,6 +287,48 @@ describe('the session cookie', () => {
 				})
 			)
 	);
+	it.live('a session minted for the agent marks every authority it yields; a plain one none', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* Layer.build(
+					TestWorkspace.layer({
+						manifest,
+						host: {
+							publicUrl: 'https://acme.example/acme',
+							workspace: () => ({ name: 'Acme', handle: 'acme' })
+						}
+					})
+				);
+				const t = Context.get(context, TestWorkspace),
+					identity = Context.get(context, HostIdentity);
+				const id = randomUUID();
+				yield* t.db.write({
+					text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ($1, 'ada@x.test', 'Ada', 'staff', true)`,
+					params: [id]
+				});
+				const authority = (token: string) =>
+					authorityOf(
+						HttpServerRequest.fromWeb(
+							new Request(`https://acme.example${SHELL}`, {
+								headers: { cookie: `${COOKIES.session}=${encodeURIComponent(token)}` }
+							})
+						)
+					).pipe(Effect.provide(RateLimits.layer), Effect.provide(context));
+				const marked = yield* mint(identity, id, { conversation: 'c1' }).pipe(
+					Effect.provide(context)
+				);
+				const plain = yield* mint(identity, id).pipe(Effect.provide(context));
+				expect(yield* authority(marked.token)).toMatchObject({
+					actor: { kind: 'member', id },
+					admin: true,
+					agent: { conversation: 'c1' }
+				});
+				const own = yield* authority(plain.token);
+				expect(own).toMatchObject({ actor: { kind: 'member', id }, admin: true });
+				expect(own?.agent).toBeUndefined();
+			})
+		)
+	);
 	it.live(
 		'slides with the database session on every boot and refuses duplicate credential names',
 		() =>
@@ -281,7 +339,7 @@ describe('the session cookie', () => {
 							manifest,
 							host: {
 								publicUrl: 'https://acme.example/acme',
-								workspace: { name: 'Acme', handle: 'acme' }
+								workspace: () => ({ name: 'Acme', handle: 'acme' })
 							}
 						})
 					);

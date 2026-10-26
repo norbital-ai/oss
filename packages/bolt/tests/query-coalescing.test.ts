@@ -20,6 +20,8 @@ const fixture = () => {
 				return statements.map((s) => ({ rows: [{ n: s.params[0]! }], affected: 1 }));
 			}),
 		write: unused,
+		session: () =>
+			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 		transaction: unused
 	});
 	return { calls, db };
@@ -90,6 +92,8 @@ it.effect('a failed wave fails every waiter with the same error and a later wave
 						: Effect.succeed(statements.map(() => ({ rows: [], affected: 0 })))
 				),
 			write: unused,
+			session: () =>
+				Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 			transaction: unused
 		});
 		const reader = yield* coalescing(db, 2);

@@ -5,7 +5,7 @@ import {
 	publicDestination,
 	connectPublic,
 	pinnedLookup
-} from '../src/engine/net.ts';
+} from '../src/node/net.ts';
 
 it.effect(
 	'rejects every private/reserved answer before TCP, including mixed DNS and mapped IPv6',

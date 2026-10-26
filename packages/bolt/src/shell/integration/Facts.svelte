@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
 	import { Input } from '@norbital-ai/ui';
+	import { Array as EffectArray } from 'effect';
 	import type { Json } from '../../decl/values.ts';
 
 	let { facts, t }: { facts: readonly (readonly [string, Json])[]; t: (key: string) => string } =
@@ -25,12 +26,13 @@
 		from: t('Sender')
 	});
 	const text = (v: Json): string =>
-		Array.isArray(v)
+		EffectArray.isArray<Json>(v)
 			? v
 					.map((x) =>
 						typeof x === 'object' &&
 						x !== null &&
-						!Array.isArray(x) &&
+						!EffectArray.isArray<Json>(x) &&
+						'name' in x &&
 						typeof x['name'] === 'string'
 							? x['name']
 							: text(x)

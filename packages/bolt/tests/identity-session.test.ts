@@ -26,6 +26,8 @@ const host = Effect.fnUntraced(function* (
 				return [{ rows: yield* answer(), affected: 0 }];
 			}),
 		write: () => Effect.succeed({ rows: [], affected: 0 }),
+		session: () =>
+			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 		transaction: () => Effect.die(new Error('unused'))
 	});
 	const h = yield* makeIdentityHost({
@@ -47,6 +49,7 @@ const row = {
 	id: 's1',
 	user: 'u1',
 	impersonated_by: null,
+	agent: null,
 	refreshed_at: '2026-09-26T00:00:00Z',
 	expires_at: '2026-10-03T00:00:00Z'
 };
@@ -62,6 +65,7 @@ describe('session memo (L-COL-034)', () => {
 				user: 'u1',
 				session: 's1',
 				impersonatedBy: null,
+				agent: null,
 				expiresAt: expect.any(Number)
 			});
 			expect(b).toEqual(a);

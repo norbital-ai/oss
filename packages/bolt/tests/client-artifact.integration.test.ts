@@ -25,7 +25,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	collections: {},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},

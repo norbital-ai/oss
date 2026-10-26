@@ -75,21 +75,18 @@ export const ops = (config: Config, handle: string, request: HttpServerRequest.H
 				);
 		}
 		const identity = yield* HostIdentity;
-		const table = {
-			'host.ping': () =>
-				Clock.currentTimeMillis.pipe(
-					Effect.map((at) => ({ workspace: handle, at: new Date(at).toISOString() }))
-				),
-			'session.mint': () =>
-				decoded.op === 'session.mint'
-					? mint(identity, decoded.input.user)
-					: Effect.fail(BoltError.make('invalid', 'decode', 'The mint input is malformed.')),
-			'founder.bootstrap': () =>
-				decoded.op === 'founder.bootstrap'
-					? founderBootstrap(identity, decoded.input.address, decoded.input.name)
-					: Effect.fail(BoltError.make('invalid', 'decode', 'The founder input is malformed.'))
-		};
-		return HttpServerResponse.jsonUnsafe({ value: yield* table[decoded.op]() });
+		switch (decoded.op) {
+			case 'host.ping':
+				return HttpServerResponse.jsonUnsafe({
+					value: { workspace: handle, at: new Date(yield* Clock.currentTimeMillis).toISOString() }
+				});
+			case 'session.mint':
+				return HttpServerResponse.jsonUnsafe({ value: yield* mint(identity, decoded.input.user) });
+			case 'founder.bootstrap':
+				return HttpServerResponse.jsonUnsafe({
+					value: yield* founderBootstrap(identity, decoded.input.address, decoded.input.name)
+				});
+		}
 	}).pipe(
 		Effect.catchTag('OpRefused', (error) =>
 			Effect.succeed(

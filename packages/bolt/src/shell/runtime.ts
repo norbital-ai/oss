@@ -1,6 +1,6 @@
 // The shell's browser half (§3.5, §5.10): `$bolt` as pages see it (the data client plus `href` and `agent`), the
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
-// needs one. The generated `$bolt` module re-exports `bolt` (below) with the ui edge (`run`, `fork`, `live`, `attach`).
+// needs one. The generated `$bolt` module re-exports `bolt` (below) with the ui edge (`run`, `fork`, `attach`).
 import {
 	Clock,
 	Context,
@@ -25,13 +25,39 @@ import type { ShellMountConfig } from './mount.ts';
 import { integrationClients, integrationOffers } from '../page/integrations.ts';
 import type { IntegrationSetupEntry } from '../page/integration.ts';
 import { resolveDevice, type DeviceApi } from '../page/device.ts';
-import type { AiModel, Outcome } from '../engine/contracts.ts';
-import type { AgentSettings } from '../engine/agent/settings.ts';
-import { BOLT, HEADERS, PATHS, uuidv7, type AgentRow, type PushBody } from '../protocol/wire.ts';
-import { ShellError, ShellWorkspace, type ShellApi, type Invitation } from './api-types.ts';
+import type { ActOutcome } from '../engine/contracts.ts';
+import { BOLT, HEADERS, PATHS, uuidv7, type PushBody } from '../protocol/wire.ts';
+import {
+	AgentModels,
+	InboxAnswer,
+	InstanceMessage,
+	InstanceSyncHealth,
+	SyncReplayAnswer,
+	Invitation,
+	LogRowAnswer,
+	OlderPage,
+	RunDetailAnswer,
+	RunViewAnswer,
+	SettingsAnswer,
+	ShellBootAnswer,
+	ShellError,
+	ShellWorkspace,
+	SignInMethodsAnswer,
+	StudioAuditAnswer,
+	StudioAuditRulesAnswer,
+	StudioBuildAnswer,
+	StudioFileAnswer,
+	StudioUsageAnswer,
+	StudioInspectionAnswer,
+	StudioViewAnswer,
+	Transcript,
+	VerifiedAnswer,
+	type ShellApi
+} from './api-types.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
 import { ActReply, WireError } from '../protocol/schema.ts';
+import { AuditPage, AuditRecord } from '../protocol/audit.ts';
 import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
 const requestFailure = (status: number): ShellError =>
@@ -89,34 +115,41 @@ export function shellApi(
 			? requestFailure(status)
 			: new ShellError({ ...refused.value.error, status });
 	};
-	const call = <T>(
+	/** A route's `{ value }` (`null` on a 204), decoded once by its answer's Schema. */
+	const call = <A>(
+		schema: Schema.Decoder<A>,
 		method: 'GET' | 'POST' | 'DELETE',
 		path: string,
 		body?: Json
-	): Effect.Effect<T, ShellError> =>
+	): Effect.Effect<A, ShellError> =>
 		transport.request(method, based(path), body).pipe(
 			Effect.mapError(transportError),
 			Effect.flatMap((response) => {
 				if (response.status >= 400) return Effect.fail(wireError(response.body, response.status));
-				if (response.status === 204) return Effect.succeed(null as T);
-				if (
-					response.body === null ||
-					typeof response.body !== 'object' ||
-					Array.isArray(response.body) ||
-					!('value' in response.body)
-				)
-					return Effect.fail(
-						new ShellError({
-							code: 'protocol',
-							message: 'The server returned an unexpected response. Reload the page and try again.',
-							status: response.status
-						})
-					);
-				return Effect.succeed(response.body['value'] as T);
+				return (
+					response.status === 204
+						? Schema.decodeUnknownEffect(schema)(null)
+						: Schema.decodeUnknownEffect(Schema.Struct({ value: schema }))(response.body).pipe(
+								Effect.map((answer) => answer.value)
+							)
+				).pipe(
+					Effect.mapError(
+						() =>
+							new ShellError({
+								code: 'protocol',
+								message:
+									'The server returned an unexpected response. Reload the page and try again.',
+								status: response.status
+							})
+					)
+				);
 			})
 		);
+	/** A route that answers nothing the caller reads. */
+	const done = (method: 'POST', path: string, body?: Json) =>
+		call(Schema.Unknown, method, path, body).pipe(Effect.asVoid);
 	const q = (k: string, v: string) => `?${new URLSearchParams({ [k]: v })}`;
-	const act = (callable: string, input: Json): Effect.Effect<Outcome, ShellError> =>
+	const act = (callable: string, input: Json): Effect.Effect<ActOutcome, ShellError> =>
 		Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis;
 			const response = yield* transport
@@ -146,7 +179,8 @@ export function shellApi(
 		});
 	return {
 		boot: (app?: string, kiosk?: string) =>
-			call<ShellBoot>(
+			call(
+				ShellBootAnswer,
 				'GET',
 				app === undefined && kiosk === undefined
 					? SHELL
@@ -158,21 +192,22 @@ export function shellApi(
 					})
 				)
 			),
-		methods: () => call<import('./host.ts').SignInMethods>('GET', PATHS.session.methods),
+		methods: () => call(SignInMethodsAnswer, 'GET', PATHS.session.methods),
 		sendCode: (address: string, via: 'sms' | 'whatsapp' = 'sms') =>
-			call<void>('POST', PATHS.session.code, { address, via }),
+			done('POST', PATHS.session.code, { address, via }),
 		verify: (address: string, code: string) =>
-			call<{ user: string }>('POST', PATHS.session.verify, { address, code }),
-		signOut: () => call<void>('POST', PATHS.session.signout),
+			call(VerifiedAnswer, 'POST', PATHS.session.verify, { address, code }),
+		signOut: () => done('POST', PATHS.session.signout),
 		invitation: (id: string) =>
-			call<Invitation>('GET', `${PATHS.session.invitation}/${encodeURIComponent(id)}`),
-		accept: (id: string) => call<void>('POST', PATHS.session.invitation, { id }),
-		inbox: () => call<import('./inbox/data.ts').Inbox>('GET', `${SHELL}/inbox`),
+			call(Invitation, 'GET', `${PATHS.session.invitation}/${encodeURIComponent(id)}`),
+		accept: (id: string) => done('POST', PATHS.session.invitation, { id }),
+		inbox: () => call(InboxAnswer, 'GET', `${SHELL}/inbox`),
 		markNoticesRead: (ids: readonly string[]) =>
 			act('sys_notification.markRead', { ids: [...ids] }), // L-BOLT-354
 		markAllNoticesRead: () => act('sys_notification.markRead', { all: true }),
 		runs: (o: { automation?: string; limit?: number } = {}) =>
-			call<import('./runs/data.ts').RunRow[]>(
+			call(
+				Schema.Array(RunViewAnswer),
 				'GET',
 				`${SHELL}/runs${
 					o.automation === undefined && o.limit === undefined
@@ -184,28 +219,40 @@ export function shellApi(
 							)}`
 				}`
 			),
-		run: (id: string) =>
-			call<import('./api-types.ts').RunDetail>('GET', `${SHELL}/runs${q('id', id)}`),
-		stopRun: (id: string) =>
-			call<import('../engine/runs/index.ts').RunView>('POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
-		settings: () => call<import('./settings/data.ts').Settings>('GET', `${SHELL}/settings`),
-		settingsOp: (op: string, input: Json) => call<Json>('POST', `${SHELL}/settings`, { op, input }),
+		run: (id: string) => call(RunDetailAnswer, 'GET', `${SHELL}/runs${q('id', id)}`),
+		stopRun: (id: string) => call(RunViewAnswer, 'POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
+		settings: () => call(SettingsAnswer, 'GET', `${SHELL}/settings`),
+		settingsOp: (op: string, input: Json) =>
+			call(Schema.Json, 'POST', `${SHELL}/settings`, { op, input }),
 		/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`); the host authorizes "may update this row". */
 		integration: instances,
 		integrationOffers: () => integrationOffers({ base: based(`${BOLT}/integrations/`), fetch: f }),
 		/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (name: string, logo: string | null) =>
-			call<void>('POST', `${SHELL}/organization`, { name, logo }),
+			done('POST', `${SHELL}/organization`, { name, logo }),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
 		instanceMessages: (instance: string, before?: string) =>
-			call<import('./integration/messages.ts').InstanceMessage[]>(
+			call(
+				Schema.Array(InstanceMessage),
 				'GET',
 				`${SHELL}/instance-messages?${new URLSearchParams(
 					before === undefined ? { instance } : { instance, before }
 				)}`
 			),
+		instanceSyncHealth: (instance: string) =>
+			call(
+				InstanceSyncHealth,
+				'GET',
+				`${SHELL}/instance-sync-health?${new URLSearchParams({ instance })}`
+			),
+		replayInstanceSync: (instance: string, ids?: readonly string[]) =>
+			call(SyncReplayAnswer, 'POST', `${SHELL}/instance-sync-replay`, {
+				instance,
+				...(ids === undefined ? {} : { ids: [...ids] })
+			}),
 		logs: (x: import('../engine/contracts.ts').LogQuery) =>
-			call<import('../engine/contracts.ts').LogRow[]>(
+			call(
+				Schema.Array(LogRowAnswer),
 				'GET',
 				`${SHELL}/logs?${new URLSearchParams(
 					Object.entries({
@@ -221,30 +268,52 @@ export function shellApi(
 					}).filter((e): e is [string, string] => e[1] !== undefined && e[1] !== '')
 				)}`
 			),
-		studio: () => call<import('./studio/model.ts').StudioView>('GET', `${SHELL}/studio`),
+		audit: (query) => call(AuditPage, 'POST', `${SHELL}/audit/query`, encodeWire(query)),
+		auditDetail: (id) =>
+			call(Schema.NullOr(AuditRecord), 'GET', `${SHELL}/audit/detail${q('id', id)}`),
+		studio: () => call(StudioViewAnswer, 'GET', `${SHELL}/studio`),
 		studioRun: (op: import('./studio/model.ts').StudioOp) =>
-			call<import('./studio/model.ts').StudioView>('POST', `${SHELL}/studio`, { op }),
-		studioBuild: (commit: string) =>
-			call<import('./studio/model.ts').StudioBuildRecord | null>(
+			call(StudioViewAnswer, 'POST', `${SHELL}/studio`, { op }),
+		studioFile: (commit: string, path: string) =>
+			call(
+				StudioFileAnswer,
 				'GET',
-				`${SHELL}/studio/build?${new URLSearchParams({ commit })}`
+				`${SHELL}/studio/file?${new URLSearchParams({ commit, path })}`
 			),
-		studioUsage: () =>
-			call<import('./studio/model.ts').StudioUsage>('GET', `${SHELL}/studio/usage`),
+		studioBuild: (commit: string) =>
+			call(StudioBuildAnswer, 'GET', `${SHELL}/studio/build?${new URLSearchParams({ commit })}`),
+		studioUsage: () => call(StudioUsageAnswer, 'GET', `${SHELL}/studio/usage`),
+		studioInspect: (input) =>
+			call(
+				StudioInspectionAnswer,
+				'GET',
+				`${SHELL}/studio/inspect?${new URLSearchParams(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))}`
+			),
+		studioAuditRules: () => call(StudioAuditRulesAnswer, 'GET', `${SHELL}/studio/audit`),
+		studioAuditSave: (revision: number, ruleSet: import('./studio/audit.ts').AuditRuleSet) =>
+			call(StudioAuditRulesAnswer, 'POST', `${SHELL}/studio/audit`, { revision, ruleSet }),
+		studioAudit: (ruleSet?: import('./studio/audit.ts').AuditRuleSet) =>
+			call(
+				StudioAuditAnswer,
+				'POST',
+				`${SHELL}/studio/audit/run`,
+				ruleSet === undefined ? {} : { ruleSet }
+			),
 		/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
 		preview: (target: string | { team: string } | null) =>
-			call<void>(
+			done(
 				'POST',
 				`${SHELL}/preview`,
 				typeof target === 'object' && target !== null ? target : { user: target }
 			),
 		/** `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's. */
 		explain: (target?: { user: string } | { team: string }) =>
-			call<Json>(
+			call(
+				Schema.Json,
 				'GET',
 				`${SHELL}/explain${target === undefined ? '' : `?${new URLSearchParams(target)}`}`
 			),
-		push: (body: PushBody) => call<void>('POST', PATHS.push, body),
+		push: (body: PushBody) => done('POST', PATHS.push, body),
 		agent: {
 			start: (title?: string, model?: string) =>
 				act('sys_conversation.start', {
@@ -252,18 +321,7 @@ export function shellApi(
 					...(model === undefined ? {} : { model })
 				}),
 			/** The models the member may pick and the one a new conversation runs, and the MCP servers its policies name (their conversations are the live `conversations` read). */
-			models: () =>
-				call<{
-					models: AiModel[];
-					default: string;
-					mcp: { name: string; description: string }[];
-					admin?: {
-						catalog: AiModel[];
-						settings: AgentSettings;
-						spent: number;
-						policies: string[];
-					};
-				}>('GET', `${PATHS.agent}/models`),
+			models: () => call(AgentModels, 'GET', `${PATHS.agent}/models`),
 			/** `mode`: the composer's `/plan` or `/compact` (§5.9). */
 			post: (
 				conversation: string,
@@ -331,13 +389,11 @@ export function shellApi(
 			discardPlan: (conversation: string) => act('sys_message.discardPlan', { conversation }),
 			resume: (conversation: string) => act('sys_conversation.resume', { conversation }),
 			transcript: (conversation: string) =>
-				call<{ status: 'idle' | 'running' | 'stopped'; rows: AgentRow[] }>(
-					'GET',
-					`${PATHS.agent}${q('conversation', conversation)}`
-				),
+				call(Transcript, 'GET', `${PATHS.agent}${q('conversation', conversation)}`),
 			/** The `limit` messages just before `seq` `before` (the panel's older page); `more`: another may lie before `first`. */
 			older: (conversation: string, before: number, limit: number) =>
-				call<{ rows: AgentRow[]; more: boolean; first: number }>(
+				call(
+					OlderPage,
 					'GET',
 					`${PATHS.agent}?${new URLSearchParams({ conversation, before: String(before), limit: String(limit) })}`
 				)
@@ -436,11 +492,14 @@ type RowFor<C> = C extends CollectionName ? RowOf<C> : Row;
 export type RecordView<C extends string = string> =
 	| { collection: C; mode: 'update'; record: RowFor<C> }
 	| { collection: C; mode: 'create'; values: Partial<RowFor<C>> };
-type ViewCommon<F, V> = {
+type CustomValue<F> = F extends CustomFieldName
+	? ValueOf<CustomShape<F>>
+	: import('@norbital-ai/std/kind').Value;
+type ViewCommon<F> = {
 	name: F;
-	value: V | null;
-	row?: Row;
-	kind?: InputKind;
+	value: CustomValue<F> | null;
+	row?: { readonly [field: string]: import('@norbital-ai/std/kind').Value };
+	kind?: F extends CustomFieldName ? CustomShape<F> : InputKind;
 	id?: string;
 	address?: { value: string | null; onChange?(next: string | null): void };
 };
@@ -450,16 +509,13 @@ type ViewCommon<F, V> = {
  * absent when a page embeds the renderer; `kind` the field's literal (a custom reference's shape); `dense` asks for one
  * compact line (a table cell, a card); `address` is a `point` field's address sibling.
  */
-export type CustomFieldView<
-	F extends string = string,
-	V = F extends CustomFieldName ? ValueOf<CustomShape<F>> : Json
-> =
-	| (ViewCommon<F, V> & { mode: 'show'; dense?: true })
-	| (ViewCommon<F, V> & {
+export type CustomFieldView<F extends string = string> =
+	| (ViewCommon<F> & { mode: 'show'; dense?: true })
+	| (ViewCommon<F> & {
 			mode: 'edit';
 			disabled: boolean;
 			error?: string;
-			onChange(next: V | null): void;
+			onChange(next: CustomValue<F> | null): void;
 	  });
 
 /**
@@ -468,7 +524,11 @@ export type CustomFieldView<
  */
 const livePoll = () => {
 	if (typeof window === 'undefined') return undefined;
-	const value: unknown = Object.getOwnPropertyDescriptor(window, 'boltLivePoll')?.value;
+	const descriptor: TypedPropertyDescriptor<unknown> | undefined = Object.getOwnPropertyDescriptor(
+		window,
+		'boltLivePoll'
+	);
+	const value = descriptor?.value;
 	return typeof value === 'number' && value > 0 ? (`${value} millis` as const) : undefined;
 };
 
@@ -521,8 +581,9 @@ export function shellBolt(
 					);
 			},
 			base: BASE,
-			actor: boot.actor as Json,
+			actor: boot.actor,
 			locale: boot.workspace.locale,
+			tz: boot.workspace.tz,
 			catalog: boot.catalog,
 			/* hook:query (bolt.decode) */ describe:
 				boot.visitor === null && boot.aiUnconfigured !== true,
@@ -621,14 +682,15 @@ export function currentBolt(): ShellBolt {
 }
 /** Stable module value: calls and plain getters read the current boot on use. */
 export const bolt: Omit<ShellBolt, 'describe'> & { readonly describe: ShellBolt['describe'] } = {
-	read: <T>(...args: Parameters<ShellBolt['read']>) => currentBolt().read<T>(...args),
-	get: <T>(...args: Parameters<ShellBolt['get']>) => currentBolt().get<T>(...args),
-	aggregate: <T>(...args: Parameters<ShellBolt['aggregate']>) =>
-		currentBolt().aggregate<T>(...args),
-	similar: <T>(...args: Parameters<ShellBolt['similar']>) => currentBolt().similar<T>(...args),
-	history: <T>(...args: Parameters<ShellBolt['history']>) => currentBolt().history<T>(...args),
-	query: <T>(...args: Parameters<ShellBolt['query']>) => currentBolt().query<T>(...args),
-	live: <T>(...args: Parameters<ShellBolt['live']>) => currentBolt().live<T>(...args),
+	get aggregate() {
+		return currentBolt().aggregate;
+	},
+	get history() {
+		return currentBolt().history;
+	},
+	get query() {
+		return currentBolt().query;
+	},
 	act: (...args) => currentBolt().act(...args),
 	recordCapabilities: (...args) => currentBolt().recordCapabilities(...args),
 	decode: (...args) => currentBolt().decode(...args),
@@ -637,6 +699,9 @@ export const bolt: Omit<ShellBolt, 'describe'> & { readonly describe: ShellBolt[
 	},
 	options: (...args) => currentBolt().options(...args),
 	start: (...args) => currentBolt().start(...args),
+	clock: (...args) => currentBolt().clock(...args),
+	convert: (...args) => currentBolt().convert(...args),
+	observe: (...args) => currentBolt().observe(...args),
 	upload: (...args) => currentBolt().upload(...args),
 	fileUrl: (...args) => currentBolt().fileUrl(...args),
 	get approvals() {

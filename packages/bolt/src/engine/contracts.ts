@@ -3,7 +3,7 @@
 //
 // Ownership: who implements what is declared here.
 //   EngineManifest, engineManifest ....... P1 compiler (A2, C1); consumed by every area
-//   TenantDb ............................. PGlite adapter here in bolt (P2); Postgres adapter in bolt-server (P5)
+//   TenantDb ............................. adapters in `node/db` (PGlite, Postgres); a cell reads the host's `HostTenantDb`
 //   Pred, ReadIR, SelectIR, ReadEngine ... query compiler (A4, `engine/query`): Where literal → Pred, Pred → SQL and JS
 //   Change, Captured ..................... write compiler (A5, `engine/write`): flattening, the one statement, RETURNING
 //   Authority ............................ access (A6, `engine/access`): compiled per (actor, revisions, release), rule 37
@@ -27,7 +27,8 @@ import type {
 	WebPage
 } from '../decl/runtime/facilities.ts';
 import type { Json, Point, Rate } from '../decl/values.ts';
-import type { Pred } from '../protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
+import type { GuestProgram } from './guest/runner.ts';
 
 /** The precise facility failure sent across the guest ABI; interior failures remain tagged errors. */
 export type FacilityError =
@@ -55,8 +56,14 @@ export const LIMITS = {
 		speech: 20_000,
 		attachment: 20_000
 	},
-	crossings: { sync: 40, automation: 10_000 },
+	/** Read crossings per invocation: `write` for one write-callback call (`create.transform`, `update.transform`,
+	 * `delete.check`: read for the whole batch, never per row), `sync` for every other synchronous body. */
+	crossings: { sync: 40, write: 2, automation: 10_000 },
+	/** Rows per write-callback invocation: a batch of N rows is ⌈N/1000⌉ calls per verb per model, one 2 s budget each. */
+	writeChunk: 1_000,
 	readBytes: 32 * MiB,
+	/** Coalesced native reads retained between an automation's successful read and its next act. */
+	readGuards: { count: 256, bytes: 4 * MiB },
 	crossingBytes: 4 * MiB,
 	argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB,
@@ -117,13 +124,7 @@ export type QueuedRun = {
 	cause: string;
 	depth: number;
 };
-export type NoticeRow = {
-	to: Json;
-	title: string;
-	body?: string;
-	link?: { collection: string; id: string };
-	once?: string;
-};
+export type NoticeRow = Omit<import('./notifications/notify.ts').NoticeInsert, 'id'>;
 /** One committed row change from `RETURNING old.*, new.*`: the input of triggers (rule 50) and live routing (A9). */
 export type Captured = {
 	collection: string;
@@ -135,7 +136,7 @@ export type Captured = {
 	cause: 'direct' | 'cascade' | 'derived' | 'erased';
 };
 
-// ── outcomes (rule 32): the author types of decl/ctx with names erased ──
+// ── outcomes (rule 32): the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
 export type Written = readonly { collection: string; id: string; revision: number }[];
 export type Outcome =
 	| { kind: 'committed'; output: Json; records: Written }
@@ -146,6 +147,10 @@ export type Outcome =
 			records: readonly { collection: string; id: string; fields: readonly string[] }[];
 	  }
 	| Unknown;
+/** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`Running`). */
+export type Running = { kind: 'running'; run: string };
+/** What an act answers its caller: the write's outcome, or `running` once it outlives the person-wait. */
+export type ActOutcome = Outcome | Running;
 
 // ── actors and authority (A6) ──
 /** The decl `Actor` with names erased: one engine serves any workspace. */
@@ -176,30 +181,26 @@ export type EngineActor =
 	  }
 	| { kind: 'visitor'; app: string; visitor: string }
 	| { kind: 'apiKey'; key: string }
-	/** A feed's page or an outbound rule's delivery writes as its definition, for the instance it runs for (§4.1, §4.2). */
+	/** An automation's or platform run's work, or a remote sync's read page for the instance it runs for (`'<model>.sync.<sync>'`). */
 	| {
 			kind: 'system';
 			run: string;
-			by:
-				| { automation: string }
-				| { platform: string }
-				| { integration: string; instance: string; feed: string }
-				| { integration: string; instance: string; outbound: string };
+			by: { automation: string } | { platform: string } | { sync: string; instance: string };
 	  };
-export type ApprovalRoute = import('./approvals/configuration.ts').SourceApprovalRoute;
 /** One grant arm; arms of every held policy union (rule 35). `fields: 'all'` = no field narrowing. */
 export type Arm = { policy: string; where: Pred; fields: readonly string[] | 'all' };
-export type WriteArm = Arm & { previous?: Pred };
+/**
+ * A write arm; `approval`: the arm admits subject to its policy's approval callback (spec §8). Among the admitting arms
+ * one without `approval` executes directly; else the first with `approval`, in policy order, runs its callback.
+ */
+export type WriteArm = Arm & { previous?: Pred; approval?: true };
 export type CollectionAuthority = {
 	read: readonly Arm[];
 	history: readonly Arm[];
 	create: readonly WriteArm[];
 	update: readonly WriteArm[];
 	delete: readonly WriteArm[];
-	/** Optional source approval routes admit a proposal only when direct permission refuses. */
-	approval: { readonly [O in 'create' | 'update' | 'delete']: readonly ApprovalRoute[] };
 	queries: readonly string[];
-	actions: readonly string[];
 	moves: { readonly [stateField: string]: 'all' | readonly string[] };
 	/** Field → the predicate of the arms that admit it (rule 14); absent = unmasked for this caller. */
 	masks: { readonly [field: string]: Pred };
@@ -215,6 +216,11 @@ export type Authority = {
 	preview?: { by: string; team: string | null };
 	/** Set when compiled for a kiosk's requests: the kiosk whose assigned policies this reads and writes as. */
 	kiosk?: string;
+	/**
+	 * Set from a session minted for the agent's browser (`session.mint`'s `agent`): every request made with it is the
+	 * agent's, acting for this authority's own member in `conversation`. A host holds live-changing work from it.
+	 */
+	agent?: { readonly conversation: string };
 	collections: { readonly [collection: string]: CollectionAuthority };
 	automations: readonly string[];
 	capabilities: {
@@ -232,20 +238,29 @@ export type Authority = {
 
 // ── the guest (C2, A10) ──
 export type InvocationKind =
-	| 'integration'
-	| 'notification'
-	| 'projection'
-	| 'transform'
+	| 'create'
+	| 'update'
+	| 'delete'
 	| 'query'
-	| 'action'
-	| 'similarity'
+	| 'notify'
+	| 'vector'
+	| 'probe'
 	| 'rerank'
+	| 'syncRead'
+	| 'syncWrite'
+	| 'parse'
+	| 'approval'
 	| 'automation'
-	| 'pipeline'
+	| 'integration'
 	| 'page'
 	| 'validation'
-	| 'tool'; // hook:reads (rerank)
-/** One fresh-isolate run of one body. `target` names it: `'<c>'` (transform), `'<c>.<query|action|similarity>'`, `'<a>'`, or `'<app>/<page>'` (page). */
+	| 'tool';
+/**
+ * One fresh-isolate run of one body. `target` names it: `'<model>'` (write callbacks `create`/`update`/`delete`,
+ * `notify`), `'<model>.<query>'`, `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'`
+ * (`syncRead`, `syncWrite`), `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`approval`), `'<a>'`
+ * (automation), or `'<app>/<page>'` (page).
+ */
 export type Invocation = {
 	id: string;
 	/** The `sys_run` an automation attempt belongs to: its events (console lines among them) carry it. */
@@ -260,26 +275,16 @@ export type Invocation = {
 		tz: string;
 		seed: string;
 		cause?: RunCause;
-		/** transform: stored root rows per input (`null` on a create); record action: its row. */
-		existing?: readonly (RowData | null)[];
-		staged?: readonly {
-			collection: string;
-			id: string;
-			path: InputPath;
-			operation: string;
-			parent?: { collection: string; id: string; relation: string; field: string };
-		}[];
-		row?: RowData;
 		admin?: boolean;
 		policies?: readonly string[];
-		fields?: readonly string[];
-		/** An integration body's instance, partition (a partitioned feed's), send key (an outbound `run`'s) and configuration. */
+		/** A sync body's or integration test's instance and configuration; `key` a sync write's `Idempotency-Key`. */
 		instance?: string;
-		partition?: string | null;
 		key?: string;
 		configuration?: Json;
+		/** Only the member's file-sync export writer may read bytes and derive images. */
+		fileExport?: true;
 	};
-	budget: { cpuMs: number; crossings: number; readBytes: number };
+	budget: { crossings: number; readBytes: number };
 };
 export type CrossAnswer = (
 	| { ok: true; value: Json; bins?: readonly Uint8Array[] }
@@ -292,20 +297,43 @@ export type CrossAnswer = (
 	  }
 ) & { /** hook:runner — a journal hit (rule 55): costs no crossing (rule 12). */ journal?: true };
 export type GuestOutcome =
-	| { kind: 'ok'; output: Json; cpuMs: number }
-	/** `ctx.refuse(message, { field })`. */
-	| { kind: 'refused'; message: string; field?: string; cpuMs: number }
+	| { kind: 'ok'; output: Json }
+	/** `ctx.refuse(message, { field, row })`; `row` indexes the batch a write callback received. */
+	| {
+			kind: 'refused';
+			message: string;
+			code?: string;
+			field?: string;
+			row?: number;
+			rows?: readonly number[];
+			rule?: string;
+			data?: { readonly requestId: string };
+			records?: readonly {
+				readonly collection: string;
+				readonly id: string;
+				readonly fields: readonly string[];
+			}[];
+			invocation?: string;
+	  }
 	/** A throw, a budget (`cpuBudget`, `crossingBudget`, `readBudgetExceeded`, `memory`) or a bad answer. */
-	| { kind: 'failed'; error: BoltError; cpuMs: number };
+	| { kind: 'failed'; error: BoltError };
 // ── host ports (§3.3.10 `/engine` types; P18, P19): optional ports are absent when the host lacks the provider ──
 /** A stored blob; the `sys_file` row is the engine's (rule 18). */
 export type Blob = { key: string; bytes: number; sha256: string; mime: string };
+/** A media file the host fetched for a tool: classified by its bytes, stored, never run. */
+export type Downloaded = Blob & { name: string };
 export interface FilesPort {
 	put(bytes: Uint8Array, meta: { name: string; mime: string }, signal: AbortSignal): Promise<Blob>;
 	/** At most `max` bytes; more is `invalid`, never a truncation. */
 	get(key: string, max: number, signal: AbortSignal): Promise<Uint8Array>;
 	url(key: string, expiresInS: number, signal: AbortSignal): Promise<string>;
 	remove(key: string, signal: AbortSignal): Promise<void>;
+	/**
+	 * Fetches a public http(s) URL under the host's egress policy (every redirect hop re-checked, at most 5) and stores
+	 * its body if its first bytes are media (image, audio, video, PDF); anything else is refused, never stored. The host
+	 * streams it (at most 100 MiB, 20 s without bytes ends it) and names it from the response or the URL.
+	 */
+	download(url: string, signal: AbortSignal): Promise<Downloaded>;
 }
 /** Each conversion target's media type. */
 export const CONVERT_MIME: Record<ConvertTarget, string> = {
@@ -390,7 +418,7 @@ export type AiResponse = {
 		/** L-BOLT-432: the provider's call id (the metering key) */ call?: string;
 	};
 };
-/** hook:runtime — one embedding input: text, or a stored file's bytes (an image; embed models are multimodal). */
+/** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */
 export type EmbedInput =
 	| string
 	| {
@@ -399,6 +427,15 @@ export type EmbedInput =
 				readonly mime: string;
 				readonly sha256: string;
 				readonly bytes: Uint8Array;
+			};
+	  }
+	| {
+			readonly $stored: {
+				readonly key: string;
+				readonly name: string;
+				readonly mime: string;
+				readonly sha256: string;
+				readonly bytes: number;
 			};
 	  };
 /** One model a person may pick (the panel lists `label`, grouped by `provider`); `context` is its window in tokens. */
@@ -479,22 +516,24 @@ export interface BrowserPort {
 	act(profile: string, steps: readonly BrowserStep[], signal: AbortSignal): Promise<Json>;
 	evaluate(profile: string, expression: string, signal: AbortSignal): Promise<Json>;
 	screenshot(profile: string, signal: AbortSignal): Promise<Uint8Array>;
-	/** A file at `url` (an image, a video, a document) fetched in the profile's session: its name, type and bytes. */
-	download(profile: string, url: string, signal: AbortSignal): Promise<BrowserFile>;
+	/**
+	 * A media file at `url` fetched in the profile's session (its sign-ins) and stored as `FilesPort.download` stores one:
+	 * classified by its first bytes, streamed into the store, never held whole.
+	 */
+	download(profile: string, url: string, signal: AbortSignal): Promise<Downloaded>;
 }
-export type BrowserFile = { name: string; mime: string; bytes: Uint8Array };
 /**
  * What an instance's link hands the engine (§4.5, `integrations.receive`): inbound conversation messages (each attachment
  * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's
  * report on a message it sent (§5.9; `providerId` is what its `send` answered), a chat the account cleared or deleted
- * (`clear`: every message of `thread` sent at or before `before` is tombstoned), or a pushing driver's changed feed
- * partition.
+ * (`clear`: every message of `thread` sent at or before `before` is tombstoned), or a pushing driver's changed sync
+ * partition (`sync`: `'<model>.<sync>'`).
  */
 export type DriverEvent =
 	| { kind: 'messages'; messages: readonly Json[]; history?: true; bins?: readonly Uint8Array[] }
 	| { kind: 'delivery'; providerId: string; report: DeliveryReport }
 	| { kind: 'clear'; thread: string; before: string }
-	| { kind: 'invalidate'; feed: string; partition: string };
+	| { kind: 'invalidate'; sync: string; partition: string };
 /**
  * One of `message.attachments` (stored FileRefs, in order) as bolt hands it to `send`: the bytes read through the host's files
  * port, all of a message's together at most `LIMITS.messageAttachmentBytes`. `url` is a signed link a provider that fetches
@@ -585,7 +624,7 @@ export interface DeadlinesPort {
 	settle(scope: string, nextDue: string | null): void;
 	teardown(scope: string): void;
 }
-/** A pushing driver's feed page (`from: 'driver'`): its items for the feed's `map`, and the page facts a `read` page carries. */
+/** A pushing driver's page of a sync partition: its items (the sync `read`'s `items`), and the page facts a `read` page carries. */
 export type DriverPage = {
 	items: readonly Json[];
 	cursor: Json;
@@ -597,7 +636,7 @@ export type DriverPage = {
 /**
  * The host's live side of integration instances (§4.5), by instance id: a conversation driver `send`s (and shows `typing`),
  * a request driver (http, sqlserver) answers `request` with the instance's credential host-side, a pushing driver `read`s
- * a feed page. A throw is a facility failure; `SendRefused` refuses a send (permanent or retried). An http `request`
+ * a sync partition's page. A throw is a facility failure; `SendRefused` refuses a send (permanent or retried). An http `request`
  * answers `{ status, body }`, a database one the `DatabaseResult`.
  */
 export interface LinksPort {
@@ -611,7 +650,7 @@ export interface LinksPort {
 	request?(instance: string, op: Json, signal: AbortSignal): Promise<Json>;
 	read?(
 		instance: string,
-		feed: string,
+		sync: string,
 		partition: string,
 		cursor: Json | null,
 		signal: AbortSignal
@@ -623,7 +662,223 @@ export interface LinksPort {
 	 */
 	changed?(instance: string): void;
 }
+
+// ── kernel ports (compute model §14, wave 1): the engine's former Node dependencies, served by the host ──
+/**
+ * The release's files, read-only. Paths are posix and relative to the release directory (`artifact.json`,
+ * `client/index.html`), with no `.`, empty, `\` or NUL segment; `..` only as `../seed/<pack>/…`, the build's seed packs
+ * beside the release (`.norbital/artifact` + `.norbital/seed/<pack>`). The host refuses any other path and resolves
+ * symlinks itself, so a path never leaves those roots. `stat` answers `null` for nothing there; `list` answers every
+ * file (never a directory) under `dir`, recursively, relative to `dir`, sorted.
+ */
+export interface ArtifactPort {
+	read(path: string, signal: AbortSignal): Promise<Uint8Array>;
+	list(dir: string, signal: AbortSignal): Promise<readonly string[]>;
+	stat(path: string, signal: AbortSignal): Promise<ArtifactStat | null>;
+}
+export type ArtifactStat = { readonly kind: 'file' | 'directory'; readonly size: number };
+/**
+ * The tenant's secrets key, held by the host (F21): AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to `aad`
+ * (`bolt\0<owner>\0<name>`), so a copied envelope never opens under another owner or name. `open` answers `null` for
+ * an envelope that does not open under this key and `aad`. A host without a key provides no port.
+ */
+export interface KeysPort {
+	seal(plain: Uint8Array, aad: Uint8Array, signal: AbortSignal): Promise<Uint8Array>;
+	open(sealed: Uint8Array, aad: Uint8Array, signal: AbortSignal): Promise<Uint8Array | null>;
+}
+/** A guest session's options: the prelude it evaluates first (the engine's `PRELUDE`), its entropy and its heap. */
+export type GuestSessionOptions = {
+	readonly prelude: string;
+	/** `$1` draws SHA-256 blocks of it (`randomStream`), so a replay with the same seed draws the same values. */
+	readonly seed: string;
+	readonly memoryMiB: number;
+	/** A program run once (a `run_js` script): no spare isolates are prepared for it. */
+	readonly once?: true;
+};
+/** The prelude's `start(kind, path, inputJson, ctxJson, invocationId)`, by name. */
+export type GuestStart = {
+	readonly kind: InvocationKind;
+	readonly path: readonly string[];
+	readonly input: string;
+	readonly ctx: string;
+	readonly invocation: string;
+};
+/** The body's end state: its JSON result, a refusal, a missing body, or a throw (name, message, stack, facility kind). */
+export type GuestFinal =
+	| readonly ['ok', string]
+	| readonly ['refused', string, string | null, number | null, string]
+	| readonly ['missing', string]
+	| readonly ['error', string, string, string]
+	| readonly ['error', string, string, string, string];
+/** One queued ctx call: member, JSON arguments, call site (stack frame) and call id. */
+export type GuestCall = readonly [member: string, args: string, site: string, id: number];
+/** The prelude's `take()`: end state, the calls crossing now, each call's bytes (`$bin`), and whether a timer ran instead. */
+export type GuestTaken = readonly [
+	final: GuestFinal | null,
+	calls: readonly GuestCall[],
+	bins: readonly (readonly Uint8Array[])[],
+	ranTimer: boolean
+];
+/** One batch's answers (`give`): call ids, one JSON text per call, and each call's bytes. */
+export type GuestAnswers = {
+	readonly ids: readonly number[];
+	readonly texts: readonly string[];
+	readonly bins: readonly (readonly Uint8Array[])[];
+};
+/**
+ * What one native slice leaves: the prelude's `take()` after it, and the console lines (`$0`) said since the last turn,
+ * module evaluation's among the first; past 200 lines in one turn the host keeps the first 200 and counts the rest.
+ */
+export type GuestTurn = {
+	readonly taken: GuestTaken;
+	readonly lines: readonly (readonly [level: string, line: string])[];
+	readonly dropped: number;
+};
+/**
+ * Guest isolates, made and metered by the host. `open` evaluates `prelude` as an `evalClosure` body with the hooks
+ * `$0` say (lines buffered for the turn), `$1` random (from `seed`), `$2` digest (`crypto.subtle.digest`'s host half)
+ * and `$3` asset (`program.assets` by sha256), then `program.source` as one module bound to `__boltGuest`; it answers
+ * an opaque session id. `start` and `give` run their prelude hook and then `take()`, `take` only `take()` (after a turn
+ * whose timer ran): each call is one native slice, under a CPU slot the host takes for it. A session past its unit's
+ * CPU budget or its memory ends and rejects with an encoded `HostFailure` of code `cpuBudget` or `memory`; an aborted
+ * call ends its session. `close` disposes it (idempotent).
+ */
+export interface GuestIsolatesPort {
+	open(program: GuestProgram, options: GuestSessionOptions, signal: AbortSignal): Promise<string>;
+	start(session: string, start: GuestStart, signal: AbortSignal): Promise<GuestTurn>;
+	take(session: string, signal: AbortSignal): Promise<GuestTurn>;
+	give(session: string, answers: GuestAnswers, signal: AbortSignal): Promise<GuestTurn>;
+	close(session: string): Promise<void>;
+}
+/** An outbound request: absolute URL, headers in order, body bytes (none for GET). */
+export type HttpRequest = {
+	readonly method: string;
+	readonly url: string;
+	readonly headers: readonly (readonly [name: string, value: string])[];
+	readonly body?: Uint8Array;
+};
+/** `redirects`: hops followed (each re-checked); `maxBytes`: the decoded body's ceiling (more fails `tooLarge`). */
+export type HttpFetchOptions = { readonly redirects: number; readonly maxBytes: number };
+/** The final response: status, lowercase headers, the whole decoded body (empty for 204, 205, 304 and a redirect). */
+export type HttpResponse = {
+	readonly status: number;
+	readonly headers: readonly (readonly [name: string, value: string])[];
+	readonly body: Uint8Array;
+};
+/**
+ * Outbound HTTP under the public-network policy (L-BOLT-366): HTTPS on 443 without credentials, DNS resolved once and
+ * the checked address pinned, private and reserved networks refused, every redirect hop re-checked (a cross-origin hop
+ * keeps only `accept`; a 301-303 of a write becomes a GET), transport headers (`host`, `connection`, `content-length`,
+ * `transfer-encoding`, `upgrade`, `te`, `trailer`, `accept-encoding`, `proxy-*`) refused, gzip decoded. A refusal
+ * rejects as a FacilityError `invalid`; the wall is the caller's (`Port.call`).
+ */
+export interface HttpPort {
+	fetch(
+		request: HttpRequest,
+		options: HttpFetchOptions,
+		signal: AbortSignal
+	): Promise<HttpResponse>;
+}
+/** A file run's tree (a skill's folder): its digest, the entry's path in it, and every file by its path in the tree. */
+export type BundleRequest = {
+	/** sha256 hex of the sorted `<path>\0<sha256 hex of its bytes>` lines, `\n`-joined. */
+	readonly digest: string;
+	readonly entry: string;
+	readonly files: readonly (readonly [path: string, bytes: Uint8Array])[];
+};
+/**
+ * One ES module that imports nothing, with its source map (sources are tree paths), or the errors that stopped it, each
+ * `file:line:column: message` and the line. The module's default export is `{ run(input) }`, which calls
+ * `globalThis[Symbol.for('norbital.node')].run(input, load)` with `load` evaluating the entry; each Node built-in a run
+ * provides (`fs`, `fs/promises`, `path`, `buffer`, `process`, `util`) is `…builtin(name)`, and a `require` that does not
+ * resolve throws when called, naming the requirer.
+ */
+export type Bundled =
+	{ readonly code: string; readonly map: string } | { readonly errors: readonly string[] };
+/**
+ * The confined bundler (compute model §3, "Running a file"): the host resolves the entry's imports inside the tree by
+ * Node's rules and bundles them in a confined process that serves one tenant, caching by (digest, entry, bundler version).
+ */
+export interface BundlerPort {
+	bundle(request: BundleRequest, signal: AbortSignal): Promise<Bundled>;
+}
+/** What `ctx.files.image` reads from a JPEG, PNG or HEIC: format, size, the PDQ perceptual hash and EXIF. */
+export type ImageFacts = {
+	readonly format: 'jpeg' | 'png' | 'heic';
+	readonly width: number;
+	readonly height: number;
+	readonly pdq: string;
+	readonly exif: {
+		readonly takenAt?: string;
+		readonly gps?: { readonly lat: number; readonly lng: number };
+		readonly software?: string;
+		readonly make?: string;
+		readonly model?: string;
+	};
+};
+export type ImagePreviewSize = 64 | 512 | 1024;
+export type ImagePreviewMime = 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif';
+/** A preview at most `maxEdge` on its long side, EXIF-oriented; `derived: false` is the original (an APNG, a HEIC sequence). */
+export type ImagePreview = {
+	readonly bytes: Uint8Array;
+	readonly mime: string;
+	readonly derived: boolean;
+};
+/**
+ * Image decoding off the engine (JPEG, PNG, HEIC; rasters at most 16 million pixels, input at most
+ * `LIMITS.storedFileBytes`): `facts`, a JPEG at most `maxEdge` on its long side, and a preview at most 5 MiB.
+ */
+export interface ImagesPort {
+	facts(bytes: Uint8Array, signal: AbortSignal): Promise<ImageFacts>;
+	jpeg(bytes: Uint8Array, maxEdge: number, signal: AbortSignal): Promise<Uint8Array>;
+	preview(
+		bytes: Uint8Array,
+		mime: ImagePreviewMime,
+		maxEdge: ImagePreviewSize,
+		signal: AbortSignal
+	): Promise<ImagePreview>;
+}
+/** An MCP server as the engine resolved it from the workspace's secrets: URL, headers, and its authorization. */
+export type McpServer = {
+	readonly url: string;
+	readonly headers: { readonly [name: string]: string };
+	readonly auth?:
+		| { readonly bearer: string }
+		| {
+				readonly client: {
+					readonly id: string;
+					readonly secret: string;
+					readonly scopes?: readonly string[];
+				};
+		  };
+};
+export type McpToolInfo = {
+	readonly name: string;
+	readonly description: string;
+	readonly inputSchema: Json;
+};
+/**
+ * MCP over streamable HTTP on the current protocol revision (rule 63b): `connect` answers an opaque session id, `call`
+ * answers `{ content, structured?, isError? }`; `close` ends the session (idempotent).
+ */
+export interface McpPort {
+	connect(server: McpServer, signal: AbortSignal): Promise<string>;
+	tools(session: string, signal: AbortSignal): Promise<readonly McpToolInfo[]>;
+	call(session: string, tool: string, input: Json, signal: AbortSignal): Promise<Json>;
+	close(session: string): Promise<void>;
+}
+/** This release's API reference (`build/docs/<file>`, `index.json` first), served by the host: a cell reads no disk. */
+export interface DocsPort {
+	read(file: string, signal: AbortSignal): Promise<string>;
+}
+/** One cron the manifest declares: an automation's (`id` its name) or a remote sync's periodic read (the runs area's id). */
+export type CronEntry = { readonly id: string; readonly cron: string; readonly zone: string };
+/** `ran: false`: a repeat of `(id, slot)`, or a run that only read and wrote nothing. */
+export type CronFired = { readonly ran: boolean };
+
 export type HostPorts = {
+	/** Durable administrator audit; no runtime-log fallback is permitted. */
+	audit?: import('../protocol/audit.ts').AuditPort;
 	files: FilesPort;
 	deadlines: DeadlinesPort;
 	secrets?: SecretsPort;

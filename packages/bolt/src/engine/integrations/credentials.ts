@@ -1,6 +1,6 @@
 import { Crypto, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import { TenantTx, type TenantDbShape } from '../db/tenant-db.ts';
+import type { TenantDbShape } from '../db/tenant-db.ts';
 import { Fenced, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { SecretsCodec } from '../secrets.ts';
@@ -60,7 +60,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 	const opened = (instance: string, rows: readonly (typeof Sealed.Type)[]) =>
 		Effect.forEach(rows, (r) =>
 			Effect.gen(function* () {
-				const value = codec.open(owner(instance), r.name, r.sealed);
+				const value = yield* codec.open(owner(instance), r.name, r.sealed);
 				if (Option.isNone(value))
 					return yield* Effect.fail(
 						BoltError.make(
@@ -77,29 +77,41 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 		).pipe(Effect.map((entries) => new Map(entries)));
 	return {
 		open: (instance) =>
-			db.transaction(
-				Effect.gen(function* () {
-					const tx = yield* TenantTx;
-					const epoch = yield* uuid;
-					const bumped = yield* tx.query({
-						text: `UPDATE sys_integration SET epoch = $2 WHERE id = $1 RETURNING ${ROW}`,
-						params: [instance, epoch]
-					});
-					const raw = bumped.rows[0];
-					if (raw === undefined) return yield* Effect.fail(unknown(instance));
-					const row = yield* Schema.decodeUnknownEffect(InstanceRowSchema)(raw).pipe(
-						Effect.mapError(() => unknown(instance))
+			Effect.gen(function* () {
+				const found = yield* db.one(Loaded, {
+					text: `SELECT ${ROW}, epoch, coalesce((SELECT jsonb_agg(jsonb_build_object('name', c.name, 'sealed', c.sealed) ORDER BY c.name) FROM bolt_credential c WHERE c.instance = i.id), '[]'::jsonb) AS sealed FROM sys_integration i WHERE i.id = $1`,
+					params: [instance]
+				});
+				if (Option.isNone(found)) return yield* Effect.fail(unknown(instance));
+				const { epoch: previous, sealed, ...row } = found.value;
+				// Key service work finishes before a database connection or row lock is acquired.
+				const values = yield* opened(instance, sealed);
+				const epoch = yield* uuid;
+				const result = yield* db.transaction({
+					statements: [
+						{ text: 'SELECT id FROM sys_integration WHERE id = $1 FOR UPDATE', params: [instance] },
+						{
+							text: `WITH moved AS (UPDATE sys_integration i SET epoch = $2 WHERE i.id = $1 AND i.epoch IS NOT DISTINCT FROM $3::text
+							AND jsonb_build_object('integration', i.integration, 'owner', i.owner, 'active', i.active, 'configuration', i.configuration, 'import_start', i.import_start) = $4::jsonb
+							AND coalesce((SELECT jsonb_agg(jsonb_build_object('name', c.name, 'sealed', c.sealed) ORDER BY c.name) FROM bolt_credential c WHERE c.instance = i.id), '[]'::jsonb) = $5::jsonb RETURNING 1)
+							SELECT (SELECT count(*) FROM moved)::int AS held, EXISTS (SELECT 1 FROM sys_integration WHERE id = $1) AS known`,
+							params: [instance, epoch, previous, JSON.stringify(row), JSON.stringify(sealed)]
+						}
+					]
+				});
+				const fence = yield* Schema.decodeUnknownEffect(Fence)(result[1]?.rows[0]).pipe(
+					Effect.mapError(() => invalid(instance))
+				);
+				if (!fence.known) return yield* Effect.fail(unknown(instance));
+				if (fence.held !== 1)
+					return yield* Effect.fail(
+						new Fenced({
+							instance,
+							message: `the configuration or credentials of '${instance}' changed while opening them`
+						})
 					);
-					const sealed = yield* tx.query({
-						text: 'SELECT name, sealed FROM bolt_credential WHERE instance = $1',
-						params: [instance]
-					});
-					const rows = yield* Schema.decodeUnknownEffect(Schema.Array(Sealed))(sealed.rows).pipe(
-						Effect.mapError(() => invalid(instance))
-					);
-					return { epoch, row, values: yield* opened(instance, rows) };
-				})
-			),
+				return { epoch, row, values };
+			}),
 		read: (instance) =>
 			Effect.gen(function* () {
 				const found = yield* db.one(Loaded, {

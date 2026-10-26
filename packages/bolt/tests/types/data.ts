@@ -1,13 +1,15 @@
 // Type corpus for the data layer (§3.3.2–§3.3.4, §3.3.9, rules 3–5, 9, 10, P14). Each `@ts-expect-error` line is a
 // planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { collection, customField, model, relationship } from '../../src/index.ts';
+import { automation, customField, model } from '../../src/index.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
+import { PlainDate as plainDate } from '@norbital-ai/std/date';
 import type {
 	Id,
 	Insert,
 	Masked,
 	Patch,
 	PlainDate,
+	PlainTime,
 	Row,
 	RowApproval,
 	Where
@@ -15,7 +17,8 @@ import type {
 import type { DateLiteral, Exact, ValidInput, ValueOf } from '../../src/decl/fields.ts';
 import type { KindOfExpr } from '../../src/decl/model.ts';
 import type { Columns, ColumnValue, StoredRow } from '../../src/decl/names.ts';
-import * as c from './fixture/collections.ts';
+import * as m from './fixture/models.ts';
+import * as rt from './fixture/runtime.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -32,7 +35,7 @@ is<Eq<Exact<{ extra: never }, {}>, { extra: never }>>();
 // Array validation precedes function terminals, including values satisfying both types.
 declare const callableJsonObjects: (() => void) & readonly { a: boolean }[];
 declare const callableJsonBools: (() => void) & readonly boolean[];
-model({
+model('data_case', {
 	description: 'X',
 	label: 'j',
 	fields: {
@@ -40,7 +43,7 @@ model({
 		j: { kind: 'json', shape: { kind: 'list', of: { kind: 'bool' } }, default: callableJsonObjects }
 	}
 });
-model({
+model('data_case', {
 	description: 'X',
 	label: 'j',
 	fields: {
@@ -61,7 +64,7 @@ is<Eq<ColumnValue<'customers', 'email_lower'>, string | null>>();
 is<Eq<ColumnValue<'customers', 'email_label'>, string>>();
 is<Eq<ColumnValue<'customers', 'email_default'>, string>>();
 is<Eq<ColumnValue<'customers', 'email_chain'>, string | null>>();
-is<Eq<Row<'orders'>['customer'], Id<'customers'>>>(); // FK from +relationship.ts
+is<Eq<Row<'orders'>['customer'], Id<'customers'>>>(); // inline ref field
 is<Eq<Row<'orders'>['owner'], Id<'sys_user'> | null>>();
 is<Eq<Row<'customers'>['tier'], 'basic' | 'gold'>>();
 is<Eq<Row<'customers'>['tags'], readonly string[] | null | Masked>>(); // masked: sales_rep reads name and tier
@@ -82,7 +85,7 @@ is<
 		| 'updated_at'
 		| 'created_by'
 		| 'updated_by'
-		| '$outbound'
+		| '$sync'
 		| '$approval'
 	>
 >();
@@ -140,7 +143,7 @@ is<Eq<ValueOf<{ kind: never; of: 'customers' }>, string>>();
 // ── predicates (K3) ──
 const w1: Where<'orders'> = {
 	status: { in: ['draft', 'submitted'] },
-	due: { lte: { today: '+30d' } },
+	due: { lte: plainDate('2026-11-24') },
 	customer: { is: { tier: { eq: 'gold' }, name: { like: 'A%' } } },
 	lines: { some: { qty: { gt: 10 } } },
 	or: [{ owner: { eq: { actor: 'id' } } }, { note: { isNull: true } }]
@@ -162,7 +165,7 @@ const e3: Where<'orders'> = { due: { like: '2026%' } };
 const e4: Where<'sites'> = { zone: { eq: 'Asia/Singapore' } };
 // @ts-expect-error W5 a relation the collection does not expose (sites: relations [])
 const e5: Where<'sites'> = { customer: { is: { tier: { eq: 'gold' } } } };
-// @ts-expect-error W6 `{ now }` on a date field (dates take `{ today }`)
+// @ts-expect-error W6 clock operands are not values in a read predicate
 const e6: Where<'orders'> = { due: { lt: { now: '-1h' } } };
 // @ts-expect-error W7 `{ actor: 'id' }` on an FK that is not a member
 const e7: Where<'orders'> = { customer: { eq: { actor: 'id' } } };
@@ -179,119 +182,142 @@ void e8;
 
 // ── model() ──
 // @ts-expect-error M1 unknown kind
-model({ description: 'x', label: 'a', fields: { a: { kind: 'txt' } } });
-// @ts-expect-error M2 unknown text format
-model({ description: 'x', label: 'a', fields: { a: { kind: 'text', format: 'handle' } } });
+model('data_case', { description: 'x', label: 'a', fields: { a: { kind: 'txt' } } });
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	// @ts-expect-error M2 unknown text format
+	fields: { a: { kind: 'text', format: 'handle' } }
+});
 // @ts-expect-error M3 vector without a metric
-model({ description: 'x', label: 'a', fields: { a: { kind: 'vector', dim: 3 } } });
-model({
+model('data_case', { description: 'x', label: 'a', fields: { a: { kind: 'vector', dim: 3 } } });
+model('data_case', {
 	description: 'x',
 	label: 's',
 	// @ts-expect-error M4 state edge names a state that does not exist
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { to: ['zz'] } } } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 's',
 	// @ts-expect-error M5 initial is not a state
 	fields: { s: { kind: 'state', initial: 'q', states: { a: {} } } }
 });
-// @ts-expect-error M6 a misspelt modifier (options are exact, rule 5)
-model({ description: 'x', label: 'a', fields: { a: { kind: 'text', optinal: true } } });
-model({
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	// @ts-expect-error M6 a misspelt modifier (options are exact, rule 5)
+	fields: { a: { kind: 'text', optinal: true } }
+});
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error M7 a derived kind takes no `optional`
 	fields: { a: { kind: 'count', of: 'lines', optional: true } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error M8 enum default outside its values
 	fields: { a: { kind: 'enum', values: ['x', 'y'], default: 'z' } }
 });
 // @ts-expect-error M9 an input-only kind on a model
-model({ description: 'x', label: 'a', fields: { a: { kind: 'number' } } });
+model('data_case', { description: 'x', label: 'a', fields: { a: { kind: 'number' } } });
 // @ts-expect-error M10 a system column name
-model({ description: 'x', label: 'a', fields: { id: { kind: 'text' } } });
-model({
+model('data_case', { description: 'x', label: 'a', fields: { id: { kind: 'text' } } });
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'date' } },
 	// @ts-expect-error M11 computed kind differs from the tree's result kind
 	computed: { b: { kind: 'text', expr: { plusDays: [{ field: 'a' }, 1] } } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'text' } },
 	// @ts-expect-error M12 plusDays on a non-date
 	computed: { b: { kind: 'date', expr: { plusDays: [{ field: 'a' }, 1] } } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'date' } },
 	// @ts-expect-error M13 round on a date
 	computed: { b: { kind: 'date', expr: { round: [{ field: 'a' }, 2] } } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'int' } },
 	// @ts-expect-error M14 an unknown field in a computed tree
 	computed: { b: { kind: 'int', expr: { plus: [{ field: 'nope' }, 1] } } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'money' } },
 	// @ts-expect-error M15 money times money
 	computed: { b: { kind: 'money', expr: { times: [{ field: 'a' }, { field: 'a' }] } } }
 });
-// @ts-expect-error M16 search over a non-text field
-model({ description: 'x', label: 'a', fields: { a: { kind: 'int' } }, search: { text: ['a'] } });
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	fields: { a: { kind: 'int' } },
+	// @ts-expect-error M16 search over a non-text field
+	search: { text: ['a'] }
+});
 // a patterned seq is text in storage and in the search document
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'seq', pattern: 'P-{yyyy}-{0000}' }, b: { kind: 'text' } },
 	search: { text: ['a', 'b'] }
 });
-// @ts-expect-error M16b a seq without a pattern is a number
-model({ description: 'x', label: 'a', fields: { a: { kind: 'seq' } }, search: { text: ['a'] } });
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	fields: { a: { kind: 'seq' } },
+	// @ts-expect-error M16b a seq without a pattern is a number
+	search: { text: ['a'] }
+});
 // @ts-expect-error M17 a json field in a key (not btree)
-model({ description: 'x', label: 'a', fields: { a: { kind: 'json' } }, key: ['a'] });
-model({
+model('data_case', { description: 'x', label: 'a', fields: { a: { kind: 'json' } }, key: ['a'] });
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'date' } },
 	// @ts-expect-error M18 noOverlap over a field that is not a period
 	noOverlap: [{ key: [], period: 'a' }]
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'int' }, d: { kind: 'date' } },
 	// @ts-expect-error M19 a check comparing an int to a date field
 	check: { c: { a: { lte: { field: 'd' } } } }
 });
-model({
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error M20 money currency naming a field that is not a currency
 	fields: { a: { kind: 'money', currency: 'b' }, b: { kind: 'text' } }
 });
-// @ts-expect-error M21 an unknown top-level option
-model({ description: 'x', label: 'a', fields: { a: { kind: 'text' } }, temporal: true });
-model({
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	fields: { a: { kind: 'text' } },
+	// @ts-expect-error M21 an unknown top-level option
+	temporal: true
+});
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error M22 a json shape with an unknown member kind
 	fields: { a: { kind: 'json', shape: { kind: 'object', fields: { b: { kind: 'strin' } } } } }
 });
 // a time field's precision: the unit its picker offers and snaps to; a date or a date period has no hour
-model({
+model('data_case', {
 	description: 'x',
 	label: 'm',
 	fields: {
@@ -303,253 +329,406 @@ model({
 	}
 });
 is<Eq<ValueOf<{ kind: 'date'; precision: 'month' }>, PlainDate>>(); // precision never changes a value's type
-// @ts-expect-error M23 a date has no hour precision
-model({ description: 'x', label: 'a', fields: { a: { kind: 'date', precision: 'hour' } } });
-// @ts-expect-error M24 a time has no month precision
-model({ description: 'x', label: 'a', fields: { a: { kind: 'time', precision: 'month' } } });
-model({
+is<Eq<ValueOf<{ kind: 'time'; precision: 'hour' }>, PlainTime>>();
+is<PlainTime extends string ? true : false>();
+is<string extends PlainTime ? false : true>();
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	// @ts-expect-error M23 a date has no hour precision
+	fields: { a: { kind: 'date', precision: 'hour' } }
+});
+model('data_case', {
+	description: 'x',
+	label: 'a',
+	// @ts-expect-error M24 a time has no month precision
+	fields: { a: { kind: 'time', precision: 'month' } }
+});
+model('data_case', {
 	description: 'x',
 	label: 'a',
 	// @ts-expect-error M25 a date period has no minute precision
 	fields: { a: { kind: 'period', of: 'date', precision: 'minute' } }
 });
-// @ts-expect-error M26 precision on a kind that is not a time
-model({ description: 'x', label: 'a', fields: { a: { kind: 'int', precision: 'day' } } });
-
-// ── relationship() ──
-// @ts-expect-error R1 unknown model in the key
-relationship({ 'nope.customer': { to: 'customers' } });
-// @ts-expect-error R2 unknown target
-relationship({ 'orders.customer': { to: 'custmers' } });
-// @ts-expect-error R3 setNull on a required ref
-relationship({ 'orders.customer': { to: 'customers', onDelete: 'setNull' } });
-// @ts-expect-error R4 an inverse named after a grant key
-relationship({ 'orders.customer': { to: 'customers', inverse: 'read' } });
-// @ts-expect-error R5 an inverse colliding with a field of the target
-relationship({ 'orders.customer': { to: 'customers', inverse: 'name' } });
-// R6 (two inverses of one name on one target) fails the `__verify` line: scale.test.ts plants it.
-// @ts-expect-error R7 the FK name is already a field of its model
-relationship({ 'orders.note': { to: 'customers' } });
-// @ts-expect-error R8 a target `where` naming an unknown field
-relationship({ 'orders.customer': { to: 'customers', where: { nope: { eq: 1 } } } });
-// @ts-expect-error R9 an owned child restricting its parent's delete
-relationship({ 'order_lines.order': { to: 'orders', owned: true, onDelete: 'restrict' } });
-// @ts-expect-error R10 `{ actor: 'id' }` default on a ref that is not a member
-relationship({ 'orders.customer': { to: 'customers', default: { actor: 'id' } } });
-
-// ── customField() ──
-// @ts-expect-error F1 a shape with an unknown kind
-customField({ description: 'x', shape: { kind: 'object', fields: { a: { kind: 'txt' } } } });
-const f = customField({
+model('data_case', {
 	description: 'x',
+	label: 'a',
+	// @ts-expect-error M26 precision on a kind that is not a time
+	fields: { a: { kind: 'int', precision: 'day' } }
+});
+
+// ── refs live on the model's fields ──
+model('orders', {
+	...m.orders.spec,
+	// @ts-expect-error R2 unknown ref target
+	fields: { ...m.orders.spec.fields, customer: { kind: 'ref', to: 'custmers' } }
+});
+model('orders', {
+	...m.orders.spec,
+	fields: {
+		...m.orders.spec.fields,
+		// @ts-expect-error R3 setNull on a required ref
+		customer: { kind: 'ref', to: 'customers', onDelete: 'setNull' }
+	}
+});
+model('orders', {
+	...m.orders.spec,
+	// @ts-expect-error R4 an inverse named after a grant key
+	fields: { ...m.orders.spec.fields, customer: { kind: 'ref', to: 'customers', inverse: 'read' } }
+});
+model('orders', {
+	...m.orders.spec,
+	// @ts-expect-error R5 an inverse colliding with a field of the target
+	fields: { ...m.orders.spec.fields, customer: { kind: 'ref', to: 'customers', inverse: 'name' } }
+});
+// R6 (two inverses of one name on one target) fails the generated `__verify` line.
+model('orders', {
+	...m.orders.spec,
+	fields: {
+		...m.orders.spec.fields,
+		// @ts-expect-error R8 a target predicate naming an unknown field
+		customer: { kind: 'ref', to: 'customers', where: { nope: { eq: 1 } } }
+	}
+});
+model('order_lines', {
+	...m.order_lines.spec,
+	fields: {
+		...m.order_lines.spec.fields,
+		// @ts-expect-error R9 an owned child restricting its parent's delete
+		order: { kind: 'ref', to: 'orders', owned: true, onDelete: 'restrict' }
+	}
+});
+model('orders', {
+	...m.orders.spec,
+	fields: {
+		...m.orders.spec.fields,
+		// @ts-expect-error R10 an actor id default on a ref that is not a member
+		customer: { kind: 'ref', to: 'customers', default: { actor: 'id' } }
+	}
+});
+
+// ── custom fields validate inside their declaration, from generated shape data ──
+customField('rating', {
+	description: 'x',
+	// @ts-expect-error F1 a shape with an unknown kind
+	shape: { kind: 'object', fields: { a: { kind: 'txt' } } }
+});
+customField('variant', {
+	description: 'A tagged value',
 	shape: {
 		kind: 'union',
 		by: 'type',
 		arms: { a: { n: { kind: 'int' } }, b: { s: { kind: 'text' } } }
+	},
+	validate: (v) =>
+		v.type === 'a' ? (v.n > 0 ? undefined : 'positive') : v.s.length > 0 ? undefined : 'empty'
+});
+customField('variant', {
+	description: 'A tagged value',
+	shape: {
+		kind: 'union',
+		by: 'type',
+		arms: { a: { n: { kind: 'int' } }, b: { s: { kind: 'text' } } }
+	},
+	// @ts-expect-error F2 the generated union must be narrowed before reading an arm
+	validate: (v) => (v.n > 0 ? undefined : 'x')
+});
+
+// ── exposure is part of the model ──
+// A model mirrored by a sync still validates edits to its local fields.
+model('products', {
+	...m.products.spec,
+	update: {
+		...m.products.spec.update,
+		transform: function* (changes) {
+			return changes.map(({ set }) => set);
+		}
 	}
 });
-f.validate((v) =>
-	v.type === 'a' ? (v.n > 0 ? undefined : 'positive') : v.s.length > 0 ? undefined : 'empty'
-);
-// @ts-expect-error F2 the value is typed from the shape
-f.validate((v) => (v.n > 0 ? undefined : 'x'));
-
-// ── collection() ──
-// @ts-expect-error C1 create on a feed target (a feed writes its rows)
-collection('notices', { read: { fields: 'all' }, create: { input: { columns: ['subject'] } } });
-// a feed target's update columns are its local fields, which the feed never writes
-collection('notices', { read: { fields: 'all' }, update: { input: { columns: ['subject'] } } });
-// @ts-expect-error C3 delete on a feed target
-collection('notices', { read: { fields: 'all' }, delete: {} });
-// @ts-expect-error C4 an action on a feed target
-collection('notices', { read: { fields: 'all' }, actions: { a: { description: 'a', input: {} } } });
-// A feed target's transform validates the rows the feed writes.
-c.notices.transform(function* (inputs) {
-	return inputs;
-});
 // @ts-expect-error C6 a misspelt create column
-collection('orders', { read: { fields: 'all' }, create: { input: { columns: ['nte'] } } });
+model('orders', { ...m.orders.spec, create: { columns: ['nte'] } });
 // @ts-expect-error C7 a derived field in an allowlist
-collection('orders', { read: { fields: 'all' }, update: { input: { columns: ['total'] } } });
-collection('orders', {
-	read: { fields: 'all' },
+model('orders', { ...m.orders.spec, update: { columns: ['total'] } });
+model('orders', {
+	...m.orders.spec,
 	// @ts-expect-error C8 a relation action on something that is not a many-relation
-	update: { input: { columns: [], with: { customer: { link: {} } } } }
+	update: { columns: [], with: { customer: { link: {} } } }
 });
-collection('orders', {
-	read: { fields: 'all' },
+model('orders', {
+	...m.orders.spec,
 	// @ts-expect-error C9 an unknown relation action
-	update: { input: { columns: [], with: { lines: { replace: {} } } } }
+	update: { columns: [], with: { lines: { replace: {} } } }
 });
 // @ts-expect-error C10 an unexposable read field
-collection('orders', { read: { fields: ['nope'] } });
-collection('orders', {
-	read: { fields: 'all' },
-	// @ts-expect-error C11 a query named after a generated verb
-	queries: { update: { description: 'x', input: {}, output: { kind: 'int' } } }
+model('orders', { ...m.orders.spec, read: { fields: ['nope'] } });
+model('orders', {
+	...m.orders.spec,
+	queries: {
+		// @ts-expect-error C11 a query named after a generated verb
+		update: {
+			description: 'x',
+			input: {},
+			output: { kind: 'int' },
+			run: function* () {
+				return 0;
+			}
+		}
+	}
 });
-collection('orders', {
-	read: { fields: 'all' },
-	queries: { q: { description: 'x', input: {}, output: { kind: 'int' } } },
-	// @ts-expect-error C11b an action named after a query of the same collection (one callable, one limit key)
-	actions: { q: { description: 'x', input: {} } }
+model('orders', {
+	...m.orders.spec,
+	queries: {
+		q: {
+			description: 'x',
+			// @ts-expect-error C12 a query input of unknown kind
+			input: { a: { kind: 'txt' } },
+			output: { kind: 'int' },
+			run: function* () {
+				return 0;
+			}
+		}
+	}
 });
-collection('orders', {
-	read: { fields: 'all' },
-	// @ts-expect-error C12 a query input of unknown kind
-	queries: { q: { description: 'x', input: { a: { kind: 'txt' } }, output: { kind: 'int' } } }
-});
-collection('orders', {
-	read: { fields: 'all' },
+model('orders', {
+	...m.orders.spec,
 	queries: {
 		q: {
 			description: 'x',
 			// @ts-expect-error C13 an id input filtered by a field its target lacks
 			input: { a: { kind: 'id', of: 'customers', where: { nope: { eq: 1 } } } },
-			output: { kind: 'int' }
+			output: { kind: 'int' },
+			run: function* () {
+				return 0;
+			}
 		}
 	}
 });
-collection('orders', {
-	read: { fields: 'all' },
-	// @ts-expect-error C14 similarity candidates above 16
-	similarity: { s: { description: 'x', input: {}, candidates: 32 } }
-});
-collection('orders', {
-	read: { fields: 'all' },
-	// @ts-expect-error C15 a notification with a non-string team ID
-	notifications: { committed: [{ channel: 'inbox', to: [{ team: 42 }], title: 't' }] }
-});
-collection('orders', {
-	read: { fields: 'all' },
-	// @ts-expect-error C16 a notification recipient field that is not a member
-	notifications: { committed: [{ channel: 'inbox', to: [{ user: 'customer' }], title: 't' }] }
-});
-// @ts-expect-error C17 a collection whose model does not exist
-collection('nope', { read: { fields: 'all' } });
-// @ts-expect-error C18 an unknown option (hooks do not exist, R2)
-collection('orders', { read: { fields: 'all' }, hooks: {} });
-
-// ── bodies attach in statements (X-2) ──
-c.orders.transform(function* (inputs, { existing, now, refuse }) {
-	if (inputs.some((input, i) => '$delete' in input && existing[i]?.status === 'ordered'))
-		return yield* refuse('An ordered order stays.');
-	return inputs.map((input, i) =>
-		'$delete' in input
-			? input
-			: {
-					...input,
-					...(input.status === 'submitted' && existing[i]?.status !== 'submitted'
-						? { placed_at: now }
-						: {})
-				}
-	);
-});
-c.orders.query('open_total', function* ({ since }, ctx) {
-	const open = yield* ctx.read('orders', {
-		where: { status: { ne: 'ordered' }, due: { gte: since } },
-		select: { total: true, customer: { select: { name: true } } },
-		all: true
-	});
-	const first = open.rows[0];
-	if (first !== undefined) {
-		const n: string = first.customer.name;
-		void n;
-		// a selected row carries what every caller row does: `$approval` and `$outbound` at its root, not in its relations
-		is<Eq<typeof first.$approval, RowApproval | undefined>>();
-		is<Eq<typeof first.$outbound, Row<'orders'>['$outbound']>>();
-		is<Eq<'$approval' extends keyof typeof first.customer ? 1 : 0, 0>>();
+model('orders', {
+	...m.orders.spec,
+	search: {
+		...m.orders.spec.search,
+		// @ts-expect-error C14 search candidates cannot exceed 16
+		indexes: { by_colour: { ...m.orders.spec.search.indexes.by_colour, candidates: 32 } }
 	}
-	return open.rows.reduce<Decimal | undefined>((_, r) => r.total, undefined) ?? Decimal.of(0);
 });
-c.orders.action('submit', function* (_, ctx) {
-	return yield* ctx.act('orders.update', { target: ctx.target.id, set: { status: 'submitted' } });
+model('orders', {
+	...m.orders.spec,
+	// @ts-expect-error C15 a notification team must be a source handle
+	notify: function* () {
+		return [{ title: 't', to: [{ team: 42 }] }];
+	}
 });
-c.orders.action('renote', function* ({ ids, note }, ctx) {
-	yield* ctx.act(
-		'orders.update',
-		ids.map((id) => ({ target: id, set: { note } }))
-	);
-	const id = ids[0];
-	const order =
-		id === undefined ? null : yield* ctx.get('orders', id, { select: { customer: true } });
-	if (order !== null)
-		yield* ctx.act('orders.create', {
-			customer: order.customer,
-			lines: { create: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }] }
+model('orders', {
+	...m.orders.spec,
+	// @ts-expect-error C16 a field name is not a user's branded id
+	notify: function* () {
+		return [{ title: 't', to: [{ user: 'customer' }] }];
+	}
+});
+// @ts-expect-error C18 an unknown model option
+model('orders', { ...m.orders.spec, hooks: {} });
+
+// ── each callback lives on what triggers it ──
+model('orders', {
+	...m.orders.spec,
+	update: {
+		...m.orders.spec.update,
+		transform: function* (changes, { now }) {
+			return changes.map(({ before, set }) =>
+				set.status === 'submitted' && before.status !== 'submitted'
+					? { ...set, placed_at: now }
+					: set
+			);
+		}
+	},
+	delete: {
+		check: function* (rows, ctx) {
+			if (rows.some((row) => row.status === 'ordered'))
+				return yield* ctx.refuse('An ordered order stays.');
+		}
+	},
+	queries: {
+		...m.orders.spec.queries,
+		open_total: {
+			...m.orders.spec.queries.open_total,
+			run: function* ({ since }, ctx) {
+				const open = yield* ctx.query('orders', {
+					where: { status: { ne: 'ordered' }, due: { gte: since } },
+					select: { total: true, customer: { select: { name: true } } },
+					all: true
+				});
+				const first = open.rows[0];
+				if (first !== undefined) {
+					const n: string = first.customer.name;
+					void n;
+					// Caller metadata belongs to the selected root, never its selected relation.
+					is<Eq<typeof first.$approval, RowApproval | undefined>>();
+					is<Eq<typeof first.$sync, Row<'orders'>['$sync']>>();
+					is<Eq<'$approval' extends keyof typeof first.customer ? 1 : 0, 0>>();
+				}
+				return open.rows.reduce<Decimal | undefined>((_, r) => r.total, undefined) ?? Decimal.of(0);
+			}
+		}
+	},
+	search: {
+		...m.orders.spec.search,
+		indexes: {
+			by_colour: {
+				...m.orders.spec.search.indexes.by_colour,
+				probe: ({ lab }) => ({ vector: lab, where: { status: { eq: 'ordered' } } })
+			}
+		}
+	}
+});
+automation('orders_submit', {
+	...rt.orders_submit.spec,
+	run: function* ({ target }, ctx) {
+		yield* ctx.act('orders.update', {
+			target: target,
+			set: { status: 'submitted' }
 		});
-	const gold = yield* ctx.query('customers', 'gold', {});
-	return gold.length;
+	}
 });
-c.orders.similarity('by_colour', {
-	probe: ({ lab }) => ({ field: 'colour', vector: lab, where: { status: { eq: 'ordered' } } })
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* ({ ids, note }, ctx) {
+		yield* ctx.act(
+			'orders.update',
+			ids.map((id) => ({ target: id, set: { note } }))
+		);
+		const id = ids[0];
+		const order =
+			id === undefined ? null : yield* ctx.query('orders', { id, select: { customer: true } });
+		if (order !== null)
+			yield* ctx.act('orders.create', {
+				customer: order.customer,
+				lines: { create: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }] }
+			});
+		const gold = yield* ctx.query('customers.gold', {});
+		return gold.length;
+	}
 });
-// @ts-expect-error B1 a query body returning the wrong output
-c.orders.query('open_total', function* () {
-	return 3;
+model('orders', {
+	...m.orders.spec,
+	queries: {
+		open_total: {
+			...m.orders.spec.queries.open_total,
+			// @ts-expect-error B1 a query body returning the wrong output
+			run: function* () {
+				return 3;
+			}
+		}
+	}
 });
-// @ts-expect-error B2 an undeclared query
-c.orders.query('nope', function* () {
-	return 1;
+model('orders', {
+	...m.orders.spec,
+	queries: {
+		open_total: {
+			...m.orders.spec.queries.open_total,
+			run: function* (input) {
+				// @ts-expect-error B3 a misspelt input field
+				return input.sinse;
+			}
+		}
+	}
 });
-c.orders.query('open_total', function* (input) {
-	// @ts-expect-error B3 a misspelt input field
-	return input.sinse;
+automation('orders_submit', {
+	...rt.orders_submit.spec,
+	run: function* ({ target }, ctx) {
+		// @ts-expect-error B4 act on an unknown callable
+		yield* ctx.act('orders.shred', { target: target });
+	}
 });
-c.orders.action('submit', function* (_, ctx) {
-	// @ts-expect-error B4 act on an unknown callable
-	return yield* ctx.act('orders.shred', { target: ctx.target.id });
+automation('orders_submit', {
+	...rt.orders_submit.spec,
+	run: function* ({ target }, ctx) {
+		const order = yield* ctx.query('orders', { id: target });
+		if (order === null) return;
+		yield* ctx.act('orders.update', {
+			target: target,
+			// @ts-expect-error B5 a field outside the update allowlist
+			set: { customer: order.customer }
+		});
+	}
 });
-c.orders.action('submit', function* (_, ctx) {
-	return yield* ctx.act('orders.update', {
-		target: ctx.target.id,
-		// @ts-expect-error B5 an update setting a field outside the update allowlist
-		set: { customer: ctx.target.customer }
-	});
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* (_, ctx) {
+		// @ts-expect-error B6 a create missing a required field
+		yield* ctx.act('orders.create', { note: 'x' });
+		return 1;
+	}
 });
-c.orders.action('renote', function* (_, ctx) {
-	// @ts-expect-error B6 a create missing a required field
-	yield* ctx.act('orders.create', { note: 'x' });
-	return 1;
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* ({ ids }, ctx) {
+		const id = ids[0];
+		if (id !== undefined) {
+			// @ts-expect-error B7 an upsert requires an explicit conflict policy
+			yield* ctx.act('orders.upsert', { id, note: 'x' });
+		}
+		return 1;
+	}
 });
-c.orders.action('renote', function* (_, ctx) {
-	// @ts-expect-error B7 upsert on a collection whose model has no key or unique
-	yield* ctx.act('orders.upsert', { note: 'x' });
-	return 1;
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* (_, ctx) {
+		// @ts-expect-error B8 an automation has no implicit record target
+		return ctx.target.id.length;
+	}
 });
-c.orders.action('renote', function* (_, ctx) {
-	// @ts-expect-error B8 `ctx.target` exists only on record actions
-	return ctx.target.id.length;
+model('orders', {
+	...m.orders.spec,
+	queries: {
+		open_total: {
+			...m.orders.spec.queries.open_total,
+			run: function* (_, ctx) {
+				// @ts-expect-error B9 a read without a limit
+				yield* ctx.query('orders', {});
+				return Decimal.of(0);
+			}
+		}
+	}
 });
-c.orders.query('open_total', function* (_, ctx) {
-	// @ts-expect-error B9 a read without a limit (rule 9)
-	yield* ctx.read('orders', {});
-	return Decimal.of(0);
+model('orders', {
+	...m.orders.spec,
+	search: {
+		...m.orders.spec.search,
+		// @ts-expect-error B10 an index pointing to a field that is not a vector
+		indexes: { by_colour: { ...m.orders.spec.search.indexes.by_colour, vector: 'note' } }
+	}
 });
-// @ts-expect-error B10 similarity probing a field that is not a vector
-c.orders.similarity('by_colour', { probe: ({ lab }) => ({ field: 'note', vector: lab }) });
-c.orders.action('renote', function* (_, ctx) {
-	// @ts-expect-error B11 an action creating rows of a feed target
-	yield* ctx.act('notices.create', {});
-	return 1;
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* (_, ctx) {
+		// @ts-expect-error B11 a model without a create exposure has no create callable
+		yield* ctx.act('notices.create', {});
+		return 1;
+	}
 });
 
-// Existing native sequence labels may be selected explicitly for retained business documents.
-c.orders.transform(function* (inputs, ctx) {
-	const labels = yield* ctx.db.read('orders', { select: { number: true }, all: true });
-	const number: string = labels.rows[0]!.number;
-	void number;
-	const keyed = yield* ctx.db.read({
-		labels: { collection: 'orders', select: { number: true }, all: true }
-	});
-	const keyedNumber: string = keyed.labels.rows[0]!.number;
-	void keyedNumber;
-	const ordinary = yield* ctx.db.read('orders', { all: true });
-	// @ts-expect-error sequence labels stay absent from default stored rows
-	ordinary.rows[0]!.number;
-	// @ts-expect-error an explicit workspace projection does not expose roll-ups
-	yield* ctx.db.read('orders', { select: { total: true }, all: true });
-	// @ts-expect-error an explicit workspace projection does not expose computed fields
-	yield* ctx.db.read('orders', { select: { due_soon: true }, all: true });
-	return inputs;
+// Native sequence labels may be selected explicitly for retained business documents.
+model('orders', {
+	...m.orders.spec,
+	create: {
+		...m.orders.spec.create,
+		transform: function* (inputs, ctx) {
+			const labels = yield* ctx.db.query('orders', { select: { number: true }, all: true });
+			const number: string = labels.rows[0]!.number;
+			void number;
+			const keyed = yield* ctx.db.query({
+				labels: { from: 'orders', select: { number: true }, all: true }
+			});
+			const keyedNumber: string = keyed.labels.rows[0]!.number;
+			void keyedNumber;
+			const ordinary = yield* ctx.db.query('orders', { all: true });
+			// @ts-expect-error sequence labels stay absent from default stored rows
+			ordinary.rows[0]!.number;
+			// @ts-expect-error an explicit workspace projection does not expose roll-ups
+			yield* ctx.db.query('orders', { select: { total: true }, all: true });
+			// @ts-expect-error an explicit workspace projection does not expose computed fields
+			yield* ctx.db.query('orders', { select: { due_soon: true }, all: true });
+			return inputs;
+		}
+	}
 });

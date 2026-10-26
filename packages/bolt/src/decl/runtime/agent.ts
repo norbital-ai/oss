@@ -80,5 +80,5 @@ export function mcp<const S extends McpBase>(spec: S & Checked<McpBase, S, Exact
 	return spec;
 }
 
-/** The frontmatter of `src/agent/skill/+<s>.skill.md`; the body is `##` sections. The build decodes it. */
+/** The frontmatter of `src/agent/skill/<s>/+skill.md`; the body is `##` sections. The build decodes it. */
 export type SkillFrontmatter = { description: string };

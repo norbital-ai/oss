@@ -63,6 +63,10 @@ screen from its header.
 	// hook:view-ui — a record view inside claims this header for its label, pills and actions: one header, not two
 	let claimed = $state<Snippet | null>(null);
 	setContext(Symbol.for('ui.sheet.header'), (s: Snippet | null) => (claimed = s));
+	// hook:view-ui — the line above the claimed heading (a record's model, "Variation"): a row of its own, so the toggles
+	// centre on the title, not on the two lines
+	let eyebrow = $state<string | null>(null);
+	setContext(Symbol.for('ui.sheet.eyebrow'), (text: string | null) => (eyebrow = text));
 	// hook:view-ui — the record's actions beside full screen
 	let chrome = $state<{ tools: Snippet } | null>(null);
 	setContext(Symbol.for('ui.sheet.chrome'), (c: { tools: Snippet } | null) => (chrome = c));
@@ -326,26 +330,57 @@ screen from its header.
 				></span>
 			</div>
 		{/if}
-		<header class="flex shrink-0 flex-wrap items-center gap-x-2 border-b px-4 py-3">
-			<div class="min-w-0 flex-1">
-				{#if header}{@render header()}{:else if claimed}{@render claimed()}{:else if title}<h2
-						class="text-heading truncate"
+		<header class="flex shrink-0 flex-col border-b px-4 py-3">
+			{#if eyebrow && !header}<span
+					class="text-micro text-muted-foreground truncate leading-4"
+					data-sheet-eyebrow>{eyebrow}</span
+				>{/if}
+			<div class="flex flex-wrap items-center gap-x-2">
+				<div class="min-w-0 flex-1">
+					{#if header}{@render header()}{:else if claimed}{@render claimed()}{:else if title}<h2
+							class="text-heading truncate"
+						>
+							{title}
+						</h2>{/if}
+				</div>
+				{@render actions?.()}
+				{@render chrome?.tools()}
+				<!-- a right sheet's full screen on a wide screen; every drawer's expand on a phone -->
+				{#if right || !wide.current}
+					<button
+						type="button"
+						data-sheet-fullscreen
+						aria-pressed={full}
+						aria-label={full ? t('exitFullScreen') : t('fullScreen')}
+						title={full ? t('exitFullScreen') : t('fullScreen')}
+						onclick={() => (full = !full)}
+						class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
 					>
-						{title}
-					</h2>{/if}
-			</div>
-			{@render actions?.()}
-			{@render chrome?.tools()}
-			<!-- a right sheet's full screen on a wide screen; every drawer's expand on a phone -->
-			{#if right || !wide.current}
+						<svg
+							viewBox="0 0 24 24"
+							class="size-4"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							{#if full}<path
+									d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"
+								/>
+							{:else}<path
+									d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"
+								/>{/if}
+						</svg>
+					</button>
+				{/if}
 				<button
 					type="button"
-					data-sheet-fullscreen
-					aria-pressed={full}
-					aria-label={full ? t('exitFullScreen') : t('fullScreen')}
-					title={full ? t('exitFullScreen') : t('fullScreen')}
-					onclick={() => (full = !full)}
-					class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
+					data-sheet-close
+					aria-label={t('close')}
+					onclick={close}
+					class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 hidden size-8 md:grid shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
 				>
 					<svg
 						viewBox="0 0 24 24"
@@ -354,35 +389,10 @@ screen from its header.
 						stroke="currentColor"
 						stroke-width="2"
 						stroke-linecap="round"
-						stroke-linejoin="round"
-						aria-hidden="true"
+						aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg
 					>
-						{#if full}<path
-								d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"
-							/>
-						{:else}<path
-								d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"
-							/>{/if}
-					</svg>
 				</button>
-			{/if}
-			<button
-				type="button"
-				data-sheet-close
-				aria-label={t('close')}
-				onclick={close}
-				class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 hidden size-8 md:grid shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
-			>
-				<svg
-					viewBox="0 0 24 24"
-					class="size-4"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg
-				>
-			</button>
+			</div>
 		</header>
 		<div class="min-h-0 flex-1 overflow-auto p-4" data-sheet-body>{@render children()}</div>
 	</div>

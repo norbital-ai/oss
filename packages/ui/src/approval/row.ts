@@ -2,6 +2,17 @@
 import type { RowApproval, ViewBolt } from '../client/contract.js';
 import { msg } from '../text/messages.js';
 
+const strings = (v: unknown): boolean =>
+	Array.isArray(v) && v.every((s: unknown) => typeof s === 'string');
+const isStep = (v: unknown): boolean =>
+	typeof v === 'object' &&
+	v !== null &&
+	'name' in v &&
+	typeof v.name === 'string' &&
+	'teams' in v &&
+	strings(v.teams) &&
+	'users' in v &&
+	strings(v.users);
 const isApproval = (v: unknown): v is RowApproval =>
 	typeof v === 'object' &&
 	v !== null &&
@@ -12,12 +23,10 @@ const isApproval = (v: unknown): v is RowApproval =>
 	'step' in v &&
 	typeof v.step === 'number' &&
 	'steps' in v &&
-	typeof v.steps === 'number' &&
+	Array.isArray(v.steps) &&
+	v.steps.every(isStep) &&
 	'requestedBy' in v &&
-	typeof v.requestedBy === 'string' &&
-	'waitingOn' in v &&
-	Array.isArray(v.waitingOn) &&
-	v.waitingOn.every((w: unknown) => typeof w === 'string');
+	typeof v.requestedBy === 'string';
 
 /** The row's open approval, or null. */
 export const approvalOf = (row: unknown): RowApproval | null =>
@@ -25,18 +34,23 @@ export const approvalOf = (row: unknown): RowApproval | null =>
 		? row.$approval
 		: null;
 
-/** "Requested by Ana · Pending step 1/2 · waiting on Finance" (or "Changes requested · waiting on Ana"). */
+/** Who the request waits on: the current step's name, or the requester while changes are requested. */
+const waiting = (a: RowApproval): string =>
+	a.state === 'Pending' ? (a.steps[a.step]?.name ?? '') : a.requestedBy;
+
+/** "Requested by Ada · Pending step 1/2 · waiting on Controller review" (or "Changes requested · waiting on Ada"). */
 export function approvalText(bolt: Pick<ViewBolt, 't'>, a: RowApproval): string {
 	const status =
 		a.state === 'Pending'
-			? msg(bolt, 'approval.pendingStep', 'Pending step {k}/{n}', { k: a.step + 1, n: a.steps })
-			: msg(bolt, 'approval.status.CHANGES_REQUESTED', 'Changes requested');
+			? msg(bolt, 'approval.pendingStep', 'Pending step {k}/{n}', {
+					k: a.step + 1,
+					n: a.steps.length
+				})
+			: msg(bolt, 'approval.status.ChangesRequested', 'Changes requested');
 	return [
 		msg(bolt, 'approval.requestedBy', 'Requested by {who}', { who: a.requestedBy }),
 		status,
-		msg(bolt, 'approval.waitingOn', 'waiting on {who}', {
-			who: a.waitingOn.join(` ${msg(bolt, 'approval.or', 'or')} `)
-		})
+		msg(bolt, 'approval.waitingOn', 'waiting on {who}', { who: waiting(a) })
 	].join(' · ');
 }
 
@@ -44,19 +58,23 @@ export function approvalText(bolt: Pick<ViewBolt, 't'>, a: RowApproval): string 
 export const lockText = (bolt: Pick<ViewBolt, 't'>, a: RowApproval | null): string =>
 	a === null
 		? msg(bolt, 'approval.locked', 'Under approval: only its approvers or requester may change it')
-		: msg(bolt, 'approval.lockedBy', 'Under approval: {who} may change it', {
-				who: a.waitingOn.join(` ${msg(bolt, 'approval.or', 'or')} `)
-			});
+		: a.state === 'Pending'
+			? msg(bolt, 'approval.lockedStep', 'Under approval: only {step} approvers may change it', {
+					step: waiting(a)
+				})
+			: msg(bolt, 'approval.lockedBy', 'Under approval: {who} may change it', { who: waiting(a) });
 
-/** One status label shared by the current request and collapsed past requests. */
+/** A record the viewer may edit while its request asks for changes: saving it resubmits the request. */
+export const resubmits = (row: unknown): boolean => approvalOf(row)?.state === 'ChangesRequested';
+
+/** One status label for a request (the scope selector, the panel's head). */
 export function approvalStatus(bolt: Pick<ViewBolt, 't'>, status: string): string {
 	const words: Readonly<Record<string, string>> = {
-		ONGOING: 'Pending',
-		CHANGES_REQUESTED: 'Changes requested',
-		APPROVED: 'Approved',
-		REJECTED: 'Rejected',
-		WITHDRAWN: 'Withdrawn',
-		SUPERSEDED: 'Superseded'
+		Pending: 'Pending',
+		ChangesRequested: 'Changes requested',
+		Approved: 'Approved',
+		Rejected: 'Rejected',
+		Superseded: 'Superseded'
 	};
 	return msg(bolt, `approval.status.${status}`, words[status] ?? status);
 }

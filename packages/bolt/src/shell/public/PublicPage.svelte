@@ -12,10 +12,11 @@
 	provideBolt(bolt);
 	provideKinds({
 		catalog: pageBoot.catalog,
+		automations: pageBoot.automations,
 		locale: pageBoot.workspace.locale,
 		zone: pageBoot.workspace.tz,
 		currency: pageBoot.workspace.currency,
-		read: (collection, options) => bolt.read(collection, options),
+		query: (collection, options) => bolt.query(collection, options),
 		upload: (file, field) => bolt.upload(file, field),
 		fileUrl: (ref, options) => bolt.fileUrl(ref, options)
 	});

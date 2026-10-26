@@ -27,7 +27,6 @@ const manifest = Result.getOrThrow(
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -152,10 +151,11 @@ it.live(
 					expect(target.querySelector('[data-rail="preview"]')).toBeNull();
 					open.click();
 					yield* until(() => target.querySelector(`[data-agent-preview="${PREVIEW}"]`) !== null);
-					expect(target.querySelector('[data-rail-expand]')!.getAttribute('aria-pressed')).toBe(
-						'true'
-					);
+					expect(target.querySelector('[data-rail-expand]')).toBeNull();
 					expect(target.querySelector('iframe')?.getAttribute('src')).toBe(PREVIEW);
+					expect(
+						target.querySelector('[data-agent-rail] [data-rail]')?.getAttribute('data-rail')
+					).toBe('preview');
 					// seen: the dot clears
 					yield* until(() => open.querySelector('[data-preview-unseen]') === null);
 					expect(open.getAttribute('aria-label')).toBe('Preview');
@@ -165,7 +165,7 @@ it.live(
 					expect(document.querySelector('[data-preview-caption]')!.textContent).toContain(
 						'Draft · Rename title'
 					);
-					// the transcript stays beside it; the same button folds the frame away
+					// The transcript stays mounted; the same button folds the frame away.
 					expect(target.querySelector('[data-role="assistant"]')).not.toBeNull();
 					open.click();
 					yield* until(() => target.querySelector('iframe') === null);

@@ -11,13 +11,15 @@ import {
 	openAiChat,
 	structuredSystem1
 } from '@norbital-ai/bolt/engine';
-import { openAiEmbeddings } from '@norbital-ai/providers/openrouter';
+import { downloadMedia, type DownloadOptions } from '@norbital-ai/bolt/node';
+import { openAiEmbeddings, openRouterChat } from '@norbital-ai/providers/openrouter';
 import type { Config } from './config.ts';
 
 /** S3-compatible SigV4, with a provider-requested signed URL expiry. */
 export const s3Files = Effect.fn('server.s3Files')(function* (
 	endpoint: string,
-	credential: string
+	credential: string,
+	downloads: DownloadOptions = {}
 ) {
 	const client = yield* HttpClient.HttpClient;
 	const base = new URL(endpoint);
@@ -87,12 +89,20 @@ export const s3Files = Effect.fn('server.s3Files')(function* (
 		};
 	};
 	const call = Effect.fn('s3.request')(function* (
-		method: 'PUT' | 'GET' | 'DELETE',
+		method: 'PUT' | 'GET' | 'DELETE' | 'POST',
 		key: string,
 		body?: Uint8Array,
-		mime?: string
+		mime?: string,
+		query: Readonly<Record<string, string>> = {}
 	) {
-		const url = yield* Effect.try({ try: () => object(key), catch: Port.failure('files') }),
+		const url = yield* Effect.try({
+				try: () => {
+					const target = object(key);
+					for (const [name, value] of Object.entries(query)) target.searchParams.set(name, value);
+					return target;
+				},
+				catch: Port.failure('files')
+			}),
 			payload = createHash('sha256')
 				.update(body ?? new Uint8Array())
 				.digest('hex');
@@ -151,14 +161,83 @@ export const s3Files = Effect.fn('server.s3Files')(function* (
 				signed('GET', url, {}, 'UNSIGNED-PAYLOAD', yield* Clock.currentTimeMillis, expiresInS);
 				return url.href;
 			}),
-		remove: (key) => call('DELETE', key).pipe(Effect.asVoid)
+		remove: (key) => call('DELETE', key).pipe(Effect.asVoid),
+		// a multipart upload, a part at a time: a download never holds the whole file
+		download: (url) =>
+			downloadMedia(
+				url,
+				{
+					begin: (mime) =>
+						Effect.gen(function* () {
+							const key = randomUUID();
+							const answer = yield* (yield* call('POST', key, undefined, mime, {
+								uploads: ''
+							})).text.pipe(Effect.mapError(Port.failure('files')));
+							const uploadId = /<UploadId>([^<]+)<\/UploadId>/.exec(answer)?.[1];
+							if (uploadId === undefined)
+								return yield* Effect.fail(
+									Port.failure('files')(new Error('The files store began no upload.'))
+								);
+							const etags: string[] = [];
+							return { key, id: uploadId, etags };
+						}),
+					part: (upload, bytes) =>
+						Effect.gen(function* () {
+							const response = yield* call('PUT', upload.key, bytes, undefined, {
+								partNumber: String(upload.etags.length + 1),
+								uploadId: upload.id
+							});
+							const etag = response.headers['etag'];
+							if (etag === undefined)
+								return yield* Effect.fail(
+									Port.failure('files')(
+										new Error('The files store answered a part without its ETag.')
+									)
+								);
+							upload.etags.push(etag);
+						}),
+					complete: (upload) =>
+						Effect.gen(function* () {
+							const parts = upload.etags
+								.map(
+									(etag, i) => `<Part><PartNumber>${i + 1}</PartNumber><ETag>${etag}</ETag></Part>`
+								)
+								.join('');
+							const answer = yield* (yield* call(
+								'POST',
+								upload.key,
+								new TextEncoder().encode(
+									`<CompleteMultipartUpload>${parts}</CompleteMultipartUpload>`
+								),
+								'application/xml',
+								{ uploadId: upload.id }
+							)).text.pipe(Effect.mapError(Port.failure('files')));
+							// S3 may answer 200 and put its failure in the body
+							if (answer.includes('<Error>'))
+								return yield* Effect.fail(
+									Port.failure('files')(
+										new Error(
+											`The files store did not complete the upload: ${answer.slice(0, 300)}`
+										)
+									)
+								);
+							return upload.key;
+						}),
+					abort: (upload) =>
+						call('DELETE', upload.key, undefined, undefined, { uploadId: upload.id }).pipe(
+							Effect.ignore
+						)
+				},
+				downloads
+			)
 	});
 });
 export type Endpoint = { endpoint: string; credential?: string | undefined };
 export const openAi = Effect.fn('server.openAi')(function* (
 	endpoints: { sys1: Endpoint & { provider?: string }; sys2: Endpoint; embed?: Endpoint },
 	config: Config['ai'],
-	declared: readonly string[]
+	declared: readonly string[],
+	files: Files['Service']['get']
 ) {
 	const context = yield* Effect.context<HttpClient.HttpClient | Crypto.Crypto>();
 	const client = yield* HttpClient.HttpClient;
@@ -183,6 +262,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 		endpoints.embed === undefined
 			? undefined
 			: openAiEmbeddings({
+					files,
 					baseUrl: endpoints.embed.endpoint,
 					...(endpoints.embed.credential === undefined
 						? {}
@@ -208,7 +288,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 				.map((name) => ({ id: name, label: name })),
 			default: declared.find((name) => config.sys2[name] !== undefined) ?? ''
 		}),
-		infer: openAiChat({ ...endpoints.sys2, models: config.sys2 }, { httpClient: client }),
+		infer: openRouterChat({ ...endpoints.sys2, models: config.sys2 }, { httpClient: client }),
 		embed: (inputs, name, dimensions) =>
 			embeddings === undefined
 				? Port.unavailable('ai.embed')

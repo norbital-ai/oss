@@ -1,5 +1,5 @@
 import { Option } from 'effect';
-import { audienceAdmits } from './app.ts';
+import { audienceAdmits, type EmbedOrigin } from './app.ts';
 // A kiosk (§3.3.1): a standalone chromeless surface rooted at `src/kiosk/<name>/`, outside `src/app/`.
 // A kiosk is always chromeless (no sidebar, banner, tabs or agent) and served at `/kiosk/<name>/<page>`,
 // so it never needs a `portal` flag on its pages. Who may open it is `auth`: a signed-in audience
@@ -15,6 +15,7 @@ import type { KioskPageName } from './names.ts';
 
 type KioskAuth = 'members' | 'external' | 'all' | 'none';
 type KioskPage = { title: Msg; icon?: IconName };
+/** A kiosk literal's general shape (the manifest's kiosk part). */
 export type KioskSpec = {
 	title: Msg;
 	description: Msg;
@@ -27,6 +28,12 @@ export type KioskSpec = {
 	policies: NonEmpty<string>;
 	/** The kiosk's pages by file name, in nav order: a title and icon each. */
 	pages: { readonly [page: string]: KioskPage };
+	/**
+	 * The sites that may frame the kiosk's pages in an iframe (`frame-ancestors 'self' <origins…>`); absent, only the
+	 * workspace itself may.
+	 * @example embed: ['https://partner.example']
+	 */
+	embed?: readonly EmbedOrigin[];
 };
 type KioskFor<K> = {
 	title: Msg;
@@ -37,12 +44,13 @@ type KioskFor<K> = {
 	policies: NonEmpty<PolicyName>;
 	/** Key order is nav order; every page file needs an entry (build `kiosk/page-unlisted`). */
 	pages: { [P in KioskPageName<K>]?: KioskPage };
+	embed?: readonly EmbedOrigin[];
 };
 
 /**
  * `src/kiosk/<k>/+kiosk.ts`: a standalone kiosk's title, description, icon and banner, who may open it
- * (`auth`), the policies it runs as inside (`policies`), and its pages in nav order (each
- * `+<page>.page.svelte` in the folder needs an entry).
+ * (`auth`), the policies it runs as inside (`policies`), its pages in nav order (each
+ * `+<page>.page.svelte` in the folder needs an entry), and the sites that may frame it (`embed`).
  * @example
  * export default kiosk('clock', {
  * 	title: 'app.kiosk.title',

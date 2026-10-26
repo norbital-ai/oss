@@ -4,11 +4,11 @@ The built-in `phone` custom field's renderer: calling code and number when edite
 -->
 <script lang="ts">
 	import CopyText from '../../primitives/copy-text/copy-text.svelte';
-	import type { CustomFieldView } from '../context.js';
+	import type { KindView } from '../context.js';
 	import PhoneInput from '../phone-input.svelte';
 	import { formatPhone } from '../phone.js';
 
-	let { view }: { view: CustomFieldView } = $props();
+	let { view }: { view: KindView } = $props();
 	const raw = $derived(typeof view.value === 'string' ? view.value : '');
 </script>
 

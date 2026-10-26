@@ -61,6 +61,27 @@ const AuditRow = Schema.Struct({
 	changes: Schema.Json
 });
 type AuditRow = typeof AuditRow.Type;
+const DeliveryRow = Schema.Struct({
+	integration: Schema.String,
+	sent: Schema.Number,
+	pending: Schema.Number,
+	retrying: Schema.Number,
+	failed: Schema.Number,
+	skipped: Schema.Number,
+	next_retry: nullableText,
+	last_error: nullableText
+});
+const InstanceRow = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	integration: Schema.String,
+	owner: nullableText,
+	named: Schema.Boolean,
+	envoy: nullableText,
+	active: Schema.Boolean,
+	status: Schema.Json,
+	configuration: Schema.Json
+});
 const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
 	Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(
 		Effect.mapError((e) => BoltError.make('internal', 'decode', String(e)))
@@ -105,6 +126,7 @@ export type Settings = {
 		conversation: boolean;
 		personal: boolean;
 		sends: boolean;
+		syncs: boolean;
 		configuration: InputFields;
 	}[];
 	/** The workspace's self sign-up: the means it declares and whether an administrator left it open; `null` when it declares none. */
@@ -174,16 +196,16 @@ export const settings = Effect.fn('shell.settings')(function* (
 		lastError: null
 	};
 	const delivery = new Map(
-		(deliveries?.rows ?? []).map((r) => [
-			String(r['integration']),
+		(yield* decode(DeliveryRow, deliveries?.rows ?? [])).map((r): [string, Delivery] => [
+			r.integration,
 			{
-				sent: Number(r['sent']),
-				pending: Number(r['pending']),
-				retrying: Number(r['retrying']),
-				failed: Number(r['failed']),
-				skipped: Number(r['skipped']),
-				nextRetry: typeof r['next_retry'] === 'string' ? r['next_retry'] : null,
-				lastError: typeof r['last_error'] === 'string' ? r['last_error'] : null
+				sent: r.sent,
+				pending: r.pending,
+				retrying: r.retrying,
+				failed: r.failed,
+				skipped: r.skipped,
+				nextRetry: r.next_retry,
+				lastError: r.last_error
 			}
 		])
 	);
@@ -209,17 +231,10 @@ export const settings = Effect.fn('shell.settings')(function* (
 			name: e.name,
 			audience: e.audience ?? 'private'
 		})),
-		instances: (instances?.rows ?? []).map((i) => ({
-			id: String(i['id']),
-			name: String(i['name']),
-			integration: String(i['integration']),
-			owner: typeof i['owner'] === 'string' ? i['owner'] : null,
-			named: i['named'] === true,
-			envoy: typeof i['envoy'] === 'string' ? i['envoy'] : null,
-			active: i['active'] === true,
-			status: i['status'] ?? null,
-			configuration: i['configuration'] ?? {},
-			delivery: delivery.get(String(i['id'])) ?? idle
+		instances: (yield* decode(InstanceRow, instances?.rows ?? [])).map((i) => ({
+			...i,
+			configuration: i.configuration ?? {},
+			delivery: delivery.get(i.id) ?? idle
 		})),
 		audit: yield* decode(AuditRow, audit?.rows ?? []),
 		mcp: Object.entries(m.mcp).map(([name, s]) => ({ name, url: s.url ?? null })),
@@ -232,7 +247,16 @@ export const settings = Effect.fn('shell.settings')(function* (
 				description: d.description,
 				conversation: conversational(d),
 				personal: 'personal' in DRIVERS[d.driver],
-				sends: conversational(d) || Object.keys(d.outbound ?? {}).length > 0,
+				sends:
+					conversational(d) ||
+					Object.values(m.collections).some((model) =>
+						Object.values(model.syncs ?? {}).some(
+							(sync) => sync.with === name && sync.write === true
+						)
+					),
+				syncs: Object.values(m.collections).some((model) =>
+					Object.values(model.syncs ?? {}).some((sync) => sync.with === name)
+				),
 				configuration: d.configuration ?? {}
 			})),
 		signup:

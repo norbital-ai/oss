@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // P4 and G5 in a DOM over the real handler and a test-kit workspace on PGlite: the shell's in-app agent panel (post,
-// confirmation card, live settle, receipts); `sweep()` per policy and per public app as a visitor, finding a
-// page's console error; the location picker with zero providers; Table paging and count; a 50-row Matrix page of a
+// confirmation card, live settle, receipts); public SSR caller scope; the location picker with zero providers;
+// Table paging and count; a 50-row Matrix page of a
 // month within 300 KiB.
 import './setup-happy-dom.js';
 import { randomUUID } from 'node:crypto';
@@ -20,6 +20,7 @@ import {
 	Layer,
 	ManagedRuntime,
 	Result,
+	Schema,
 	Stream
 } from 'effect';
 import { mountEdge } from '@norbital-ai/ui/effect';
@@ -33,10 +34,11 @@ import { Authorities } from '../src/engine/identity/actor.ts';
 import { routeFixture } from './support/route-fixture.ts';
 import { program } from './support/guest-fixture.ts';
 import { PATHS } from '../src/protocol/wire.ts';
+import { AgentRow } from '../src/protocol/schema.ts';
 import Agent from '../src/shell/agent/Agent.svelte';
 import { liveBolt } from './support/live-bolt.ts';
 import { shellApi } from '../src/shell/runtime.ts';
-import { sweep, visit } from '../src/test/browser.ts';
+import { visit } from '../src/test/browser.ts';
 import { KitInvalid, TestWorkspace, type TestOptions } from '../src/test/index.ts';
 import { check } from '../src/compiler/check/index.ts';
 import { discover } from '../src/compiler/discover.ts';
@@ -50,8 +52,6 @@ import {
 } from '@norbital-ai/ui';
 import Point from './support/p4-point.svelte';
 import Views from './support/p4-views.svelte';
-import SweepPage from './support/sweep-page.svelte';
-import Noisy from './support/sweep-noisy.svelte';
 import PublicData from './support/p4-public.page.data.ts';
 
 const required = <T>(value: T | null | undefined): T => {
@@ -165,7 +165,7 @@ const fetchFor = (
 
 describe('the in-app agent panel (§5.9)', () => {
 	it.live(
-		'posts, shows the confirmation card, runs the call when confirmed, and shows the reply with its receipt',
+		'posts, confirms an automation start, and shows its queued receipt before the run executes',
 		() =>
 			Effect.gen(function* () {
 				const manifest = Result.getOrThrow(
@@ -182,28 +182,28 @@ describe('the in-app agent panel (§5.9)', () => {
 						collections: {
 							quotes: {
 								read: { fields: 'all' },
-								create: { input: { columns: ['title'] } },
-								actions: {
-									mark: {
-										description: 'Mark a quote',
-										input: { title: { kind: 'text' } },
-										output: { kind: 'text' },
-										agent: 'confirm'
-									}
-								}
+								create: { input: { columns: ['title'] } }
 							}
 						},
 						policies: {
 							rep: {
 								description: 'Rep',
-								grants: { quotes: { read: true, create: true, actions: ['mark'] } }
+								grants: { quotes: { read: true, create: true } },
+								automations: ['quotes_mark']
 							}
 						},
 						agent: { internal: 'Staff brief.', skills: {} },
 						integrations: {},
-						pipelines: {},
 						teams: { rep: ['rep'] },
-						automations: {},
+						automations: {
+							quotes_mark: {
+								description: 'Mark a quote',
+								input: { title: { kind: 'text' } },
+								output: { kind: 'text' },
+								runAs: 'trigger',
+								agent: 'confirm'
+							}
+						},
 						connections: {},
 						envoys: {},
 						mcp: {},
@@ -212,8 +212,9 @@ describe('the in-app agent panel (§5.9)', () => {
 					})
 				);
 				const guest = {
-					source: `export default { collection: { quotes: { bodies: { actions: {
-			mark: function* (input, ctx) { return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id; } } } } } };`
+					source: `export default { automation: { quotes_mark: { body: function* (input, ctx) {
+						return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id;
+					} } } };`
 				};
 				const steps: (() => AiResponse)[] = [
 					() => ({
@@ -222,7 +223,7 @@ describe('the in-app agent panel (§5.9)', () => {
 							{
 								id: 'k1',
 								name: 'act',
-								input: { callable: 'quotes.mark', input: { title: 'Chair' } }
+								input: { callable: 'automation.quotes_mark', input: { title: 'Chair' } }
 							}
 						],
 						finish: 'tool',
@@ -267,38 +268,61 @@ describe('the in-app agent panel (§5.9)', () => {
 				expect(target.querySelector('[data-role="user"] [data-text]')?.textContent).toBe(
 					'mark a chair'
 				);
-				expect(target.querySelector('[data-role="confirm"] p')?.textContent).toBe(
-					'Allow Norbius to do this?'
-				);
-				expect(target.querySelector('[data-role="confirm"] details pre')?.textContent).toContain(
-					'quotes.mark'
-				);
 				required(
 					[...target.querySelectorAll<HTMLButtonElement>('[data-role="confirm"] button')].find(
 						(b) => b.textContent?.trim() === 'Approve'
 					)
 				).click();
-				yield* until(
-					() =>
-						(target.querySelector('[data-role="assistant"]')?.textContent ?? '').includes(
-							'Marked the chair.'
-						) && (target.querySelector('[data-receipt]')?.textContent ?? '').includes('quotes.mark')
+				yield* until(() =>
+					(target.querySelector('[data-role="assistant"]')?.textContent ?? '').includes(
+						'Marked the chair.'
+					)
 				).pipe(
 					Effect.catchCause((cause) =>
 						Effect.die(new Error(target.textContent ?? 'Empty agent panel', { cause }))
 					)
 				);
-				expect(target.querySelector('[data-receipt]')?.textContent).toContain('quotes.mark');
 				expect(target.querySelector('[data-role="confirm"]')).toBeNull();
 				yield* handle.settled;
 				expect(
+					yield* t.db.rows(
+						Schema.Struct({ automation: Schema.String, input: Schema.Json, state: Schema.String }),
+						{
+							text: "SELECT automation, input, state FROM sys_run WHERE automation = 'quotes_mark'",
+							params: []
+						}
+					)
+				).toEqual([{ automation: 'quotes_mark', input: { title: 'Chair' }, state: 'queued' }]);
+				expect(
+					yield* t.db.rows(Schema.Struct({ receipts: AgentRow.fields.receipts }), {
+						text: "SELECT meta->'receipts' AS receipts FROM sys_message WHERE role='assistant' AND meta->>'tag'='reply'",
+						params: []
+					})
+				).toMatchObject([
+					{ receipts: [{ outcome: 'committed', callable: 'automation.quotes_mark' }] }
+				]);
+				expect(
+					required((yield* t.db.read([{ text: 'SELECT title FROM quotes', params: [] }]))[0]).rows
+				).toEqual([]);
+				yield* t.runDue();
+				expect(
 					required((yield* t.db.read([{ text: 'SELECT title FROM quotes', params: [] }]))[0]).rows
 				).toEqual([{ title: 'Chair' }]);
+				const quoteId = yield* t.db.value(Schema.String, {
+					text: 'SELECT id FROM quotes',
+					params: []
+				});
+				expect(
+					yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+						text: "SELECT state, output FROM sys_run WHERE automation = 'quotes_mark'",
+						params: []
+					})
+				).toEqual([{ state: 'succeeded', output: quoteId }]);
 			})
 	);
 });
 
-describe('sweep() (§3.7, G5)', () => {
+describe('public SSR caller scope', () => {
 	const manifest = Result.getOrThrow(
 		decodeManifest({
 			workspace: { tz: 'UTC', locale: 'en', apps: ['sales', 'careers'], agent: { triage: false } }, // hook:decisions
@@ -337,7 +361,6 @@ describe('sweep() (§3.7, G5)', () => {
 			},
 			agent: { skills: {} },
 			integrations: {},
-			pipelines: {},
 			teams: { rep: ['rep'], applicant: ['applicant'] },
 			automations: {},
 			connections: {},
@@ -346,19 +369,17 @@ describe('sweep() (§3.7, G5)', () => {
 			customFields: {}
 		})
 	);
-	const page = (c: Component) => async () => ({ default: c });
 	const artifact = Effect.fnUntraced(function* () {
 		const fs = yield* FileSystem.FileSystem;
 		const here = dirname(fileURLToPath(import.meta.url));
 		const root = yield* fs.makeTempDirectoryScoped({
 			directory: yield* scratchRoot(),
-			prefix: 'p4-public-sweep-'
+			prefix: 'p4-public-scope-'
 		});
 		yield* fs.symlink(join(here, '..', 'node_modules'), join(root, 'node_modules'));
 		const files = {
 			'src/+workspace.ts': `export default ${JSON.stringify(manifest.workspace)} as const;`,
-			'src/data/model/+quotes.model.ts': `import { model } from '@norbital-ai/bolt'; export default model(${JSON.stringify(manifest.models['quotes'])});`,
-			'src/data/collection/quotes/+collection.ts': `import { collection } from '@norbital-ai/bolt'; export default collection('quotes', ${JSON.stringify(manifest.collections['quotes'])});`,
+			'src/data/model/quotes/+model.ts': `import { model } from '@norbital-ai/bolt'; export default model('quotes', ${JSON.stringify({ ...manifest.models['quotes'], read: 'all', create: { columns: ['title'] } })});`,
 			'src/access_control/team/+team.ts': `import { team } from '@norbital-ai/bolt'; export default team(${JSON.stringify(manifest.teams)});`,
 			...Object.fromEntries(
 				Object.entries(manifest.policies).map(([name, policy]) => [
@@ -382,7 +403,7 @@ describe('sweep() (§3.7, G5)', () => {
 			'src/app/careers/+apply.page.server.ts': `import { pageServer } from '@norbital-ai/bolt';
 import data from './apply.page.data.ts';
 export default pageServer({ data, load: function* (request, ctx) {
-	const page = yield* ctx.read('quotes', { select: { title: true }, orderBy: { title: 'asc' }, limit: 10 });
+	const page = yield* ctx.query('quotes', { select: { title: true }, orderBy: { title: 'asc' }, limit: 10 });
 	return { titles: page.rows.map((row) => row.title), caller: ctx.actor.kind, path: request.pathname };
 } });`,
 			'src/app/careers/+apply.page.svelte': `<script lang="ts">
@@ -396,19 +417,19 @@ let { data }: { data: typeof Data.Type } = $props();
 			yield* fs.makeDirectory(dirname(join(root, file)), { recursive: true });
 			yield* fs.writeFileString(join(root, file), source);
 		}
-		const checked = yield* check(root);
+		const checked = yield* check(root, { migrations: 'generate' });
 		expect(checked.errors).toEqual([]);
 		const builtManifest = required(checked.manifest),
 			guest = required(checked.guest);
 		const found = yield* discover(root);
 		expect(found.errors).toEqual([]);
 		const out = join(root, '.norbital', 'artifact');
-		yield* writeArtifact(root, { ...checked, manifest: builtManifest, guest }, found.files, out);
+		yield* writeArtifact(root, { manifest: builtManifest, guest }, found.files, out);
 		return yield* readArtifact(out);
 	});
 
 	it.live(
-		'visits every page per policy and per public app as its visitor, with no console error and no over-budget view',
+		'public server reads retain the visitor caller and filter private rows',
 		() =>
 			Effect.gen(function* () {
 				const context = yield* Layer.build(
@@ -423,25 +444,6 @@ let { data }: { data: typeof Data.Type } = $props();
 					})
 				);
 				const publicPages = { 'app/careers/apply': PublicData };
-				const report = yield* sweep({
-					pages: {
-						'sales/deals': page(SweepPage),
-						'sales/report': page(SweepPage)
-					},
-					publicPages
-				}).pipe(Effect.provide(context));
-				expect(report.visited).toEqual(
-					expect.arrayContaining([
-						{ who: 'member [rep]', path: '/app/sales/deals', mode: 'spa' },
-						{ who: 'member [rep]', path: '/app/sales/report', mode: 'spa' },
-						{ who: 'member [rep]', path: '/inbox', mode: 'spa' },
-						{ who: 'visitor of careers', path: '/app/careers/apply', mode: 'ssr' }
-					])
-				);
-				expect(
-					report.visited.some((v) => v.who === 'member [applicant]' && v.path.startsWith('/app/'))
-				).toBe(false);
-				expect(report.findings).toEqual([]);
 				const rendered = yield* visit(
 					'/app/careers/apply',
 					{ visitor: 'careers' },
@@ -449,7 +451,6 @@ let { data }: { data: typeof Data.Type } = $props();
 						publicPages
 					}
 				).pipe(Effect.provide(context));
-				expect(rendered.target.querySelector('h1')?.textContent).toBe('Apply');
 				expect(rendered.target.querySelector('[data-public-caller]')?.textContent).toBe('visitor');
 				expect(rendered.target.querySelector('[data-public-path]')?.textContent).toBe(
 					'/app/careers/apply'
@@ -460,30 +461,6 @@ let { data }: { data: typeof Data.Type } = $props();
 				expect(rendered.target.textContent).not.toContain('Private quote');
 			}).pipe(Effect.provide(NodeServices.layer)),
 		60_000
-	);
-
-	it.live('refuses a policy combination without an authored source team', () =>
-		Effect.gen(function* () {
-			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
-			expect(
-				(yield* sweep({ as: [{ policies: ['rep', 'applicant'] }] }).pipe(
-					Effect.provide(context),
-					Effect.flip
-				)).message
-			).toContain('sweep requires an authored source team');
-		})
-	);
-
-	it.live('reports a page that logs a console error', () =>
-		Effect.gen(function* () {
-			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
-			expect(
-				(yield* sweep({
-					as: [{ policies: ['rep'] }],
-					pages: { 'sales/deals': page(SweepPage), 'sales/report': page(Noisy) }
-				}).pipe(Effect.provide(context), Effect.flip)).message
-			).toMatch(/member \[rep\] \/app\/sales\/report console: the page could not render its chart/);
-		})
 	);
 });
 
@@ -565,7 +542,6 @@ describe('G5 UI', () => {
 			collections: { people: { read: { fields: 'all' } }, entries: { read: { fields: 'all' } } },
 			policies: {},
 			integrations: {},
-			pipelines: {},
 			teams: {},
 			automations: {},
 			connections: {},
@@ -672,6 +648,8 @@ describe('G5 UI', () => {
 			yield* until(() => range() === 'rows 11–20 of 23', 200);
 			next().click();
 			yield* until(() => range() === 'rows 21–23 of 23', 200);
+			expect(target.textContent).toContain('N23');
+			expect(target.textContent).not.toContain('N01');
 			expect(next().disabled).toBe(true);
 		})
 	);

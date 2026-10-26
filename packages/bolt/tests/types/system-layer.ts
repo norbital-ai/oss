@@ -16,7 +16,7 @@ is<Eq<ColumnValue<'approval_request', 'id'>, Id<'approval_request'>>>();
 is<Eq<'sys_run' extends SystemName ? true : false, true>>();
 is<Eq<'sys_session' extends CollectionName ? true : false, false>>();
 const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
-// @ts-expect-error S1 a member's kind is staff or external (the old hand type said 'member')
+// @ts-expect-error S1 a stored user's kind is staff or external, unlike an actor's member kind
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
 // a member's team is a source handle: `actor.teams` / `actor.teamTree` compare it in a list
 const inTree: Where<'sys_user'> = { team: { in: { actor: 'teamTree' } } };

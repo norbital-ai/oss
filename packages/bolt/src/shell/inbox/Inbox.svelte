@@ -1,10 +1,11 @@
 <!--
-	The inbox (§3.8 "where it shows", rule 46): open requests the viewer may decide, supersede or withdraw, in ui's
-	`Table`. Decisions are `bolt.approvals.*`; the host decides eligibility. Opening a request shows its committed
-	record or native create proposal. Notices are the bell's (`Bell.svelte`), not listed here a second time.
+	The inbox (§3.8 "where it shows", rule 46): open requests the viewer may decide (a superseder's Approve supersedes),
+	and their own requests that ask for changes, in ui's `Table`. Decisions are `bolt.approvals.decide`; the host decides
+	eligibility. Opening a request shows its committed record or native create proposal; saving that record resubmits a
+	request that asks for changes. Notices are the bell's (`Bell.svelte`), not listed here a second time.
 -->
 <script lang="ts">
-	import { live, fork } from '@norbital-ai/ui/effect';
+	import { observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
 	import {
@@ -32,43 +33,36 @@
 	}: { bolt: ShellBolt; t: (key: string) => string; onCount?: (n: number) => void } = $props();
 
 	// svelte-ignore state_referenced_locally
-	const inbox = live(() =>
-		bolt.live<{ requests: InboxRequest[] }>({ read: { m: 'inbox', a: [{ requests: true }] } })
+	const inbox = observe(() =>
+		bolt.observe<{ requests: readonly InboxRequest[] }>({
+			read: { m: 'inbox', a: [{ requests: true }] }
+		})
 	);
-	const requests = $derived($inbox?.requests ?? null);
+	const requests = $derived(inbox.current?.requests ?? null);
 	let message = $state<string | null>(null);
-	let chosen = $state<{ request: InboxRequest; move: InboxRequest['moves'][number] } | null>(null);
+	let chosen = $state<{ request: InboxRequest; move: Decision } | null>(null);
 	let reason = $state('');
 	let busy = $state(false);
 	const reasonId = $props.id();
-	const LABEL: { readonly [status: string]: string } = {
-		APPROVED: 'Approve',
-		REQUEST_FOR_CHANGE: 'Request changes',
-		REJECTED: 'Reject',
-		SUPERSEDED: 'Supersede',
-		RESUBMITTED: 'Resubmit',
-		WITHDRAWN: 'Withdraw',
-		CLOSED: 'Close'
+	type Decision = InboxRequest['moves'][number];
+	const LABEL: { readonly [D in Decision['decision']]: string } = {
+		approve: 'Approve',
+		reject: 'Reject',
+		requestChanges: 'Request changes'
 	};
-
-	const VARIANT: Readonly<Record<string, NonNullable<Act['variant']>>> = {
-		APPROVED: 'default',
-		RESUBMITTED: 'default',
-		REJECTED: 'outline',
-		WITHDRAWN: 'ghost'
-	};
+	const ORDER: readonly Decision['decision'][] = ['approve', 'reject', 'requestChanges'];
 	const decide = Effect.fn('Inbox.decide')(function* (
 		r: InboxRequest,
-		move: InboxRequest['moves'][number],
-		note = ''
+		move: Decision,
+		note: string = ''
 	) {
 		if (busy || (move.reason === 'required' && note.trim() === '')) return;
 		busy = true;
 		message = null;
 		yield* Effect.gen(function* () {
 			const result = yield* Effect.result(
-				bolt.approvals.process(r.id, {
-					status: move.status,
+				bolt.approvals.decide(r.id, {
+					decision: move.decision,
 					...(note.trim() ? { reason: note.trim() } : {})
 				})
 			);
@@ -92,7 +86,7 @@
 			)
 		);
 	});
-	const choose = (request: InboxRequest, move: InboxRequest['moves'][number]) => {
+	const choose = (request: InboxRequest, move: Decision) => {
 		if (busy) return;
 		if (move.reason === 'required') {
 			chosen = { request, move };
@@ -103,17 +97,13 @@
 	const keepWhileBusy = (event: Event) => {
 		if (busy) event.preventDefault();
 	};
-	// The host's complete move set; an approval or resubmission is the primary action.
+	// The host's decisions for this viewer; Approve is the primary action.
 	const decisions = (r: InboxRequest): Act[] =>
-		[...r.moves]
-			.sort(
-				(a, b) => Number(VARIANT[b.status] === 'default') - Number(VARIANT[a.status] === 'default')
-			)
-			.map((move) => ({
-				label: t(LABEL[move.status] ?? move.status),
-				run: () => choose(r, move),
-				variant: VARIANT[move.status] ?? 'outline'
-			}));
+		ORDER.flatMap((d) => r.moves.filter((m) => m.decision === d)).map((move) => ({
+			label: t(LABEL[move.decision]),
+			run: () => choose(r, move),
+			variant: move.decision === 'approve' ? 'default' : 'outline'
+		}));
 
 	// the collection's catalog label and the action as a verb (`create` → `Create`); `collection` stays the key openRecord needs
 	const verb = (a: string) => {
@@ -126,15 +116,16 @@
 			of: label(bolt, r.collection),
 			verb: verb(r.action),
 			progress:
-				r.status === 'CHANGES_REQUESTED'
+				r.status === 'ChangesRequested'
 					? t(
 							r.mine
 								? 'Changes requested · Your changes are needed'
 								: 'Changes requested · Awaiting the requester'
 						)
-					: t('Pending · Step {step} of {total}')
+					: t('Pending · {name} (step {step} of {total})')
+							.replace('{name}', r.steps[r.step]?.name ?? '')
 							.replace('{step}', String(r.step + 1))
-							.replace('{total}', String(r.steps))
+							.replace('{total}', String(r.steps.length))
 		}))
 	);
 
@@ -204,7 +195,7 @@
 	>
 		{#if chosen !== null}
 			<Dialog.Header>
-				<Dialog.Title>{t(LABEL[chosen.move.status] ?? chosen.move.status)}</Dialog.Title>
+				<Dialog.Title>{t(LABEL[chosen.move.decision])}</Dialog.Title>
 				<Dialog.Description>{t('Add a reason for this decision.')}</Dialog.Description>
 			</Dialog.Header>
 			<form
@@ -230,7 +221,7 @@
 						}}>{t('Cancel')}</Button
 					>
 					<Button type="submit" disabled={busy || reason.trim() === ''}
-						>{t(LABEL[chosen.move.status] ?? chosen.move.status)}</Button
+						>{t(LABEL[chosen.move.decision])}</Button
 					>
 				</Dialog.Footer>
 			</form>

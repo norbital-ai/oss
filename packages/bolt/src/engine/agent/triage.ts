@@ -9,8 +9,7 @@
 // pending row, flush the queued decision and ask nothing. `delivered_turn` (set by the agent's claim, guarded by
 // `IS NULL`) and `addressed` are the one record of what the agent received, so no row is new input twice.
 import type { EnvoySpec } from '../../decl/runtime/agent.ts';
-import { Clock, Context, Effect, FiberMap, Layer, Predicate, Schema } from 'effect';
-import { randomUUID } from 'node:crypto';
+import { Clock, Context, Effect, FiberMap, Layer, Schema } from 'effect';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import {
@@ -22,16 +21,15 @@ import {
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
-import { Ai, Metering } from '../ports.ts';
+import { Ai, Logs, Metering } from '../ports.ts';
 import { Manifest, Live, Turns, Links, Wake, RunHandlers, type LiveShape } from '../services.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Port } from '../port.ts';
 import { TurnHandlers } from './turns.ts';
 import { decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
-import { messageCommit, rowsOf, type As } from './schema.ts';
+import { FileRef, messageCommit, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
-import { logged } from '../guest/telemetry.ts';
 const TRIAGE_RUN = 'agent.triage';
 /** Engine constants (rule 72's budget row), never authoring options. */
 export const TRIAGE_DEBOUNCE = 2000;
@@ -110,6 +108,7 @@ const recheck = (chain: Chain, conversation: string, at: string, waits: string) 
 };
 export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 	const debounce = yield* FiberMap.make<string, Json, EngineError>();
+	const logs = yield* Logs;
 	const { manifest: m, db } = cfg.engine;
 	/** The host's wake, and a wake already open behind a long run (`nudge`): a decision never queues behind other automations. */
 	const announce = cfg.announce;
@@ -203,7 +202,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				text: Schema.String,
 				at: Schema.Number,
 				invocation: Schema.NullOr(Schema.String),
-				files: Schema.Json
+				files: Schema.Array(FileRef)
 			}),
 			pendingRows?.rows ?? []
 		);
@@ -219,7 +218,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		const count =
 			(yield* decode(Schema.Struct({ n: Schema.Number }), posters?.rows ?? []))[0]?.n ?? 0;
 		// a stopped conversation triages nothing; with nothing pending there is nothing to decide
-		if (conv === undefined || conv['status'] === 'stopped' || pending.length === 0)
+		if (conv === undefined || conv.status === 'stopped' || pending.length === 0)
 			return { pending: 0 };
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
@@ -232,10 +231,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		// saying the assistant's name addresses it, as a mention does: those rows are answered without asking the decider,
 		// and a burst of nothing else is admitted at once
 		const named = pending.map(
-			(r) =>
-				r['invocation'] === 'mention' ||
-				r['invocation'] === 'reply' ||
-				names(String(r['text'] ?? ''), assistant)
+			(r) => r.invocation === 'mention' || r.invocation === 'reply' || names(r.text, assistant)
 		);
 		if (named.every(Boolean)) {
 			yield* admit(conversation, envoy);
@@ -243,16 +239,14 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		}
 		// P41: a group (an envoy group, or an in-app conversation more than one member posted in) may be not for the agent;
 		// a direct one (an envoy DM, an in-app one-to-one) always is, so it decides only when
-		const group = envoy ? conv['kind'] === 'group' : count > 1;
+		const group = envoy ? conv.kind === 'group' : count > 1;
 		const allowed: TriageAction[] = group ? ['respond', 'wait', 'ignore'] : ['respond', 'wait'];
 		const now = yield* cfg.clock;
-		const pendingIds = pending.map((r) => String(r['id']));
-		const at = (r: Row) => new Date(Number(r['at'])).toISOString();
+		const pendingIds = pending.map((r) => r.id);
+		const at = (r: { readonly at: number }) => new Date(r.at).toISOString();
 		// attachments go in as metadata only (P37 (3)): name, mime, size, and a caption or text when there is one
 		const fileIds = pending.flatMap((r) =>
-			(Array.isArray(r['files']) ? r['files'] : []).flatMap((f) =>
-				Predicate.isObject(f) && typeof f['id'] === 'string' ? [f['id']] : []
-			)
+			r.files.flatMap((f) => (f.id === undefined ? [] : [f.id]))
 		);
 		const sizes = new Map<string, number>(
 			fileIds.length === 0
@@ -264,19 +258,16 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 						}
 					]))[0]!.rows.map((x) => [String(x['id']), Number(x['size'])])
 		);
-		const attachments = (r: Row): Json[] =>
-			(Array.isArray(r['files']) ? r['files'] : []).flatMap((f) => {
-				if (!Predicate.isObject(f)) return [];
-				const size = sizes.get(String(f['id']));
-				return [
-					{
-						name: String(f['name'] ?? 'file'),
-						mime: String(f['mime'] ?? ''),
-						...(typeof size === 'number' ? { size } : {}),
-						...(typeof f['caption'] === 'string' ? { caption: preview(f['caption']) } : {}),
-						...(typeof f['text'] === 'string' ? { text: preview(f['text']) } : {})
-					}
-				];
+		const attachments = (r: (typeof pending)[number]): Json[] =>
+			r.files.map((f) => {
+				const size = f.id === undefined ? undefined : sizes.get(f.id);
+				return {
+					name: f.name ?? 'file',
+					mime: f.mime ?? '',
+					...(size === undefined ? {} : { size }),
+					...(f.caption === undefined ? {} : { caption: preview(f.caption) }),
+					...(f.text === undefined ? {} : { text: preview(f.text) })
+				};
 			});
 		const req: DecisionRequest = {
 			state: {
@@ -290,26 +281,24 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 						: 'in-app, one-to-one',
 				actions: allowed,
 				earlier: context.toReversed().map((r) => ({
-					from: r['role'] === 'assistant' ? 'assistant' : (r.sender ?? 'someone'),
-					text: preview(String(r['text'])),
+					from: r.role === 'assistant' ? 'assistant' : (r.sender ?? 'someone'),
+					text: preview(r.text),
 					at: at(r),
 					contextOnly: true
 				})),
 				pending: pending.map((r) => {
 					const files = attachments(r);
 					return {
-						id: String(r['id']),
+						id: r.id,
 						from: r.sender ?? 'someone',
-						text: preview(String(r['text'])),
+						text: preview(r.text),
 						at: at(r),
 						...(files.length === 0 ? {} : { attachments: files })
 					};
 				}),
-				secondsSinceFirstPending: Math.round(
-					Math.max(0, Date.parse(now) - Number(pending[0]!['at'])) / 1000
-				),
+				secondsSinceFirstPending: Math.round(Math.max(0, Date.parse(now) - pending[0]!.at) / 1000),
 				addressesAssistant: pending.some(
-					(r) => r['invocation'] === 'mention' || r['invocation'] === 'reply'
+					(r) => r.invocation === 'mention' || r.invocation === 'reply'
 				),
 				// An envoy is named, and a message that says its name is for it whether or not the mention was mechanical:
 				// without this the decider is asked about a nameless assistant and reads `hi <name>` as not addressed.
@@ -323,7 +312,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 						`m${i}`,
 						{
 							type: 'choice' as const,
-							instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${String(r['sender'] ?? 'someone')}: should ${assistant} answer this one?`,
+							instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${r.sender ?? 'someone'}: should ${assistant} answer this one?`,
 							criteria: VERDICTS
 						}
 					])
@@ -349,7 +338,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				)
 			)
 		);
-		const call = randomUUID(),
+		const call = globalThis.crypto.randomUUID(),
 			bad = failed(d);
 		// a direct conversation offers no `ignore`; an answer outside the three verdicts is read as it
 		// a failed decision answers a DM (never leave a person unanswered) but stays quiet in a group, where an outage must
@@ -382,7 +371,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			pending: pending.length,
 			waits
 		};
-		yield* logged({
+		yield* logs.write({
 			at: now,
 			severity: bad ? 'warn' : 'info',
 			event: 'decision.made',
@@ -416,7 +405,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			// left exactly as an ignored conversation is — the message stays as ambient context for the next address.
 			const left = pending
 				.filter((_, i) => action === 'ignore' || verdicts[i] === 'no')
-				.map((r) => String(r['id']));
+				.map((r) => r.id);
 			if (left.length > 0) {
 				const chain = new Chain();
 				chain.params.push(conversation, JSON.stringify(left));

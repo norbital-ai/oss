@@ -2,17 +2,18 @@
 // inserts the `sys_file` row keyed by the client-minted upload id and adds the `upload` rate increment gated on that
 // insert, so a resent upload adds no row and no count and answers the first `FileRef`. Refused before its bytes are
 // stored (grant, `accept`, `max`) it costs no statement.
-import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
 import { LIMITS, type Authority, type Outcome } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { Manifest } from '../services.ts';
 import { Files } from '../ports.ts';
+import { sha256 as sha256Of, toHex } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import type { RateCharge } from '../write/commit.ts';
 import { Chain, KEY_REUSE, rate } from '../write/sql.ts';
 import { ATTACHMENT_MIME } from '../agent/ai.ts'; // hook:attachments
+import { acceptOf, parserFor, parsersOf } from '../files/parse.ts';
 
 type Upload = {
 	id: string;
@@ -67,26 +68,23 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const files = yield* Files;
 	// hook:attachments — the agent panel's own field: any member stores a conversation input; `sys_message.post` checks the message's 8 files / 20 MiB
 	const panel = u.collection === 'sys_conversation' && u.field === 'inputs';
-	// a pipeline import's file (`<c>.$import`, read back by its `<c>.pipeline` run): a member who may create in `c`
-	const upload = u.field === '$import' && manifest.pipelines[u.collection]?.import !== undefined;
-	const kind = panel
-		? { kind: 'file' as const, accept: [], max: '20MiB' }
-		: upload
-			? {
-					kind: 'file' as const,
-					accept: [
-						'application/json',
-						'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-					],
-					max: '20MiB'
-				}
+	// a file sync's upload (`<m>.$import.<sync>`, read back by its `<m>.sync.<sync>` run): a member who may create or update
+	// in `m`, sending a file one of the sync's parsers reads (by extension or media type); any other is refused unread
+	const sync = u.field.startsWith('$import.')
+		? manifest.collections[u.collection]?.syncs?.[u.field.slice('$import.'.length)]
+		: undefined;
+	const parsers = sync?.with === 'file' ? parsersOf(sync) : null;
+	const kind =
+		panel || parsers !== null
+			? { kind: 'file' as const, accept: [], max: '20MiB' }
 			: manifest.models[u.collection]?.fields[u.field];
-	const allowed =
-		panel || upload
+	const allowed = panel
+		? u.authority.actor.kind === 'member'
+		: parsers !== null
 			? u.authority.actor.kind === 'member' &&
-				(panel ||
-					u.authority.admin ||
-					(u.authority.collections[u.collection]?.create.length ?? 0) > 0)
+				(u.authority.admin ||
+					(u.authority.collections[u.collection]?.create.length ?? 0) > 0 ||
+					(u.authority.collections[u.collection]?.update.length ?? 0) > 0)
 			: admits(manifest, u.authority, u.collection, u.field);
 	if (kind?.kind !== 'file' || !allowed)
 		return refuse('forbidden', `You may not upload to ${u.collection}.${u.field}.`);
@@ -95,17 +93,19 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	if (
 		panel
 			? !ATTACHMENT_MIME.test(u.mime) || u.bytes.byteLength === 0
-			: !accepts(kind.accept, u.mime)
+			: parsers !== null
+				? parserFor(parsers, u.name, u.mime) === undefined
+				: !accepts(kind.accept, u.mime)
 	)
 		return refuse(
 			'invalidInput',
 			panel
 				? 'Attach a nonempty image, PDF, DOCX, XLSX or text document.'
-				: `${u.field} accepts ${kind.accept.join(', ')}.`
+				: `${u.field} accepts ${parsers !== null ? acceptOf(parsers) : kind.accept.join(', ')}.`
 		);
 	if (u.bytes.byteLength > Math.min(sizeBytes(kind.max), LIMITS.storedFileBytes))
 		return refuse('invalidInput', `${u.field} holds at most ${kind.max}.`);
-	const sha256 = createHash('sha256').update(u.bytes).digest('hex');
+	const sha256 = toHex(sha256Of(u.bytes));
 	const blob = yield* files
 		.put(u.bytes, { name: u.name, mime: u.mime })
 		.pipe(Effect.mapError((error) => BoltError.make('upload', 'facility', error.message, error)));

@@ -17,7 +17,6 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		collections: { openings: { read: { fields: 'all' } } },
 		integrations: {},
-		pipelines: {},
 		policies: {
 			rep: {
 				description: 'Rep',
@@ -120,7 +119,7 @@ const workspace = Layer.effectContext(
 				manifest,
 				host: {
 					publicUrl: ORIGIN,
-					workspace: { name: 'Acme', handle: 'acme' },
+					workspace: () => ({ name: 'Acme', handle: 'acme' }),
 					environment: 'staging',
 					notice: async (a) =>
 						a.admin

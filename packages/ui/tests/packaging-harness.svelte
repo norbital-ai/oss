@@ -44,7 +44,7 @@
 		get customFields() {
 			return fixture.customFields;
 		},
-		read: (c, o) => fixture.bolt.read<Page>(c, o)
+		query: (c, o) => fixture.bolt.query<Page>(c, o)
 	});
 	// svelte-ignore state_referenced_locally
 	provideRepresentations(fixture.representations ?? {});

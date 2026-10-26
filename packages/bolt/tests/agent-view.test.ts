@@ -1,5 +1,8 @@
 // The agent panel's projections (L-BOLT-436, L-BOLT-546, L-BOLT-547): pure functions of the transcript rows.
 import { describe, expect, it } from '@effect/vitest';
+import { Effect } from 'effect';
+import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
+import type { Json } from '../src/decl/values.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
 import {
 	background,
@@ -14,8 +17,8 @@ import {
 	orbState,
 	captionOf,
 	logsOf,
-	outcomeOf,
 	previewsOf,
+	reportView,
 	resultLine,
 	revisable,
 	runState,
@@ -151,7 +154,7 @@ describe('tool steps', () => {
 			target: 'src/app/+page.svelte',
 			code: { text: '<h1>Hi</h1>', language: 'javascript' }
 		});
-		expect(stepView('sandbox_run', { command: 'node', args: ['-e', 'a\nb'] }).code).toEqual({
+		expect(stepView('browser_evaluate', { expression: 'a\nb' }).code).toEqual({
 			text: 'a\nb',
 			language: 'javascript'
 		});
@@ -174,14 +177,106 @@ describe('tool steps', () => {
 			'document',
 			'workspace_write',
 			'browser_navigate',
-			'sandbox_run'
+			'browser_evaluate'
 		];
 		expect(new Set(tools.map((n) => stepView(n, {}).icon)).size).toBe(tools.length);
+	});
+	it('names each subagent action and previews only the task or message, never its conversation id', () => {
+		const conversation = '620df511-790d-4570-9d1e-1fddf492ba86';
+		expect(
+			stepView('subagent', { action: 'spawn', task: 'Review invoices\nCheck totals' })
+		).toEqual({
+			icon: 'lucide:bot',
+			verb: 'Started a subagent',
+			target: 'Review invoices'
+		});
+		expect(
+			stepView('subagent', {
+				action: 'message',
+				conversation,
+				text: 'Use the new rates\nFor October'
+			})
+		).toEqual({
+			icon: 'lucide:send',
+			verb: 'Sent a message to a subagent',
+			target: 'Use the new rates'
+		});
+		expect(stepView('subagent', { action: 'stop', conversation })).toEqual({
+			icon: 'lucide:circle-stop',
+			verb: 'Stopped a subagent',
+			target: ''
+		});
+		for (const action of ['list', 'read', 'query'])
+			expect(stepView('subagent', { action, conversation })).toEqual({
+				icon: 'lucide:bot',
+				verb: 'Checked subagents',
+				target: ''
+			});
 	});
 	it('reads a result in one line: its error or its row count', () => {
 		expect(resultLine({ error: 'No such field' })).toBe('No such field');
 		expect(resultLine({ rows: [1, 2] })).toBe('2 rows');
 		expect(resultLine('plain')).toBe('');
+	});
+});
+
+describe('subagent messages', () => {
+	const conversation = '620df511-790d-4570-9d1e-1fddf492ba86';
+	it('requires report metadata even when the text resembles a report', () => {
+		expect(
+			reportView(
+				row(1, {
+					text: `Sub-agent "Review invoices" (conversation ${conversation}) finished: Done`
+				})
+			)
+		).toBeNull();
+	});
+	it('reads the task title and keeps the entire message, including quotes and newlines', () => {
+		const task = 'Review "invoices"\nCheck totals';
+		const message = 'Checked "October" invoices.\nTotals match.\n\nReady for review.';
+		for (const state of ['finished', 'failed', 'was stopped'])
+			expect(
+				reportView(
+					row(1, {
+						report: { conversation },
+						text: `Sub-agent "${task}" (conversation ${conversation}) ${state}: ${message}`
+					})
+				)
+			).toEqual({
+				icon: 'lucide:inbox',
+				verb: 'Received a message',
+				target: 'Review "invoices"',
+				message
+			});
+	});
+	it('identifies a question from its metadata and removes only the engine instruction', () => {
+		const message = 'Which month should I use?\nThe draft has September and October.';
+		expect(
+			reportView(
+				row(1, {
+					report: { conversation, asked: true },
+					text: `Sub-agent "Review invoices" (conversation ${conversation}) asks you: ${message}\nAnswer it with subagent message.`
+				})
+			)
+		).toEqual({
+			icon: 'lucide:message-circle-question',
+			verb: 'Received a question',
+			target: 'Review invoices',
+			message
+		});
+	});
+	it('preserves unexpected text or a mismatched conversation without inventing a task title', () => {
+		for (const text of [
+			'A report in another format.\nKeep every line.',
+			'Sub-agent "Review invoices" (conversation another-conversation) finished: Done',
+			null
+		])
+			expect(reportView(row(1, { report: { conversation }, text }))).toEqual({
+				icon: 'lucide:inbox',
+				verb: 'Received a message',
+				target: '',
+				message: text ?? ''
+			});
 	});
 });
 
@@ -253,13 +348,6 @@ describe('Studio outcomes outside the folded steps', () => {
 		);
 		expect(doingOf([step(1, 'read', true)])).toBe('Working…');
 	});
-	it('a built preview is no outcome of its own: the header opens the latest', () => {
-		expect(
-			outcomeOf(
-				tool('workspace_validate', '{"commit":"ab","log":["…', { preview: 'https://h/acme--u-a' })
-			)
-		).toBeNull();
-	});
 	it('a failed step says why, and the run names what failed', () => {
 		const failed = (name: string, args: string, result: string) =>
 			row(1, { role: 'tool', tool: { ...tool(name, result), failed: true, args } });
@@ -272,9 +360,9 @@ describe('Studio outcomes outside the folded steps', () => {
 		expect(
 			failedVerbs([
 				row(1, { role: 'tool', tool: tool('read', '{}') }),
-				failed('sandbox_run', '{"command":"ls"}', '{"error":"exit 1"}')
+				failed('browser_download', '{"url":"https://a.test/x"}', '{"error":"404"}')
 			])
-		).toEqual(['Ran a command']);
+		).toEqual(['Downloaded']);
 	});
 	it('the previewer shows built previews and the ones the agent chose among them, never another page', () => {
 		const step = (seq: number, name: string, o: Partial<NonNullable<AgentRow['tool']>>) =>
@@ -322,25 +410,34 @@ describe('Studio outcomes outside the folded steps', () => {
 		]);
 		expect(logsOf(tool('read', result))).toBeNull();
 	});
-	it('reports a publish or rollback that switched over, never a declined or refused one', () => {
-		const applied = {
-			text: 'Applied — the workspace is now on the new version.',
-			action: 'View live',
-			reload: true
-		};
-		expect(outcomeOf(tool('workspace_publish', '{"live":{"commit":"c1"},"draft":"c1"}'))).toEqual(
-			applied
-		);
-		expect(
-			outcomeOf(
-				tool('workspace_rollback', '{"restarted":"The workspace restarted during: Switching…"}')
-			)
-		).toEqual(applied);
-		expect(outcomeOf(tool('workspace_publish', '{"declined":true}'))).toBeNull();
-		// a step is named by its declared role, never its name: the same tool without one is no Studio outcome
-		expect(outcomeOf({ name: 'workspace_publish', failed: false, result: '{}' })).toBeNull();
-		expect(
-			outcomeOf(tool('workspace_publish', '{"live":{"commit":"c"}}', { failed: true }))
-		).toBeNull();
-	});
+	it.effect('a step whose answer is a held request names it in full, for the card to decide', () =>
+		Effect.gen(function* () {
+			const message = (seq: number, result: Json) => ({
+				r: {
+					id: `m${seq}`,
+					conversation: 'c',
+					seq,
+					role: 'tool',
+					content: { id: `k${seq}`, name: 'workspace_merge', studio: 'merge', result },
+					text: null,
+					state: null,
+					mode: null,
+					as: null,
+					author: null,
+					meta: null,
+					supersedes: null,
+					turn: 't'
+				}
+			});
+			const [held, refused] = yield* rowsOf([
+				message(1, { approval: { id: 'r1', op: { op: 'publish' }, note: 'x'.repeat(700) } }),
+				message(2, { error: 'Your draft is at c2, not c1; nothing was published.' })
+			]);
+			expect(held && transcriptRow(held, true, false)?.tool).toMatchObject({
+				studio: 'merge',
+				approval: 'r1'
+			});
+			expect(refused && transcriptRow(refused, true, false)?.tool?.approval).toBeUndefined();
+		})
+	);
 });

@@ -1,9 +1,7 @@
-/// <reference types="node" />
 // A workspace's pages as every host serves them (`bolt dev`, bolt-server, a hosting platform): the artifact's client build, its own
 // `assets/**` at `/assets/*`, then the document under the workspace's frame policy. A host adds only its own wrapping
 // (a base path, a bundle digest) and the response.
-import { extname, join, resolve, sep } from 'node:path';
-import { Effect, FileSystem, Result } from 'effect';
+import { Effect, FileSystem, Path, Result } from 'effect';
 import { framePolicy, type ShellManifest } from '../shell/nav.ts';
 import { BOLT } from './wire.ts';
 
@@ -38,11 +36,16 @@ export type ClientPage = {
 	readonly headers: { readonly [name: string]: string };
 };
 
-/** The file at the request `path` under `root`, never outside it; a path that does not decode names none. */
+/**
+ * The file at the request `path` under `root`, never outside it: the joined path is normalized, so a `..` that leaves
+ * `root` shows in its prefix. A path that does not decode, or holds a backslash, a NUL or a trailing `/`, names none.
+ */
 const under = Effect.fn('Protocol.clientPath')(function* (root: string, path: string) {
 	const rel = Result.getOrUndefined(Result.try(() => decodeURIComponent(path)));
-	const file = rel === undefined ? undefined : resolve(root, `.${rel}`);
-	if (file === undefined || !file.startsWith(root + sep)) return undefined;
+	const { join } = yield* Path.Path;
+	const file =
+		rel === undefined || /[\\\0]/.test(rel) || rel.endsWith('/') ? undefined : join(root, rel);
+	if (file === undefined || !file.startsWith(`${root}/`)) return undefined;
 	const fs = yield* FileSystem.FileSystem;
 	return (yield* fs.exists(file)) && (yield* fs.stat(file)).type === 'File' ? file : undefined;
 });
@@ -59,12 +62,13 @@ export const clientPage = Effect.fn('Protocol.clientPage')(function* (
 ) {
 	if (path === BOLT || path.startsWith(`${BOLT}/`)) return undefined;
 	const fs = yield* FileSystem.FileSystem;
-	const client = resolve(dir, 'client'),
+	const { extname, join } = yield* Path.Path;
+	const client = join(dir, 'client'),
 		index = join(client, 'index.html');
 	const assets = path.startsWith('/assets/');
 	const file =
 		(yield* under(client, path)) ??
-		(assets ? yield* under(resolve(dir, 'assets'), path.slice('/assets'.length)) : undefined);
+		(assets ? yield* under(join(dir, 'assets'), path.slice('/assets'.length)) : undefined);
 	if (file !== undefined && file !== index) {
 		const page: ClientPage = {
 			file,

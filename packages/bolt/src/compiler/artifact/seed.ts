@@ -3,7 +3,7 @@
 // tree by the template's `seed/seed.ts` (or, without one, every `<collection>.json` of the tree). A pack is a sibling of
 // the artifact with its own hash: `pack.json`, `rows/<collection>.jsonl`, `assets/**`. Loading one is a restore.
 import { createHash } from 'node:crypto';
-import { Effect, FileSystem, Result, Schema } from 'effect';
+import { Effect, FileSystem, Predicate, Result, Schema } from 'effect';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -29,7 +29,7 @@ export type SeedRows = {
 export type BankReader = {
 	readonly tree: string;
 	has(path: string): boolean;
-	json<T = unknown>(path: string): T;
+	json(path: string): unknown;
 	bytes(path: string): Uint8Array;
 	/** Every file under `dir` (default the tree), relative to the tree, sorted. */
 	files(dir?: string): string[];
@@ -41,13 +41,6 @@ export type SeedSource = {
 	/** Rule 70's first-admission start: one run of each on the first admission of an environment built from the pack. */
 	start?: readonly AutomationName[];
 };
-export {
-	loadPack,
-	readPack,
-	type Pack,
-	type PackJson,
-	type SeedAsset
-} from '../../engine/write/pack.ts';
 
 // hook:cli-kit — a path join: a DOM test environment's transform rewrites `new URL(…, import.meta.url)` to an asset
 const BOLT = join(
@@ -55,7 +48,7 @@ const BOLT = join(
 	'../..',
 	`index${extname(fileURLToPath(import.meta.url))}`
 );
-import { sha256Hex } from '../../engine/write/sql.ts';
+import { sha256Hex } from '@norbital-ai/store';
 class SeedSourceError extends Schema.TaggedError<SeedSourceError>()('SeedSourceError', {
 	message: Schema.String,
 	cause: Schema.Defect()
@@ -151,7 +144,13 @@ const seedSource = Effect.fn('bolt.seedSource')(function* (root: string, cache: 
 					write: false,
 					ssr: join(root, 'seed/seed.ts'),
 					rolldownOptions: {
-						output: { format: 'es', entryFileNames: 'seed.mjs', codeSplitting: false }
+						output: {
+							format: 'es',
+							entryFileNames: 'seed.mjs',
+							codeSplitting: false,
+							// a reader may import model modules for their declared fields: their bodies never run here
+							banner: "globalThis[Symbol.for('norbital.bolt.seedBuild')]=true;"
+						}
 					}
 				}
 			}),
@@ -170,13 +169,13 @@ const seedSource = Effect.fn('bolt.seedSource')(function* (root: string, cache: 
 	const file = join(cache, `seed-${sha256Hex(chunk.code).slice(0, 16)}.mjs`);
 	yield* fs.makeDirectory(cache, { recursive: true });
 	yield* fs.writeFileString(file, chunk.code);
-	const mod: { default?: unknown } = yield* Effect.tryPromise({
-		try: () => import(pathToFileURL(file).href),
+	const mod = yield* Effect.tryPromise({
+		try: (): Promise<unknown> => import(pathToFileURL(file).href),
 		catch: (cause) => new SeedSourceError({ cause })
 	});
-	return yield* Schema.decodeUnknownEffect(Source)(mod.default).pipe(
-		Effect.mapError((cause) => new SeedSourceError({ cause }))
-	);
+	return yield* Schema.decodeUnknownEffect(Source)(
+		Predicate.isObject(mod) ? mod['default'] : undefined
+	).pipe(Effect.mapError((cause) => new SeedSourceError({ cause })));
 });
 
 /** `seed/assets.json` (`{ path, sha256, bytes, contentType }`) checked against `seed/assets/**` (rule 70). */

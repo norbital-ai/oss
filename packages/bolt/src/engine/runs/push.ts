@@ -6,6 +6,7 @@ import { Port } from '../port.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { PushBody } from '../../protocol/schema.ts';
 import { noticePath } from '../../protocol/wire.ts';
+import { prepareNoticeFiles } from '../notifications/notify.ts';
 import type { RunHandler } from '../services.ts';
 
 export const NOTICE_PUSH = 'bolt.push';
@@ -39,7 +40,8 @@ const Notice = Schema.Struct({
 });
 export const noticePush = Effect.gen(function* () {
 	const db = yield* TenantDb,
-		transport = yield* Transport;
+		transport = yield* Transport,
+		context = yield* Effect.context<Effect.Services<ReturnType<typeof prepareNoticeFiles>>>();
 	const run: RunHandler = (input) =>
 		Effect.gen(function* () {
 			const body = yield* Schema.decodeUnknownEffect(Input)(input).pipe(
@@ -48,6 +50,7 @@ export const noticePush = Effect.gen(function* () {
 				)
 			);
 			if (body.ids.length === 0) return { sent: 0, failed: 0 };
+			yield* prepareNoticeFiles(body.ids).pipe(Effect.provideContext(context));
 			const rows = yield* db.rows(Notice, {
 				text: `SELECT n.title, n.body, n.link, s.kind, s.endpoint, s.keys FROM sys_notification n JOIN bolt_push_subscriptions s ON s."user" = n.member JOIN sys_user u ON u.id = n.member AND u.active WHERE n.id IN (SELECT jsonb_array_elements_text($1::jsonb)) ORDER BY s."user"`,
 				params: [JSON.stringify(body.ids)]

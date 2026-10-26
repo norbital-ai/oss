@@ -10,7 +10,7 @@ import { cachedSvelte } from './svelte-cache.ts';
 import { build, type Rolldown } from 'vite';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import { publicPageKeys } from '../../engine/artifact/read.ts';
-import { sha256Hex } from '../../engine/write/sql.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import type { Discovered } from '../discover.ts';
 import { BuildError } from './client.ts';
 import { publicWrapper } from './public-wrapper.ts';
@@ -62,7 +62,7 @@ export const buildServerPages = Effect.fn('bolt.buildServerPages')(function* (
 			return yield* new BuildError({ cause: new Error(`Public page ${route} requires ${codec}`) });
 		const wrapper = yield* publicWrapper(root, component);
 		const entry = `import { install } from ${key(edge)};
-import { attached } from ${key(join(SOURCE, 'decl', `collection${EXT}`))};
+import { attached } from ${key(join(SOURCE, 'decl', `body${EXT}`))};
 import { Schema } from 'effect';
 import { render } from 'svelte/server';
 import { frameworkText } from ${key(join(SHELL, `i18n${EXT}`))};

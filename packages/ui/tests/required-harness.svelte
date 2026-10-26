@@ -27,7 +27,7 @@
 		get catalog() {
 			return catalog;
 		},
-		read: (c, o) => bolt.read<Page>(c, o),
+		query: (c, o) => bolt.query<Page>(c, o),
 		locale: 'en',
 		zone: 'UTC',
 		currency: 'SGD'

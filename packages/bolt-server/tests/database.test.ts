@@ -8,6 +8,7 @@ const harness = vi.hoisted(
 		rows: Record<string, unknown>[];
 		parameters: Record<string, unknown>;
 		statement: string;
+		procedure: string | undefined;
 		closed: number;
 		cancelled: number;
 		begun: number;
@@ -23,6 +24,7 @@ const harness = vi.hoisted(
 		rows: [],
 		parameters: {},
 		statement: '',
+		procedure: undefined,
 		closed: 0,
 		cancelled: 0,
 		begun: 0,
@@ -89,6 +91,10 @@ vi.mock('mssql', () => ({
 							errorListener?.(error);
 						}
 						return { recordset: [] };
+					},
+					execute(procedure: string) {
+						harness.procedure = procedure;
+						return this.query('RPC');
 					}
 				};
 			}
@@ -118,6 +124,7 @@ beforeEach(() => {
 	harness.rows = [];
 	harness.parameters = {};
 	harness.statement = '';
+	harness.procedure = undefined;
 	harness.closed = 0;
 	harness.cancelled = 0;
 	harness.begun = 0;
@@ -131,8 +138,8 @@ beforeEach(() => {
 	harness.parsed = { server: 'sql.example', port: 1433 };
 });
 const request = {
-	statement: 'SELECT @text AS text',
-	parameters: { text: "'; DROP TABLE x; --", yes: true, amount: 1.5, empty: null }
+	op: 'values' as const,
+	values: { text: "'; DROP TABLE x; --", yes: true, amount: 1.5, empty: null }
 };
 const query = (input = request) => sqlServerDatabase().query('private DSN', input);
 it.effect(
@@ -183,8 +190,10 @@ it.effect('binds parameters without interpolation and preserves transport values
 				}
 			]
 		});
-		expect(harness.statement).toBe(request.statement);
-		expect(harness.parameters).toEqual(request.parameters);
+		expect(harness.statement).toBe(
+			'SELECT @p0 AS [text], @p1 AS [yes], @p2 AS [amount], @p3 AS [empty]'
+		);
+		expect(harness.parameters).toEqual({ p0: request.values.text, p1: true, p2: 1.5, p3: null });
 		expect(harness.closed).toBe(1);
 	})
 );
@@ -193,6 +202,17 @@ it.effect('serializable batch commits only after the bounded result is accepted'
 		harness.rows = [{ id: 'remote' }];
 		yield* sqlServerDatabase().query('private DSN', { ...request, transaction: 'serializable' });
 		expect(harness).toMatchObject({ begun: 1, committed: 1, rolledBack: 0, closed: 1 });
+	})
+);
+it.effect('executes named procedure arguments through native RPC', () =>
+	Effect.gen(function* () {
+		yield* sqlServerDatabase().query('private DSN', {
+			op: 'call',
+			procedure: { schema: 'ledger', name: 'post' },
+			arguments: { reference: "'; --" }
+		});
+		expect(harness.procedure).toBe('[ledger].[post]');
+		expect(harness.parameters).toEqual({ reference: "'; --" });
 	})
 );
 it.effect(

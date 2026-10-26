@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from 'effect';
-import { jsonApi } from '../link.ts';
+import { jsonApi } from '../transport.ts';
 import type { Endpoint } from './embeddings.ts';
 
 export const Model = Schema.Struct({

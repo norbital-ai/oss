@@ -58,7 +58,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	// `notes` is masked to the dispatcher: its one read arm lists the fields it reads
 	policies: {
 		dispatch: {
@@ -205,6 +204,7 @@ const open = (port?: System1, m: EngineManifest = manifest) =>
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest: m,
+				now: '2026-09-25T10:00:00.000Z',
 				ports: port === undefined ? metering : Layer.merge(metering, ai(port))
 			})
 		);
@@ -236,7 +236,7 @@ const titles = (route: FixtureRoute, caller: Authority, where?: object, orderBy?
 	qReply(route, caller, {
 		reads: [
 			{
-				m: 'read',
+				m: 'query',
 				a: [
 					'jobs',
 					{
@@ -274,7 +274,7 @@ describe('filter.describe (rule 16a)', () => {
 						ok: true,
 						where: {
 							and: expect.arrayContaining([
-								{ scheduled_on: { gte: { startOf: 'week' }, lt: { startOf: 'week', shift: 1 } } },
+								{ scheduled_on: { gte: '2026-09-21', lt: '2026-09-28' } },
 								{ status: { nin: ['done'] } },
 								{ assignee: { eq: bob } }
 							])
@@ -676,7 +676,7 @@ describe('filter.describe (rule 16a)', () => {
 				)(
 					(yield* qReply(route, t.as(t.admin).authority, {
 						reads: [
-							{ m: 'read', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
+							{ m: 'query', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
 						]
 					})).answers[0]
 				)).rows[0]?.id;
@@ -727,7 +727,7 @@ describe('filter.describe (rule 16a)', () => {
 				)(
 					(yield* qReply(route, t.as(t.admin).authority, {
 						reads: [
-							{ m: 'read', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
+							{ m: 'query', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
 						]
 					})).answers[0]
 				)).rows[0]?.id;
@@ -768,7 +768,7 @@ describe('filter.describe (rule 16a)', () => {
 				)(
 					(yield* qReply(route, t.as(t.admin).authority, {
 						reads: [
-							{ m: 'read', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
+							{ m: 'query', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
 						]
 					})).answers[0]
 				)).rows[0]?.id;
@@ -905,12 +905,12 @@ describe('dates and relations a description names (live Jev misreadings, 2026-10
 					(yield* run('jobs scheduled after last week', {
 						'Scheduled on': { op: 'after', value: 'last week' }
 					})).r
-				).toEqual({ ok: true, where: { scheduled_on: { gte: { startOf: 'week' } } } });
+				).toEqual({ ok: true, where: { scheduled_on: { gte: '2026-10-05' } } });
 				expect(
 					(yield* run('jobs scheduled on or before this month', {
 						'Scheduled on': { op: 'on or before', value: 'this month' }
 					})).r
-				).toEqual({ ok: true, where: { scheduled_on: { lt: { startOf: 'month', shift: 1 } } } });
+				).toEqual({ ok: true, where: { scheduled_on: { lt: '2026-11-01' } } });
 			})
 		)
 	);
@@ -998,7 +998,6 @@ describe("named days, lists, ranges and a related record's own related records (
 			}
 		},
 		integrations: {},
-		pipelines: {},
 		policies: {},
 		teams: {},
 		automations: {},
@@ -1055,7 +1054,7 @@ describe("named days, lists, ranges and a related record's own related records (
 							(yield* qReply(route, authority, {
 								reads: [
 									{
-										m: 'read',
+										m: 'query',
 										a: [
 											collection,
 											{

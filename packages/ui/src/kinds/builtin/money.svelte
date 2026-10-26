@@ -4,11 +4,11 @@ The built-in `money` custom field's renderer: the amount box with its currency a
 -->
 <script lang="ts">
 	import CopyText from '../../primitives/copy-text/copy-text.svelte';
-	import { useKinds, type CustomFieldView } from '../context.js';
+	import { useKinds, type KindView } from '../context.js';
 	import { currencyOf, format, type KindOf } from '../kind.js';
 	import MoneyInput from '../money-input.svelte';
 
-	let { view }: { view: CustomFieldView } = $props();
+	let { view }: { view: KindView } = $props();
 	const host = useKinds();
 	const kind = $derived<KindOf<'money'>>(
 		view.kind?.kind === 'money' ? view.kind : { kind: 'money' }

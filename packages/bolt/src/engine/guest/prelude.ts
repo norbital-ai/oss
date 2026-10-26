@@ -356,7 +356,7 @@ const settle = (c, answer) => answer.ok ? c.resolve(answer.value) : c.reject(ans
 
 // an error's 'kind' (a facility failure's) rides the tuple for the host's transient judgement
 const failure = (e) => {
-	if (e && typeof e === 'object' && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field)];
+	if (e && typeof e === 'object' && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
 	const kind = e && typeof e === 'object' && typeof e.kind === 'string' ? [e.kind] : [];
 	if (e instanceof Error) return ['error', e.name, e.message, String(e.stack || ''), ...kind];
 	return ['error', 'Error', show(e), '', ...kind];
@@ -372,20 +372,19 @@ function start(kind, path, inputJson, ctxJson, invocationId) {
 	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
 	const input = JSON.parse(inputJson, reviveWire);
 	let ctx;
-	if (['transform', 'projection', 'query', 'action', 'tool', 'automation', 'integration', 'pipeline', 'page'].includes(kind)) {
+	if (['create', 'update', 'delete', 'query', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'integration', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson, reviveWire);
 		ctx = Object.defineProperty(kind === 'page'
 			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocationId }
 			: { ...raw, invocationId }, Symbol.for('norbital.bolt.ctx'), { value: kind });
 	}
-	const args = kind === 'pipeline' || kind === 'tool' || kind === 'integration'
+	const args = kind === 'tool' || kind === 'integration'
 		? (Array.isArray(input) ? input : [input]).map((a) => a !== null && typeof a === 'object' && a.$ctx === true ? ctx : a)
 		: ctx === undefined ? [input] : [input, ctx];
-	// hook:reads — a rerank is one invocation over the candidate page: input is [query, rows], output one score per row
-	// a validation is one invocation over every value of its kind in the act: one message (or undefined) per value
-	// a pipeline body over many items ({ $each, with }: an import's records) is one invocation: each item through the body
-	const each = kind === 'pipeline' && input !== null && typeof input === 'object' && !Array.isArray(input) && Array.isArray(input.$each);
-	Promise.resolve().then(() => each ? Promise.all(input.$each.map((item) => body(item, input.with))) : kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' ? input.map((v) => body(v)) : body(...args)).then(
+	// pure bodies run once per element of one invocation's batch: a rerank over the candidate page (input [query, rows],
+	// one score per row); a validation over every value of its kind (one message or undefined each); an index's vector
+	// over a chunk of rows (one vector or null each); approval returns one flow snapshot for its write.
+	Promise.resolve().then(() => kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' || kind === 'vector' ? input.map((v) => body(v)) : body(...args)).then(
 		(v) => { state = ['ok', JSON.stringify(v === undefined ? null : v)]; },
 		(e) => { state = failure(e); });
 }

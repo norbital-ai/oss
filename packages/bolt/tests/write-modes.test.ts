@@ -6,12 +6,20 @@ import type { ActMode } from '../src/engine/services.ts';
 
 it.effect('all act modes preserve their distinct planning inputs', () =>
 	Effect.gen(function* () {
-		const direct: ActMode = { _tag: 'Direct', delivery: true };
-		const feed: ActMode = { _tag: 'Feed', fields: ['name'], removals: [], pieces: () => {} };
+		const direct: ActMode = { _tag: 'Direct' };
+		const sync: ActMode = {
+			_tag: 'Sync',
+			sync: 'contacts.sync.remote',
+			instance: 'remote',
+			fields: ['name'],
+			deletes: [],
+			pieces: () => {}
+		};
 		const record: ActMode = { _tag: 'Record', pending: new Map(), sink: () => {} };
-		assert.strictEqual(modeContext(direct).delivery, true);
-		assert.strictEqual(modeContext(feed).feed, feed);
+		assert.deepStrictEqual(modeContext(direct), {});
+		assert.strictEqual(modeContext(sync).sync, sync);
 		assert.strictEqual(modeContext(record).pending, record.pending);
+		assert.strictEqual(modeContext(record).sink, record.sink);
 	})
 );
 it.effect('a serialization replay retries exactly once before settling', () =>

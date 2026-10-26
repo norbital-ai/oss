@@ -22,7 +22,7 @@ install();
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const BOLT = '../../../../src/index.ts'; // src as seen from a fixture's .norbital/
 describe('next compiler: discover', () => {
-	it.live('discovers named model files and policies and rejects retired layout roles', () =>
+	it.live('discovers model folders and policies', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-layout-${randomUUID()}`);
 			const write = (path: string) => {
@@ -32,8 +32,7 @@ describe('next compiler: discover', () => {
 			try {
 				for (const path of [
 					'src/+workspace.ts',
-					'src/data/model/+orders.model.ts',
-					'src/data/collection/orders/+collection.ts',
+					'src/data/model/orders/+model.ts',
 					'src/access_control/policy/+sales.policy.ts'
 				])
 					write(path);
@@ -42,19 +41,13 @@ describe('next compiler: discover', () => {
 				expect(found.files).toContainEqual({
 					role: 'model',
 					name: 'orders',
-					path: 'src/data/model/+orders.model.ts'
+					path: 'src/data/model/orders/+model.ts'
 				});
 				expect(found.files).toContainEqual({
 					role: 'policy',
 					name: 'sales',
 					path: 'src/access_control/policy/+sales.policy.ts'
 				});
-				write('src/data/model/orders/+model.ts');
-				write('src/access/+sales.policy.ts');
-				expect((yield* discover(root)).errors.map((error) => error.code)).toEqual([
-					'discover/wrong-folder',
-					'discover/unknown-role'
-				]);
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}
@@ -115,9 +108,7 @@ describe('next compiler: discover', () => {
 						API_URL: { label: 'API', description: 'The base URL' },
 						API_SECRET: { label: 'Secret' }
 					});
-					expect(namesIndex(files, loaded.manifest)).toContain(
-						'secrets: typeof import("../src/+secrets.ts").default'
-					);
+					expect(namesIndex(files, loaded.manifest)).toContain('"API_URL": {');
 					loaded.manifest.secrets[''] = {
 						API_SECRET: { label: 'Secret', default: 'must-not-ship' }
 					};
@@ -142,9 +133,6 @@ describe('next compiler: discover', () => {
 				'app hr/kiosk',
 				'app sales',
 				'automation nightly',
-				'collection customers',
-				'collection notices',
-				'collection orders',
 				'custom_field rating',
 				'envoy desk',
 				'group hr',
@@ -163,7 +151,6 @@ describe('next compiler: discover', () => {
 				'page sales/list',
 				'policy kiosk_reader',
 				'policy sales_rep',
-				'relationship ',
 				'renderer rating',
 				'representation orders',
 				'skill triage',
@@ -175,32 +162,33 @@ describe('next compiler: discover', () => {
 	it.live('refuses every layout mistake with a stable code and the role table as help', () =>
 		Effect.gen(function* () {
 			const { errors } = yield* discover(fixture('bad'));
-			expect(errors.map((e) => `${e.code} ${e.path}`).sort()).toEqual([
-				'discover/app-and-group src/app/sales/+app.ts',
-				'discover/app-and-group src/app/sales/+group.ts',
-				'discover/app-nesting src/app/shop/inner/+app.ts',
-				'discover/bad-name src/data/model/+Bad.model.ts',
-				'discover/collection-without-model src/data/collection/ghost/+collection.ts',
-				'discover/custom-field-without-definition src/data/custom_field/stars/+renderer.svelte',
-				'discover/messages-missing src/i18n/+ms.messages.ts',
-				'discover/name-clash src/automation/+orders.automation.ts',
-				'discover/one-per-folder src/data/collection/orders/+erp.integration.ts',
-				'discover/page-without-app src/app/empty/+board.page.svelte',
-				'discover/plural-folder src/automations/+sync.automation.ts',
-				'discover/reserved-name src/data/custom_field/phone/+definition.ts',
-				'discover/reserved-name src/data/model/+sys_thing.model.ts',
-				'discover/reserved-name src/integration/whatsapp/+integration.ts',
-				'discover/seed-unknown-collection seed/nope.json',
-				'discover/unknown-role src/+layout.ts',
-				'discover/unknown-role src/lib/+helper.ts',
-				'discover/without-collection src/data/collection/lonely/+pipeline.ts',
-				'discover/workspace-missing src/+workspace.ts',
-				'discover/wrong-folder src/access_control/policy/+late.automation.ts',
-				'discover/wrong-folder src/data/collection/orders/+integration.ts'
-			]);
+			expect(errors.map((e) => `${e.code} ${e.path}`).sort()).toEqual(
+				[
+					'discover/app-and-group src/app/sales/+app.ts',
+					'discover/app-and-group src/app/sales/+group.ts',
+					'discover/app-nesting src/app/shop/inner/+app.ts',
+					'discover/bad-name src/data/model/Bad/+model.ts',
+					'discover/representation-without-model src/data/model/ghost/+representation.svelte',
+					'discover/custom-field-without-definition src/data/custom_field/stars/+renderer.svelte',
+					'discover/messages-missing src/i18n/+ms.messages.ts',
+					'discover/name-clash src/automation/+orders.automation.ts',
+					'discover/one-per-folder src/data/model/orders/+erp.integration.ts',
+					'discover/page-without-app src/app/empty/+board.page.svelte',
+					'discover/plural-folder src/automations/+sync.automation.ts',
+					'discover/reserved-name src/data/custom_field/phone/+definition.ts',
+					'discover/reserved-name src/data/model/sys_thing/+model.ts',
+					'discover/reserved-name src/integration/whatsapp/+integration.ts',
+					'discover/seed-unknown-model seed/nope.json',
+					'discover/unknown-role src/+layout.ts',
+					'discover/unknown-role src/lib/+helper.ts',
+					'discover/workspace-missing src/+workspace.ts',
+					'discover/wrong-folder src/access_control/policy/+late.automation.ts',
+					'discover/wrong-folder src/data/model/orders/+integration.ts'
+				].sort()
+			);
 			expect(errors.every((e) => e.help === LAYOUT_HELP)).toBe(true);
 			expect(LAYOUT_HELP).toContain('src/integration/<name>/+integration.ts');
-			expect(LAYOUT_HELP).not.toContain('src/data/collection/<app>/+integration.ts');
+			expect(LAYOUT_HELP).toContain('src/data/model/<name>/+model.ts');
 			expect(LAYOUT_HELP).toContain('src/access_control/policy/+<name>.policy.ts');
 			expect(errors.find((e) => e.code === 'discover/plural-folder')?.message).toContain(
 				"'automations' is 'automation'"
@@ -245,7 +233,7 @@ describe('next compiler: load', () => {
 			}
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('emits definitions, envoys and connections and indexes the feed targets', () =>
+	it.live('splits inline model refs and syncs beside integration definitions and connections', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-integration-load-${randomUUID()}`);
 			const write = (path: string, text: string) => {
@@ -255,180 +243,47 @@ describe('next compiler: load', () => {
 			try {
 				write(
 					'src/+workspace.ts',
-					"export default { tz: 'UTC', locale: 'en', connections: { ledger: { integration: 'books' }, wa: { integration: 'whatsapp', envoy: 'desk' } } };"
+					"export default { tz: 'UTC', locale: 'en', connections: { ledger: { integration: 'books' } } };"
 				);
 				write(
-					'src/data/model/+entries.model.ts',
-					"export default { key: ['source', 'code'], fields: { code: { kind: 'text' } } };"
-				);
-				write(
-					'src/data/+relationship.ts',
-					"export default { 'entries.source': { to: 'sys_integration', where: { integration: { eq: 'books' } } } };"
-				);
-				write(
-					'src/data/collection/entries/+collection.ts',
-					"export default { name: 'entries', spec: { read: { fields: 'all' } } };"
-				);
-				write(
-					'src/agent/envoy/+desk.envoy.ts',
-					"export default { name: 'Desk', audience: 'public', policies: ['p'], delegation: 'disabled', task: 'x' };"
+					'src/data/model/entries/+model.ts',
+					`export default { name: 'entries', spec: {
+					description: 'Ledger entries', label: 'code', key: ['source', 'code'],
+					fields: { code: { kind: 'text' }, source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'books' } } } },
+					read: 'all', syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
+				} };`
 				);
 				write(
 					'src/integration/books/+integration.ts',
-					`export default { name: 'books', spec: { description: 'x', driver: 'sqlserver',
-				feeds: { entries: { into: 'entries', key: ['code'], cron: '@hourly' } } }, bodies: { feeds: { entries: { read: () => null } }, outbound: {} } };`
+					"export default { name: 'books', spec: { description: 'Books', driver: 'sqlserver' }, bodies: {} };"
 				);
 				const found = yield* discover(root),
 					loaded = yield* load(root, found.files);
 				expect(found.errors).toEqual([]);
-				expect(loaded.errors).toEqual([]);
+				expect([...loaded.errors, ...manifestErrors(loaded.manifest)]).toEqual([]);
 				const manifest = engineManifest(loaded.manifest);
-				expect(Object.keys(manifest.integrations)).toEqual(['books']);
-				expect(manifest.integrations['books']?.feeds?.['entries']).toEqual({
-					into: 'entries',
-					key: ['code'],
-					cron: '@hourly'
+				expect(manifest.integrations['books']).toEqual({
+					description: 'Books',
+					driver: 'sqlserver'
 				});
-				expect(manifest.connections).toEqual({
-					ledger: { integration: 'books' },
-					wa: { integration: 'whatsapp', envoy: 'desk' }
+				expect(manifest.relationships['entries.source']).toMatchObject({ to: 'sys_integration' });
+				expect(manifest.collections['entries']?.syncs?.['ledger']).toEqual({
+					with: 'books',
+					every: '1h',
+					read: true
 				});
+				expect(manifest.connections).toEqual({ ledger: { integration: 'books' } });
 				expect(manifest.workspace).not.toHaveProperty('connections');
-				expect(manifest.envoys['desk']).toMatchObject({ name: 'Desk', audience: 'public' });
 				const names = namesIndex(found.files, loaded.manifest);
-				expect(names).toContain('fed: { "entries": "books.entries" };');
-				expect(names).toContain(
-					'integrations: { "books": typeof import("../src/integration/books/+integration.ts").default };'
-				);
-				expect(names).toContain(
-					'envoys: { "desk": typeof import("../src/agent/envoy/+desk.envoy.ts").default };'
-				);
+				expect(names).toContain('"syncs": {');
+				expect(names).toContain('"read": true;');
+				expect(names).not.toContain('typeof import');
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live(
-		'refuses a feed that does not own its target or its key, a misnamed definition and a missing body',
-		() =>
-			Effect.gen(function* () {
-				const root = yield* scratchPath(`compiler-integration-checks-${randomUUID()}`);
-				const write = (path: string, text: string) => {
-					mkdirSync(dirname(join(root, path)), { recursive: true });
-					writeFileSync(join(root, path), text);
-				};
-				const definition = (name: string, spec: string, bodies = '{ feeds: {}, outbound: {} }') =>
-					`export default { name: ${JSON.stringify(name)}, spec: ${spec}, bodies: ${bodies} };`;
-				const feed = (into: string) =>
-					`${into}: { into: '${into}', key: ['code'], cron: '@hourly' }`;
-				const read = (...feeds: string[]) =>
-					`{ feeds: { ${feeds.map((f) => `${f}: { read: true }`).join(', ')} }, outbound: {} }`;
-				try {
-					write(
-						'src/+workspace.ts',
-						"export default { tz: 'UTC', locale: 'en', connections: { ledger: { integration: 'books' } } };"
-					);
-					for (const m of ['entries', 'items', 'lines', 'open'])
-						write(
-							`src/data/model/+${m}.model.ts`,
-							"export default { key: ['source', 'code'], fields: { code: { kind: 'text' } } };"
-						);
-					write(
-						'src/data/+relationship.ts',
-						`export default {
-				'entries.source': { to: 'sys_integration', where: { integration: { eq: 'books' } } },
-				'items.source': { to: 'sys_integration', where: { integration: { eq: 'books' } } },
-				'lines.source': { to: 'sys_integration' },
-				'open.source': { to: 'sys_integration', where: { integration: { eq: 'books' } } } };`
-					);
-					write(
-						'src/data/collection/entries/+collection.ts',
-						"export default { name: 'entries', spec: { read: { fields: 'all' }, notifications: { committed: [{ channel: 'ledger', to: [], title: 't' }] } } };"
-					);
-					for (const c of ['items', 'lines'])
-						write(
-							`src/data/collection/${c}/+collection.ts`,
-							`export default { name: '${c}', spec: { read: { fields: 'all' } } };`
-						);
-					write(
-						'src/data/collection/open/+collection.ts',
-						"export default { name: 'open', spec: { read: { fields: 'all' }, create: { input: { columns: ['code'] } }, actions: { go: {} } } };"
-					);
-					// books: entries (fine), open (exposes writes), ghost (no collection), push (a command without run)
-					write(
-						'src/integration/books/+integration.ts',
-						definition(
-							'books',
-							`{ description: 'x', driver: 'sqlserver',
-				feeds: { ${feed('entries')}, ${feed('open')}, ${feed('ghost')} }, outbound: { push: { from: 'entries', via: 'ledger' } } }`,
-							`{ feeds: { entries: { read: true }, open: { read: true }, ghost: { read: true } }, outbound: { push: { build: true } } }`
-						)
-					);
-					// again: entries (first) keyed by books' instance; other: misnamed, items pinned to books, no body; third: lines unpinned
-					write(
-						'src/integration/again/+integration.ts',
-						definition(
-							'again',
-							`{ description: 'x', driver: 'sqlserver', feeds: { ${feed('entries')} } }`,
-							read('entries')
-						)
-					);
-					write(
-						'src/integration/other/+integration.ts',
-						definition(
-							'otter',
-							`{ description: 'x', driver: 'sqlserver', feeds: { ${feed('items')} } }`
-						)
-					);
-					write(
-						'src/integration/third/+integration.ts',
-						definition(
-							'third',
-							`{ description: 'x', driver: 'sqlserver', feeds: { ${feed('lines')} } }`,
-							read('lines')
-						)
-					);
-					write(
-						'src/integration/chat/+integration.ts',
-						definition(
-							'chat',
-							"{ description: 'x', driver: 'http', conversation: { kind: 'chat', handle: 'phone' }, webhook: { scheme: 'bearer', secret: 'token' } }"
-						)
-					);
-					const found = yield* discover(root);
-					expect(found.errors).toEqual([]);
-					const loaded = yield* load(root, found.files);
-					const errors = [...loaded.errors, ...manifestErrors(loaded.manifest)];
-					const at = (code: string) => errors.filter((e) => e.code === code).map((e) => e.message);
-					expect(at('load/name-mismatch')).toEqual([
-						"src/integration/other/+integration.ts: declares integration('otter'); the folder names it 'other'"
-					]);
-					expect(at('load/feed-target')).toEqual([
-						"src/integration/books/+integration.ts: feed 'entries' writes 'entries', which again.entries already writes",
-						"src/integration/books/+integration.ts: feed 'open' writes 'open', whose collection exposes create, actions: a feed's rows change only through it (local fields through update)",
-						"src/integration/books/+integration.ts: feed 'ghost' writes 'ghost', which is no collection"
-					]);
-					expect(at('load/feed-key').map((m) => m.slice(0, m.indexOf(':')))).toEqual([
-						'src/integration/again/+integration.ts',
-						'src/integration/other/+integration.ts',
-						'src/integration/third/+integration.ts'
-					]);
-					expect(at('load/feed-key')[0]).toContain("one FK to sys_integration pinned to 'again'");
-					expect(at('load/missing-body')).toEqual([
-						"src/integration/books/+integration.ts: outbound 'push' commands through a sqlserver instance: its body declares run",
-						'src/integration/chat/+integration.ts: a custom conversation attaches chat.receive(…)',
-						'src/integration/chat/+integration.ts: a custom conversation attaches chat.send(…)',
-						"src/integration/other/+integration.ts: feed 'items' has no body: attach other.feed('items', { read })"
-					]);
-					expect(at('load/notification-channel')).toEqual([
-						"src/data/collection/entries/+collection.ts: a notification's channel is 'inbox' or a conversation connection; 'ledger' is not"
-					]);
-					expect(errors.length).toBe(12);
-				} finally {
-					rmSync(root, { recursive: true, force: true });
-				}
-			}).pipe(Effect.provide(NodeServices.layer))
-	);
+
 	it.live("reserves bolt's conversation definitions and the inbox", () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-reserved-integrations-${randomUUID()}`);
@@ -449,9 +304,7 @@ describe('next compiler: load', () => {
 					'discover/reserved-name src/integration/email/+integration.ts',
 					'discover/reserved-name src/integration/inbox/+integration.ts'
 				]);
-				expect(errors[0]?.message).toContain(
-					'discord, email, slack, telegram, wechat, whatsapp, inbox are reserved'
-				);
+				expect(errors[0]?.message).toContain('is a built-in integration');
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}
@@ -464,18 +317,23 @@ describe('next compiler: load', () => {
 			expect(errors).toEqual([]);
 			expect(manifestErrors(manifest)).toEqual([]);
 			expect(Object.keys(manifest.model).sort()).toEqual(['customers', 'notices', 'orders']);
-			expect(manifest.collection.orders).toHaveProperty('bodies.queries.count_placed');
+			expect(manifest.model.orders).toHaveProperty('bodies.queries.count_placed');
 			expect(manifest.custom_field.rating).toHaveProperty('check', expect.any(Function));
 			expect(manifest.integration_definition.mail).toMatchObject({
 				name: 'mail',
-				spec: { driver: 'email', feeds: { notices: { into: 'notices' } } }
+				spec: { driver: 'email' }
 			});
-			expect(manifest.integration_definition.mail).toHaveProperty(
-				'bodies.feeds.notices.map',
+			expect(manifest.model.notices).toHaveProperty(
+				'bodies.syncs.messages.read',
 				expect.any(Function)
 			);
 			expect(manifest.envoy.desk).toMatchObject({ name: 'Norbius', policies: ['sales_rep'] });
-			expect(manifest.skill.triage).toContain('description: Triage a notice');
+			// a skill is its folder: `+skill.md` is its SKILL.md, beside its scripts
+			expect(manifest.skill.triage).toEqual({
+				text: expect.stringContaining('description: Triage a notice'),
+				digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+				files: ['SKILL.md', 'scripts/count.js']
+			});
 			expect(manifest.page['sales/board']).toBe('src/app/sales/+board.page.svelte');
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
@@ -488,13 +346,11 @@ describe('next compiler: load', () => {
 			const errors = [...loaded.errors, ...manifestErrors(loaded.manifest)];
 			expect(errors.map((e) => `${e.code} ${e.path}`).sort()).toEqual([
 				'app/page-unlisted src/app/sales/+stray.page.svelte',
-				'load/collection-name src/data/collection/orders/+collection.ts',
 				'load/failed src/integration/broken/+integration.ts',
-				'load/feed-key src/integration/orders_source/+integration.ts',
-				'load/missing-body src/integration/orders_source/+integration.ts',
-				'load/name-mismatch src/integration/orders_source/+integration.ts',
-				'load/no-default src/data/model/+orders.model.ts',
-				'load/skill-description src/agent/skill/+nodesc.skill.md'
+				'load/name-path src/data/model/lines/+model.ts',
+				'load/name-path src/integration/orders_source/+integration.ts',
+				'load/no-default src/data/model/orders/+model.ts',
+				'load/skill-description src/agent/skill/nodesc/+skill.md'
 			]);
 			expect(errors.find((e) => e.code === 'load/failed')?.message).toContain('boom at load');
 		}).pipe(Effect.provide(NodeServices.layer))
@@ -502,7 +358,7 @@ describe('next compiler: load', () => {
 });
 describe('next compiler: names index', () => {
 	it.live(
-		'maps every path-derived name to its default export, sorted, written only on change',
+		'prints each evaluated declaration as literal types, sorted, written only on change',
 		() =>
 			Effect.gen(function* () {
 				const root = fixture('good');
@@ -513,19 +369,15 @@ describe('next compiler: names index', () => {
 				expect(yield* writeNames(root, text)).toBe(true);
 				expect(yield* writeNames(root, text)).toBe(false);
 				expect(readFileSync(join(root, '.norbital/names.ts'), 'utf8')).toBe(text);
-				expect(text).toContain(
-					`models: { "customers": typeof import("../src/data/model/+customers.model.ts").default; "notices": `
-				);
-				expect(text).toContain('fed: { "notices": "mail.notices" };');
-				expect(text).toContain(
-					'envoys: { "desk": typeof import("../src/agent/envoy/+desk.envoy.ts").default };'
-				);
-				expect(text).toContain('pages: { "hr/kiosk": "clock"; "sales": "board" | "list" };');
-				expect(text).toContain('groups: { "hr": "kiosk" };');
-				expect(text).toContain('skills: { "triage": true };');
-				expect(text).toContain(
-					'hostTools: { "browser_act": true; "browser_download": true; "browser_evaluate": true; "browser_navigate": true; "browser_screenshot": true; "browser_snapshot": true; '
-				);
+				expect(text).toContain('models: {');
+				expect(text).toContain('"description": "Buyers";');
+				expect(text).toContain('"count_placed": {');
+				expect(text).toContain('"syncs": {');
+				expect(text).not.toContain('typeof import');
+				expect(text).toContain('"sales": "board" | "list";');
+				expect(text).toContain('"hr": "kiosk";');
+				expect(text).toContain('"triage": true;');
+				expect(text).toContain('"browser_act": true;');
 				expect(text).toContain('export const __verify: Check<Verify> = true;');
 				const parts = [...text.matchAll(/^\t\t(\w+):/gm)].map((m) => m[1]);
 				expect(parts).toEqual([...parts].sort());
@@ -555,7 +407,6 @@ describe('next compiler: seed packs', () => {
 		policies: {},
 		integrations: {},
 		connections: {},
-		pipelines: {},
 		automations: {},
 		teams: {},
 		envoys: {},

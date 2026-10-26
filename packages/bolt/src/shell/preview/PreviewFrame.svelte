@@ -265,8 +265,12 @@
 		class="relative min-h-0 flex-1 overflow-hidden bg-background p-4"
 		style:background-image={GRID}
 		style:background-size="20px 20px"
-		bind:clientWidth={null, (w) => (roomWidth = Math.max(0, (w ?? 0) - BEZEL))}
-		bind:clientHeight={null, (h) => (roomHeight = Math.max(0, (h ?? 0) - BEZEL))}
+		bind:clientWidth={
+			null, (w: number | null | undefined) => (roomWidth = Math.max(0, (w ?? 0) - BEZEL))
+		}
+		bind:clientHeight={
+			null, (h: number | null | undefined) => (roomHeight = Math.max(0, (h ?? 0) - BEZEL))
+		}
 	>
 		<!-- the bezel; inside it the box is the scaled size, the page laid out at the full size and drawn at `zoom` -->
 		<div

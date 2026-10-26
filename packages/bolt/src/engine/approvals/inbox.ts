@@ -1,25 +1,31 @@
+import { Option, Schema } from 'effect';
+import type { ApprovalStep } from '../../decl/access/policy.ts';
 import type { Authority, RowData, Sql } from '../contracts.ts';
 import { actorRef } from '../write/commit.ts';
-import { canApprove, canSupersede, rolesOf, routeSnapshot } from './route.ts';
-import { movesFor, type ApprovalState } from './machine.ts';
-import { STATUS, STATUS_OF, type DecisionStatus } from './approvals.ts';
+import { canApprove, canSupersede, rolesOf } from './route.ts';
+import { Snapshot } from './snapshot.ts';
+import { decisionsFor, type ApprovalDecision, type ApprovalState } from './machine.ts';
 
-/** The requestor's display name, the request's state and the caller's current moves (machine.ts). */
+/**
+ * An open request in the caller's inbox: what it holds, its state at `step` of its named `steps`, who asked, and the
+ * decisions the caller may take now (machine.ts). The requester sees their own pending status; saving the record in
+ * ChangesRequested resubmits it.
+ */
 export type InboxRequest = {
 	id: string;
 	collection: string;
 	record: string;
 	action: string;
-	status: string;
+	status: Extract<ApprovalState, 'Pending' | 'ChangesRequested'>;
 	step: number;
-	steps: number;
+	steps: readonly ApprovalStep[];
 	at: string;
 	requestor: string;
 	by: string;
 	mine: boolean;
 	canDecide: boolean;
 	canSupersede: boolean;
-	moves: readonly { status: DecisionStatus; reason: 'required' | 'optional' }[];
+	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 };
 
 // Eligibility filters the bounded candidate set; these are private rows, never a caller's collection read.
@@ -29,37 +35,46 @@ export const openRequests: Sql = {
 	WHERE a.state IN ('Pending', 'ChangesRequested') ORDER BY a.at DESC LIMIT 2000`,
 	params: []
 };
+const Open = Schema.Struct({
+	id: Schema.String,
+	state: Schema.Literals(['Pending', 'ChangesRequested']),
+	collection: Schema.String,
+	record: Schema.String,
+	action: Schema.String,
+	requestor: Schema.String,
+	step: Schema.Number,
+	route: Snapshot,
+	at: Schema.String,
+	by: Schema.String
+});
+const decodeOpen = Schema.decodeUnknownOption(Open);
 export function inboxRequests(rows: readonly RowData[], auth: Authority): InboxRequest[] {
 	const actor = auth.actor;
 	if (actor.kind !== 'member' || actor.external) return [];
 	const me = actorRef(actor),
 		requests: InboxRequest[] = [];
-	for (const row of rows) {
-		const state: ApprovalState =
-			row['state'] === 'ChangesRequested' ? 'ChangesRequested' : 'Pending';
-		const request = {
-			state,
-			step: Number(row['step']),
-			requestor: String(row['requestor']),
-			route: routeSnapshot(row['route'])
-		};
-		const moves = movesFor(state, rolesOf(request, auth)).filter((m) => m.move !== 'comment');
-		if (moves.length === 0) continue;
+	for (const raw of rows) {
+		// a malformed stored row names nobody
+		const row = Option.getOrUndefined(decodeOpen(raw));
+		if (row === undefined) continue;
+		const moves = decisionsFor(row.state, rolesOf(row, auth));
+		const mine = row.requestor === me;
+		if (moves.length === 0 && !mine) continue;
 		requests.push({
-			id: String(row['id']),
-			collection: String(row['collection']),
-			record: String(row['record']),
-			action: String(row['action']),
-			status: STATUS[state],
-			step: request.step,
-			steps: request.route.steps.length,
-			at: String(row['at']),
-			requestor: request.requestor,
-			by: String(row['by']),
-			mine: request.requestor === me,
-			canDecide: state === 'Pending' && canApprove(request, actor),
-			canSupersede: state === 'Pending' && canSupersede(request, auth),
-			moves: moves.map(({ move, reason }) => ({ status: STATUS_OF[move], reason }))
+			id: row.id,
+			collection: row.collection,
+			record: row.record,
+			action: row.action,
+			status: row.state,
+			step: row.step,
+			steps: row.route.steps,
+			at: row.at,
+			requestor: row.requestor,
+			by: row.by,
+			mine,
+			canDecide: row.state === 'Pending' && canApprove(row, actor),
+			canSupersede: row.state === 'Pending' && canSupersede(row, auth),
+			moves
 		});
 		if (requests.length === 200) break;
 	}

@@ -10,21 +10,24 @@ import { BoltError, CODE } from '../protocol/errors.ts';
 const DbErrorFields = {
 	sqlstate: Schema.String,
 	message: Schema.String,
-	constraint: Schema.optional(Schema.String)
+	constraint: Schema.optional(Schema.String),
+	column: Schema.optional(Schema.String)
 };
 type DbErrorProps = Schema.Struct.MakeIn<typeof DbErrorFields>;
 type DbErrorArgs =
-	| [sqlstate: string, message: string, constraint?: string]
+	| [sqlstate: string, message: string, constraint?: string, column?: string]
 	| [props: DbErrorProps, options?: Schema.MakeOptions];
 /** What a Postgres adapter fails with: the SQLSTATE and constraint the write compiler maps to a refusal (rule 20). */
 export class DbError extends Schema.TaggedError<DbError>()('DbError', DbErrorFields) {
-	static override make(...args: [sqlstate: string, message: string, constraint?: string]): DbError;
+	static override make(
+		...args: [sqlstate: string, message: string, constraint?: string, column?: string]
+	): DbError;
 	/** The Schema class's own form (`new DbError(props)`), which the static side keeps. */
 	static override make(...args: [props: DbErrorProps, options?: Schema.MakeOptions]): DbError;
 	static override make(...args: DbErrorArgs): DbError {
 		if (isDbProps(args)) return new DbError(args[0], args[1]);
-		const [sqlstate, message, constraint] = args;
-		return new DbError({ sqlstate, message, constraint });
+		const [sqlstate, message, constraint, column] = args;
+		return new DbError({ sqlstate, message, constraint, column });
 	}
 }
 const isDbProps = (

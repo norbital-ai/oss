@@ -1,6 +1,7 @@
 /**
- * `@norbital-ai/doctor` (RFC §3.3.10, OD-K5′): `bolt check` packs. Workspace: `boundaries`, `layout`, `svelte`,
- * `reactive`. Realm gates add `packs/realm/*`. Exception: `repository-health:allow <rule> -- <reason>`.
+ * `@norbital-ai/doctor` (RFC §3.3.10, OD-K5′): the audit's packs. Workspace: `boundaries`, `layout`, `svelte`,
+ * `reactive`; an organization's rule set adjusts them (`audit`). Realm gates add `packs/realm/*`. Exception:
+ * `repository-health:allow <rule> -- <reason>`.
  */
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,6 @@ import type { Confidence, Rule, Severity } from './rules.js';
 import type { Constraints, Matcher, Utils } from './matcher.js';
 import { searchRule } from './pattern.js';
 import { runRules, searchRules, sourceFiles, type Match } from './runner.js';
-import type { Program } from 'typescript';
 import { runTypeAware } from './type-aware.js';
 
 export type Finding = Readonly<{
@@ -29,8 +29,9 @@ export type Finding = Readonly<{
 /** One compiled pack rule. */
 export type DoctorRule = Rule;
 
-const PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
-const WORKSPACE = ['boundaries', 'layout', 'svelte', 'reactive'];
+export const PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
+/** The packs a workspace's audit runs. */
+export const WORKSPACE = ['boundaries', 'layout', 'svelte', 'reactive'] as const;
 const loaded = new Map<string, ReadonlyArray<DoctorRule>>();
 
 /**
@@ -43,12 +44,10 @@ export function doctor(
 		files?: ReadonlyArray<string>;
 		includeTests?: boolean;
 		packs?: ReadonlyArray<string>;
-		/** A TypeScript program over these files to reuse for the type-aware rules (Bolt's type index builds one). */
-		program?: { readonly program: Program; readonly version: string };
 	}> = {}
 ): ReadonlyArray<Finding> {
 	const root = resolve(options.root ?? process.cwd());
-	const packs = options.packs ?? WORKSPACE;
+	const packs: ReadonlyArray<string> = options.packs ?? WORKSPACE;
 	const rules = packs
 		.filter((pack) => pack !== 'realm/types')
 		.flatMap((pack) => {
@@ -70,8 +69,7 @@ export function doctor(
 		? runTypeAware({
 				root,
 				files,
-				deprecated: packs.includes('realm/types'),
-				...(options.program === undefined ? {} : { program: options.program })
+				deprecated: packs.includes('realm/types')
 			})
 		: [];
 	return applyAllowances(root, [...runRules({ root, rules, files }), ...types]);

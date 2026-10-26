@@ -1,20 +1,22 @@
-// `automation()` (§3.3.8, rules 48–56): triggers are one literal union (P26); the run body attaches with `a.run`
-// exactly once, typed from the literal (its input from the triggers or the declared input, its output, its ctx).
+// `automation('<name>', …)` (§3.3.8, rules 48–56): triggers are one literal union (P26); the `run` body sits in the
+// literal, typed from the generated names (its input from the triggers or the declared input, its output, its ctx).
 import type { Actor } from '../access/actor.ts';
-import { attached, type AgentUse } from '../collection.ts';
+import { attached, type AgentUse, type Body } from '../body.ts';
 import type { Act, BodyReturn, Eff, QueryCtx } from '../ctx.ts';
+import type { Transaction } from '../transaction.ts';
 import type {
 	Checked,
 	Exact,
 	InputFields,
-	InputKind,
 	InputOf,
 	Simplify,
-	ValidInput,
+	ValidOutput,
+	OutputKind,
 	ValidInputs,
 	ValueOf
 } from '../fields.ts';
 import type {
+	AutomationName,
 	CollectionName,
 	PolicyName,
 	ReadField,
@@ -36,7 +38,7 @@ import type {
 	Send,
 	Web
 } from './facilities.ts';
-import type { SecretName } from './names.ts';
+import type { AutomationSpecOf, SecretName } from './names.ts';
 
 type Macro = '@yearly' | '@annually' | '@monthly' | '@weekly' | '@daily' | '@hourly';
 type Fields<S, N extends unknown[] = [0]> = S extends `${string} ${infer R}`
@@ -48,7 +50,12 @@ export type Cron<S> = S extends Macro
 	: Fields<S> extends 5
 		? S
 		: 'error: a cron is 5 fields or a macro';
-export type WebhookScheme = 'bearer' | 'hmac-sha256' | 'svix' | 'stripe' | 'slack' | 'meta';
+/**
+ * How a webhook is signed: `standard` is Standard Webhooks (HMAC-SHA256 over `id.timestamp.body`, `webhook-*` headers;
+ * Svix sends the same scheme under `svix-*` headers and is accepted as it), `hmac-sha256` a hex digest of the body,
+ * `stripe`, `slack` and `meta` those providers' own signatures, `bearer` a shared token in `Authorization`.
+ */
+export type WebhookScheme = 'standard' | 'hmac-sha256' | 'stripe' | 'slack' | 'meta' | 'bearer';
 /** Ledgers take no trigger (X-18). */
 type TriggerTarget = ReadableName;
 /** Fields an `updated` trigger may name: exposed, stored or derived, never system columns. */
@@ -56,7 +63,7 @@ type TriggerField<C> = Exclude<ReadField<C>, keyof SystemColumns<C>>;
 
 /**
  * When an automation runs (its `on`): a `cron` schedule, a `webhook` path, or a row `created`, `updated` or `deleted` in a
- * collection (optionally filtered by `where`, `fields`, and delayed).
+ * model (optionally filtered by `where`, `fields`, and delayed).
  */
 export type Trigger =
 	| { cron: string; tz?: IanaZone }
@@ -83,12 +90,13 @@ type ValidTrigger<T> = T extends { cron: infer S }
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+/** An automation literal's data: what the manifest holds (the `run` body is not data). */
 export type AutomationSpec = {
 	description: string;
 	/** The typed input a start or schedule passes. */
 	input?: InputFields;
 	/** The typed result recorded on the run. */
-	output?: InputKind;
+	output?: OutputKind;
 	/** What runs it: cron, webhook, or a row created, updated or deleted; absent means started only. */
 	on?: Trigger | readonly Trigger[];
 	/** The policies the run holds, or `'trigger'` (the starter's authority) for an automation with no `on`. */
@@ -103,10 +111,10 @@ export type AutomationSpec = {
 	agent?: AgentUse;
 };
 type On<S> = S extends { on: infer O } ? (O extends readonly unknown[] ? O[number] : O) : never;
-type AutomationFor<S> = {
+type AutomationFor<N, S> = {
 	description: string;
 	input?: S extends { input: infer I } ? ValidInputs<I> : InputFields;
-	output?: S extends { output: infer O } ? ValidInput<O> : InputKind;
+	output?: S extends { output: infer O } ? ValidOutput<O> : OutputKind;
 	on?: S extends { on: infer O }
 		? O extends readonly unknown[]
 			? { [I in keyof O]: ValidTrigger<O[I]> }
@@ -125,6 +133,7 @@ type AutomationFor<S> = {
 	retry?: { attempts: Attempts; backoff?: Duration };
 	concurrency?: { max: Max };
 	agent?: AgentUse;
+	run: RunBody<SpecOf<N>>;
 };
 
 // ── the run's input and ctx ──
@@ -132,7 +141,7 @@ type Target<T> = T extends { created: infer C } | { updated: infer C } | { delet
 	? C & CollectionName
 	: never;
 type Deleted<T> = T extends { deleted: infer C } ? C & CollectionName : never;
-/** One row-event trigger's input: which collection fired, correlated with the ids it fired for. */
+/** One row-event trigger's input: which model fired, correlated with the ids it fired for. */
 type RowArm<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
 	? { readonly collection: C & CollectionName; readonly ids: readonly Id<C & CollectionName>[] }
 	: never;
@@ -145,12 +154,14 @@ type EventInput<T> = [Target<T>] extends [never]
 type Removed<T> = [Deleted<T>] extends [never]
 	? {}
 	: { readonly rows?: readonly Row<Deleted<T>>[] };
+/** What `run` receives: the declared input, else the row event that fired it (and a `deleted` run's pre-images). */
 export type RunInput<S> = Simplify<
 	(S extends { input: infer I } ? InputOf<I> : EventInput<On<S>>) & Removed<On<S>>
 >;
+/** What `run` returns: the declared output, recorded on the run. */
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
-/** `a.run`'s ctx (§3.4): reads, writes and schedules as its `runAs` policies; the only place for I/O. */
+/** `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `runAs` policies; the only place for I/O. */
 export type AutomationCtx<S = AutomationSpec> = Omit<QueryCtx, 'actor' | 'refuse'> & {
 	actor: S extends { runAs: 'trigger' } ? Actor : Extract<Actor, { kind: 'system' }>;
 	/** 1 on the first attempt. */
@@ -158,6 +169,8 @@ export type AutomationCtx<S = AutomationSpec> = Omit<QueryCtx, 'actor' | 'refuse
 	cause: RunCause;
 	progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
 	act: Act;
+	/** Caller-scoped model reads and guarded CRUD in one fixed five-second native transaction. */
+	transaction: Transaction;
 	schedule: Schedule;
 	notify: Notify;
 	send: Send;
@@ -170,38 +183,35 @@ export type AutomationCtx<S = AutomationSpec> = Omit<QueryCtx, 'actor' | 'refuse
 	geo: Geo;
 };
 type RunBody<S> = (input: RunInput<S>, ctx: AutomationCtx<S>) => BodyReturn<RunOutput<S>>;
-export type Automation<S> = {
+/** Automation `N`'s data from the generated names; the general shape until the first sync knows it. */
+type SpecOf<N> = [AutomationSpecOf<N>] extends [never] ? AutomationSpec : AutomationSpecOf<N>;
+/** The literal `automation(N, …)` takes: its data and the `run` body, typed from the generated names. */
+type AutomationLiteral<N> = AutomationSpec & { run: RunBody<SpecOf<N>> };
+/** What `automation()` returns: the name, the literal, and `run` as the guest calls it. */
+export type Automation<N extends string, S> = {
+	readonly name: N;
 	readonly spec: S;
-	/** Exactly once (a missing body is a build error). */
-	run(body: RunBody<S>): void;
-	/** The attached body, read by the compiler. */
-	readonly body: RunBody<S> | undefined;
+	readonly body: Body;
 };
 
 /**
  * `src/automation/+<a>.automation.ts`: work that runs on a trigger (`on`: cron, webhook, a row created, updated or deleted)
- * or when started, as the policies in `runAs`, with typed `input` and `output`, retries and concurrency. The body attaches
- * with `a.run(function* (input, ctx) { … })`; `ctx` carries reads, `act`, files, AI and the other facilities.
+ * or when started, as the policies in `runAs`, with typed `input` and `output`, retries and concurrency. `run` is a
+ * generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
  * @example
- * const a = automation({ description: 'Daily sweep of lapsed quotes.', on: { cron: '0 6 * * *' }, runAs: ['quote_watch'] });
- * export default a;
- * a.run(function* (_, ctx) {
- * 	const lapsed = yield* ctx.read('quotes', { where: { valid_until: { lt: { today: '' } } }, limit: 50 });
- * 	yield* ctx.progress({ text: `${lapsed.rows.length} lapsed` });
+ * export default automation('sweep_quotes', {
+ * 	description: 'Daily sweep of lapsed quotes.',
+ * 	on: { cron: '0 6 * * *' },
+ * 	runAs: ['quote_watch'],
+ * 	run: function* (_, ctx) {
+ * 		const lapsed = yield* ctx.query('quotes', { where: { valid_until: { lt: ctx.today } }, limit: 50 });
+ * 		yield* ctx.progress({ text: `${lapsed.rows.length} lapsed` });
+ * 	}
  * });
  */
-export function automation<const S extends AutomationSpec>(
-	spec: S & NoInfer<Checked<AutomationSpec, S, Exact<S, AutomationFor<S>>>>
-): Automation<S> {
-	let body: RunBody<S> | undefined;
-	return {
-		spec,
-		run(b) {
-			if (body !== undefined) throw new Error('automation: run is attached twice');
-			body = attached(b, 1);
-		},
-		get body() {
-			return body;
-		}
-	};
+export function automation<const N extends AutomationName, const S extends AutomationLiteral<N>>(
+	name: N,
+	spec: S & NoInfer<Checked<AutomationLiteral<N>, S, Exact<S, AutomationFor<N, S>>>>
+): Automation<N, S> {
+	return { name, spec, body: attached(spec.run, 1) };
 }

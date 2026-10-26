@@ -435,14 +435,14 @@ const open = Effect.fn('Mailbox.open')(function* (
 	const completion = yield* callbackCompletion;
 	/** The OAuth client a mailbox signs in with: Microsoft's is the operator's app, Google's the host's (or the definition's). */
 	const clientOf = (mailbox: Mailbox) =>
-		Effect.suspend(() => {
+		Effect.gen(function* () {
 			const client =
 				mailbox.method === 'microsoft'
 					? { id: mailbox.oauth.clientId, secret: mailbox.oauth.clientSecret }
 					: mailbox.method === 'google'
-						? ctx.oauthClient('google')
+						? yield* Effect.promise(() => ctx.oauthClient('google'))
 						: undefined;
-			return client === undefined
+			return yield* client === undefined
 				? Effect.fail(
 						new ProviderUnavailable({ message: 'This host has no sign-in for the mailbox' })
 					)
@@ -738,13 +738,19 @@ const open = Effect.fn('Mailbox.open')(function* (
 			completion.reset(
 				Effect.gen(function* () {
 					pending = null;
-					const draft = yield* mailboxOf(method, input, known, personal, ctx.state());
+					const draft = yield* mailboxOf(
+						method,
+						input,
+						known,
+						personal,
+						yield* Effect.promise(() => ctx.state())
+					);
 					if (draft.method === 'password') {
 						yield* verify(draft, null);
 						yield* adopt(draft, null);
 						return;
 					}
-					const pairing = attempt(ctx.state()),
+					const pairing = attempt(yield* Effect.promise(() => ctx.state())),
 						client = yield* clientOf(draft);
 					pending = {
 						state: pairing.state,
@@ -840,7 +846,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 							})
 						);
 					const mailbox = yield* need(),
-						local = ctx.state(),
+						local = yield* Effect.promise(() => ctx.state()),
 						mid = midOf(mailbox, local),
 						auth = yield* login(mailbox);
 					yield* submit(

@@ -1,10 +1,8 @@
-import { Clock, Effect, Layer, Option, Predicate, Schema } from 'effect';
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { Clock, Effect, Layer, Option, Schema } from 'effect';
 import { csvRows } from '@norbital-ai/std/csv';
 import { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
+import type { ConvertSource } from '../decl/runtime/facilities.ts';
 import {
 	LIMITS,
 	CONVERT_MIME,
@@ -14,14 +12,15 @@ import {
 } from './contracts.ts';
 import type { EngineManifest } from './manifest.ts';
 import { TenantDb, type TenantDbShape } from './db/tenant-db.ts';
-import { Ai, Convert, Files, Geo, Speech, Transport, WebRead } from './ports.ts';
+import { Ai, Convert, Files, Geo, Images, Speech, Transport, WebRead } from './ports.ts';
 import { Port, type PortFailure } from './port.ts';
 import { Decisions, Facilities, Manifest, type FacilityCall } from './services.ts';
 import { imageFacts, imageJpeg } from './files/image.ts';
 import { sizeBytes } from './callables/upload.ts';
 import { xlsxCells, xlsxSheets } from './files/xlsx.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import { DecisionRequestSchema } from './decisions/index.ts';
-import { inferFacility, inferMs } from './agent/ai.ts';
+import { inferFacility } from './agent/ai.ts';
 import { PATHS } from '../protocol/wire.ts';
 
 const FileRow = Schema.Struct({
@@ -35,7 +34,21 @@ const FileRow = Schema.Struct({
 });
 type FileRow = typeof FileRow.Type;
 const PutOptions = Schema.Struct({ name: Schema.String, mime: Schema.String, for: Schema.String });
-const Reference = Schema.Struct({ id: Schema.String });
+/** A FileRef as a facility takes it: its `id` names the stored file. */
+export const Reference = Schema.Struct({ id: Schema.String });
+/** `files.image` options: with `jpeg`, a JPEG copy no larger than `maxEdge` is stored; without, the image's facts. */
+export const ImageOptions = Schema.Struct({
+	jpeg: Schema.optionalKey(
+		Schema.Struct({ maxEdge: Schema.Int.check(Schema.isBetween({ minimum: 16, maximum: 8192 })) })
+	)
+});
+/** `ai.embed` inputs: text, or stored files by FileRef. */
+export const EmbedInputs = Schema.Array(
+	Schema.Union([
+		Schema.String,
+		Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String })
+	])
+);
 const invalid = (message: string) => new FacilityFailure({ kind: 'invalid', message });
 const answered = (value: Json): CrossAnswer => ({ ok: true, value });
 const wireError = (error: PortFailure): CrossAnswer => ({
@@ -85,50 +98,135 @@ export const fileLoader =
 			};
 		});
 
-export function localFiles(dir: string): Files['Service'] {
-	const path = (key: string): Effect.Effect<string, FacilityFailure> =>
-		/^[0-9a-f]{64}$/.test(key)
-			? Effect.succeed(join(dir, key))
-			: Effect.fail(invalid('invalid local file key'));
-	return {
-		put: (bytes, meta) =>
-			Effect.gen(function* () {
-				const key = createHash('sha256').update(bytes).digest('hex');
-				yield* Port.attempt('files', () => mkdir(dir, { recursive: true }));
-				yield* Port.attempt('files', () => writeFile(join(dir, key), bytes));
-				return { key, bytes: bytes.byteLength, sha256: key, mime: meta.mime };
-			}),
-		get: (key, max) =>
-			Effect.gen(function* () {
-				const bytes = new Uint8Array(
-					yield* path(key).pipe(
-						Effect.flatMap((file) => Port.attempt('files', () => readFile(file)))
-					)
+/** A stored file's FileRef as the wire carries it. */
+export type StoredFile = {
+	readonly id: string;
+	readonly name: string;
+	readonly mime: string;
+	readonly bytes: number;
+	readonly sha256: string;
+};
+/**
+ * Stores `bytes` as a `sys_file` of at most `max` bytes, owned by `for`: a model's file field (`<model>.<field>`), an
+ * automation, or a member's own file (`<model>.$export.<sync>`, `bolt.$export`), which only `by` downloads.
+ */
+export const storeFile =
+	(ports: Pick<FacilityPorts, 'db' | 'manifest' | 'files'>) =>
+	(
+		bytes: Uint8Array,
+		file: {
+			readonly name: string;
+			readonly mime: string;
+			readonly for: string;
+			readonly by?: string | undefined;
+		},
+		via: string,
+		max: number = LIMITS.fileBytes
+	): Effect.Effect<StoredFile, PortFailure> =>
+		Effect.gen(function* () {
+			if (bytes.byteLength > max)
+				return yield* Effect.fail(
+					new FacilityFailure({ kind: 'tooLarge', message: `${via} wrote over ${max} bytes` })
 				);
-				if (bytes.byteLength > max)
-					return yield* Effect.fail(
-						new FacilityFailure({
-							kind: 'tooLarge',
-							message: `the file holds ${bytes.byteLength} bytes; at most ${max} were requested`
-						})
-					);
-				return bytes;
-			}),
-		url: () => Port.unavailable('files.url', 'local files have no signed URLs'),
-		remove: (key) =>
-			path(key).pipe(
-				Effect.flatMap((file) => Port.attempt('files', () => unlink(file))),
-				Effect.asVoid
-			)
+			if (!(file.for in ports.manifest.automations) && !file.for.includes('.'))
+				return yield* Effect.fail(invalid(`${via}: for names a field or automation`));
+			const blob = yield* ports.files
+				.put(bytes, { name: file.name, mime: file.mime })
+				.pipe(Port.call('files', LIMITS.callMs.other));
+			const now = new Date(yield* Clock.currentTimeMillis).toISOString(),
+				id = globalThis.crypto.randomUUID();
+			const sha256 = sha256Hex(bytes);
+			yield* ports.db
+				.write({
+					text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)`,
+					params: [
+						id,
+						file.name,
+						file.mime,
+						bytes.byteLength,
+						blob.key,
+						sha256,
+						file.for,
+						now,
+						file.by ?? null
+					]
+				})
+				.pipe(Effect.mapError(databaseFailure));
+			return { id, name: file.name, mime: file.mime, bytes: bytes.byteLength, sha256 };
+		});
+
+/** `convert.document`'s options as a guest sends them (a guest never names `by`). */
+const DocumentRequest = Schema.Struct({
+	to: Schema.Literals(CONVERT_TARGETS),
+	name: Schema.String,
+	for: Schema.String,
+	page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
+	landscape: Schema.optionalKey(Schema.Boolean),
+	reference: Schema.optionalKey(Reference)
+});
+const Source = Schema.Union([
+	Schema.Struct({ markdown: Schema.String }),
+	Schema.Struct({ html: Schema.String })
+]);
+/** A conversion: a declared target, its file name and options, the owner `for` and, for a member's own file, `by`. */
+export type DocumentRequest = typeof DocumentRequest.Type & { readonly by?: string | undefined };
+/** One conversion through the host's converter, stored like `files.put`: the target must be declared and served. */
+const convertWith =
+	(ports: Pick<FacilityPorts, 'db' | 'manifest' | 'files' | 'convert'>) =>
+	(source: ConvertSource, request: DocumentRequest): Effect.Effect<StoredFile, PortFailure> =>
+		Effect.gen(function* () {
+			if (!ports.manifest.workspace.convert?.to.includes(request.to))
+				return yield* Effect.fail(
+					invalid(`'${request.to}' is not declared in workspace.convert.to`)
+				);
+			if (request.to !== 'pdf' && (request.page !== undefined || request.landscape !== undefined))
+				return yield* Effect.fail(invalid("page and landscape are a pdf's options"));
+			if (request.reference !== undefined && !['docx', 'pptx', 'odt'].includes(request.to))
+				return yield* Effect.fail(invalid(`${request.to} takes no reference document`));
+			if (!ports.convert.targets.includes(request.to))
+				return yield* Port.unavailable('convert', `the host provides no ${request.to} converter`);
+			const reference =
+				request.reference === undefined
+					? undefined
+					: (yield* fileLoader(ports.db, ports.files)(request.reference.id)).bytes;
+			const bytes = yield* ports.convert.convert(source, request.to, {
+				...(reference === undefined ? {} : { reference }),
+				...(request.page === undefined ? {} : { page: request.page }),
+				...(request.landscape === undefined ? {} : { landscape: request.landscape })
+			});
+			return yield* storeFile(ports)(
+				bytes,
+				{ name: request.name, mime: CONVERT_MIME[request.to], for: request.for, by: request.by },
+				'convert.document'
+			);
+		});
+/**
+ * H5, the one converter: `source` to `request.to`, stored for `request.for` within the convert wall. `ctx.convert.document`,
+ * a page's `bolt.convert` (`for: 'bolt.$export'`, `by` the viewer), a notice attachment at delivery and a file sync's
+ * document export all convert here.
+ */
+export const convertDocument = Effect.fn('convertDocument')(function* (
+	source: ConvertSource,
+	request: DocumentRequest
+) {
+	const ports = {
+		db: yield* TenantDb,
+		manifest: yield* Manifest,
+		files: yield* Files,
+		convert: yield* Convert
 	};
-}
+	return yield* convertWith(ports)(source, request).pipe(
+		Port.call('convert.document', LIMITS.callMs.database)
+	);
+});
+
 export const loggedTransport = (
 	kind: string,
 	log: (line: string) => void
 ): Transport['Service'] => ({
 	send: (message) =>
 		Effect.sync(() => {
-			const providerId = randomUUID();
+			const providerId = globalThis.crypto.randomUUID();
 			log(`[${kind}] ${JSON.stringify(message)}`);
 			return { providerId };
 		})
@@ -137,6 +235,7 @@ export type FacilityPorts = {
 	readonly db: TenantDbShape;
 	readonly manifest: EngineManifest;
 	readonly files: Files['Service'];
+	readonly images: Images['Service'];
 	readonly convert: Convert['Service'];
 	readonly speech: Speech['Service'];
 	readonly web: WebRead['Service'];
@@ -162,30 +261,7 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 				: row.value;
 		});
 	const store = (bytes: Uint8Array, name: string, mime: string, owner: string, via: string) =>
-		Effect.gen(function* () {
-			if (bytes.byteLength > LIMITS.fileBytes)
-				return yield* Effect.fail(
-					new FacilityFailure({
-						kind: 'tooLarge',
-						message: `${via} wrote over ${LIMITS.fileBytes} bytes`
-					})
-				);
-			if (!(owner in ports.manifest.automations) && !owner.includes('.'))
-				return yield* Effect.fail(invalid(`${via}: for names a field or automation`));
-			const blob = yield* ports.files
-				.put(bytes, { name, mime })
-				.pipe(Port.call('files', LIMITS.callMs.other));
-			const now = new Date(yield* Clock.currentTimeMillis).toISOString(),
-				id = randomUUID();
-			const sha256 = createHash('sha256').update(bytes).digest('hex');
-			yield* ports.db
-				.write({
-					text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)`,
-					params: [id, name, mime, bytes.byteLength, blob.key, sha256, owner, now]
-				})
-				.pipe(Effect.mapError(databaseFailure));
-			return answered({ id, name, mime, bytes: bytes.byteLength, sha256 });
-		});
+		storeFile(ports)(bytes, { name, mime, for: owner }, via).pipe(Effect.map(answered));
 	const file = (call: FacilityCall) =>
 		Effect.gen(function* () {
 			const first = call.args[0],
@@ -212,21 +288,18 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 				.get(row.key, LIMITS.storedFileBytes)
 				.pipe(Port.call('files', LIMITS.callMs.other));
 			if (call._tag === 'files.image') {
-				const jpeg = Predicate.isObject(options) ? options['jpeg'] : undefined;
+				const { jpeg } = yield* decode(
+					ImageOptions,
+					options ?? {},
+					'files.image takes { jpeg: { maxEdge: 16..8192 } }'
+				);
 				if (jpeg === undefined)
 					return answered({
 						...(yield* imageFacts(bytes)),
-						sha256: createHash('sha256').update(bytes).digest('hex')
+						sha256: sha256Hex(bytes)
 					});
-				const spec = yield* decode(
-					Schema.Struct({
-						maxEdge: Schema.Int.check(Schema.isBetween({ minimum: 16, maximum: 8192 }))
-					}),
-					jpeg,
-					'files.image takes { jpeg: { maxEdge: 16..8192 } }'
-				);
 				return yield* store(
-					yield* imageJpeg(bytes, spec.maxEdge),
+					yield* imageJpeg(bytes, jpeg.maxEdge),
 					`${row.name.replace(/\.[^./]*$/, '')}.jpg`,
 					'image/jpeg',
 					row.field,
@@ -267,13 +340,13 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 							: rows
 				);
 			}
-			const asked = Predicate.isObject(options) ? options['max'] : undefined;
+			const { max: asked } = yield* decode(
+				Schema.Struct({ max: Schema.optionalKey(Schema.String) }),
+				options ?? {},
+				'files.get: max is not a size'
+			);
 			const max = Math.min(
-				asked === undefined
-					? LIMITS.fileBytes
-					: Predicate.isString(asked)
-						? sizeBytes(asked)
-						: Number.NaN,
+				asked === undefined ? LIMITS.fileBytes : sizeBytes(asked),
 				LIMITS.fileBytes
 			);
 			if (!Number.isFinite(max) || max < 0)
@@ -290,13 +363,14 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 	return (call) =>
 		Effect.gen(function* () {
 			const [first, given] = call.args;
-			const options = Predicate.isObject(given) ? given : {};
 			switch (call._tag) {
 				case 'web.read': {
 					const url = yield* decode(Schema.String, first, 'web.read takes a URL');
-					const raw = options['raw'];
-					if (raw !== undefined && typeof raw !== 'boolean')
-						return yield* Effect.fail(invalid('web.read raw is a boolean'));
+					const { raw } = yield* decode(
+						Schema.Struct({ raw: Schema.optionalKey(Schema.Boolean) }),
+						given ?? {},
+						'web.read raw is a boolean'
+					);
 					return answered(yield* ports.web.read(url, raw === undefined ? undefined : { raw }));
 				}
 				case 'geo.search':
@@ -344,34 +418,33 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 					return answered({ answers, costUsd: result.costUsd });
 				}
 				case 'ai.embed': {
-					const inputs = yield* decode(
-						Schema.Array(
-							Schema.Union([
-								Schema.String,
-								Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String })
-							])
-						),
-						first,
-						'embed takes strings or FileRefs'
+					const inputs = yield* decode(EmbedInputs, first, 'embed takes strings or FileRefs');
+					const embedding = yield* decode(
+						Schema.Struct({
+							model: Schema.optionalKey(Schema.String),
+							dimensions: Schema.optionalKey(Schema.Number)
+						}),
+						given ?? {},
+						'embed takes { model?, dimensions? }'
 					);
 					const resolved: EmbedInput[] = [];
 					for (const input of inputs) {
 						if (typeof input === 'string') resolved.push(input);
 						else {
 							const row = yield* rowOf(input);
-							const bytes = yield* ports.files.get(row.key, LIMITS.storedFileBytes);
 							resolved.push({
-								$file: { name: row.name, mime: row.mime, sha256: row.sha256, bytes }
+								$stored: {
+									key: row.key,
+									name: row.name,
+									mime: row.mime,
+									sha256: row.sha256,
+									bytes: row.size
+								}
 							});
 						}
 					}
-					const model = typeof options['model'] === 'string' ? options['model'] : 'default';
 					return answered(
-						yield* ports.ai.embed(
-							resolved,
-							model,
-							typeof options['dimensions'] === 'number' ? options['dimensions'] : undefined
-						)
+						yield* ports.ai.embed(resolved, embedding.model ?? 'default', embedding.dimensions)
 					);
 				}
 				case 'ai.transcribe': {
@@ -418,67 +491,37 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 					);
 				}
 				case 'convert.document': {
-					const spec = yield* decode(
-						Schema.Struct({
-							to: Schema.Literals(CONVERT_TARGETS),
-							name: Schema.String,
-							for: Schema.String,
-							page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
-							landscape: Schema.optionalKey(Schema.Boolean),
-							reference: Schema.optionalKey(Reference)
-						}),
+					const request = yield* decode(
+						DocumentRequest,
 						given,
 						'convert.document takes { to, name, for, page?: A4, A3 or Letter, landscape?, reference? }'
 					);
 					const source = yield* decode(
-						Schema.Union([
-							Schema.Struct({ markdown: Schema.String }),
-							Schema.Struct({ html: Schema.String })
-						]),
+						Source,
 						first,
 						'convert.document takes { markdown } or { html }'
 					);
-					if (!ports.manifest.workspace.convert?.to.includes(spec.to))
-						return yield* Effect.fail(
-							invalid(`'${spec.to}' is not declared in workspace.convert.to`)
-						);
-					if (spec.to !== 'pdf' && (spec.page !== undefined || spec.landscape !== undefined))
-						return yield* Effect.fail(invalid("page and landscape are a pdf's options"));
-					if (spec.reference !== undefined && !['docx', 'pptx', 'odt'].includes(spec.to))
-						return yield* Effect.fail(invalid(`${spec.to} takes no reference document`));
-					if (!ports.convert.targets.includes(spec.to))
-						return yield* Port.unavailable('convert', `the host provides no ${spec.to} converter`);
-					const reference =
-						spec.reference === undefined ? undefined : (yield* load(spec.reference.id)).bytes;
-					const bytes = yield* ports.convert.convert(source, spec.to, {
-						...(reference === undefined ? {} : { reference }),
-						...(spec.page === undefined ? {} : { page: spec.page }),
-						...(spec.landscape === undefined ? {} : { landscape: spec.landscape })
-					});
-					return yield* store(
-						bytes,
-						spec.name,
-						CONVERT_MIME[spec.to],
-						spec.for,
-						'convert.document'
-					);
+					return answered(yield* convertWith(ports)(source, request));
 				}
 			}
 		}).pipe(
-			Port.call(
-				call._tag,
+			Effect.provideService(Images, ports.images),
+			// an inference has no wall: its stall window ends it (compute model §3 "Limits and liveness")
+			<A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | FacilityFailure, R> =>
 				call._tag === 'ai.sys_2.infer'
-					? inferMs(call.args)
-					: call._tag === 'ai.transcribe' || call._tag === 'ai.speak'
-						? LIMITS.callMs.speech
-						: call._tag === 'files.image'
-							? LIMITS.callMs.image
-							: call._tag.startsWith('ai.')
-								? LIMITS.callMs.ai
-								: call._tag === 'convert.document'
-									? LIMITS.callMs.database
-									: LIMITS.callMs.other
-			),
+					? self
+					: Port.call(
+							call._tag,
+							call._tag === 'ai.transcribe' || call._tag === 'ai.speak'
+								? LIMITS.callMs.speech
+								: call._tag === 'files.image'
+									? LIMITS.callMs.image
+									: call._tag.startsWith('ai.')
+										? LIMITS.callMs.ai
+										: call._tag === 'convert.document'
+											? LIMITS.callMs.database
+											: LIMITS.callMs.other
+						)(self),
 			Effect.mapError((error): PortFailure =>
 				error._tag === 'FacilityFailure' || error._tag === 'Unavailable'
 					? error
@@ -494,6 +537,7 @@ export const FacilitiesLive = Layer.effect(
 		const db = yield* TenantDb,
 			manifest = yield* Manifest,
 			files = yield* Files,
+			images = yield* Images,
 			convert = yield* Convert,
 			speech = yield* Speech,
 			web = yield* WebRead,
@@ -501,9 +545,19 @@ export const FacilitiesLive = Layer.effect(
 			geo = yield* Geo,
 			decisions = yield* Decisions;
 		return {
-			dispatch: facilityDispatch({ db, manifest, files, convert, speech, web, ai, geo, decisions }),
+			dispatch: facilityDispatch({
+				db,
+				manifest,
+				files,
+				images,
+				convert,
+				speech,
+				web,
+				ai,
+				geo,
+				decisions
+			}),
 			fileLoader: fileLoader(db, files),
-			localFiles,
 			loggedTransport
 		};
 	})

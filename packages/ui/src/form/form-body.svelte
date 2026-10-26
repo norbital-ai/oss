@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The mounted draft: built once its row is known, and handed to every `Field` below by context.
-	import { fork, query } from '../effect/index.js';
+	import { fork, observeOnce } from '../effect/index.js';
 	import { getContext, onDestroy, untrack, type Snippet } from 'svelte';
 	import { watch } from 'runed';
 	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
@@ -12,6 +12,7 @@
 	import { locked, type FormSpec, type Outcome, type Row } from './draft.js';
 	import Field from './field.svelte';
 	import Grid from '../layout/grid.svelte';
+	import RunStatus from '../runs/RunStatus.svelte';
 	import Section, { groupSections, type RecordSection } from './section.svelte';
 	import { useBolt } from '../client/context.js';
 	import { msg } from '../text/messages.js';
@@ -79,13 +80,19 @@
 					record,
 					values,
 					act,
-					{ pendingApproval: t('pendingApproval'), conflict: t('conflict'), unknown: t('unknown') },
-					(field) => locked(modelFields, record)(field)
+					{
+						pendingApproval: t('pendingApproval'),
+						conflict: t('conflict'),
+						unknown: t('unknown'),
+						running: t('running')
+					},
+					(field) => locked(modelFields, record)(field),
+					(automation, input) => bolt.start(automation, input)
 				);
 	if (matching) untrack(() => form.prefill(values));
 	if (scope?.historical) form.mode = 'view';
 	provideForm(form);
-	const capabilities = query(() =>
+	const capabilities = observeOnce(() =>
 		matching ||
 		asked === true ||
 		scope?.historical ||
@@ -114,6 +121,7 @@
 			if (value === undefined) return;
 			if (
 				value !== null &&
+				spec.target.of === 'collection' &&
 				(value.collection !== spec.target.collection ||
 					value.id !== spec.target.id ||
 					value.revision !== record?.['revision'])
@@ -188,11 +196,15 @@
 							summary={typeof s?.summary === 'function' ? s.summary(form.row) : s?.summary}
 						>
 							<!-- short fields flow across the width; a structured or long one spans its row (Field) -->
-							<Grid minimum="card">{#each g.names as name (name)}<Field {name} />{/each}</Grid>
+							<Grid minimum="card"
+								>{#each g.names as name (name)}<Field {name} />{/each}</Grid
+							>
 						</Section>
 					{/each}
 				{:else}
-					<Grid minimum="card">{#each visible as name (name)}<Field {name} />{/each}</Grid>
+					<Grid minimum="card"
+						>{#each visible as name (name)}<Field {name} />{/each}</Grid
+					>
 				{/if}
 				{#if form.notice}
 					<Alert
@@ -202,6 +214,13 @@
 						{bolt.t(form.notice.text)}
 					</Alert>
 				{/if}
+				{#if form.run !== null}<RunStatus
+						automation={form.run.automation}
+						run={form.run}
+					/>{:else if form.notice?.run !== undefined}<RunStatus
+						automation={spec.callable}
+						run={form.notice.run}
+					/>{/if}
 			</div>
 		</div>
 		<!-- the action footer : a hairline above, unsaved changes said beside the buttons; none on a readonly form without actions -->
@@ -218,10 +237,18 @@
 						type="submit"
 						disabled={!form.canSave || controls.disabled || (update && !form.dirty)}
 					>
-						{#if form.pending}<Spinner class="size-4" />{t('saving')}{:else}{form.requestingApproval
-								? t('requestApproval')
-								: (submit ??
-									(spec.target.of === 'collection' && !update ? t('create') : t('save')))}{/if}
+						{#if form.pending}<Spinner class="size-4" />{spec.target.of === 'automation'
+								? msg(bolt, 'run.starting', 'Starting…')
+								: t('saving')}{:else}{form.resubmitting
+								? msg(bolt, 'record.resubmit', 'Resubmit')
+								: form.requestingApproval
+									? t('requestApproval')
+									: (submit ??
+										(spec.target.of === 'automation'
+											? msg(bolt, 'run.start', 'Start')
+											: !update
+												? t('create')
+												: t('save')))}{/if}
 					</Button>{/if}
 			</footer>{/if}
 	{/if}

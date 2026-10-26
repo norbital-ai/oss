@@ -2,6 +2,7 @@ import { Match, Predicate, Result, Schema } from 'effect';
 import { inputSchema, type Value } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { encodeWire } from '@norbital-ai/std/wire';
+import { utcOf } from '@norbital-ai/std/zone';
 import { likePattern } from '../kinds/kind.js';
 import { sortable as kindSortable } from '../kinds/registry.js';
 // The view popover's typed model (rule 16b, P34): filter rows that mirror `Where` (§3.3.9) and can only lower to a
@@ -73,8 +74,9 @@ export const INDEX: { readonly [key: string]: { op: 'search' | 'similar'; label:
 	$similar: { op: 'similar', label: 'Topic' }
 };
 export type Unit = 'week' | 'month' | 'quarter' | 'year';
-/** A condition's value: a literal, a list, a relative date span (with the catalogue's label, when it came from one), an
- * actor, or a `today`/`now`/`startOf` operand. */
+/** A condition's value: a literal, a list, a date span (with the catalogue's label, when it came from one), an actor, or
+ * a relative `today`/`now`/`startOf` value. The view keeps the relative form (its URL too, so "this month" rolls over);
+ * a read sends the literal it stands for at the page's clock (`toWhere` with a `FilterClock`). */
 export type RawArg =
 	| { lit: Value }
 	| { list: readonly Value[] }
@@ -366,19 +368,86 @@ export const radiusText = (m: number) =>
 	m >= 1000 ? `${Math.round(m / 100) / 10} km` : `${Math.round(m)} m`;
 const pointText = (p: { lat: number; lng: number }) => `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`;
 
+// ── relative values at the page's clock ──
+/** What a relative value resolves against: the page's `bolt.clock('day')` and the workspace zone. */
+export type FilterClock = { readonly today: string; readonly now: string; readonly zone: string };
+const UNIT_MS: { readonly [unit: string]: number } = {
+	s: 1_000,
+	min: 60_000,
+	h: 3_600_000,
+	d: 86_400_000
+};
+/** `'+3d'`, `'-1h'` as milliseconds; `''` is none. */
+const offsetMs = (offset: string): number => {
+	const m = /^([+-]\d+)(s|min|h|d)$/.exec(offset);
+	return m === null ? 0 : Number(m[1]) * (UNIT_MS[m[2] ?? ''] ?? 0);
+};
+/** The first day of the unit holding `today` (weeks start Monday), moved `shift` units, as the engine reads it. */
+function startOfDate(unit: Unit, shift: number, today: string): string {
+	const d = new Date(`${today}T00:00:00Z`),
+		[y, m] = [d.getUTCFullYear(), d.getUTCMonth()];
+	const out =
+		unit === 'week'
+			? new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86_400_000 + shift * 7 * 86_400_000)
+			: unit === 'month'
+				? new Date(Date.UTC(y, m + shift, 1))
+				: unit === 'quarter'
+					? new Date(Date.UTC(y, m - (m % 3) + 3 * shift, 1))
+					: new Date(Date.UTC(y + shift, 0, 1));
+	return out.toISOString().slice(0, 10);
+}
+type Relative = Extract<Arg, { _tag: 'today' | 'now' | 'startOf' }>;
+/** A relative value as the date (or, for an instant field, the instant in the workspace zone) it is at `clock`. */
+function literal(arg: Relative, clock: FilterClock, instant: boolean): string {
+	return Match.value(arg).pipe(
+		Match.tagsExhaustive({
+			today: (value) =>
+				new Date(Date.parse(`${clock.today}T00:00:00Z`) + offsetMs(value.today))
+					.toISOString()
+					.slice(0, 10),
+			now: (value) => new Date(Date.parse(clock.now) + offsetMs(value.now)).toISOString(),
+			startOf: (value) => {
+				const date = startOfDate(value.startOf, value.shift ?? 0, clock.today);
+				return instant ? new Date(utcOf(date, 0, clock.zone)).toISOString() : date;
+			}
+		})
+	);
+}
+/** A span's bound: a literal, or a relative value (`{ startOf: 'week' }`) kept as is without a clock. */
+function bound(value: Json, clock: FilterClock | undefined, instant: boolean): Json {
+	if (clock === undefined || !Predicate.isObject(value)) return value;
+	const unit = value['startOf'],
+		shift = value['shift'];
+	if (typeof value['today'] === 'string')
+		return literal({ _tag: 'today', today: value['today'] }, clock, instant);
+	if (typeof value['now'] === 'string')
+		return literal({ _tag: 'now', now: value['now'] }, clock, instant);
+	if (Schema.is(UnitSchema)(unit) && (shift === undefined || typeof shift === 'number'))
+		return literal(
+			{ _tag: 'startOf', startOf: unit, ...(shift === undefined ? {} : { shift }) },
+			clock,
+			instant
+		);
+	return value;
+}
+
 // ── lowering: Node → Where ──
-function operand(arg: Arg): Json {
+function operand(arg: Arg, clock: FilterClock | undefined, instant: boolean): Json {
 	return Match.value(arg).pipe(
 		Match.tagsExhaustive({
 			lit: (value) => encodeWire(value.lit),
 			list: (value) => encodeWire(value.list),
-			range: (value) => value.range,
-			today: (value) => ({ today: value.today }),
-			now: (value) => ({ now: value.now }),
-			startOf: (value) => ({
-				startOf: value.startOf,
-				...(value.shift === undefined ? {} : { shift: value.shift })
-			}),
+			range: (value) => value.range.map((b) => bound(b, clock, instant)),
+			today: (value) =>
+				clock === undefined ? { today: value.today } : literal(value, clock, instant),
+			now: (value) => (clock === undefined ? { now: value.now } : literal(value, clock, instant)),
+			startOf: (value) =>
+				clock === undefined
+					? {
+							startOf: value.startOf,
+							...(value.shift === undefined ? {} : { shift: value.shift })
+						}
+					: literal(value, clock, instant),
 			actor: (value) => ({ actor: value.actor })
 		})
 	);
@@ -400,7 +469,11 @@ export function complete(n: Node): boolean {
 	if ('list' in a) return a.list.length > 0;
 	return true;
 }
-function leafOps(n: Extract<Node, { t: 'cond' }>): Json {
+function leafOps(
+	n: Extract<Node, { t: 'cond' }>,
+	clock: FilterClock | undefined,
+	instant: boolean
+): Json {
 	const a = n.arg;
 	switch (n.op) {
 		case 'isNull':
@@ -418,18 +491,26 @@ function leafOps(n: Extract<Node, { t: 'cond' }>): Json {
 			return a !== null && 'lit' in a && typeof a.lit === 'string' ? a.lit : null;
 		case 'during': {
 			if (a === null || !('range' in a)) return null;
-			return { gte: a.range[0], lt: a.range[1] };
+			return { gte: bound(a.range[0], clock, instant), lt: bound(a.range[1], clock, instant) };
 		}
 		default:
-			return { [n.op]: a === null ? null : operand(a) };
+			return { [n.op]: a === null ? null : operand(a, clock, instant) };
 	}
 }
-/** A viewer node as a `Where` over `collection`; incomplete rows lower to nothing. */
-export function toWhere(cat: Catalog, collection: string, n: Node): Where | null {
+/**
+ * A viewer node as a `Where` over `collection`; incomplete rows lower to nothing. With `clock`, a relative value is the
+ * literal it stands for now (what a read sends); without, it stays relative (the URL).
+ */
+export function toWhere(
+	cat: Catalog,
+	collection: string,
+	n: Node,
+	clock?: FilterClock
+): Where | null {
 	if (!complete(n)) return null;
 	if (n.t === 'group') {
 		const parts = n.of
-			.map((x) => toWhere(cat, collection, x))
+			.map((x) => toWhere(cat, collection, x, clock))
 			.filter((x): x is Where => x !== null);
 		if (parts.length === 0) return null;
 		const body: Where =
@@ -441,7 +522,9 @@ export function toWhere(cat: Catalog, collection: string, n: Node): Where | null
 			name = steps.pop() ?? '';
 		if (n.q === 'some' || n.q === 'none' || n.q === 'every') {
 			const child = childOf(cat, collection, n.rel) ?? '';
-			const inner = n.of.map((x) => toWhere(cat, child, x)).filter((x): x is Where => x !== null);
+			const inner = n.of
+				.map((x) => toWhere(cat, child, x, clock))
+				.filter((x): x is Where => x !== null);
 			return wrap(steps, {
 				[name]: {
 					[n.q]: inner.length === 0 ? {} : inner.length === 1 ? (inner[0] ?? {}) : { and: inner }
@@ -464,7 +547,10 @@ export function toWhere(cat: Catalog, collection: string, n: Node): Where | null
 	if (r === null) return null;
 	const steps = n.path.split('.');
 	const [name = '', arm] = (steps.pop() ?? '').split(':');
-	let body = leafOps(n);
+	const instant =
+		r.leaf === 'field' &&
+		(r.kind.kind === 'instant' || (r.kind.kind === 'period' && r.kind.of !== 'date'));
+	let body = leafOps(n, clock, instant);
 	if (body === null) return null;
 	// a record picked by label is sent in the `is` form (it needs the relation exposed, never its FK column); actor
 	// operands and `isNull` stay on the FK
@@ -479,8 +565,15 @@ function wrap(steps: readonly string[], inner: Where): Where {
 	}, inner);
 }
 /** The viewer's rows as one `Where` (each top-level row a conjunct, so a URL clause drops alone). */
-export function rowsWhere(cat: Catalog, collection: string, rows: readonly Node[]): Where | null {
-	const parts = rows.map((r) => toWhere(cat, collection, r)).filter((x): x is Where => x !== null);
+export function rowsWhere(
+	cat: Catalog,
+	collection: string,
+	rows: readonly Node[],
+	clock?: FilterClock
+): Where | null {
+	const parts = rows
+		.map((r) => toWhere(cat, collection, r, clock))
+		.filter((x): x is Where => x !== null);
 	return parts.length === 0 ? null : parts.length === 1 ? (parts[0] ?? {}) : { and: parts };
 }
 

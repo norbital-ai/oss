@@ -1,14 +1,12 @@
-// Collection queries and actions, and run starts (rules 31, 33, 33a, 38d, 51): each reachable only by policy. A query is
-// a `/q` read: one guest invocation reading as its caller, nothing recorded. An action is one act: its body runs in one
-// invocation per target (reads as its caller), every `ctx.act` it makes passes the generated-verb pipeline as the caller
-// and is recorded, not written (`sink`), and the recorded writes, `ctx.schedule` runs and `ctx.notify` rows commit in the
-// action's one statement under its idempotency key; a refusal after guest code is the outcome record (rule 20). `start`
-// is one `sys_run` insert keyed by the client-minted run id.
-import { Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
+// Collection queries, generated-verb batches, and queued run starts are reachable only by policy.
+// A query invokes guest code with caller-scoped reads. A batch plans guarded generated verbs and commits
+// their writes in one statement under its idempotency key. A start queues runs without executing them.
+import { Array as EffectArray, Effect, Layer, Predicate, Result, Schema } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
+import { audited, auditActor } from '../audit-operation.ts';
+import { Audit } from '../audit.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import {
-	Activation,
 	Callables,
 	Guest,
 	Live,
@@ -17,7 +15,6 @@ import {
 	Wake,
 	Links,
 	type Bridge,
-	type CrossCall,
 	type Entry,
 	type CallerContext,
 	type CallResult,
@@ -30,75 +27,56 @@ import {
 	type ShapeOf
 } from '../services.ts';
 import type { EngineManifest } from '../manifest.ts';
-import type { ReadIR } from '../../protocol/ir-types.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import { dueAt as roundedDueAt, offsetMs } from '../runs/time.ts';
-import { readEngine } from '../query/engine.ts';
 import { approvalHook } from '../approvals/approvals.ts';
-import { collectionNotices } from '../notifications/rules.ts';
-import { Outcome as importedOutcome } from '../../protocol/schema.ts';
+import { FILE_SYNC_INPUT, fileSyncAdmits } from '../sync/file.ts';
+import { WriteOutcome as importedOutcome } from '../../protocol/schema.ts';
 import { replayOnce } from '../write/replay.ts';
 import { delegatedVerbAuthority, type AutomationDelegation } from '../access/delegation.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	LIMITS,
 	type Authority,
-	type Bindings,
 	type CrossAnswer,
 	type EngineActor,
-	type Invocation,
-	type NoticeRow,
 	type Outcome,
 	type RowData
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
 
-import * as ir from '../../protocol/ir.ts';
-import { constraintIndex } from '../schema/ddl.ts';
-import { schemaSlice } from '../schema/plan.ts';
+import * as ir from '../../protocol/reads.ts';
+import { constraintIndex } from '../schema/plan.ts';
 import { coalescing, memoReads } from '../query/engine.ts';
 import { act, transformBridge, type Verb, type WriteEngine } from '../write/act.ts';
 import {
 	actorId,
 	actorRef,
-	compileCommit,
+	executeCommit,
 	compileOutcomeRecord,
 	CommitAnswer,
 	committed,
 	type Commit,
 	type RateCharge
 } from '../write/commit.ts';
-import {
-	canonical,
-	Chain,
-	decided,
-	fingerprinting,
-	KEY_REUSE,
-	minter,
-	sha256Hex,
-	storedOutcome,
-	type Fingerprint
-} from '../write/sql.ts';
-import { decodeInput, type Decoded, type InputSpec } from './decode.ts';
+import { canonical, sha256Hex } from '@norbital-ai/store';
+import { Chain, decided, KEY_REUSE, storedOutcome } from '../write/sql.ts';
+import { decodeInput, decodeOutput, type Decoded } from './decode.ts';
 
 type Caller = CallerContext & {
 	delegation?: AutomationDelegation | undefined;
 };
 type Sink = (planned: PlannedCommit) => void;
-type ActionRequest = Caller & {
-	collection: string;
-	action: string;
-	input: Json;
-	key: string;
-	issuedAt: string;
-	retry?: boolean | undefined;
-	rate?: readonly RateCharge[] | undefined;
-	sink?: Sink | undefined;
-};
 type ActsRequest = Caller & {
 	name: string;
-	acts: readonly { collection: string; verb: Verb; input: Json }[];
+	acts: readonly {
+		collection: string;
+		verb: Verb;
+		input: Json;
+		observed?: Readonly<Record<string, number>> | undefined;
+		onConflict?: 'update' | 'keep' | undefined;
+	}[];
 	key: string;
 	issuedAt: string;
 	sink?: Sink | undefined;
@@ -107,7 +85,6 @@ type QueryRequest = Caller & { collection: string; query: string; input: Json };
 type CallablesConfig = {
 	engine: WriteEngine & { read: ReadsShape['run'] };
 	guest: GuestShape;
-	reads: (db: TenantDbShape) => ReadsShape['run'];
 	live: ShapeOf<typeof Live>;
 	wake: ShapeOf<typeof Wake>;
 	links: ShapeOf<typeof Links>;
@@ -115,18 +92,12 @@ type CallablesConfig = {
 
 type Refused = Extract<Outcome, { kind: 'refused' }>;
 type Planned = PlannedCommit;
-/** What one action act has recorded so far; nested `ctx.act` actions record into their caller's. */
+/** Planned generated verbs share their outer batch's commit and pending created rows. */
 type Recorder = {
 	commits: Planned[];
-	runs: Commit['runs'][number][];
-	notices: (NoticeRow & { id: string })[];
-	refusals: Map<string, Outcome>;
 	issuedAt: string;
 	db: TenantDbShape;
-	reads: ReadsShape['run'];
-	fingerprints: () => readonly Fingerprint[];
-	tables: Set<string>;
-	/** Rows created by earlier `ctx.act` calls of this act, readable as refs by later ones (keyed `collection␀id`). */
+	/** Rows created by earlier planned verbs, keyed `collection␀id`. */
 	pending: Map<string, RowData>;
 };
 type Performed = { output: Json } | { outcome: Outcome; guest: boolean } | { error: BoltError };
@@ -139,6 +110,21 @@ const refused = (code: Refused['code'], message: string, field?: string): Refuse
 });
 const HOUR = 3_600_000;
 export const VERBS: readonly Verb[] = ['create', 'update', 'delete', 'upsert', 'erase', 'import'];
+/** The generated verbs admitted by both typed and dynamically checked atomic batches. */
+export function isBatchCallable(callable: Callable): callable is Extract<
+	Callable,
+	{ _tag: 'Verb' }
+> & {
+	verb: 'create' | 'update' | 'upsert' | 'delete';
+} {
+	return (
+		callable._tag === 'Verb' &&
+		(callable.verb === 'create' ||
+			callable.verb === 'update' ||
+			callable.verb === 'upsert' ||
+			callable.verb === 'delete')
+	);
+}
 const fail = (code: string, message: string): CrossAnswer => ({
 	ok: false,
 	error: { kind: 'bolt', code, message }
@@ -155,31 +141,21 @@ const starterOf = (a: Authority): Json =>
 		teamTree: a.teamTree,
 		scopes: a.scopes
 	});
-const split = (callable: string) => {
-	const dot = callable.lastIndexOf('.');
-	return [callable.slice(0, dot), callable.slice(dot + 1)] as const;
-};
-
-/** Rules 33, 33a, 38d: a declared callable, reachable by this caller from this entry. */
+/** A declared query is reachable only through the caller's policy and entry. */
 function reach(
 	m: EngineManifest,
 	auth: Authority,
 	c: string,
-	part: 'queries' | 'actions',
 	name: string,
 	from: Entry
 ): Refused | null {
-	const spec = m.collections[c]?.[part]?.[name];
+	const spec = m.collections[c]?.queries?.[name];
 	if (spec === undefined)
-		throw BoltError.make(
-			'unknownCallable',
-			'decode',
-			`'${c}.${name}' is not a declared ${part === 'queries' ? 'query' : 'action'}`
-		);
+		throw BoltError.make('unknownCallable', 'decode', `'${c}.${name}' is not a declared query`);
 	if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not call this.');
 	if ('internal' in spec && spec.internal === true && from === 'Client')
 		return refused('forbidden', `'${c}.${name}' is callable only from server code.`);
-	return auth.admin || (auth.collections[c]?.[part] ?? []).includes(name)
+	return auth.admin || (auth.collections[c]?.queries ?? []).includes(name)
 		? null
 		: refused('forbidden', `You may not call '${c}.${name}'.`);
 }
@@ -207,12 +183,13 @@ export function parseCallable(
 	const verb = VERBS.find((verb) => verb === member);
 	if (verb !== undefined && manifest.collections[collection] !== undefined)
 		return Result.succeed({ _tag: 'Verb', collection, verb });
-	if (manifest.collections[collection]?.actions?.[member] !== undefined)
-		return Result.succeed({ _tag: 'Action', collection, action: member });
-	if (member === 'pipeline' && manifest.pipelines[collection] !== undefined)
-		return Result.succeed({ _tag: 'Pipeline', collection });
-	if (manifest.integrations[collection]?.feeds?.[member] !== undefined)
-		return Result.succeed({ _tag: 'Feed', integration: collection, feed: member });
+	const syncAt = callable.indexOf('.sync.');
+	if (syncAt > 0) {
+		const model = callable.slice(0, syncAt),
+			sync = callable.slice(syncAt + 6);
+		if (manifest.collections[model]?.syncs?.[sync] !== undefined)
+			return Result.succeed({ _tag: 'Sync', collection: model, sync });
+	}
 	if (manifest.automations[callable] !== undefined)
 		return Result.succeed({ _tag: 'Automation', automation: callable });
 	return Result.fail(
@@ -224,270 +201,39 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		m = e.manifest,
 		cat = catalogOf(m);
 	const guest = config.guest;
-	const constraints = constraintIndex(schemaSlice(m));
-
-	const read = Effect.fn('Callables.read')(function* (
-		batch: readonly ReadIR[],
-		c: Caller,
-		rec: Recorder | null
-	): Effect.fn.Return<readonly Json[], import('../errors.ts').EngineError> {
-		for (const r of batch) if (rec !== null && 'collection' in r) rec.tables.add(r.collection);
-		return yield* (rec?.reads ?? e.read)(
-			batch,
-			{ as: 'caller', authority: c.authority },
-			c.bindings
-		);
-	});
-
-	/** Rule 36: every ref the input names must be readable by the caller, before any guest code. */
-	const unreadable = Effect.fn('Callables.unreadable')(function* (
-		refs: Decoded['refs'],
-		c: Caller,
-		rec: Recorder | null = null
-	): Effect.fn.Return<Refused | null, import('../errors.ts').EngineError> {
-		if (refs.length === 0) return null;
-		const rows = yield* read(
-			refs.map((ref) => ir.get(cat, ref.collection, ref.id, {})),
-			c,
-			rec
-		).pipe(Effect.catch(() => Effect.succeed(refs.map(() => null))));
-		const i = rows.findIndex((r) => r === null);
-		return i < 0
-			? null
-			: refused('notFound', `No readable ${refs[i]!.collection} has this id.`, refs[i]!.field);
-	});
-
-	const invoke = Effect.fn('Callables.invoke')(function* (
-		kind: 'query' | 'action',
-		target: string,
-		input: Json,
-		c: Caller,
-		id: string,
-		rec: Recorder | null,
-		row?: Json
-	): Effect.fn.Return<import('../contracts.ts').GuestOutcome, import('../errors.ts').EngineError> {
-		const decodedRow =
-			row === undefined
-				? undefined
-				: yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(row).pipe(
-						Effect.mapError((error) => BoltError.make('internal', 'decode', error.message))
-					);
-		const inv: Invocation = {
-			id,
-			kind,
-			target,
-			input,
-			ctx: {
-				actor: c.authority.actor,
-				policies: c.authority.policies,
-				admin: c.authority.admin,
-				now: c.bindings.now,
-				today: c.bindings.today,
-				tz: c.bindings.tz,
-				seed: id,
-				...(decodedRow === undefined ? {} : { row: decodedRow })
-			},
-			budget: {
-				cpuMs: LIMITS.guestCpuMs,
-				crossings: LIMITS.crossings.sync,
-				readBytes: LIMITS.readBytes
-			}
-		};
-		return yield* guest.invoke(inv, bridge(c, id, rec, kind === 'action'));
-	});
-
-	/** Reads as the caller (rule 15), one round trip per crossing; inside an action, `act`/`schedule`/`notify` are recorded. */
-	function bridge(c: Caller, id: string, rec: Recorder | null, writable: boolean): Bridge {
-		let n = 0;
-		const one = Effect.fn('Callables.crossOne')(function* (
-			call: CrossCall,
-			sub: string
-		): Effect.fn.Return<CrossAnswer, import('../errors.ts').EngineError> {
-			if (call._tag === 'read' && call.read.kind === 'query') {
-				const queryRead = call.read;
-				return {
-					ok: true,
-					value: yield* query(
-						{
-							...c,
-							from: 'Server',
-							invocationId: sub,
-							collection: queryRead.collection,
-							query: queryRead.query,
-							input: queryRead.input
-						},
-						rec
-					)
-				};
-			}
-			if (rec === null || !writable)
-				return fail(
-					'unsupported',
-					`a collection query cannot ${call._tag}; queue an automation (rule 31)`
-				);
-			switch (call._tag) {
-				case 'act':
-					return {
-						ok: true,
-						value: yield* recordAct(
-							call.callable,
-							call.input,
-							{
-								...c,
-								observed: { ...call.options?.observed, ...c.observed },
-								from: 'Server',
-								invocationId: sub
-							},
-							rec,
-							call.options?.onConflict
-						)
-					};
-				case 'acts': {
-					const output: Json[] = [];
-					for (const act of call.acts) {
-						const result = yield* recordAct(
-							act.callable,
-							act.input,
-							{ ...c, from: 'Server', invocationId: sub },
-							rec
-						);
-						if (result.kind !== 'committed') return { ok: true, value: result };
-						output.push(result.output);
-					}
-					return { ok: true, value: { kind: 'committed', output, records: [] } };
-				}
-				case 'notify': {
-					const Notice = Schema.Struct({
-						to: Schema.Json,
-						title: Schema.String,
-						body: Schema.optionalKey(Schema.String),
-						link: Schema.optionalKey(
-							Schema.Struct({ collection: Schema.String, id: Schema.String })
-						),
-						once: Schema.optionalKey(Schema.String)
-					});
-					const notes = yield* Schema.decodeUnknownEffect(Schema.Array(Notice))(
-						Array.isArray(call.notices) ? call.notices : [call.notices]
-					).pipe(
-						Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
-					);
-					const mint = minter(sub, c.bindings.now);
-					rec.notices.push(...notes.map((note) => ({ ...note, id: mint() })));
-					return { ok: true, value: null };
-				}
-				case 'schedule':
-					return yield* schedule(call, c, sub, rec);
-				default:
-					return fail(
-						'unsupported',
-						`a collection action cannot ${call._tag}; queue an automation (rule 31)`
-					);
-			}
-		});
-		return {
-			cross: Effect.fn('Callables.cross')(function* (calls) {
-				const plain = calls.flatMap((call) =>
-					call._tag === 'read' && call.read.kind !== 'query' ? [call.read] : []
-				);
-				const answers = yield* read(plain, c, rec).pipe(
-					Effect.match({
-						onSuccess: (values) => values.map((value): CrossAnswer => ({ ok: true, value })),
-						onFailure: (error) => plain.map(() => failed(error))
-					})
-				);
-				let at = 0;
-				const output: CrossAnswer[] = [];
-				for (const call of calls)
-					output.push(
-						call._tag === 'read' && call.read.kind !== 'query'
-							? (answers[at++] ?? fail('internal', 'a read answer is missing'))
-							: yield* one(call, `${id}/${n++}`).pipe(
-									Effect.catch((error) => Effect.succeed(failed(error)))
-								)
-					);
-				return output;
-			})
-		};
-	}
-
-	/** `ctx.schedule` inside an action: a queued-run piece of the act's statement (rule 49), started as the caller (rule 33). */
-	const schedule = Effect.fn('Callables.schedule')(function* (
-		x: Extract<CrossCall, { _tag: 'schedule' }>,
-		c: Caller,
-		sub: string,
-		rec: Recorder
-	): Effect.fn.Return<CrossAnswer, import('../errors.ts').EngineError> {
-		const no = startable(x.automation, c.authority, x.input);
-		if (no !== null) {
-			rec.refusals.set(no.message, no);
-			return { ok: false, error: { kind: 'refused', code: no.code, message: no.message } };
-		}
-		const spec = m.automations[x.automation];
-		const key =
-			x.key === undefined
-				? undefined
-				: spec?.runAs === 'trigger'
-					? `${actorRef(c.authority.actor)}\u0000${x.key}`
-					: x.key;
-		const id = minter(sub, c.bindings.now)();
-		const due = yield* Effect.try({
-			try: () => scheduledAt(c.bindings.now, x.at),
-			catch: (error) =>
-				error instanceof BoltError ? error : BoltError.make('invalidInput', 'decode', String(error))
-		});
-		rec.runs.push({
-			id,
-			automation: x.automation,
-			input: x.input,
-			dueAt: due,
-			cause: 'schedule',
-			depth: 0,
-			actor: actorRef(c.authority.actor),
-			...(spec?.runAs === 'trigger' ? { starter: starterOf(c.authority) } : {}),
-			...(key === undefined ? {} : { key })
-		});
-		return { ok: true, value: { id, automation: x.automation } };
-	});
+	const constraints = constraintIndex(m);
 
 	/** Rule 33: a start or schedule needs the automation in `policy.automations`; its input decodes (rule 23). */
 	function startable(name: string, auth: Authority, input: Json): Refused | null {
-		const [c, v] = split(name);
-		const pipe = v === 'pipeline' ? m.pipelines[c] : undefined;
-		// a feed run (`<def>.<feed>`, §4.1) takes no input
-		const spec: { readonly input?: InputSpec | undefined } | undefined =
-			m.integrations[c]?.feeds?.[v] !== undefined
-				? { input: {} }
-				: pipe !== undefined
-					? {
-							input: {
-								mode: {
-									kind: 'enum',
-									values: [
-										...(pipe.import === undefined ? [] : ['import', 'template']),
-										...(pipe.export === undefined ? [] : ['export'])
-									]
-								},
-								file: { kind: 'text', optional: true },
-								accept: { kind: 'bool', optional: true },
-								context: { kind: 'json', optional: true }
-							}
-						}
-					: m.automations[name];
-		if (spec === undefined) return refused('notFound', `'${name}' is not an automation.`);
+		const parsed = parseCallable(name, m);
 		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
-		// a pipeline is gated by the caller's grants on its collection (§3.3.5: its rows enter as the caller); the act judges each row again
-		if (pipe !== undefined) {
-			const g = auth.collections[c],
-				mode = Predicate.isObject(input) ? input['mode'] : undefined;
-			if (
-				!auth.admin &&
-				(mode === 'export' ? (g?.read.length ?? 0) === 0 : (g?.create.length ?? 0) === 0)
-			)
-				return refused('forbidden', `You may not ${String(mode)} ${c}.`);
-		} else if (!auth.admin && !auth.automations.includes(name))
+		if (Result.isSuccess(parsed) && parsed.success._tag === 'Sync') {
+			const { collection, sync } = parsed.success,
+				entry = m.collections[collection]?.syncs?.[sync];
+			if (entry?.with === 'file') {
+				if (!fileSyncAdmits(auth, collection, input))
+					return refused('forbidden', `You may not run '${name}'.`);
+				const decoded = decodeInput(FILE_SYNC_INPUT, input);
+				return decoded.problems.length > 0
+					? refused('invalidInput', problems(decoded), decoded.problems[0]?.path)
+					: null;
+			}
+			if (entry?.read !== true) return refused('forbidden', `'${name}' has no read.`);
+			if (!auth.admin && (auth.collections[collection]?.read.length ?? 0) === 0)
+				return refused('forbidden', `You may not sync '${collection}'.`);
+			const decoded = decodeInput(
+				{ instance: { kind: 'text', optional: true }, partition: { kind: 'text', optional: true } },
+				input
+			);
+			return decoded.problems.length > 0
+				? refused('invalidInput', problems(decoded), decoded.problems[0]?.path)
+				: null;
+		}
+		const spec = m.automations[name];
+		if (spec === undefined) return refused('notFound', `'${name}' is not an automation or sync.`);
+		if (!auth.admin && !auth.automations.includes(name))
 			return refused('forbidden', `You may not start '${name}'.`);
-		const d = decodeInput(spec.input, input);
-		return d.problems.length > 0 ? refused('invalidInput', problems(d), d.problems[0]!.path) : null;
+		return null;
 	}
 
 	/** One generated verb through the act pipeline, its planned commit recorded (`sink`), its creates readable by later acts. */
@@ -511,6 +257,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				issuedAt: rec.issuedAt,
 				authority: delegatedVerbAuthority(m, c.authority, c.delegation, `${collection}.${verb}`),
 				observed: c.observed,
+				readGuards: c.readGuards,
 				bindings: c.bindings,
 				invocationId: c.invocationId,
 				onConflict,
@@ -547,184 +294,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		return result.outcome;
 	});
 
-	/** One `ctx.act` inside an action: a generated verb through the act pipeline with `sink`, or a nested action. */
-	const recordAct = Effect.fn('Callables.recordAct')(function* (
-		callable: Callable | string,
-		input: Json,
-		c: Caller,
-		rec: Recorder,
-		onConflict?: 'update' | 'keep'
-	): Effect.fn.Return<Outcome, import('../errors.ts').EngineError> {
-		const parsed =
-			typeof callable === 'string' ? parseCallable(callable, m) : Result.succeed(callable);
-		if (Result.isFailure(parsed)) return yield* Effect.fail(parsed.failure);
-		const target = parsed.success;
-		let outcome: Outcome;
-		if (target._tag === 'Verb')
-			outcome = yield* recordVerb(target.collection, target.verb, input, c, rec, onConflict);
-		else if (target._tag === 'Action') {
-			const result = yield* perform(
-				{
-					...c,
-					collection: target.collection,
-					action: target.action,
-					input,
-					key: c.invocationId,
-					issuedAt: rec.issuedAt
-				},
-				rec
-			);
-			if ('error' in result) return yield* Effect.fail(result.error);
-			outcome =
-				'output' in result
-					? { kind: 'committed', output: result.output, records: [] }
-					: result.outcome;
-		} else
-			return refused('forbidden', 'An action may record only a generated verb or another action.');
-		if (outcome.kind === 'refused') rec.refusals.set(outcome.message, outcome);
-		else if (outcome.kind !== 'committed' && outcome.kind !== 'pendingApproval')
-			rec.refusals.set(JSON.stringify(outcome), outcome);
-		return outcome;
-	});
-
-	/** The body of one action, once per target, recording into `rec`; `guest` says whether a refusal came after guest code. */
-	const perform = Effect.fn('Callables.perform')(function* (
-		r: ActionRequest,
-		rec: Recorder
-	): Effect.fn.Return<Performed, import('../errors.ts').EngineError> {
-		const no = yield* Effect.try({
-			try: () => reach(m, r.authority, r.collection, 'actions', r.action, r.from),
-			catch: (error) =>
-				error instanceof BoltError ? error : BoltError.make('internal', 'decode', String(error))
-		});
-		if (no !== null) return { outcome: no, guest: false };
-		const spec = m.collections[r.collection]?.actions?.[r.action];
-		if (spec === undefined)
-			return yield* Effect.fail(
-				BoltError.make(
-					'unknownCallable',
-					'decode',
-					`'${r.collection}.${r.action}' is not a declared action`
-				)
-			);
-		const record = spec.target === 'record';
-		const arg =
-			(record ? (Predicate.isObject(r.input) ? r.input['input'] : undefined) : r.input) ?? null;
-		const d = decodeInput(spec.input, arg);
-		if (d.problems.length > 0)
-			return { outcome: refused('invalidInput', problems(d), d.problems[0]!.path), guest: false };
-		const bad = yield* unreadable(d.refs, r, rec);
-		if (bad !== null) return { outcome: bad, guest: false };
-		const target = record && Predicate.isObject(r.input) ? r.input['target'] : undefined;
-		let ids: readonly (string | undefined)[] = [undefined];
-		let rows: readonly Json[] = [];
-		if (record) {
-			const decodedIds = Schema.decodeUnknownResult(
-				Schema.Array(Schema.String).check(Schema.isMinLength(1))
-			)(Array.isArray(target) ? target : [target]);
-			if (Result.isFailure(decodedIds))
-				return {
-					outcome: refused('invalidInput', 'target: expected an id or a list of ids', 'target'),
-					guest: false
-				};
-			ids = decodedIds.success;
-			rows = yield* read(
-				decodedIds.success.map((id) => ir.get(cat, r.collection, id, {})),
-				r,
-				rec
-			).pipe(Effect.catch(() => Effect.succeed(decodedIds.success.map(() => null))));
-			if (rows.includes(null))
-				return {
-					outcome: refused('notFound', 'The record does not exist.', 'target'),
-					guest: false
-				};
-		}
-		const outputs: Json[] = [];
-		for (const [i] of ids.entries()) {
-			const g = yield* invoke(
-				'action',
-				`${r.collection}.${r.action}`,
-				encodeWire(d.value),
-				r,
-				ids.length > 1 ? `${r.invocationId}/${i}` : r.invocationId,
-				rec,
-				rows[i]
-			);
-			if (g.kind === 'failed')
-				return g.error.code === 'readBudgetExceeded'
-					? { outcome: refused('readBudgetExceeded', g.error.message), guest: true }
-					: { error: g.error };
-			if (g.kind === 'refused')
-				return {
-					outcome: rec.refusals.get(g.message) ?? {
-						...refused('refused', g.message, g.field),
-						rule: `${r.collection}.${r.action}`
-					},
-					guest: true
-				};
-			outputs.push(g.output);
-		}
-		const notification = yield* Effect.result(
-			Effect.gen(function* () {
-				const decodedRows = yield* Schema.decodeUnknownEffect(
-					Schema.Array(Schema.Record(Schema.String, Schema.Json))
-				)(rows).pipe(
-					Effect.mapError((error) => BoltError.make('internal', 'decode', error.message))
-				);
-				const records = decodedRows.flatMap((values) => {
-					return typeof values['id'] === 'string' ? [{ id: values['id'], values }] : [];
-				});
-				rec.notices.push(
-					...(yield* collectionNotices(guest, m, {
-						collection: r.collection,
-						event: 'committed',
-						records: records.map((x) => ({ ...x, action: r.action })),
-						requestor: r.authority.actor.kind === 'member' ? r.authority.actor.id : null,
-						approvers: [],
-						actor: r.authority.actor,
-						bindings: r.bindings,
-						id: (() => {
-							const mint = minter(`${r.invocationId}:action-notices`, r.bindings.now);
-							return () => mint();
-						})(),
-						named: r.action
-					}))
-				);
-			})
-		);
-		if (Result.isFailure(notification))
-			return {
-				error:
-					notification.failure instanceof BoltError
-						? notification.failure
-						: BoltError.make(
-								'guestError',
-								'guest',
-								'invalid action notification',
-								notification.failure
-							)
-			};
-		return { output: record && Array.isArray(target) ? outputs : (outputs[0] ?? null) };
-	});
-
-	const query = (
-		request: QueryRequest,
-		recorder: Recorder | null = null
-	): Effect.Effect<Json, import('../errors.ts').EngineError> =>
-		readQuery(
-			{
-				manifest: m,
-				guest,
-				read: (batch, reader, bindings) => read(batch, { ...request, bindings }, recorder)
-			},
-			request
-		);
-
-	const action = (
-		r: ActionRequest
-	): Effect.Effect<CallResult, import('../errors.ts').EngineError> =>
-		atomic(r, `${r.collection}.${r.action}`, r.input, (rec) => perform(r, rec));
-	/** Each act records into the one commit; the first that does not commit is the outcome, recorded (it ran guest code). */
+	const query = (request: QueryRequest): Effect.Effect<Json, import('../errors.ts').EngineError> =>
+		readQuery({ manifest: m, guest, read: e.read }, request);
 	/**
 	 * Each act records into the one commit; the first (in order) that does not commit is the outcome, recorded (it ran
 	 * guest code). The acts are planned at once over one coalesced reader — one round trip, one statement per step for
@@ -732,10 +303,22 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	 */
 	const acts = (r: ActsRequest): Effect.Effect<CallResult, import('../errors.ts').EngineError> =>
 		atomic(
-			{ ...r, input: r.acts },
+			{ ...r, input: encodeWire(r.acts) },
 			r.name,
-			r.acts,
+			encodeWire(r.acts),
 			Effect.fn('Callables.body')(function* (rec) {
+				const invalid = r.acts.findIndex((act) =>
+					act.verb === 'upsert' ? act.onConflict === undefined : act.onConflict !== undefined
+				);
+				if (invalid >= 0)
+					return {
+						outcome: refused(
+							'invalidInput',
+							'A batch upsert requires onConflict; other verbs do not take it.',
+							`${invalid}.onConflict`
+						),
+						guest: false
+					};
 				const db = yield* coalescing(e.db, r.acts.length);
 				const plans: (Recorder['commits'][number] | undefined)[] = r.acts.map(() => undefined);
 				// each act its own invocation: its minted ids are its own (two creates of one collection mint apart)
@@ -746,9 +329,9 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 							a.collection,
 							a.verb,
 							a.input,
-							{ ...r, invocationId: `${r.invocationId}/${i}` },
+							{ ...r, observed: a.observed, invocationId: `${r.invocationId}/${i}` },
 							rec,
-							undefined,
+							a.onConflict,
 							{
 								db,
 								into: (p) => {
@@ -804,7 +387,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			const previous = yield* stored();
 			if (previous !== null) return none(previous);
 		}
-		// One action owns its first read answers across replay, including generated child verbs.
+		// One batch owns its first read answers across replay.
 		const db = yield* memoReads(yield* coalescing(e.db));
 		const common = { key, digest, issuedAt: r.issuedAt, rate: r.rate ?? [] };
 		const record = Effect.fn('Callables.recordOutcome')(function* (outcome: Outcome) {
@@ -819,18 +402,11 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		// rule 26: a serialization failure replays the body once with the same clock and minted ids
 		return yield* replayOnce<CallResult, import('../errors.ts').EngineError, never>(
 			Effect.fn('Callables.replay')(function* (replay) {
-				const fp = fingerprinting(db);
 				const rec: Recorder = {
 					commits: [],
-					runs: [],
-					notices: [],
-					refusals: new Map(),
 					issuedAt: r.issuedAt,
 					db,
-					pending: new Map(),
-					reads: config.reads(fp.db),
-					fingerprints: fp.fingerprints,
-					tables: new Set()
+					pending: new Map()
 				};
 				const p = yield* body(rec);
 				if ('error' in p) {
@@ -851,7 +427,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					writes.length > LIMITS.changesPerAct ||
 					JSON.stringify(writes).length > LIMITS.changeSetBytes
 				)
-					return yield* record(refused('overflow', 'The action exceeds its native change budget.'));
+					return yield* record(refused('overflow', 'The batch exceeds its native change budget.'));
 				const seen = new Set<string>();
 				const twice = writes.find(
 					(w) => seen.size === seen.add(`${w.collection}\u0000${w.id}`).size
@@ -860,7 +436,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					return yield* record(
 						refused(
 							'invalidInput',
-							`The action writes ${twice.collection} ${twice.id} twice; one act writes a row once (rule 21).`
+							`The batch writes ${twice.collection} ${twice.id} twice; one act writes a row once (rule 21).`
 						)
 					);
 				const approvals = rec.commits.flatMap((x) =>
@@ -876,8 +452,17 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 							'These changes need different approvals; submit them separately.'
 						)
 					);
+				const resubmits = rec.commits.flatMap((planned) =>
+					planned.commit.resubmit === undefined ? [] : [planned.commit.resubmit]
+				);
+				if (new Set(resubmits.map((resubmit) => resubmit.request)).size > 1)
+					return yield* record(refused('approvalSplit', 'Save each approval request separately.'));
 				const tables = [
-					...new Set([...rec.tables, ...rec.commits.flatMap((x) => x.lock?.tables ?? [])])
+					...new Set([
+						...rec.commits.flatMap((x) => x.lock?.tables ?? []),
+						...(r.readGuards?.tables ?? []),
+						...(r.readGuards === undefined ? [] : writes.map((write) => write.collection))
+					])
 				].sort();
 				const erasures = rec.commits.flatMap(
 					(plan) =>
@@ -891,15 +476,14 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					actor,
 					writes,
 					owned: rec.commits.flatMap((x) => x.commit.owned),
-					fingerprints: [
-						...rec.fingerprints(),
-						...rec.commits.flatMap((x) => x.commit.fingerprints ?? [])
-					],
+					fingerprints: rec.commits.flatMap((x) => x.commit.fingerprints ?? []),
+					...(r.readGuards === undefined ? {} : { readGuards: r.readGuards }),
 					erasures,
-					runs: rec.runs,
-					notices: [...rec.notices, ...rec.commits.flatMap((x) => x.commit.notices)],
+					runs: [],
+					notices: rec.commits.flatMap((x) => x.commit.notices),
 					output: p.output,
-					...(approval === undefined ? {} : { approval })
+					...(approval === undefined ? {} : { approval }),
+					...(resubmits[0] === undefined ? {} : { resubmit: resubmits[0] })
 				};
 				if (r.sink !== undefined) {
 					r.sink({
@@ -917,9 +501,11 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					});
 				}
 				const result = yield* Effect.result(
-					e.db.returning(
-						CommitAnswer,
-						compileCommit(m, cat, commit),
+					executeCommit(
+						e.db,
+						m,
+						cat,
+						commit,
 						tables.length > 0 ? { tables, mode: 'SHARE ROW EXCLUSIVE' } : undefined
 					)
 				);
@@ -943,7 +529,15 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					Effect.provideService(Wake, config.wake),
 					Effect.provideService(Links, config.links)
 				);
-				return { outcome, captured: answer.captured, v };
+				return {
+					outcome,
+					captured: answer.captured,
+					v,
+					...(answer.read_guards_applied === true &&
+					(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+						? { readGuardsConsumed: true as const }
+						: {})
+				};
 			})
 		);
 	});
@@ -956,6 +550,40 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		for (const run of r.runs) {
 			const no = startable(r.automation, r.authority, run.input);
 			if (no !== null) return no;
+			const spec = m.automations[r.automation];
+			const decoded = spec === undefined ? undefined : decodeInput(spec.input, run.input);
+			if (decoded !== undefined && decoded.problems.length > 0)
+				return refused('invalidInput', problems(decoded), decoded.problems[0]?.path);
+			const refs = decoded?.refs ?? [];
+			if (refs.length > 0) {
+				const found = yield* e
+					.read(
+						refs.map((ref) =>
+							ir.read(cat, ref.collection, {
+								where:
+									ref.where === undefined || Object.keys(ref.where).length === 0
+										? { id: { eq: ref.id } }
+										: { and: [{ id: { eq: ref.id } }, ref.where] },
+								select: { id: true },
+								limit: 1
+							})
+						),
+						{ as: 'caller', authority: r.authority },
+						r.bindings
+					)
+					.pipe(Effect.catch(() => Effect.succeed(refs.map(() => null))));
+				const missing = refs.find((_, index) => {
+					const page = found[index];
+					const rows = Predicate.isObject(page) ? page['rows'] : undefined;
+					return !EffectArray.isArray(rows) || rows.length === 0;
+				});
+				if (missing !== undefined)
+					return refused(
+						'notFound',
+						`No readable ${missing.collection} has this id.`,
+						missing.field
+					);
+			}
 			if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(run.id))
 				return refused('invalidInput', 'A run id is a client-minted uuid.', 'id');
 		}
@@ -967,7 +595,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		const parsed = parseCallable(r.automation, m);
 		const starter =
 			m.automations[r.automation]?.runAs === 'trigger' ||
-			(Result.isSuccess(parsed) && parsed.success._tag === 'Pipeline')
+			(Result.isSuccess(parsed) && parsed.success._tag === 'Sync')
 				? starterOf(r.authority)
 				: null;
 		const actor = actorRef(r.authority.actor);
@@ -1008,7 +636,36 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			: KEY_REUSE;
 	});
 
-	return { query, action, acts, start };
+	return {
+		query,
+		acts: (request: ActsRequest) =>
+			audited(
+				e.db,
+				{
+					category: 'write',
+					action: 'act.many',
+					actor: auditActor(request.authority.actor),
+					invocation: request.invocationId,
+					payload: encodeWire(request.acts),
+					outcomeKey: sha256Hex(
+						`${canonical({ actor: request.authority.actor.kind === 'member' ? request.authority.actor.id : request.authority.actor, callable: request.name })}\u0000${request.key}`
+					),
+					digest: sha256Hex(canonical({ callable: request.name, input: encodeWire(request.acts) }))
+				},
+				acts(request)
+			),
+		start: (request: StartRequest) =>
+			audited(
+				e.db,
+				{
+					category: 'automation',
+					action: 'start',
+					actor: auditActor(request.authority.actor),
+					payload: encodeWire({ automation: request.automation, runs: request.runs })
+				},
+				start(request)
+			)
+	};
 }
 
 // ── visitors (rule 38d, §3.9) and what an outcome may say to whom (rule 32) ──
@@ -1044,9 +701,9 @@ export const CallablesLive = Layer.effect(
 	Callables,
 	Effect.gen(function* () {
 		const manifest = yield* Manifest,
+			audit = yield* Audit,
 			db = yield* TenantDb,
 			guest = yield* Guest,
-			activation = yield* Activation,
 			reader = yield* Reads;
 		const live = yield* Live,
 			wake = yield* Wake,
@@ -1055,21 +712,22 @@ export const CallablesLive = Layer.effect(
 			manifest,
 			db,
 			guest,
-			transforms: activation.transforms,
-			approval: approvalHook(manifest, db, guest),
+			approval: approvalHook(manifest, db),
 			bridge: (invocation, over = db) => transformBridge(manifest, over, invocation),
 			read: reader.run
 		};
-		return Callables.of(
-			makeCallables({
-				engine: native,
-				guest,
-				live,
-				wake,
-				links,
-				reads: (db) => readEngine({ manifest, db }).run
-			})
-		);
+		const callables = makeCallables({
+			engine: native,
+			guest,
+			live,
+			wake,
+			links
+		});
+		return Callables.of({
+			query: callables.query,
+			acts: (request) => callables.acts(request).pipe(Effect.provideService(Audit, audit)),
+			start: (request) => callables.start(request).pipe(Effect.provideService(Audit, audit))
+		});
 	})
 );
 
@@ -1085,8 +743,7 @@ export const readQuery = Effect.fn('Callables.readQuery')(function* (
 	const m = config.manifest,
 		cat = catalogOf(m);
 	const no = yield* Effect.try({
-		try: () =>
-			reach(m, request.authority, request.collection, 'queries', request.query, request.from),
+		try: () => reach(m, request.authority, request.collection, request.query, request.from),
 		catch: (error) =>
 			error instanceof BoltError ? error : BoltError.make('internal', 'decode', String(error))
 	});
@@ -1185,7 +842,6 @@ export const readQuery = Effect.fn('Callables.readQuery')(function* (
 				seed: request.invocationId
 			},
 			budget: {
-				cpuMs: LIMITS.guestCpuMs,
 				crossings: LIMITS.crossings.sync,
 				readBytes: LIMITS.readBytes
 			}
@@ -1193,7 +849,7 @@ export const readQuery = Effect.fn('Callables.readQuery')(function* (
 		bridge
 	);
 	return result.kind === 'ok'
-		? result.output
+		? yield* decodeOutput(m, spec.output, result.output)
 		: yield* Effect.fail(
 				result.kind === 'failed' ? result.error : BoltError.make('refused', 'guest', result.message)
 			);

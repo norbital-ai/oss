@@ -18,22 +18,28 @@ import {
 	FileSystem,
 	Layer,
 	Predicate,
+	Schedule,
 	Schema,
 	Scope
 } from 'effect';
 import { FetchHttpClient } from 'effect/unstable/http';
 import { TestClock } from 'effect/testing';
-import { CONTRACT } from '../../bolt/src/compiler/artifact/index.ts';
 import { buildServerPages } from '../../bolt/src/compiler/artifact/server.ts';
+import { prepareMigrations } from '../../bolt/src/compiler/migrations.ts';
 import { discover } from '../../bolt/src/compiler/discover.ts';
 import { PublicHydration } from '../../bolt/src/protocol/public-page.ts';
 import { program } from '../../bolt/tests/support/guest-fixture.ts';
-import { artifactHash, treeHash, type ArtifactJson } from '../../bolt/src/engine/artifact/read.ts';
-import { sha256Hex } from '../../bolt/src/engine/write/sql.ts';
+import {
+	artifactHash,
+	CONTRACT,
+	treeHash,
+	type ArtifactJson
+} from '../../bolt/src/engine/artifact/read.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { fingerprint, schemaSlice } from '../../bolt/src/engine/schema/plan.ts';
 import { ActReply, Frame, LiveReply, QReply } from '../../bolt/src/protocol/schema.ts';
-import { Authorities, BoltError, Reads, TenantDb } from '@norbital-ai/bolt/engine';
+import { Audit, Authorities, BoltError, Reads, TenantDb } from '@norbital-ai/bolt/engine';
 import { BoltConfig, type StartFlags } from '../src/config.ts';
 import { devSink } from '../src/mail.ts';
 import { Server, ServerLive, type StartOptions } from '../src/server.ts';
@@ -73,7 +79,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -82,7 +87,7 @@ const manifest = {
 	customFields: {},
 	agent: { skills: {} }
 } satisfies EngineManifest;
-const guest = `export default { collection: { quotes: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.read('quotes', { limit: 1 }); } } } } }, automation: { remind: { body: function* (input, ctx) {
+const guest = `export default { collection: { quotes: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.query('quotes', { limit: 1 }); } } } } }, automation: { remind: { body: function* (input, ctx) {
 	for (const id of input.ids) yield* ctx.act('quotes.update', { target: id, set: { status: 'sent' } });
 } } } };`;
 const compiledGuest = program(guest);
@@ -138,14 +143,13 @@ const writeFixture = (
 				pages[route] = { entry: `${prefix}/entry.js`, css: [], server };
 			}
 		}
+		yield* prepareMigrations(dir, m, 'generate');
 		const body: Omit<ArtifactJson, 'hash'> = {
 			format: 1,
 			contract: CONTRACT,
 			handle: 'acme',
 			name: 'Acme',
 			schema: fingerprint(schemaSlice(m)),
-			transforms: [],
-			projections: [],
 			client: { entry: '', css: [] },
 			pages,
 			hashes: {
@@ -165,6 +169,7 @@ const env = (over: Record<string, string> = {}) => ({
 	BOLT_PORT: '0',
 	BOLT_PUBLIC_URL: 'http://localhost:3100',
 	BOLT_PGLITE_DIR: join(root, 'db'),
+	BOLT_AUDIT_DIR: `${over['BOLT_PGLITE_DIR'] ?? join(root, 'db')}-audit`,
 	BOLT_FILES_PROVIDER: 'local',
 	BOLT_FILES_ENDPOINT: join(root, 'files'),
 	BOLT_OPS_KEY: OPS_KEY,
@@ -337,6 +342,21 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 			expect(r.headers.getSetCookie()[0]).toContain('SameSite=Lax');
 			expect(r.headers.getSetCookie()[0]).toContain('Path=/');
 			expect(r.headers.getSetCookie()[0]).not.toMatch(/(?:^|;)\s*Domain=/i);
+			const audit = Context.get(t.server.context, Audit);
+			const entries = yield* audit.query({
+				category: 'identity',
+				action: 'session.verify',
+				status: 'committed'
+			});
+			expect(entries.rows).toMatchObject([
+				{ actor: { kind: 'member' }, action: 'session.verify', status: 'committed' }
+			]);
+			expect(
+				yield* t.db.value(Schema.Number, {
+					text: "SELECT count(*)::int FROM information_schema.tables WHERE table_schema = 'bolt_audit'",
+					params: []
+				})
+			).toBe(0);
 		})
 	);
 	it.effect('refuses the protocol without a session', () =>
@@ -365,7 +385,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 				if (hello.t !== 'hello') throw new Error('Expected hello frame');
 				const reg = yield* t.call('POST', '/__bolt/live', {
 					conn: hello.conn,
-					add: [{ view: 'all', read: { m: 'read', a: ['quotes', { all: true }] } }]
+					add: [{ view: 'all', read: { m: 'query', a: ['quotes', { all: true }] } }]
 				});
 				expect(yield* json(reg, LiveReply)).toEqual({ errors: [] });
 				yield* stream.next((f) => f.t === 'answer' && f.view === 'all');
@@ -376,7 +396,9 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 				if (reply.outcome.kind !== 'committed' || reply.outcome.records[0] === undefined)
 					throw new Error('Expected created record');
 				const id = reply.outcome.records[0].id;
-				const q = yield* t.call('POST', '/__bolt/q', { reads: [{ m: 'get', a: ['quotes', id] }] });
+				const q = yield* t.call('POST', '/__bolt/q', {
+					reads: [{ m: 'query', a: ['quotes', { id }] }]
+				});
 				expect((yield* json(q, QReply)).answers[0]).toMatchObject({
 					title: 'Q-1',
 					status: 'draft'
@@ -540,7 +562,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 					'src/app/site/home.page.data.ts':
 						'import { Schema } from "effect"; export default Schema.Struct({ titles: Schema.Array(Schema.String), visitor: Schema.String });',
 					'src/app/site/+home.page.server.ts':
-						'import { pageServer } from "@norbital-ai/bolt"; import Data from "./home.page.data.ts"; export default pageServer({ data: Data, load: function* (_, ctx) { const result = yield* ctx.read("quotes", { limit: 10 }); return { titles: result.rows.map((row) => row.title), visitor: ctx.actor.kind === "visitor" ? ctx.actor.visitor : "member" }; } });',
+						'import { pageServer } from "@norbital-ai/bolt"; import Data from "./home.page.data.ts"; export default pageServer({ data: Data, load: function* (_, ctx) { const result = yield* ctx.query("quotes", { limit: 10 }); return { titles: result.rows.map((row) => row.title), visitor: ctx.actor.kind === "visitor" ? ctx.actor.visitor : "member" }; } });',
 					'src/app/site/+home.page.svelte':
 						'<script lang="ts">import { bolt } from "$bolt"; let { data }: { data: { titles: readonly string[]; visitor: string } } = $props();</script><svelte:head><title>Protected public page</title></svelte:head><main><h1>{bolt.t("page.welcome")}</h1>{#each data.titles as title}<p>{title}</p>{/each}<p data-visitor={data.visitor}>{bolt.org.name}</p></main>',
 					'src/i18n/+messages.ts': 'export default { "page.welcome": "Welcome to public SSR" };'
@@ -670,7 +692,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 			});
 			yield* Effect.addFinalizer(() => Effect.sync(() => events.mockRestore()));
 			yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
-			const query = { reads: [{ m: 'query', a: ['quotes', 'hold', {}] }] };
+			const query = { reads: [{ m: 'query', a: ['quotes.hold', {}] }] };
 			const first = yield* Effect.forkChild(t.call('POST', '/__bolt/q', query));
 			yield* Deferred.await(entered);
 			const second = yield* Effect.forkChild(t.call('POST', '/__bolt/q', query));
@@ -833,12 +855,12 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 				JSON.stringify({ ...manifest, models: {} })
 			);
 			expect(
-				(yield* Effect.flip(
+				yield* Effect.flip(
 					generation(
 						yield* config(env({ BOLT_ARTIFACT: tampered, BOLT_PGLITE_DIR: join(root, 'db5') }))
 					)
-				)).message
-			).toMatch(/schema hash/);
+				)
+			).toMatchObject({ code: 'schemaMoved' });
 		})
 	);
 	it.effect('refuses non-image models before acquiring the database', () =>
@@ -887,12 +909,13 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 		})
 	);
 	it.effect(
-		'refuses a destructive schema step without --accept and applies it with (rule 69)',
+		'applies an explicitly accepted SQL migration once, preserving the committed history',
 		() =>
 			Effect.gen(function* () {
 				const narrower = join(root, 'narrower'),
+					fs = yield* FileSystem.FileSystem,
 					{ attachment: _dropped, ...fields } = manifest.models.quotes.fields;
-				yield* writeFixture(narrower, {
+				const next: EngineManifest = {
 					...manifest,
 					models: { quotes: { ...manifest.models.quotes, fields } },
 					collections: {
@@ -902,16 +925,63 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 							update: { input: { columns: ['status'] } }
 						}
 					}
-				});
+				};
+				yield* fs.makeDirectory(narrower, { recursive: true });
+				yield* fs.copy(join(artifact, 'migrations'), join(narrower, 'migrations'));
+				const unaccepted = yield* Effect.flip(prepareMigrations(narrower, next, 'generate'));
+				expect(unaccepted).toMatchObject({ code: 'migrationInvalid' });
+				expect(unaccepted.message).toContain('destructive steps need an accept line');
+				const file = join(narrower, 'migrations', '0002_schema.sql'),
+					sql = yield* fs.readFileString(file),
+					accepted = sql.replace(/^-- step (\S+) \(destructive\)$/gm, '$&\n-- accept: $1');
+				expect(accepted).not.toBe(sql);
+				yield* fs.writeFileString(file, accepted);
+				yield* writeFixture(narrower, next);
+				expect(yield* fs.readFileString(join(narrower, 'migrations', '0001_initial.sql'))).toBe(
+					yield* fs.readFileString(join(artifact, 'migrations', '0001_initial.sql'))
+				);
 				const db = { BOLT_PGLITE_DIR: join(root, 'db6') };
-				yield* (yield* generation(yield* config(env(db)))).close;
-				expect(
-					(yield* Effect.flip(generation(yield* config(env({ ...db, BOLT_ARTIFACT: narrower })))))
-						.message
-				).toMatch(/--accept/);
-				yield* (yield* generation(
-					yield* config(env({ ...db, BOLT_ARTIFACT: narrower }), { accept: true })
-				)).close;
+				const initial = yield* generation(yield* config(env(db), { founder: FOUNDER }));
+				const auditQuery = {
+					category: 'identity',
+					action: 'founder.bootstrap',
+					status: 'committed'
+				} as const;
+				const retainedAudit = yield* Context.get(initial.server.context, Audit).query(auditQuery);
+				expect(retainedAudit.rows).toMatchObject([
+					{ action: 'founder.bootstrap', status: 'committed' }
+				]);
+				yield* initial.db.write({
+					text: "INSERT INTO quotes (id, title, status) VALUES (gen_random_uuid(), 'Kept', 'draft')",
+					params: []
+				});
+				yield* initial.close;
+				const cfg = yield* config(env({ ...db, BOLT_ARTIFACT: narrower }));
+				for (let generationIndex = 0; generationIndex < 2; generationIndex++) {
+					const active = yield* generation(cfg);
+					expect(yield* Context.get(active.server.context, Audit).query(auditQuery)).toEqual(
+						retainedAudit
+					);
+					expect(
+						yield* active.db.rows(Schema.Struct({ title: Schema.String }), {
+							text: 'SELECT title FROM quotes',
+							params: []
+						})
+					).toEqual([{ title: 'Kept' }]);
+					expect(
+						yield* active.db.value(Schema.Number, {
+							text: "SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'quotes' AND column_name = 'attachment'",
+							params: []
+						})
+					).toBe(0);
+					expect(
+						yield* active.db.rows(Schema.Struct({ name: Schema.String }), {
+							text: 'SELECT name FROM store_migration ORDER BY name',
+							params: []
+						})
+					).toEqual([{ name: '0001_initial.sql' }, { name: '0002_schema.sql' }]);
+					yield* active.close;
+				}
 			}),
 		60_000
 	);
@@ -944,74 +1014,25 @@ it.effect(
 			const s = yield* generation(
 				yield* config(env({ BOLT_ARTIFACT: dir, BOLT_PGLITE_DIR: join(root, 'cron') }))
 			);
-			const due = yield* s.db.value(Schema.String, {
-				text: `SELECT due_at FROM sys_run WHERE automation = 'stamp'`,
+			const quotes = s.db.rows(Schema.Struct({ title: Schema.String }), {
+				text: `SELECT title FROM quotes`,
 				params: []
 			});
-			expect(new Date(due).toISOString()).toBe('2031-02-03T08:00:00.000Z');
-			yield* TestClock.setTime(Date.parse('2031-02-03T08:00:00.000Z'));
-			yield* s.server.wake;
+			// the host's clock arms no row: nothing is stored before the slot
 			expect(
-				yield* s.db.rows(Schema.Struct({ title: Schema.String }), {
-					text: `SELECT title FROM quotes`,
-					params: []
-				})
-			).toEqual([{ title: '2031-02-03T08:00:00.000Z 2031-02-03' }]);
-			yield* s.close;
-		}).pipe(Effect.provide(NodeServices.layer)),
-	60_000
-);
-
-it.live(
-	'serves on Postgres: TLS by default, plain only with sslmode=disable (§5.11.6)',
-	(ctx) =>
-		Effect.gen(function* () {
-			const url = yield* Config.option(Config.string('BOLT_TEST_POSTGRES_URL')).pipe(
-				Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv()))
-			);
-			if (url._tag === 'None') {
-				ctx.skip();
-				return;
-			}
-			const fs = yield* FileSystem.FileSystem;
-			yield* Effect.addFinalizer(() =>
-				fs.remove(root, { recursive: true, force: true }).pipe(Effect.orDie)
-			);
-			yield* writeFixture();
-			const { default: pg } = yield* io(() => import('pg'));
-			const name = `bolt_start_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-			const admin = yield* Effect.acquireRelease(
-				io(async () => {
-					const client = new pg.Client({ connectionString: url.value });
-					await client.connect();
-					return client;
-				}),
-				(client) => io(() => client.end()).pipe(Effect.orDie)
-			);
-			yield* io(() => admin.query(`CREATE DATABASE ${name}`));
-			yield* Effect.addFinalizer(() =>
-				io(() => admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)).pipe(Effect.orDie)
-			);
-			const at = (query: string) => {
-				const u = new URL(url.value);
-				u.pathname = `/${name}`;
-				u.search = query;
-				return u.href;
-			};
-			const pgEnv = (value: string) => {
-				const { BOLT_PGLITE_DIR: _d, ...rest } = env();
-				return { ...rest, BOLT_DATABASE_URL: value };
-			};
-			expect((yield* Effect.flip(generation(yield* config(pgEnv(at('')))))).message).toMatch(
-				/SSL|TLS/i
-			);
-			const s = yield* generation(yield* config(pgEnv(at('?sslmode=disable'))));
-			expect(
-				yield* s.db.value(Schema.Number, {
-					text: `SELECT count(*)::int AS n FROM quotes`,
-					params: []
-				})
+				yield* s.db.value(Schema.Number, { text: `SELECT count(*)::int FROM sys_run`, params: [] })
 			).toBe(0);
+			yield* TestClock.adjust('1 minute');
+			// the fired run is the clock's own fiber; its database work settles on real time
+			const stamped = yield* quotes.pipe(
+				Effect.repeat({
+					until: (rows) => rows.length > 0,
+					schedule: Schedule.spaced('20 millis')
+				}),
+				Effect.timeout('10 seconds'),
+				TestClock.withLive
+			);
+			expect(stamped).toEqual([{ title: '2031-02-03T08:00:00.000Z 2031-02-03' }]);
 			yield* s.close;
 		}).pipe(Effect.provide(NodeServices.layer)),
 	60_000

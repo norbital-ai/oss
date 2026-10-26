@@ -9,12 +9,12 @@ const messages = await import('../src/text/messages.ts');
 const relations = await import('../src/relations/select.ts');
 const csv = await import('../src/table/csv.ts');
 const d = await import('../src/form/draft.ts');
-import type { Json, ViewBolt } from '../src/client/contract.ts';
+import type { ViewBolt } from '../src/client/contract.ts';
 import type { Row, Page, Values } from '../src/collection/types.ts';
 import type { Fields, Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { DefaultsPart } from './defaults-harness.svelte';
-import { scriptedBolt } from './scripted-bolt.ts';
+import { viewFixture, type ReadOptions } from './view-fixture.ts';
 import { element } from './elements.ts';
 import * as ui from '../src/index.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
@@ -213,7 +213,6 @@ test('a final state has no moves: the state field is locked', () => {
 });
 
 // ── mounted ──
-type ReadOptions = Readonly<Record<string, Json>>;
 async function fake(
 	rows: readonly Row[],
 	extra: {
@@ -226,27 +225,19 @@ async function fake(
 	} = {}
 ) {
 	const reads: { c: string; o: ReadOptions }[] = [];
-	const client = await scriptedBolt({
+	const client = await viewFixture({
 		...extra,
-		answer: ({ m, a }) => {
-			const collection = Schema.decodeUnknownSync(Schema.String)(a[0]);
-			if (m === 'read') {
-				const options = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(a[1]);
-				reads.push({ c: collection, o: options });
-				return extra.read?.(collection, options) ?? { rows, next: null };
-			}
-			if (m === 'get') {
-				const id = Schema.decodeUnknownSync(Schema.String)(a[1]);
-				return extra.get === undefined
-					? (rows.find((row) => row.id === id) ?? null)
-					: extra.get(collection, id);
-			}
-			if (m === 'aggregate') return extra.aggregate?.() ?? [{ count: rows.length }];
-			if (m === 'history') return { rows: [], next: null };
-			return null;
-		}
+		read: (collection, options) => {
+			reads.push({ c: collection, o: options });
+			return extra.read?.(collection, options) ?? { rows, next: null };
+		},
+		get: (collection, id) =>
+			extra.get === undefined
+				? (rows.find((row) => row.id === id) ?? null)
+				: extra.get(collection, id),
+		aggregate: () => extra.aggregate?.() ?? [{ count: rows.length }],
+		history: () => ({ rows: [], next: null })
 	});
-	clients.push(client.dispose);
 	return { bolt: client.bolt, reads };
 }
 const settle = async () => {
@@ -257,11 +248,9 @@ const settle = async () => {
 	}
 	flushSync();
 };
-const clients: (() => Promise<void>)[] = [];
 const mounted: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	while (mounted.length > 0) await mounted.pop()?.();
-	while (clients.length > 0) await clients.pop()?.();
 });
 async function show(
 	part: DefaultsPart,
@@ -406,7 +395,7 @@ test('record sheet: titled by the record, the singular model above; a subtitle o
 	);
 	const head = element(document, '[role=dialog] [data-record-head]');
 	assert.equal(element(head, 'h2').textContent?.trim(), 'Paint');
-	assert.match(head.textContent ?? '', /Job/);
+	assert.equal(element(document, '[role=dialog] [data-sheet-eyebrow]').textContent?.trim(), 'Job');
 	assert.match(head.textContent ?? '', /On site · Jan 2, 2026/);
 	const account = element(document, '[data-field=account_id]');
 	assert.match(account.textContent ?? '', /Account/);
@@ -518,14 +507,20 @@ test("select-all: the card list selects its page, then every matching row, besid
 	);
 });
 
-test("CustomView with `collection`: the menu offers that collection's pipeline, and the search stays on the view's own rows", async () => {
+test("CustomView with `collection`: the menu offers that collection's file sync, and the search stays on the view's own rows", async () => {
 	const started: { automation: string; input: Value }[] = [];
 	const { bolt } = await fake([], {
 		start: (automation, input) => {
 			started.push({ automation, input });
 		}
 	});
-	const cat = { jobs: { ...jobs.jobs, search: ['title'], pipeline: { export: 'Every job' } } };
+	const cat = {
+		jobs: {
+			...jobs.jobs,
+			search: ['title'],
+			syncs: { sheet: { kind: 'file' as const, export: ['xlsx'] } }
+		}
+	};
 	const props: Extract<DefaultsPart, { part: 'custom' }>['props'] = {
 		of: [{ id: 'a', name: 'Ada' }],
 		fields: [{ field: 'name', label: 'Person' }],
@@ -535,11 +530,16 @@ test("CustomView with `collection`: the menu offers that collection's pipeline, 
 	const t = await show({ part: 'custom', props: { ...props, collection: 'jobs' } }, bolt, cat);
 	element(t, '[data-view-actions]').click();
 	await settle();
-	const row = document.querySelector('[data-view-menu] [data-menu-item="export-pipeline"]');
-	assert.ok(row, 'the pipeline export is in the menu');
+	const row = document.querySelector('[data-view-menu] [data-menu-item="export:sheet:xlsx"]');
+	assert.ok(row, 'the file sync export is in the menu');
 	element(row, 'button').click();
 	await settle();
-	assert.deepEqual(started, [{ automation: 'jobs.pipeline', input: { mode: 'export' } }]);
+	assert.deepEqual(started, [
+		{
+			automation: 'jobs.sync.sheet',
+			input: { mode: 'export', to: 'xlsx', context: { site: 's1' } }
+		}
+	]);
 	element(t, '[data-search-toggle]').click();
 	await settle();
 	assert.match(
@@ -552,7 +552,7 @@ test("CustomView with `collection`: the menu offers that collection's pipeline, 
 	assert.equal(
 		plain.querySelector('[data-view-actions]'),
 		null,
-		'without `collection` the view offers no pipeline'
+		'without `collection` the view offers no file sync'
 	);
 });
 

@@ -4,7 +4,7 @@
 import { Crypto, Duration, Effect, Schedule, Schema } from 'effect';
 import type { Json } from '@norbital-ai/bolt/engine';
 import { ProviderUnavailable } from '../errors.ts';
-import { jsonApi } from '../link.ts';
+import { jsonApi } from '../transport.ts';
 import { models, type ModelCatalogue } from './models.ts';
 
 /** One embedding input: text, or a stored file's bytes (an image; embed models are multimodal). */
@@ -12,9 +12,19 @@ export type EmbedInput =
 	| string
 	| {
 			readonly $file: { readonly name: string; readonly mime: string; readonly bytes: Uint8Array };
+	  }
+	| {
+			readonly $stored: {
+				readonly key: string;
+				readonly name: string;
+				readonly mime: string;
+				readonly bytes: number;
+			};
 	  };
 export type Endpoint = { readonly baseUrl: string; readonly apiKey?: string | undefined };
 export type EmbeddingsConfig<E> = Endpoint & {
+	/** The host's scoped file reader; stored media never returns through the Cell. */
+	readonly files?: (key: string, max: number) => Effect.Effect<Uint8Array, E>;
 	/** The provider model a workspace's embedding name runs and how many inputs one request may carry; `undefined`: none is mapped. */
 	readonly model: (name: string) => { readonly id: string; readonly batch: number } | undefined;
 	/** Records the provider's charge for one request (USD) under its id; a failure is logged, never the embedding's. */
@@ -46,7 +56,7 @@ const part = (f: {
 		: { type: 'file', file: { filename: f.name, file_data: url } };
 };
 /** Text alone goes as strings; a batch with a file goes in the multimodal shape, one `{ content }` per input (a bare part is refused). */
-const wire = (batch: readonly EmbedInput[]): Json =>
+const wire = (batch: readonly Exclude<EmbedInput, { readonly $stored: unknown }>[]): Json =>
 	batch.every((x): x is string => typeof x === 'string')
 		? batch
 		: batch.map((x) => ({
@@ -73,7 +83,25 @@ export const openAiEmbeddings = <E>(config: EmbeddingsConfig<E>) => {
 		const vectors: (readonly number[])[] = [],
 			size = Math.max(1, model.batch);
 		for (let at = 0; at < inputs.length; at += size) {
-			const batch = inputs.slice(at, at + size);
+			const batch = yield* Effect.forEach(
+				inputs.slice(at, at + size),
+				(
+					input
+				): Effect.Effect<
+					Exclude<EmbedInput, { readonly $stored: unknown }>,
+					E | ProviderUnavailable
+				> => {
+					if (typeof input === 'string' || '$file' in input) return Effect.succeed(input);
+					const read = config.files;
+					if (read === undefined)
+						return Effect.fail(
+							new ProviderUnavailable({ message: 'the host provides no stored file reader' })
+						);
+					return read(input.$stored.key, input.$stored.bytes).pipe(
+						Effect.map((bytes) => ({ $file: { ...input.$stored, bytes } }))
+					);
+				}
+			);
 			const answer = yield* call(Answer, 'POST', '/embeddings', {
 				model: model.id,
 				input: wire(batch),

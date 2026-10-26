@@ -1,36 +1,55 @@
-// The tenant database (C11, per activation; W2.E1): a service whose every call is one round trip, failing with the
+// The tenant database (C11, per activation; W2.E1): complete, bounded SQL work, failing with the
 // driver's `DbError` (the SQLSTATE the write compiler maps to a refusal, rule 20) and, for a typed read, `BoltError`
-// naming the table of a row that does not decode. No connection is held while guest code runs (rule 20): the engine
-// never keeps a transaction open across a crossing. Adapters: `postgres.ts` (native Postgres hosts), `pglite.ts` (bolt
-// dev, the test kit).
-import { Context, Effect, Exit, FiberSet, type Option, type Schema } from 'effect';
+// naming the table of a row that does not decode. Completed batches release their connection before answering;
+// interactive automation transactions own a native, absolutely bounded lease. Adapters: `postgres.ts`, `pglite.ts`.
+import { Context, Effect, type Option, type Schema, type Scope } from 'effect';
 import type { Lock, Rows, Sql } from '../contracts.ts';
 import type { DbError } from '../errors.ts';
 import type { BoltError } from '../../protocol/errors.ts';
 import { decodeOne, decodeRows, decodeValue } from './rows.ts';
-import { dbError } from './wire.ts';
+import { AuditMutation, auditedBatch } from '../audit-context.ts';
 
-/** The connection a transaction's body runs on, provided by `TenantDb.transaction` alone. */
-export class TenantTx extends Context.Service<
-	TenantTx,
-	{ readonly query: (statement: Sql) => Effect.Effect<Rows, DbError> }
->()('bolt/TenantTx') {}
+/** Complete database work, prepared before a connection is acquired; no application callback runs inside it. */
+export type DbBatch = {
+	readonly statements: readonly Sql[];
+	readonly lock?: Lock;
+	/** Native dry-run: execute and answer the statements, then roll back all of their effects. */
+	readonly rollback?: true;
+};
+
+/** One native SERIALIZABLE lease. Its fixed five-second deadline starts at admission and never resets. */
+export type DbSession = {
+	readonly db: Omit<RawDb, 'session'>;
+	readonly commit: Effect.Effect<void, DbError>;
+	readonly rollback: Effect.Effect<void, DbError>;
+};
 
 /** What an adapter implements; `TenantDb.typed` adds the decoding reads over it. */
 export type RawDb = {
-	/** Reads, pipelined in one round trip; answers in order (rule 12). Rows relayed as JSON (D5). */
+	/** Read statements share one snapshot and answer in order; rows are relayed as JSON (D5). */
 	readonly read: (statements: readonly Sql[]) => Effect.Effect<readonly Rows[], DbError>;
-	/** An act's one write statement: `BEGIN; LOCK …; <statement>; COMMIT` in one round trip (rules 20, 26). */
+	/** An act's one write statement, with fixed deadlines and native locks before execution. */
 	readonly write: (statement: Sql, lock?: Lock) => Effect.Effect<Rows, DbError>;
-	/**
-	 * Several statements atomically (schema apply, seed restore, transactional host operations): `body` runs with
-	 * `TenantTx`; a failure rolls back, and so does an interruption.
-	 */
-	readonly transaction: <A, E, R>(
-		body: Effect.Effect<A, E, R>,
-		lock?: Lock
-	) => Effect.Effect<A, E | DbError, Exclude<R, TenantTx>>;
+	/** Complete SQL statements atomically; answers are decoded only after commit or native dry-run rollback. */
+	readonly transaction: (batch: DbBatch) => Effect.Effect<readonly Rows[], DbError>;
+	/** PG17+ only: the driver enforces the deadline independently of the guest; unsupported hosts fail before BEGIN. */
+	readonly session: () => Effect.Effect<DbSession, DbError, Scope.Scope>;
 };
+export type SqlReadCaptureService = {
+	readonly read: (
+		statements: readonly Sql[],
+		execute: RawDb['read']
+	) => Effect.Effect<readonly Rows[], DbError>;
+};
+/** Native transaction routing. Captured services retain their contracts while every SQL call uses this lease. */
+export const SqlSessionDb = Context.Reference<Omit<RawDb, 'session'> | undefined>(
+	'bolt/SqlSessionDb',
+	{ defaultValue: () => undefined }
+);
+export const SqlReadCapture = Context.Reference<SqlReadCaptureService | undefined>(
+	'bolt/SqlReadCapture',
+	{ defaultValue: () => undefined }
+);
 export type TenantDbShape = RawDb & {
 	/** One read's rows, each decoded by `schema`. */
 	readonly rows: <A>(
@@ -56,87 +75,53 @@ export type TenantDbShape = RawDb & {
 };
 
 const NONE: Rows = { rows: [], affected: 0 };
-/** A callback transaction's body failed: thrown so the driver rolls back, carrying the body's exit out. */
-class RolledBack<A, E> {
-	readonly exit: Exit.Failure<A, E>;
-	constructor(exit: Exit.Failure<A, E>) {
-		this.exit = exit;
-	}
-}
-/**
- * `body` inside a driver's Promise transaction callback (PGlite's API): the callback throws to roll the driver back when
- * the body fails, and the body's exit comes back out; interrupting the call interrupts the body, then waits for the
- * driver's rollback before its scope can release the database.
- */
-export function callbackTransaction<T, A, E, R>(
-	begin: (callback: (t: T) => Promise<Exit.Success<A, E>>) => Promise<Exit.Success<A, E>>,
-	txOf: (t: T) => TenantTx['Service'],
-	body: Effect.Effect<A, E, R>
-): Effect.Effect<A, E | DbError, Exclude<R, TenantTx>> {
-	return Effect.scoped(
-		Effect.gen(function* () {
-			const fibers = yield* FiberSet.make<Exit.Exit<A, E>, never>();
-			const run = yield* FiberSet.runtimePromise(fibers)<Exclude<R, TenantTx>>();
-			const failure = (e: unknown): RolledBack<A, E> | DbError =>
-				e instanceof RolledBack ? e : dbError(e);
-			let interrupted = false;
-			const exit = yield* Effect.uninterruptibleMask((restore) =>
-				Effect.gen(function* () {
-					const pending = yield* Effect.try({
-						try: () =>
-							begin(async (t) => {
-								const done = await run(
-									Effect.exit(
-										interrupted
-											? Effect.interrupt
-											: body.pipe(Effect.provideService(TenantTx, txOf(t)))
-									)
-								);
-								if (Exit.isFailure(done)) throw new RolledBack(done);
-								return done;
-							}),
-						catch: failure
-					});
-					return yield* restore(
-						Effect.tryPromise({ try: () => pending, catch: failure }).pipe(
-							Effect.onInterrupt(() =>
-								Effect.sync(() => {
-									// BEGIN may still be queued; no body may start after cancellation.
-									interrupted = true;
-								}).pipe(Effect.andThen(FiberSet.clear(fibers)))
-							),
-							// Interrupt the Effect body first; then await the driver's actual rollback.
-							Effect.ensuring(
-								// repository-health:allow EFF13 -- Both native-driver settlement handlers fulfill with undefined, including rollback rejection.
-								Effect.promise(() =>
-									pending.then(
-										() => undefined,
-										() => undefined
-									)
-								)
-							)
-						)
-					);
-				})
-			).pipe(
-				Effect.catch((e) => (e instanceof RolledBack ? Effect.succeed(e.exit) : Effect.fail(e)))
-			);
-			return yield* exit;
-		})
-	);
-}
-
 export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/TenantDb') {
 	/** An adapter's calls with the decoding reads over them. */
-	static readonly typed = (raw: RawDb): TenantDbShape => ({
-		...raw,
-		rows: (schema, statement) =>
-			Effect.flatMap(raw.read([statement]), ([r]) => decodeRows(schema, r ?? NONE)),
-		one: (schema, statement) =>
-			Effect.flatMap(raw.read([statement]), ([r]) => decodeOne(schema, r ?? NONE)),
-		value: (schema, statement) =>
-			Effect.flatMap(raw.read([statement]), ([r]) => decodeValue(schema, r ?? NONE)),
-		returning: (schema, statement, lock) =>
-			Effect.flatMap(raw.write(statement, lock), (r) => decodeRows(schema, r))
-	});
+	static readonly typed = (raw: RawDb): TenantDbShape => {
+		const read = Effect.fn('Bolt.tenantRead')(function* (statements: readonly Sql[]) {
+			const session = yield* SqlSessionDb;
+			if (session !== undefined) return yield* session.read(statements);
+			const capture = yield* SqlReadCapture;
+			if (capture === undefined) return yield* raw.read(statements);
+			return yield* capture
+				.read(statements, raw.read)
+				.pipe(Effect.provideService(SqlReadCapture, undefined));
+		});
+		const write: RawDb['write'] = Effect.fn('Bolt.tenantWrite')(function* (statement, lock) {
+			const session = yield* SqlSessionDb;
+			if (session !== undefined) return yield* session.write(statement, lock);
+			const audit = yield* AuditMutation;
+			if (audit === undefined) return yield* raw.write(statement, lock);
+			const rows = yield* raw
+				.transaction(
+					auditedBatch({ statements: [statement], ...(lock === undefined ? {} : { lock }) }, audit)
+				)
+				.pipe(Effect.provideService(AuditMutation, undefined));
+			return rows[1] ?? NONE;
+		});
+		const transaction: RawDb['transaction'] = Effect.fn('Bolt.tenantBatch')(function* (batch) {
+			const session = yield* SqlSessionDb;
+			if (session !== undefined) return yield* session.transaction(batch);
+			const audit = yield* AuditMutation;
+			if (audit === undefined) return yield* raw.transaction(batch);
+			const answers = yield* raw
+				.transaction(auditedBatch(batch, audit))
+				.pipe(Effect.provideService(AuditMutation, undefined));
+			return answers.slice(1, -1);
+		});
+		return {
+			...raw,
+			read,
+			write,
+			transaction,
+			rows: (schema, statement) =>
+				Effect.flatMap(read([statement]), ([r]) => decodeRows(schema, r ?? NONE)),
+			one: (schema, statement) =>
+				Effect.flatMap(read([statement]), ([r]) => decodeOne(schema, r ?? NONE)),
+			value: (schema, statement) =>
+				Effect.flatMap(read([statement]), ([r]) => decodeValue(schema, r ?? NONE)),
+			returning: (schema, statement, lock) =>
+				Effect.flatMap(write(statement, lock), (r) => decodeRows(schema, r))
+		};
+	};
 }

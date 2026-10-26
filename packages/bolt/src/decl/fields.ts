@@ -1,5 +1,5 @@
 // Field kinds and input kinds: one literal language for stored fields and every typed input (§3.3.2).
-import type { CollectionName, CustomFieldName, CustomShape, NamesPart } from './names.ts';
+import type { CollectionName, CustomFieldName, CustomShape, NamesPart, Row } from './names.ts';
 import type { ModelWhere } from './where.ts';
 import type {
 	DatePrecision,
@@ -69,7 +69,13 @@ type StoredArm =
 	| { kind: 'time'; precision?: TimePrecision }
 	| { kind: 'period'; of: 'date'; precision?: DatePrecision }
 	| { kind: 'period'; of: 'instant'; precision?: InstantPrecision }
-	| { kind: 'enum'; values: readonly string[]; many?: true }
+	| {
+			kind: 'enum';
+			values: readonly string[];
+			many?: true;
+			/** The states one value may move to; a write naming another transition is refused. */
+			transitions?: Readonly<Record<string, readonly string[]>>;
+	  }
 	| { kind: 'state'; initial: string; states: { readonly [state: string]: StateSpec } }
 	| { kind: 'seq'; pattern?: SeqPattern; per?: readonly string[] }
 	| { kind: 'sum'; of: `${string}.${string}`; where?: { readonly [k: string]: unknown } } // checked by `Verify`
@@ -104,6 +110,21 @@ export type FieldKind = Flat<FieldCommon & StoredArm>;
  * An input field's kind: every stored kind plus the input-only `number`, `id`, `union` and `record`.
  */
 export type InputKind = Flat<FieldCommon & (StoredArm | InputArm)>;
+/** A callable output may carry caller-readable rows without copying their model's fields. */
+export type OutputKind =
+	| InputKind
+	| (FieldCommon &
+			(
+				| { kind: 'row'; of: string }
+				| { kind: 'list'; of: OutputKind; min?: number; max?: number }
+				| { kind: 'object'; fields: { readonly [name: string]: OutputKind }; rest?: OutputKind }
+				| { kind: 'record'; of: OutputKind }
+				| {
+						kind: 'union';
+						by: string;
+						arms: { readonly [tag: string]: { readonly [name: string]: OutputKind } };
+				  }
+			));
 /** A record of named input fields: a query's, action's, automation's or custom field's `input` shape. */
 export type InputFields = { readonly [name: string]: InputKind };
 /** The arms an untagged union may hold: scalars, so a value's kind names its arm. */
@@ -121,11 +142,13 @@ export type Value<K> = Literal<K>;
 type DerivedKind = 'seq' | 'sum' | 'count';
 
 // ── values ──
-type Base<K> = K extends { kind: 'id'; of: infer C extends string }
-	? K extends { kind: never }
-		? FieldValue<K>
-		: Id<C>
-	: FieldValue<K>;
+type Base<K> = K extends { kind: never }
+	? FieldValue<K>
+	: K extends { kind: 'row'; of: infer C extends string }
+		? Row<C>
+		: K extends { kind: 'id'; of: infer C extends string }
+			? Id<C>
+			: FieldValue<K>;
 // Unchecked descriptors and unchecked kind properties follow different original branches.
 type FieldValue<K> = K extends { kind: 'list' | 'object' | 'union' | 'record' }
 	? K extends { kind: never }
@@ -347,8 +370,22 @@ type InputOptions<T, Stored> = T extends { kind: 'object'; fields: infer F }
 										? InputKind
 										: InputSpec<T>;
 export type ValidInputs<F, Stored = false> = { [P in keyof F]: ValidInput<F[P], Stored> };
-// An `id` input's picker filter is a Where over the target model, which never depends on a collection literal. Inside a
-// stored `json` shape (`Stored`) an id takes no filter: a model literal must not read the relationships, which read it.
+/** Output validation follows nested values and resolves a row's model name from the generated catalogue. */
+export type ValidOutput<T> = T extends { kind: 'row' }
+	? { kind: 'row'; of: CollectionName } & Common<never>
+	: T extends { kind: 'list' | 'record'; of: infer O }
+		? Omit<T, 'of'> & { of: ValidOutput<O> }
+		: T extends { kind: 'object'; fields: infer F }
+			? Omit<T, 'fields' | 'rest'> & {
+					fields: { [P in keyof F]: ValidOutput<F[P]> };
+				} & (T extends { rest: infer R } ? { rest: ValidOutput<R> } : {})
+			: T extends { kind: 'union'; arms: infer A }
+				? Omit<T, 'arms'> & {
+						arms: { [G in keyof A]: { [P in keyof A[G]]: ValidOutput<A[G][P]> } };
+					}
+				: ValidInput<T>;
+// An `id` input's picker filter is a Where over the target model. Inside a stored `json` shape (`Stored`) an id takes no
+// filter.
 type IdWhere<C> = C extends string ? ModelWhere<C> : never;
 
 /** The spec one stored field literal must satisfy, given its model's own field literals `F`. */

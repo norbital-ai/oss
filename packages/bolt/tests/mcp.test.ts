@@ -1,12 +1,13 @@
-import { createServer } from 'node:http';
-import { Client } from '@modelcontextprotocol/client';
+// The engine's side of MCP over a fake `Mcp` service: server resolution from secrets, one session per server per turn,
+// allowlists, discovery and the turn scope's lifetime. The SDK client is the host's (`node/mcp.ts`).
 import { expect, it, vi } from '@effect/vitest';
-import { ConfigProvider, Deferred, Effect, Exit, Fiber, Option, Scope, Schema } from 'effect';
+import { ConfigProvider, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 import { FacilityFailure } from '../src/decl/errors.ts';
-import type { Authority } from '../src/engine/contracts.ts';
+import type { Authority, McpServer, McpToolInfo } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
-import { Port } from '../src/engine/port.ts';
+import type { PortFailure } from '../src/engine/port.ts';
+import { Mcp } from '../src/engine/ports.ts';
 import { mcpSessions, type McpHost } from '../src/engine/agent/mcp.ts';
 
 const manifest = {
@@ -15,122 +16,159 @@ const manifest = {
 		bad: { description: 'Bad', url: 'URL', auth: { bearer: 'TOKEN' } }
 	}
 };
+const URL_OF = 'https://fixture.test/mcp';
 /** `URL` answers the fixture address; `token` answers every other secret (the bearer). */
 const host = (token: McpHost['secret'] = () => Effect.succeed(undefined)): McpHost => ({
-	secret: (name) => (name === 'URL' ? Effect.succeed('http://fixture.invalid/mcp') : token(name))
+	secret: (name) => (name === 'URL' ? Effect.succeed(URL_OF) : token(name))
 });
-const sdk = () =>
-	Effect.acquireRelease(
-		Effect.sync(() => {
-			const connect = vi.spyOn(Client.prototype, 'connect').mockResolvedValue(undefined);
-			vi.spyOn(Client.prototype, 'callTool').mockResolvedValue({ content: [] });
-			const close = vi.spyOn(Client.prototype, 'close').mockResolvedValue(undefined);
-			return { connect, close };
-		}),
-		() => Effect.sync(() => vi.restoreAllMocks())
-	);
+type Fake = {
+	connect?: (server: McpServer) => Effect.Effect<void, PortFailure>;
+	tools?: (server: McpServer) => Effect.Effect<readonly McpToolInfo[], PortFailure>;
+	call?: (tool: string, input: Json) => Effect.Effect<Json, PortFailure>;
+};
+/** A fake port service: what it was asked to connect, and how many sessions it closed. */
+const fakeMcp = (fake: Fake = {}) => {
+	const seen = { connects: [] as McpServer[], closes: 0 };
+	const service: Mcp['Service'] = {
+		connect: (server) =>
+			Effect.acquireRelease(
+				(fake.connect?.(server) ?? Effect.void).pipe(
+					Effect.tap(() => Effect.sync(() => seen.connects.push(server)))
+				),
+				() =>
+					Effect.sync(() => {
+						seen.closes++;
+					})
+			).pipe(
+				Effect.as({
+					tools: fake.tools?.(server) ?? Effect.succeed([]),
+					call: (tool: string, input: Json) =>
+						fake.call?.(tool, input) ?? Effect.succeed({ content: [] })
+				})
+			)
+	};
+	return { seen, service };
+};
 const fixture = (
-	m: Parameters<typeof mcpSessions>[0] = manifest,
-	h: McpHost | null = host(),
-	wallMs?: number
+	o: {
+		m?: Parameters<typeof mcpSessions>[0];
+		host?: McpHost | null;
+		wallMs?: number;
+		fake?: Fake;
+	} = {}
 ) =>
 	Effect.gen(function* () {
+		const { seen, service } = fakeMcp(o.fake);
 		const scope = yield* Scope.make();
 		yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
-		const sessions = yield* mcpSessions(m, h ?? undefined, wallMs).pipe(
-			Effect.provideService(Scope.Scope, scope)
-		);
-		return { sessions, close: Scope.close(scope, Exit.void) };
+		const sessions = yield* mcpSessions(
+			o.m ?? manifest,
+			o.host === null ? undefined : (o.host ?? host()),
+			o.wallMs
+		).pipe(Effect.provideService(Scope.Scope, scope), Effect.provideService(Mcp, service));
+		return { sessions, seen, close: Scope.close(scope, Exit.void) };
 	});
 
-it.effect('shares acquisition and closes once across concurrent shutdowns', () =>
+it.effect('shares one session per server and closes it once across concurrent shutdowns', () =>
 	Effect.gen(function* () {
-		const { connect, close } = yield* sdk(),
-			f = yield* fixture();
+		const f = yield* fixture();
 		yield* Effect.all([f.sessions.call('good', 'echo', {}), f.sessions.call('good', 'echo', {})], {
 			concurrency: 'unbounded'
 		});
-		expect(connect).toHaveBeenCalledTimes(1);
+		expect(f.seen.connects).toEqual([{ url: URL_OF, headers: {} }]);
 		yield* Effect.all([f.close, f.close], { concurrency: 'unbounded' });
-		expect(close).toHaveBeenCalledTimes(1);
+		expect(f.seen.closes).toBe(1);
 	})
 );
-it.effect('closes successful clients despite cached acquisition failures', () =>
+it.effect('resolves the URL and credentials from secrets into the server the port connects', () =>
 	Effect.gen(function* () {
-		const { close } = yield* sdk(),
-			error = new FacilityFailure({ kind: 'upstream', message: 'secret unavailable' });
+		const secrets: Record<string, string> = {
+			URL: URL_OF,
+			TOKEN: 'token',
+			CLIENT: 'cid',
+			SECRET: 'csec'
+		};
+		const f = yield* fixture({
+			m: {
+				mcp: {
+					bearer: { description: '', url: 'URL', auth: { bearer: 'TOKEN' } },
+					client: {
+						description: '',
+						url: 'URL',
+						auth: { oauth: { clientId: 'CLIENT', clientSecret: 'SECRET', scopes: ['a', 'b'] } }
+					}
+				}
+			},
+			host: { secret: (name) => Effect.succeed(secrets[name]) }
+		});
+		yield* f.sessions.call('bearer', 'echo', {});
+		yield* f.sessions.call('client', 'echo', {});
+		expect(f.seen.connects).toEqual([
+			{ url: URL_OF, headers: {}, auth: { bearer: 'token' } },
+			{
+				url: URL_OF,
+				headers: {},
+				auth: { client: { id: 'cid', secret: 'csec', scopes: ['a', 'b'] } }
+			}
+		]);
+	})
+);
+it.effect('keeps a secret provider failure for the turn and closes the sessions it opened', () =>
+	Effect.gen(function* () {
+		const error = new FacilityFailure({ kind: 'upstream', message: 'secret unavailable' });
 		const secret = vi.fn(() => Effect.fail(error)),
-			f = yield* fixture(manifest, host(secret));
+			f = yield* fixture({ host: host(secret) });
 		yield* f.sessions.call('good', 'echo', {});
 		for (let i = 0; i < 2; i++)
 			expect(yield* f.sessions.call('bad', 'echo', {}).pipe(Effect.flip)).toBe(error);
 		expect(secret).toHaveBeenCalledTimes(1);
 		yield* f.close;
-		expect(close).toHaveBeenCalledTimes(1);
+		expect(f.seen.closes).toBe(1);
 	})
 );
-it.effect('waits for pending acquisition and refuses new sessions during shutdown', () =>
+it.effect('answers an unconfigured server Unavailable, kept for the turn, without connecting', () =>
 	Effect.gen(function* () {
-		const { connect, close } = yield* sdk();
-		const connected = Promise.withResolvers<void>(),
-			gate = Promise.withResolvers<void>();
-		connect.mockImplementation(() => {
-			connected.resolve();
-			return gate.promise;
-		});
+		const f = yield* fixture({ host: null }),
+			absent = ConfigProvider.layer(ConfigProvider.fromUnknown({}));
+		const first = yield* f.sessions
+			.call('good', 'echo', {})
+			.pipe(Effect.provide(absent), Effect.flip);
+		expect(first).toMatchObject({ _tag: 'Unavailable', reason: 'URL is not set' });
+		expect(
+			yield* f.sessions.call('good', 'echo', {}).pipe(Effect.provide(absent), Effect.flip)
+		).toBe(first);
+		expect(f.seen.connects).toEqual([]);
+	})
+);
+it.effect('refuses every call once the turn scope closed', () =>
+	Effect.gen(function* () {
 		const f = yield* fixture();
-		yield* Effect.addFinalizer(() => Effect.sync(() => gate.resolve()));
-		const call = yield* Effect.forkChild(f.sessions.call('good', 'echo', {}));
-		yield* Port.attempt('fixture.connect', () => connected.promise);
-		let finished = false;
-		const stopping = yield* Effect.forkChild(
-			f.close.pipe(
-				Effect.tap(() =>
-					Effect.sync(() => {
-						finished = true;
-					})
-				)
-			),
-			{ startImmediately: true }
-		);
-		expect(finished).toBe(false);
-		expect(yield* f.sessions.call('bad', 'echo', {}).pipe(Effect.flip)).toMatchObject({
-			_tag: 'Unavailable',
-			reason: 'the session scope is closed'
-		});
-		gate.resolve();
-		yield* Fiber.join(call);
-		yield* Fiber.join(stopping);
-		expect(connect).toHaveBeenCalledTimes(1);
-		expect(close).toHaveBeenCalledTimes(1);
+		yield* f.sessions.call('good', 'echo', {});
+		yield* f.close;
 		expect(yield* f.sessions.call('good', 'echo', {}).pipe(Effect.flip)).toMatchObject({
 			_tag: 'Unavailable',
 			reason: 'the session scope is closed'
 		});
 	})
 );
-it.effect('retains unavailable answers and attempts all closes when one close fails', () =>
+it.effect('closes at once a session that connected after the turn scope closed', () =>
 	Effect.gen(function* () {
-		const { close } = yield* sdk();
-		const unavailable = yield* fixture(manifest, null),
-			absent = ConfigProvider.layer(ConfigProvider.fromUnknown({}));
-		const first = yield* unavailable.sessions
-			.call('good', 'echo', {})
-			.pipe(Effect.provide(absent), Effect.flip);
-		expect(
-			yield* unavailable.sessions.call('good', 'echo', {}).pipe(Effect.provide(absent), Effect.flip)
-		).toBe(first);
-		yield* unavailable.close;
-		const f = yield* fixture(
-			manifest,
-			host(() => Effect.succeed('token'))
-		);
-		yield* Effect.all([f.sessions.call('good', 'echo', {}), f.sessions.call('bad', 'echo', {})], {
-			concurrency: 'unbounded'
+		const gate = yield* Deferred.make<void>(),
+			connecting = yield* Deferred.make<void>();
+		const f = yield* fixture({
+			fake: {
+				connect: () =>
+					Deferred.succeed(connecting, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+			}
 		});
-		close.mockRejectedValueOnce(new Error('close failed'));
+		const call = yield* Effect.forkChild(f.sessions.call('good', 'echo', {}));
+		yield* Deferred.await(connecting);
 		yield* f.close;
-		expect(close).toHaveBeenCalledTimes(2);
+		expect(f.seen.closes).toBe(0);
+		yield* Deferred.succeed(gate, undefined);
+		yield* Fiber.join(call);
+		expect(f.seen.connects).toHaveLength(1);
+		expect(f.seen.closes).toBe(1);
 	})
 );
 
@@ -156,257 +194,155 @@ const discoveryAuthority: Authority = {
 	scopes: {},
 	capabilities: { apps: [], tools: [], mcp: [], skills: [] }
 };
+const info = (name: string): McpToolInfo => ({
+	name,
+	description: name,
+	inputSchema: { type: 'object' }
+});
 it.effect('keeps declaration order and allowlists when server lists finish out of order', () =>
 	Effect.gen(function* () {
-		yield* sdk();
-		const held = Promise.withResolvers<{
-			tools: { name: string; inputSchema: { type: 'object' } }[];
-		}>();
-		const started = Promise.withResolvers<void>(),
-			secondFinished = Promise.withResolvers<void>();
-		const list = vi
-			.spyOn(Client.prototype, 'listTools')
-			.mockImplementationOnce(() => {
-				started.resolve();
-				return held.promise;
-			})
-			.mockImplementationOnce(async () => {
-				secondFinished.resolve();
-				return { tools: [{ name: 'second', inputSchema: { type: 'object' } }] };
-			});
+		const first = yield* Deferred.make<readonly McpToolInfo[]>(),
+			second = yield* Deferred.make<void>();
 		const f = yield* fixture({
-			mcp: {
-				first: { description: '', url: 'URL', tools: ['allowed'] },
-				second: { description: '', url: 'URL' }
+			m: {
+				mcp: {
+					first: { description: '', url: 'FIRST', tools: ['allowed'] },
+					second: { description: '', url: 'SECOND' }
+				}
+			},
+			host: { secret: (name) => Effect.succeed(name) },
+			fake: {
+				tools: (server) =>
+					server.url === 'FIRST'
+						? Deferred.await(first)
+						: Deferred.succeed(second, undefined).pipe(Effect.as([info('second')]))
 			}
 		});
-		yield* Effect.addFinalizer(() => Effect.sync(() => held.resolve({ tools: [] })));
 		const result = yield* Effect.forkChild(f.sessions.tools(discoveryAuthority));
-		yield* Port.attempt('fixture.list', () => started.promise);
-		yield* Port.attempt('fixture.list', () => secondFinished.promise);
-		held.resolve({
-			tools: [
-				{ name: 'blocked', inputSchema: { type: 'object' } },
-				{ name: 'allowed', inputSchema: { type: 'object' } }
-			]
-		});
+		yield* Deferred.await(second);
+		yield* Deferred.succeed(first, [info('blocked'), info('allowed')]);
 		expect((yield* Fiber.join(result)).map((tool) => [tool.server, tool.name])).toEqual([
 			['first', 'allowed'],
 			['second', 'second']
 		]);
-		expect(list).toHaveBeenCalledTimes(2);
 	})
 );
-it.effect('rejects discovery acquisition failure before an admitted sibling list completes', () =>
+it.effect('fails discovery on a secret provider failure, ending a sibling list', () =>
 	Effect.gen(function* () {
-		yield* sdk();
 		const error = new FacilityFailure({ kind: 'upstream', message: 'secret rejected' });
-		const failed = yield* Deferred.make<string | undefined, FacilityFailure>();
-		const started = Promise.withResolvers<void>(),
-			held = Promise.withResolvers<{ tools: [] }>();
-		const list = vi.spyOn(Client.prototype, 'listTools').mockImplementation(() => {
-			started.resolve();
-			return held.promise;
-		});
-		const f = yield* fixture(
-			manifest,
-			host(() => Deferred.await(failed))
-		);
-		yield* Effect.addFinalizer(() => Effect.sync(() => held.resolve({ tools: [] })));
-		const result = yield* Effect.forkChild(
-			f.sessions.tools(discoveryAuthority).pipe(Effect.flip, Effect.timeoutOption('1 millis'))
-		);
-		yield* Port.attempt('fixture.list', () => started.promise);
-		yield* Deferred.fail(failed, error);
-		yield* TestClock.adjust('1 millis');
-		const rejected = yield* Fiber.join(result);
-		expect(Option.isSome(rejected)).toBe(true);
-		if (Option.isSome(rejected)) expect(rejected.value).toBe(error);
-		expect(list).toHaveBeenCalledTimes(1);
-	})
-);
-
-it.live('uses SDK pagination to discover every page without a Bolt cursor loop', () =>
-	Effect.gen(function* () {
-		const methods: string[] = [],
-			cursors: (Json | undefined)[] = [];
-		const Message = Schema.Struct({
-			method: Schema.String,
-			id: Schema.optionalKey(Schema.Json),
-			params: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
-		});
-		const server = yield* Effect.acquireRelease(
-			Port.attempt(
-				'fixture.listen',
-				() =>
-					new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
-						const server = createServer(async (req, res) => {
-							if (req.method !== 'POST') {
-								res.writeHead(405).end();
-								return;
-							}
-							let body = '';
-							for await (const chunk of req) body += String(chunk);
-							const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Message))(body);
-							if (decoded._tag === 'None') {
-								res.writeHead(400).end();
-								return;
-							}
-							const message = decoded.value,
-								method = message.method;
-							methods.push(method);
-							if (message.id === undefined) {
-								res.writeHead(202).end();
-								return;
-							}
-							const cursor = message.params?.['cursor'];
-							let result: Json;
-							if (method === 'initialize')
-								result = {
-									protocolVersion: message.params?.['protocolVersion'] ?? null,
-									capabilities: { tools: {} },
-									serverInfo: { name: 'pages', version: '1' }
-								};
-							else if (method === 'tools/list') {
-								cursors.push(cursor);
-								result =
-									cursor === undefined
-										? {
-												tools: [{ name: 'first', inputSchema: { type: 'object' } }],
-												nextCursor: 'page2'
-											}
-										: { tools: [{ name: 'second', inputSchema: { type: 'object' } }] };
-							} else {
-								res.writeHead(202).end();
-								return;
-							}
-							res
-								.writeHead(200, { 'content-type': 'application/json' })
-								.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
-						});
-						server.once('error', reject);
-						server.listen(0, '127.0.0.1', () => resolve(server));
-					})
-			),
-			(server) =>
-				Port.attempt(
-					'fixture.close',
-					() =>
-						new Promise<void>((resolve, reject) =>
-							server.close((error) => (error ? reject(error) : resolve()))
-						)
-				).pipe(Effect.orDie)
-		);
-		const address = server.address();
-		if (address === null || typeof address === 'string')
-			return yield* Effect.die(new Error('fixture has no TCP address'));
-		const f = yield* fixture(
-			{ mcp: { pages: { description: '', url: 'URL' } } },
-			{ secret: () => Effect.succeed(`http://127.0.0.1:${address.port}/mcp`) }
-		);
-		expect((yield* f.sessions.tools(discoveryAuthority)).map((tool) => tool.name)).toEqual([
-			'first',
-			'second'
-		]);
-		expect(cursors).toEqual([undefined, 'page2']);
-		expect(methods.filter((method) => method === 'initialize')).toHaveLength(1);
-		yield* f.close;
-	})
-);
-it.effect('omits an in-flight tool list when SDK close rejects its request', () =>
-	Effect.gen(function* () {
-		const { close } = yield* sdk();
-		const started = Promise.withResolvers<void>(),
-			held = Promise.withResolvers<{ tools: [] }>();
-		vi.spyOn(Client.prototype, 'listTools').mockImplementation(() => {
-			started.resolve();
-			return held.promise;
-		});
-		close.mockImplementation(async () => {
-			held.reject(new Error('Connection closed'));
-		});
-		const f = yield* fixture();
-		yield* Effect.addFinalizer(() => Effect.sync(() => held.resolve({ tools: [] })));
-		const observed = yield* Effect.forkChild(f.sessions.tools(discoveryAuthority));
-		yield* Port.attempt('fixture.list', () => started.promise);
-		yield* f.close;
-		expect(yield* Fiber.join(observed)).toEqual([]);
-	})
-);
-it.effect('refuses a disallowed tool before opening its SDK session', () =>
-	Effect.gen(function* () {
-		const { connect } = yield* sdk();
+		const failed = yield* Deferred.make<string | undefined, FacilityFailure>(),
+			listing = yield* Deferred.make<void>();
+		let ended = false;
 		const f = yield* fixture({
-			mcp: { good: { description: '', url: 'URL', tools: ['allowed'] } }
+			host: host(() => Deferred.await(failed)),
+			fake: {
+				tools: () =>
+					Deferred.succeed(listing, undefined).pipe(
+						Effect.andThen(Effect.never),
+						Effect.onInterrupt(() =>
+							Effect.sync(() => {
+								ended = true;
+							})
+						)
+					)
+			}
+		});
+		const result = yield* Effect.forkChild(f.sessions.tools(discoveryAuthority).pipe(Effect.flip));
+		yield* Deferred.await(listing);
+		yield* Deferred.fail(failed, error);
+		expect(yield* Fiber.join(result)).toBe(error);
+		expect(ended).toBe(true);
+	})
+);
+it.effect('omits from discovery a server that does not connect or whose list fails', () =>
+	Effect.gen(function* () {
+		const down = new FacilityFailure({ kind: 'upstream', message: 'connection refused' });
+		const f = yield* fixture({
+			m: {
+				mcp: {
+					down: { description: '', url: 'DOWN' },
+					broken: { description: '', url: 'BROKEN' },
+					up: { description: '', url: 'UP' }
+				}
+			},
+			host: { secret: (name) => Effect.succeed(name) },
+			fake: {
+				connect: (server) => (server.url === 'DOWN' ? Effect.fail(down) : Effect.void),
+				tools: (server) =>
+					server.url === 'BROKEN'
+						? Effect.fail(new FacilityFailure({ kind: 'upstream', message: 'list failed' }))
+						: Effect.succeed([info('ok')])
+			}
+		});
+		expect((yield* f.sessions.tools(discoveryAuthority)).map((tool) => tool.server)).toEqual([
+			'up'
+		]);
+		expect(yield* f.sessions.call('down', 'ok', {}).pipe(Effect.flip)).toBe(down);
+	})
+);
+it.effect('refuses a disallowed tool or non-object arguments before connecting', () =>
+	Effect.gen(function* () {
+		const f = yield* fixture({
+			m: { mcp: { good: { description: '', url: 'URL', tools: ['allowed'] } } }
 		});
 		expect(yield* f.sessions.call('good', 'blocked', {}).pipe(Effect.flip)).toMatchObject({
 			_tag: 'Unavailable',
 			reason: "blocked is not in the server's allowlist"
 		});
-		expect(connect).not.toHaveBeenCalled();
+		expect(yield* f.sessions.call('good', 'allowed', [1]).pipe(Effect.flip)).toMatchObject({
+			_tag: 'Unavailable',
+			reason: 'tool arguments must be an object'
+		});
+		expect(f.seen.connects).toEqual([]);
 	})
 );
-it.effect('retains tool result projection and upstream failure mapping', () =>
+it.effect("passes the port's result and failure through", () =>
 	Effect.gen(function* () {
-		yield* sdk();
-		const call = vi.mocked(Client.prototype.callTool);
-		call.mockResolvedValueOnce({
-			content: [{ type: 'text', text: 'answer' }],
-			structuredContent: { count: 1 },
-			isError: true
-		});
-		call.mockRejectedValueOnce(new Error('remote failed'));
-		const f = yield* fixture();
-		expect(yield* f.sessions.call('good', 'echo', { value: 1 })).toEqual({
+		const answer = {
 			content: [{ type: 'text', text: 'answer' }],
 			structured: { count: 1 },
 			isError: true
+		};
+		const f = yield* fixture({
+			fake: {
+				call: (tool) =>
+					tool === 'echo'
+						? Effect.succeed(answer)
+						: Effect.fail(new FacilityFailure({ kind: 'upstream', message: 'remote failed' }))
+			}
 		});
-		expect(yield* f.sessions.call('good', 'echo', {}).pipe(Effect.flip)).toMatchObject({
+		expect(yield* f.sessions.call('good', 'echo', { value: 1 })).toEqual(answer);
+		expect(yield* f.sessions.call('good', 'other', {}).pipe(Effect.flip)).toMatchObject({
 			kind: 'upstream',
 			message: 'remote failed'
 		});
 	})
 );
-it.effect('classifies an aborted SDK request as timeout', () =>
+it.effect('ends a call past its wall as a timeout and interrupts the port call', () =>
 	Effect.gen(function* () {
-		yield* sdk();
-		const called = Promise.withResolvers<void>();
-		const held = Promise.withResolvers<Awaited<ReturnType<Client['callTool']>>>();
-		let signal: AbortSignal | undefined;
-		vi.mocked(Client.prototype.callTool).mockImplementation((_request, options) => {
-			signal = options?.signal;
-			signal?.addEventListener('abort', () => held.reject(new Error('request aborted')), {
-				once: true
-			});
-			called.resolve();
-			return held.promise;
+		const called = yield* Deferred.make<void>();
+		let interrupted = false;
+		const f = yield* fixture({
+			wallMs: 25,
+			fake: {
+				call: () =>
+					Deferred.succeed(called, undefined).pipe(
+						Effect.andThen(Effect.never),
+						Effect.onInterrupt(() =>
+							Effect.sync(() => {
+								interrupted = true;
+							})
+						)
+					)
+			}
 		});
-		const f = yield* fixture(manifest, host(), 25);
 		const result = yield* Effect.forkChild(f.sessions.call('good', 'echo', {}).pipe(Effect.flip));
-		yield* Port.attempt('fixture.call', () => called.promise);
+		yield* Deferred.await(called);
 		yield* TestClock.adjust('26 millis');
 		expect(yield* Fiber.join(result)).toMatchObject({
 			kind: 'timeout',
 			message: 'mcp:good.echo did not answer within 25 ms'
 		});
-		expect(signal?.aborted).toBe(true);
-		expect(Client.prototype.callTool).toHaveBeenCalledWith(
-			{ name: 'echo', arguments: {} },
-			{ signal }
-		);
-	})
-);
-it.effect('keeps malformed URLs as acquisition failures', () =>
-	Effect.gen(function* () {
-		const { connect } = yield* sdk(),
-			f = yield* fixture(manifest, { secret: () => Effect.succeed('http://') });
-		const failure = yield* f.sessions.call('good', 'echo', {}).pipe(Effect.flip);
-		expect(failure).toMatchObject({
-			_tag: 'FacilityFailure',
-			kind: 'upstream',
-			message: expect.stringMatching(/Invalid URL/)
-		});
-		expect(connect).not.toHaveBeenCalled();
+		expect(interrupted).toBe(true);
 	})
 );

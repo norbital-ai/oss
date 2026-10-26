@@ -1,4 +1,5 @@
-// The one predicate language (K3, §3.3.9): reads, grants, `check`, approval matches, triggers and live routing.
+// The one predicate language (K3, §3.3.9): reads, grants, `check`, ref `where`, triggers and live routing. A read compares
+// against values it is given: there is no clock operand (a page passes `bolt.clock(unit)`'s values, server code `ctx.today`).
 import type { Literal } from './fields.ts';
 import type {
 	CollectionName,
@@ -13,19 +14,12 @@ import type {
 	RelTarget,
 	TargetName
 } from './names.ts';
-import type { Json, Offset, Point } from './values.ts';
+import type { Json, Point } from './values.ts';
 
-/** A calendar unit: `{ startOf }` is the first day of the unit containing today, in the workspace zone (weeks start Monday). */
-export type CalendarUnit = 'week' | 'month' | 'quarter' | 'year';
-/** A calendar-relative date, moved by `shift` whole units: "last month" is `{ startOf: 'month', shift: -1 }`. */
-export type StartOf = { startOf: CalendarUnit; shift?: number };
 /** A typed operand literal; which ones a position admits depends on the value's kind. */
 export type Operand =
 	| { field: string }
 	| { param: string }
-	| { now: Offset }
-	| { today: Offset }
-	| StartOf
 	| {
 			actor:
 				| 'id'
@@ -72,18 +66,16 @@ type NumericKind<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
 		: K;
 type Ordered = { kind: NumKind | 'date' | 'instant' | 'time' | 'duration' | 'text' | 'seq' };
 
-// Operands a value position admits, by kind; S = static (check, unique, relationship `where`): values and fields only.
+// Operands a value position admits, by kind; S = static (check, unique, ref `where`): values and fields only.
 type Dyn<K, S> = S extends true
 	? never
 	: | { param: string }
-		| (K extends { kind: 'date' } ? { today: Offset } | StartOf : never)
-		| (K extends { kind: 'instant' } ? { now: Offset } | StartOf : never)
 		| (K extends { kind: 'text'; format: 'email' } ? { actor: 'email' } : never)
 		| (K extends { kind: 'text'; format: 'phone' } ? { actor: 'phone' } : never)
 		/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
 		| (K extends { kind: 'text' } ? { actor: 'visitor' } : never)
 		| (K extends { kind: 'id'; of: 'sys_user' } ? { actor: 'id' } : never)
-		/** The instance an envoy turn arrived on, or a feed or outbound run is for; null for every other actor. */
+		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other actor. */
 		| (K extends { kind: 'id'; of: 'sys_integration' } ? { actor: 'instance' } : never)
 		| (K extends { kind: 'id' } ? { actor: 'party' } : never);
 type DynList<K, S> = S extends true
@@ -110,7 +102,7 @@ type PeriodLit<K> = K extends { of: 'date' }
 	? Literal<{ kind: 'date' }>
 	: Literal<{ kind: 'instant' }>;
 type End<K, S> = PeriodLit<K> | Dyn<{ kind: K extends { of: 'date' } ? 'date' : 'instant' }, S>;
-/** A period argument of `overlaps`/`within`: a literal, or ends relative to today ("overlaps this month"). */
+/** A period argument of `overlaps`/`within`: its ends as literals or parameters. */
 type PeriodArg<K, S> = K extends { of: 'date' }
 	? { from: End<K, S>; to: End<K, S> | null }
 	: { start: End<K, S>; end: End<K, S> | null };
@@ -192,16 +184,26 @@ type WhereOver<M, X> = {
 	not?: WhereOver<M, X>;
 } & { $search?: string; $similar?: string | { to: string; top?: number } }; // `search.text`: every word, fuzzily; `search.semantic`: the nearest in meaning and every row nearly as near (at most `top`, default 20)
 
-// Conditional on the name: while a call is inferred, its literal is typed against the generic `Where<C>`, whose
-// constraint is then `never`, which is cheap; expanding the generic predicate for every nested literal of every call
-// cost ~0.5 ms a read (G1 scale fixture). The applicability check that follows types the literal against the
-// instantiated `Where<'orders'>`. (A mapped index of every collection's predicate was slower still.)
+// Conditional on the name: while a call is inferred, its literal is typed against the generic `Where<C>`, and expanding
+// that predicate for every nested literal of every call cost ~0.5 ms a read (G1 scale fixture). The `[C] extends
+// [infer D]` wrapper keeps the generic form's constraint from being `Where<constraint of C>`: under a template helper's
+// `C extends ReadableName` that is every collection's predicate at once, 0.3 s a call (F28); `D` still distributes over
+// a union of names. The applicability check that follows types the literal against the instantiated `Where<'orders'>`.
+// (A mapped index of every collection's predicate was slower still.)
 /** A predicate over collection `C`: only its exposed fields and relations exist (rule 10). */
-export type Where<C> = C extends CollectionName ? WhereOver<C, C> : never;
+export type Where<C> = [C] extends [infer D]
+	? D extends CollectionName
+		? WhereOver<D, D>
+		: never
+	: never;
 /** A predicate over a model with no exposure filter (an `id` input's picker filter). */
-export type ModelWhere<M> = M extends TargetName ? WhereOver<M, 'model'> : never;
-/** An own-row predicate with static operands only (`check`, `unique.where`, `noOverlap.where`, relationship `where`).
- * `Fk = false` leaves FK columns out: a relationship's own `where` cannot read the relationships it is declaring. */
+export type ModelWhere<M> = [M] extends [infer D]
+	? D extends TargetName
+		? WhereOver<D, 'model'>
+		: never
+	: never;
+/** An own-row predicate with static operands only (`check`, `unique.where`, `noOverlap.where`, a ref field's `where`).
+ * `Fk = false` leaves FK columns out: a ref's `where` filters its target by the target's own fields. */
 export type StaticWhere<M, Fk = true> = {
 	[P in keyof Columns<M> & string]?: Ops<M, Columns<M>[P], true>;
 } & (Fk extends true ? { [R in keyof OneRels<M> & string]?: IdOps<OneTarget<M, R>, true> } : {}) & {

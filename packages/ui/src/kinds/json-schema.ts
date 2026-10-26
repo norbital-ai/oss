@@ -214,10 +214,7 @@ export function jsonSchemaInitial(schema: JsonSchema, root: JsonSchema = schema)
 	return null;
 }
 
-/**
- * Fields in declaration order (numeric `x-norbital.order` first sorts them). Fields without an `x-norbital.section`
- * form one untitled group; named sections follow it, `advanced` ones last and disclosed on demand.
- */
+/** Declared sections in their authored order; advanced groups follow the main fields. */
 export function jsonSchemaGroups(schema: Exclude<JsonSchema, boolean>, root: JsonSchema = schema) {
 	const groups = new Map<
 		string,
@@ -239,9 +236,9 @@ export function jsonSchemaGroups(schema: Exclude<JsonSchema, boolean>, root: Jso
 	);
 	for (const field of fields) {
 		const meta = typeof field.schema === 'boolean' ? undefined : field.schema['x-norbital'];
-		const advanced = meta?.advanced ?? false;
-		const title = meta?.section ?? '';
-		const key = `${advanced}:${title}`;
+		const advanced = meta?.advanced ?? false,
+			title = meta?.section ?? '',
+			key = `${advanced}:${title}`;
 		if (!groups.has(key)) groups.set(key, { title, advanced, fields: [] });
 		groups.get(key)!.fields.push(field);
 	}

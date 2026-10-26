@@ -1,256 +1,263 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect } from 'effect';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
-import { Approvals, Callables, Writes, type ActRequest } from '../src/engine/services.ts';
-import { Authorities } from '../src/engine/identity/actor.ts';
-import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
+import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
+import { Callables, RunHandlers, Writes, Reads } from '../src/engine/services.ts';
+import { Convert } from '../src/engine/ports.ts';
+import { compileAuthority } from '../src/engine/access/authority.ts';
+import { readableFile } from '../src/engine/decisions/index.ts';
+import { noticeRows } from '../src/engine/notifications/notify.ts';
+import { TestWorkspace } from '../src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import type { GuestProgram } from '../src/engine/guest/runner.ts';
-import { acquireEngine } from './effect-engine.ts';
+import { admin, manifest as base } from './write-fixture.ts';
 import { program } from './support/guest-fixture.ts';
-
-const memberID = 'recipient';
-const schema: EngineManifest = {
+const recipient = '0199a000-0000-7000-8000-000000000001';
+const manifest: EngineManifest = {
 	...base,
-	teams: {
-		'review-team': { name: 'Review', policies: ['reviewer'] },
-		'request-team': ['requester']
-	},
-	policies: {
-		reviewer: { description: 'Review', grants: { orders: { read: true } } },
-		requester: {
-			description: 'Request',
-			grants: { orders: { read: true, approval: { create: [{ steps: [['review-team']] }] } } }
-		}
-	},
+	workspace: { ...base.workspace, convert: { to: ['pdf'] } },
 	collections: {
 		...base.collections,
 		orders: {
 			...base.collections['orders'],
 			read: { fields: 'all' },
-			notifications: {
-				committed: [{ channel: 'missing_mail', to: true, title: 'Committed' }],
-				approvalStarted: [{ channel: 'inbox', to: true, title: 'Started' }],
-				approvalCompleted: [{ channel: 'inbox', to: true, title: 'Approved' }]
-			}
+			notify: true
 		}
-	}
+	},
+	automations: {
+		ping: {
+			description: 'Ping',
+			input: { fail: { kind: 'bool' } },
+			output: { kind: 'text' },
+			runAs: 'trigger'
+		}
+	},
+	teams: { reviewers: [] }
 };
-const runner = (body: string) =>
-	program(`export default { collection: { orders: { spec: { notifications: {
-	committed: [{to:${body}}], approvalStarted: [{to:${body}}], approvalCompleted: [{to:${body}}]
-} } } } };`);
-const request = (key: string): ActRequest => ({
-	collection: 'orders',
-	verb: 'create',
-	mode: { _tag: 'Direct' },
-	input: { title: key },
-	key,
-	issuedAt: NOW,
-	authority: admin,
-	bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
-	invocationId: key
-});
-const fixture = (manifest: EngineManifest, guest: Effect.Effect<GuestProgram>) =>
+const setup = (notify: string, convert?: Convert['Service']) =>
 	Effect.gen(function* () {
-		const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer)),
-			db = PgliteDb.make(pg);
-		yield* applyPlan(db, plan(null, manifest), { accept: true });
-		yield* db.write({
-			text: "INSERT INTO sys_user(id,name,team) VALUES ('recipient','Recipient','review-team'), ('requestor','Requestor','request-team')",
-			params: []
+		const context = yield* Layer.build(
+			TestWorkspace.layer({
+				manifest,
+				...(convert === undefined ? {} : { ports: Layer.succeed(Convert, convert) }),
+				now: '2026-10-24T08:00:00.000Z',
+				guest: yield* program(
+					`import { Effect } from 'effect';
+import { ActRefused } from '@norbital-ai/bolt/errors';
+export default {collection:{orders:{bodies:{notify:${notify}}}},automation:{ping:{body:function*(input,ctx){if(input.fail)return yield* Effect.fail(new ActRefused({code:'refused',message:'Refused'}));yield* ctx.notify({title:'Ping',to:[{user:'${recipient}'}]});return 'ack';}}}};`
+				)
+			})
+		);
+		const t = Context.get(context, TestWorkspace),
+			writes = Context.get(context, Writes),
+			calls = Context.get(context, Callables),
+			handlers = Context.get(context, RunHandlers);
+		yield* t.db.write({
+			text: "INSERT INTO sys_user(id,name,kind,team) VALUES ($1,'Reviewer','staff','reviewers')",
+			params: [recipient]
 		});
-		const context = yield* acquireEngine(manifest, db, yield* guest);
-		return {
-			db,
-			writes: Context.get(context, Writes),
-			calls: Context.get(context, Callables),
-			approvals: Context.get(context, Approvals),
-			notes: () =>
-				db.read([
-					{
-						text: 'SELECT id, member, recipient, title FROM sys_notification ORDER BY id',
-						params: []
-					}
-				])
-		};
+		const request = (key: string) => ({
+			collection: 'orders',
+			verb: 'create' as const,
+			input: { title: key },
+			key,
+			issuedAt: t.clock.now(),
+			authority: admin,
+			bindings: { now: t.clock.now(), today: '2026-10-24', tz: 'UTC', params: {} },
+			invocationId: key,
+			mode: { _tag: 'Direct' as const }
+		});
+		const pending = () =>
+			t.db.rows(Schema.Struct({ id: Schema.String, input: Schema.Json }), {
+				text: "SELECT id,input FROM sys_run WHERE automation='bolt.notify'",
+				params: []
+			});
+		const notifyRun = (run: { id: string; input: import('../src/decl/values.ts').Json }) =>
+			Effect.gen(function* () {
+				const handler = yield* handlers.handler('bolt.notify');
+				if (Option.isNone(handler)) throw new Error('Missing notify handler');
+				return yield* handler.value(run.input, { id: run.id, starter: null });
+			});
+		const notes = () =>
+			t.db.rows(Schema.Struct({ title: Schema.String, member: Schema.NullOr(Schema.String) }), {
+				text: 'SELECT title,member FROM sys_notification ORDER BY id',
+				params: []
+			});
+		return { t, context, writes, calls, request, pending, notifyRun, notes };
 	});
-
-describe('authored notification recipients', () => {
+describe('model notification callbacks', () => {
 	it.live(
-		'runs the actual guest on admitted row images, dedupes overlaps and persists inbox despite unavailable external delivery',
+		'runs after commit on committed row images, dedupes recipients and retried delivery',
 		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* setup(
+						`function*(event){if(event.kind!=='write'||event.records[0].number!=='PO-2026-0001')throw Error('Bad event');return [{title:'Committed',to:[{user:'${recipient}'},{user:'${recipient}'},{team:'reviewers'}]}];}`
+					);
+					const saved = yield* f.writes.act(f.request('order'));
+					expect(saved.outcome.kind).toBe('committed');
+					expect(yield* f.notes()).toEqual([]);
+					const [run] = yield* f.pending();
+					if (run === undefined) throw new Error('Missing notification');
+					yield* f.notifyRun(run);
+					yield* f.notifyRun(run);
+					expect(yield* f.notes()).toEqual([{ title: 'Committed', member: recipient }]);
+					expect((yield* f.writes.act({ ...f.request('order'), retry: true })).captured).toEqual(
+						[]
+					);
+					expect(yield* f.pending()).toHaveLength(1);
+				})
+			)
+	);
+	it.live('a malformed callback fails delivery while its causing write stays committed', () =>
+		Effect.scoped(
 			Effect.gen(function* () {
-				const f = yield* fixture(
-					schema,
-					runner(`event => { if(event.event!=='committed'||event.records.length!==1||event.records[0].values.title!=='order')throw Error('event');
-			return [{user:'${memberID}'},{user:'${memberID}'},{team:'review-team'}]; }`)
-				);
-				const first = yield* f.writes.act(request('order'));
-				expect(first.outcome.kind).toBe('committed');
-				expect(first.captured.filter((row) => row.collection === 'sys_notification')).toHaveLength(
-					1
-				);
-				const [stored] = yield* f.notes();
-				expect(stored?.rows).toHaveLength(2);
-				expect(stored?.rows.filter((row) => row['member'] === memberID)).toHaveLength(1);
-				expect(stored?.rows.filter((row) => row['member'] === null)).toHaveLength(1);
-				const [queued] = yield* f.db.read([
-					{
-						text: "SELECT input FROM sys_run WHERE automation = 'notifications.deliver'",
+				const f = yield* setup("function*(){return [{title:'Invalid',to:[{team:'unknown'}]}];}");
+				expect((yield* f.writes.act(f.request('kept'))).outcome.kind).toBe('committed');
+				const [run] = yield* f.pending();
+				if (run === undefined) throw new Error('Missing notification');
+				expect(Result.isFailure(yield* Effect.result(f.notifyRun(run)))).toBe(true);
+				expect(
+					yield* f.t.db.value(Schema.Number, {
+						text: 'SELECT count(*)::int FROM orders',
 						params: []
-					}
-				]);
-				const external = stored?.rows.find((row) => row['member'] === null);
-				expect(queued?.rows).toEqual([{ input: { ids: [external?.['id']] } }]);
-				expect(yield* f.writes.act({ ...request('order'), retry: true })).toMatchObject({
-					outcome: first.outcome,
-					captured: []
-				});
-				expect((yield* f.notes())[0]?.rows).toHaveLength(2);
+					})
+				).toBe(1);
+				expect(yield* f.notes()).toEqual([]);
 			})
+		)
 	);
-
 	it.live(
-		'notifies a successful named action with no domain write, and suppresses refused/replayed actions',
+		'queues automation work before execution and notifies once across successful, refused and replayed starts',
 		() =>
-			Effect.gen(function* () {
-				const actions: EngineManifest = {
-					...schema,
-					collections: {
-						...schema.collections,
-						orders: {
-							...schema.collections['orders'],
-							read: { fields: 'all' },
-							actions: {
-								ping: {
-									description: 'Ping',
-									input: { fail: { kind: 'bool' } },
-									output: { kind: 'text' }
-								}
-							},
-							notifications: {
-								committed: [{ to: true, title: 'Action succeeded', on: { action: ['ping'] } }]
-							}
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* setup(
+						"function*(){throw Error('An automation with no write must not invoke model notify');}"
+					);
+					const id = randomUUID(),
+						request = {
+							automation: 'ping',
+							runs: [{ id, input: { fail: false } }],
+							authority: admin,
+							bindings: { now: f.t.clock.now(), today: '2026-10-24', tz: 'UTC', params: {} }
+						};
+					expect(yield* f.calls.start(request)).toMatchObject({ kind: 'committed' });
+					expect(yield* f.notes()).toEqual([]);
+					expect(
+						yield* f.t.db.value(Schema.String, {
+							text: 'SELECT state FROM sys_run WHERE id=$1',
+							params: [id]
+						})
+					).toBe('queued');
+					yield* f.calls.start(request);
+					yield* f.t.runDue();
+					expect(
+						yield* f.t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+							text: 'SELECT state,output FROM sys_run WHERE id=$1',
+							params: [id]
+						})
+					).toEqual([{ state: 'succeeded', output: 'ack' }]);
+					expect(yield* f.notes()).toEqual([{ title: 'Ping', member: recipient }]);
+					yield* f.calls.start(request);
+					yield* f.t.runDue();
+					const refusedId = randomUUID();
+					expect(
+						yield* f.calls.start({ ...request, runs: [{ id: refusedId, input: { fail: true } }] })
+					).toMatchObject({ kind: 'committed' });
+					yield* f.t.runDue();
+					expect(
+						yield* f.t.db.rows(Schema.Struct({ state: Schema.String, error: Schema.Json }), {
+							text: 'SELECT state,error FROM sys_run WHERE id=$1',
+							params: [refusedId]
+						})
+					).toMatchObject([{ state: 'failed', error: { code: 'refused', message: 'Refused' } }]);
+					expect(
+						yield* f.t.db.value(Schema.Number, {
+							text: "SELECT count(*)::int FROM sys_run WHERE automation='ping'",
+							params: []
+						})
+					).toBe(2);
+					expect(yield* f.pending()).toEqual([]);
+					expect(yield* f.notes()).toEqual([{ title: 'Ping', member: recipient }]);
+				})
+			)
+	);
+	it.live(
+		'converts attachments after commit once and grants the inbox recipient access to the resulting file',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					let conversions = 0;
+					const f = yield* setup(
+						`function*(){return [{title:'Report',to:[{user:'${recipient}'}],attachments:[{document:{html:'<p>Report</p>'},to:'pdf',name:'Report.pdf'}]}];}`,
+						{
+							targets: ['pdf'],
+							convert: () =>
+								Effect.sync(() => {
+									conversions++;
+									return new TextEncoder().encode('%PDF report');
+								})
 						}
-					}
-				};
-				const f = yield* fixture(
-					actions,
-					program(`export default {collection:{orders:{
-			bodies:{actions:{ping:function*(input,ctx){if(input.fail)return yield* ctx.refuse('declined');return 'ack';}}},
-			spec:{notifications:{committed:[{to:event=>{if(event.action!=='ping'||event.records.length)throw Error('event');return [{user:'recipient'}];}}]}}
-		}}};`)
-				);
-				const common = {
-					collection: 'orders',
-					action: 'ping',
-					input: { fail: false },
-					key: 'ping-success',
-					issuedAt: NOW,
-					authority: admin,
-					bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
-					invocationId: 'ping',
-					from: 'Client' as const
-				};
-				const first = yield* f.calls.action(common);
-				expect(first.outcome).toEqual({ kind: 'committed', output: 'ack', records: [] });
-				expect(first.captured.filter((row) => row.collection === 'sys_notification')).toHaveLength(
-					1
-				);
-				expect(yield* f.calls.action({ ...common, retry: true })).toMatchObject({
-					outcome: first.outcome,
-					captured: []
-				});
-				expect(
-					(yield* f.calls.action({ ...common, input: { fail: true }, key: 'ping-refused' })).outcome
-				).toMatchObject({ kind: 'refused' });
-				expect((yield* f.notes())[0]?.rows.map((row) => row['title'])).toEqual([
-					'Action succeeded'
-				]);
-				const [domain] = yield* f.db.read([
-					{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }
-				]);
-				expect(domain?.rows).toEqual([{ n: 0 }]);
-			})
+					);
+					yield* f.writes.act(f.request('attachment'));
+					expect(conversions).toBe(0);
+					const [run] = yield* f.pending();
+					if (run === undefined) throw new Error('Missing notification');
+					yield* f.notifyRun(run);
+					yield* f.notifyRun(run);
+					expect(conversions).toBe(1);
+					const [file] = yield* f.t.db.rows(
+						Schema.Struct({ id: Schema.String, field: Schema.String }),
+						{ text: 'SELECT id,field FROM sys_file', params: [] }
+					);
+					if (file === undefined) throw new Error('Missing converted attachment');
+					if (admin.actor.kind !== 'member') throw new Error('Expected member');
+					const actor = admin.actor;
+					const viewer = (id: string) =>
+						compileAuthority(
+							manifest,
+							{ actor: { ...actor, id, admin: false }, policies: [], admin: false },
+							id
+						);
+					const read = Context.get(f.context, Reads).run,
+						bindings = f.request('permission').bindings;
+					expect(
+						yield* readableFile(
+							{ manifest, db: f.t.db, read, authority: viewer(recipient), bindings },
+							file.id,
+							file.field
+						)
+					).toBe(true);
+					expect(
+						yield* readableFile(
+							{ manifest, db: f.t.db, read, authority: viewer(randomUUID()), bindings },
+							file.id,
+							file.field
+						)
+					).toBe(false);
+				})
+			)
 	);
-
-	it.live(
-		'rejects malformed or undeclared-policy callback output before the data/notice statement commits',
+	it.effect(
+		'expands approval recipients, and refuses ambiguous recipients and non-conversation channels',
 		() =>
 			Effect.gen(function* () {
-				const f = yield* fixture(schema, runner('()=>[]'));
-				for (const [index, body] of [
-					'()=>[{user:"recipient",team:"review-team"}]',
-					'()=>[{policy:"does_not_exist"}]',
-					'()=>[{team:"does_not_exist"}]',
-					'()=>[{user:""}]',
-					'()=>null'
-				].entries()) {
-					const context = yield* acquireEngine(schema, f.db, yield* runner(body));
-					const result = yield* Context.get(context, Writes).act(request(`invalid-${index}`));
-					expect(result.outcome).toMatchObject({ kind: 'refused', code: 'internal' });
-				}
-				const [rows] = yield* f.db.read([
-					{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }
-				]);
-				expect(rows?.rows).toEqual([{ n: 0 }]);
-				expect((yield* f.notes())[0]?.rows).toEqual([]);
-			})
-	);
-
-	it.live(
-		'runs request and final approval callbacks with authored team handles, without replay duplicates',
-		() =>
-			Effect.gen(function* () {
-				const f = yield* fixture(
-					schema,
-					runner(`event => { if(event.records[0].values.title!=='held'||event.requestor!=='requestor')throw Error('approval event');
-			if(event.event==='committed'){if(event.approvers.length)throw Error('committed approvers');return [{user:'recipient'}];}
-			if(event.approvers[0]!=='review-team')throw Error('approval team');return [{team:event.approvers[0]},{user:'recipient'}]; }`)
-				);
-				const actors = new Authorities(schema, 'test');
-				const caller = yield* actors.member(f.db, 'requestor'),
-					reviewer = yield* actors.member(f.db, memberID);
-				if (caller === null || reviewer === null)
-					throw new Error('fixture requires source members');
-				const result = yield* f.writes.act({ ...request('held'), authority: caller });
-				if (result.outcome.kind !== 'pendingApproval')
-					throw new Error(JSON.stringify(result.outcome));
-				// the provisional change commits at once: its `committed` rule fires with the request's `approvalStarted`
-				expect(result.outcome.records).toHaveLength(1);
 				expect(
-					(yield* f.notes())[0]?.rows
-						.filter((row) => row['member'] === memberID)
-						.map((row) => row['title'])
-						.sort()
-				).toEqual(['Committed', 'Started']);
-				expect(
-					(yield* f.db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0]
-						?.rows
-				).toEqual([{ n: 1 }]);
-				const decision = {
-					requestId: result.outcome.requestId,
-					status: 'APPROVED' as const,
-					authority: reviewer,
-					now: NOW
-				};
-				expect(yield* f.approvals.process(decision)).toMatchObject({ kind: 'decided' });
-				expect(
-					(yield* f.db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0]
-						?.rows
-				).toEqual([{ n: 1 }]);
-				expect(
-					(yield* f.notes())[0]?.rows
-						.filter((row) => row['member'] === memberID)
-						.map((row) => row['title'])
-						.sort()
-				).toEqual(['Approved', 'Committed', 'Started']);
-				expect(yield* f.approvals.process(decision)).toMatchObject({ kind: 'refused' });
-				expect(
-					(yield* f.notes())[0]?.rows.filter((row) => row['member'] === memberID)
-				).toHaveLength(3);
+					yield* noticeRows([{ title: 'Review', to: ['requester', 'approvers'] }], {
+						manifest,
+						id: 'event',
+						approval: {
+							requester: recipient,
+							approvers: { teams: ['reviewers'], users: [recipient] }
+						}
+					})
+				).toMatchObject([{ to: [{ user: recipient }, { team: 'reviewers' }] }]);
+				for (const notice of [
+					{ title: 'Bad', to: [{ user: recipient, team: 'reviewers' }] },
+					{ title: 'Bad', to: [{ user: recipient }], via: ['inbox'] }
+				])
+					expect(
+						Result.isFailure(yield* Effect.result(noticeRows([notice], { manifest, id: 'event' })))
+					).toBe(true);
 			})
 	);
 });

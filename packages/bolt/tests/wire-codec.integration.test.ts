@@ -1,16 +1,17 @@
 // The one wire shape per kind (D6, std/wire), both ways: a decimal is `{ $dec }`, a date and an instant their ISO text,
-// a period `{ from, to }` / `{ start, end }` of those. An act takes exactly what q, live, the guest's `ctx.existing` and
-// `ctx.db.get`, an aggregate and a seed load give back; the retired `$d` / `$t` tags are refused on the way in.
+// a period `{ from, to }` / `{ start, end }` of those. An act takes exactly what q, live, the callback's `before` and
+// `ctx.db.query`, an aggregate and a seed load give back.
 import { dec } from '@norbital-ai/std/decimal';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Layer, Queue, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import { lowerRead } from '../src/engine/index.ts';
-import { aggregate } from '../src/protocol/ir.ts';
+import { aggregate } from '@norbital-ai/store';
 import type { Frame } from '../src/protocol/wire.ts';
+import { fromStore } from '../src/protocol/errors.ts';
 import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
 import { Live, Reads } from '../src/engine/services.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
@@ -44,7 +45,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -56,16 +56,13 @@ const manifest = {
 	agent: { skills: {} }
 } satisfies EngineManifest;
 
-/** An update's transform records the stored row as the guest reads it: through `ctx.existing` and `ctx.db.get`. */
+/** An update callback records the stored row beside its set and through one batched workspace query. */
 const guest =
-	program(`export default { collection: { items: { bodies: { transform: function* (rows, ctx) {
+	program(`export default { collection: { items: { bodies: { update: function* (changes, ctx) {
 	const shape = (r) => r === null ? null : { amount: String(r.amount), day: r.day, at: r.at, span: r.span, slot: r.slot };
-	const result = [];
-	for (const [i, row] of rows.entries()) {
-		const was = ctx.existing[i] ?? null;
-		result.push(was === null ? row : { ...row, seen: { existing: shape(was), get: shape(yield* ctx.db.get('items', was.id)) } });
-	}
-	return result;
+	const page = yield* ctx.db.query('items', { where: { id: { in: changes.map(({ before }) => before.id) } }, all: true });
+	const rows = new Map(page.rows.map((row) => [row.id, row]));
+	return changes.map(({ before, set }) => ({ ...set, seen: { before: shape(before), query: shape(rows.get(before.id) ?? null) } }));
 } } } } };`);
 
 const input = {
@@ -92,7 +89,21 @@ const open = Effect.fn('Test.wireCodec')(function* (
 		TestWorkspace.layer({
 			manifest,
 			...options,
-			...(transformed ? { guest: yield* guest, transforms: ['items'] } : {})
+			...(transformed
+				? {
+						manifest: {
+							...manifest,
+							collections: {
+								items: {
+									...manifest.collections.items,
+									update: { ...manifest.collections.items.update, transform: true }
+								}
+							}
+						},
+						guest: yield* guest,
+						transforms: ['items.update']
+					}
+				: {})
 		})
 	);
 	const t = Context.get(context, TestWorkspace),
@@ -103,7 +114,7 @@ const open = Effect.fn('Test.wireCodec')(function* (
 			Effect.map((reply) => reply.outcome)
 		);
 	const get = (id: string) =>
-		qReply(route, authority, { reads: [{ m: 'get', a: ['items', id] }] }).pipe(
+		qReply(route, authority, { reads: [{ m: 'query', a: ['items', { id }] }] }).pipe(
 			Effect.flatMap((reply) => Schema.decodeUnknownEffect(Schema.NullOr(Row))(reply.answers[0]))
 		);
 	return { t, context, authority, act, get };
@@ -115,35 +126,23 @@ const createdId = (outcome: Outcome) => {
 };
 
 describe('wire codec: one shape per kind, both ways (D6)', () => {
-	it.live(
-		'date both ways: q gives back exactly what act took, the read row goes back in, and the old tags are refused',
-		() =>
-			Effect.gen(function* () {
-				const a = yield* open({}, true);
-				const id = createdId(yield* a.act('items.create', input));
-				const row = yield* a.get(id);
-				if (row === null) throw new Error('Missing created row');
-				expect(row).toMatchObject(input);
-				committed(
-					yield* a.act('items.update', {
-						target: id,
-						set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
-					})
-				);
-				expect(yield* a.get(id)).toMatchObject(input);
-				for (const set of [
-					{ day: { $d: '2026-01-02' } },
-					{ at: { $t: '2026-01-02T03:04:05.000Z' } },
-					{ span: { from: { $d: '2026-01-01' }, to: null } },
-					{ slot: { start: { $t: '2026-01-02T09:00:00.000Z' }, end: null } }
-				])
-					expect(yield* a.act('items.update', { target: id, set })).toMatchObject({
-						kind: 'refused',
-						code: 'invalidInput'
-					});
-			})
+	it.live('date both ways: q gives back exactly what act took and the read row goes back in', () =>
+		Effect.gen(function* () {
+			const a = yield* open({}, true);
+			const id = createdId(yield* a.act('items.create', input));
+			const row = yield* a.get(id);
+			if (row === null) throw new Error('Missing created row');
+			expect(row).toMatchObject(input);
+			committed(
+				yield* a.act('items.update', {
+					target: id,
+					set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
+				})
+			);
+			expect(yield* a.get(id)).toMatchObject(input);
+		})
 	);
-	it.live('the guest reads the same shapes through ctx.existing and ctx.db.get', () =>
+	it.live('the callback reads the same shapes through before and ctx.db.query', () =>
 		Effect.gen(function* () {
 			const a = yield* open({}, true);
 			const id = createdId(yield* a.act('items.create', input));
@@ -155,7 +154,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 				span: input.span,
 				slot: input.slot
 			};
-			expect((yield* a.get(id))?.['seen']).toEqual({ existing: shape, get: shape });
+			expect((yield* a.get(id))?.['seen']).toEqual({ before: shape, query: shape });
 		})
 	);
 	it.live('a live patch carries the shapes a read gives', () =>
@@ -178,7 +177,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			const conn = yield* Deferred.await(ready);
 			const select = Object.fromEntries(columns.map((f) => [f, true]));
 			yield* live.register(conn, 'items', {
-				read: lowerRead(manifest, 'read', ['items', { all: true, select }])
+				read: lowerRead(manifest, 'query', ['items', { all: true, select }])
 			});
 			committed(yield* a.act('items.create', input));
 			yield* live.settled;
@@ -196,12 +195,12 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			const reads = Context.get(a.context, Reads);
 			const [page] = yield* reads.run(
 				[
-					aggregate(catalogOf(manifest), 'items', {
+					yield* aggregate(catalogOf(manifest), 'items', {
 						by: [{ month: 'day' }],
 						count: true,
 						sum: ['amount'],
 						all: true
-					})
+					}).pipe(Effect.mapError(fromStore))
 				],
 				{ as: 'workspace' },
 				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC', params: {} }

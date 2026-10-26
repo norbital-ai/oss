@@ -53,7 +53,7 @@ const declared: NonNullable<KindsHost['catalog']> = {
 		fields: { name: { kind: 'text' } },
 		update: { columns: ['name'] },
 		delete: true,
-		pipeline: { import: 'Jobs from a sheet', export: 'Every job as a sheet' }
+		syncs: { sheet: { kind: 'file', import: true, export: ['xlsx'] } }
 	}
 };
 const bare: NonNullable<KindsHost['catalog']> = {
@@ -110,7 +110,10 @@ async function show({
 		await unmount(app);
 		target.remove();
 	});
-	await settle();
+	await vi.waitFor(() => {
+		flushSync();
+		element(target, '[data-table-wide] tbody tr:not([aria-hidden])');
+	});
 	return { target, acts };
 }
 const open = async (target: ParentNode) => {
@@ -131,19 +134,25 @@ const selectAll = async (target: ParentNode) => {
 };
 
 it.live(
-	'declared update, delete and pipelines appear; update and delete wait for a selection, import does not',
+	'declared update, delete and file syncs appear; update and delete wait for a selection, import does not',
 	() =>
 		Effect.gen(function* () {
 			const { target } = yield* browser(() => show({ catalog: declared }));
 			yield* browser(() => open(target));
-			assert.deepEqual(keys(), ['update', 'delete', 'import', 'template', 'export-pipeline']);
+			assert.deepEqual(keys(), [
+				'update',
+				'delete',
+				'import:sheet',
+				'template:sheet',
+				'export:sheet:xlsx'
+			]);
 			assert.ok(textOf(row('update')).includes('Update selected records'));
 			assert.ok(textOf(row('delete')).includes('Delete selected records'));
 			for (const key of ['update', 'delete']) {
 				assert.equal(button(key).disabled, true);
 				assert.ok(textOf(row(key)).includes('Select records first'));
 			}
-			for (const key of ['import', 'template', 'export-pipeline'])
+			for (const key of ['import:sheet', 'template:sheet', 'export:sheet:xlsx'])
 				assert.equal(button(key).disabled, false);
 			element<HTMLButtonElement>(target, '[data-view-actions]').click();
 			yield* browser(() => selectAll(target));
@@ -154,7 +163,7 @@ it.live(
 );
 
 it.live(
-	'undeclared or unpermitted rows are absent; a page action keeps its own group and selection rule',
+	'catalogue authority limits standard commands and page actions keep their selection rules',
 	() =>
 		Effect.gen(function* () {
 			const ran: (readonly string[])[] = [];
@@ -182,12 +191,6 @@ it.live(
 			);
 			yield* browser(() => open(target));
 			assert.deepEqual(keys(), ['item:Recalculate', 'item:Approve']);
-			assert.deepEqual(
-				[...document.querySelectorAll<HTMLElement>('[data-view-menu] [data-menu-group]')].map(
-					(group) => [group.dataset['menuGroup'], textOf(group).trim()]
-				),
-				[['actions', 'Actions']]
-			);
 			assert.equal(button('item:Approve').disabled, true);
 			assert.ok(textOf(row('item:Approve')).includes('Select records first'));
 			button('item:Recalculate').click();

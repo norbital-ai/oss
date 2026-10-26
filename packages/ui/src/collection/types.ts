@@ -27,16 +27,21 @@ type Loose = {
 };
 type Shape = {
 	collections: {
-		[c: string]: { row: object; record: object; insert: object; where: unknown; orderBy: unknown };
+		[c: string]: { row: Values; record: Values; insert: Values; where: unknown; orderBy: unknown };
 	};
 	queries: { [q: string]: { input: unknown; output: unknown } };
 	actions: { [a: string]: unknown };
-	automations: { [a: string]: unknown };
+	automations: { [a: string]: Values };
 };
-type Names = Workspace extends { names: infer N extends Shape }
+type Unusable = { collections: {}; queries: {}; actions: {}; automations: {} };
+type Names = Workspace extends { names: infer N }
 	? [N] extends [never]
 		? Loose
-		: N
+		: unknown extends N
+			? Unusable
+			: N extends Shape
+				? N
+				: Unusable
 	: Loose;
 type Collections = Names['collections'];
 export type CollectionKey = keyof Collections & string;
@@ -68,7 +73,7 @@ export type IdOf<C> = C extends unknown
 		? I
 		: string
 	: never;
-/** `'<c>.<q>'` queries and `'<c>.<verb|action>'` callables, with their inputs. */
+/** `'<c>.<q>'` queries and `'<c>.<verb>'` generated writes, with their inputs. */
 export type QueryKey = keyof Names['queries'] & string;
 export type QueryInputOf<N> = N extends keyof Names['queries']
 	? Names['queries'][N]['input']
@@ -78,3 +83,9 @@ export type QueryOutputOf<N> = N extends keyof Names['queries']
 	: unknown;
 export type ActionKey = keyof Names['actions'] & string;
 export type ActionInputOf<N> = N extends keyof Names['actions'] ? Names['actions'][N] : Values;
+/** A declared automation and its input as a native start form sees them. */
+export type AutomationKey = keyof Names['automations'] & string;
+/** A declared automation's input, as a native start form sees it. */
+export type AutomationInputOf<N> = N extends keyof Names['automations']
+	? Names['automations'][N]
+	: Values;

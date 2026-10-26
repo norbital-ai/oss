@@ -1,32 +1,44 @@
-// The one write statement (rule 20): a `WITH` chain gated on the idempotency record, with every row change as a piece
-// (one write per row, rule 21), cascades and `setNull` expanded in SQL, `seq` drawn from counter rows, roll-ups folded
-// from the child pieces' `RETURNING old/new`, history, queued runs, notices, queued outbound rows, and the outcome.
+// A native atomic batch: guarded direct writes, database referential actions and row history, then complete captured
+// effects for approvals, roll-ups, queued runs, notices, the sync outbox and the receipt.
 import type { Json } from '../../decl/values.ts';
-import { Effect, Schema } from 'effect';
-import { Outcome } from '../../protocol/schema.ts';
-import type { EngineActor, NoticeRow, QueuedRun, RowData, Sql } from '../contracts.ts';
-import type { EngineManifest } from '../manifest.ts';
+import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
+import { BoltError, storeSync } from '../../protocol/errors.ts';
+import { SqlSessionDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { readGuardBaseline } from '../approvals/read-guards.ts';
+import { Context, Effect, Schema } from 'effect';
+import type { EngineError } from '../errors.ts';
+import { WriteOutcome } from '../../protocol/schema.ts';
+import type {
+	Captured,
+	EngineActor,
+	Lock,
+	NoticeRow,
+	Outcome,
+	QueuedRun,
+	RowData,
+	Sql
+} from '../contracts.ts';
+import { relations, type EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
 import { toPred } from '../access/pred.ts';
-import { q, type Catalog } from '../../protocol/catalog.ts';
+import { q, cells, nullRowSql, ownPredSql, type Catalog, type FieldInfo } from '@norbital-ai/store';
 import { enqueue, nextDue, queueTriggered } from '../runs/queue.ts'; // hook:automations
-import { feedConfigurationPiece } from '../integrations/feeds.ts'; // hook:integrations
-import { outboundPiece } from '../integrations/outbound.ts'; // hook:integrations
+import { syncOutboxPiece } from '../sync/write.ts'; // hook:syncs (H3)
 import { purgeProposals } from '../approvals/erase.ts';
 import {
 	answer,
-	cells,
 	Chain,
 	fingerprintAsserts,
 	GATED,
 	gate,
 	noticeCaptures,
 	noticeInsert,
-	ownPredSql,
 	rate,
-	type Fingerprint
+	type Fingerprint,
+	type ReadGuards
 } from './sql.ts';
 import { lockPieces } from '../approvals/lock.ts';
+import { captureFinish, captureStart, netRows } from './capture.ts';
 
 /** One row change as the statement writes it: upserts are already resolved, updates carry the stored revision. */
 export type Write = { collection: string; id: string; erased?: boolean } &
@@ -60,25 +72,34 @@ export type Commit = {
 	output: Json;
 	/**
 	 * A routed write commits at once (provisional) and opens a request: its pieces follow the domain pieces and read
-	 * `allp` for the checkpoint. `route` is the request's route snapshot (one per statement). When an open request
-	 * already holds a touched row (`held`, the lock's CTE) the write joins it: no request opens and the outcome commits.
+	 * `allp` for the checkpoint. `route` is the flow snapshot the approval callback returned (one per statement). When an
+	 * open request already holds a touched row (`held`, the lock's CTE) the write joins it: no request opens and the
+	 * outcome commits.
 	 */
 	approval?: {
 		requestId: string;
-		route: { steps: readonly (readonly string[])[]; superseded_by: readonly string[] };
+		route: Extract<ApprovalSnapshot, { kind: 'steps' }>;
 		pieces: (c: Chain, held: string | null) => void;
 	};
+	/** A requester's save on their own ChangesRequested request (`ApprovalHook.resubmit`): pieces after `allp` and the lock. */
+	resubmit?: { request: string; pending: boolean; pieces: (c: Chain) => void };
 	/** An approval decision's own statement: authorized in `before`, exempt from the lock, its history linked to `request`. */
 	before?: (c: Chain) => void;
 	approvalDecision?: { request: string };
-	/** hook:integrations — pieces after `allp` (a feed page's cursor and row markers). */
+	/** An engine sync rollback restores its checkpoint without taking an approval lock or resending it. */
+	rollback?: true;
+	/** hook:syncs — pieces after `allp` (a sync read page's cursor, id map and version stamps). */
 	pieces?: (c: Chain) => void;
-	/** Rule 26: the transform's reads, re-digested under the table lock and asserted before the statement commits. */
+	/** Rule 26: the write callbacks' reads, re-digested under the table lock and asserted before the statement commits. */
 	fingerprints?: readonly Fingerprint[];
+	/** Native prior automation query intent, fixed across retries and persisted for held approvals. */
+	readGuards?: ReadGuards;
+	/** Native interactive stages defer their approval and effect publication to the outer receipt. */
+	transactionStage?: true;
 	/**
 	 * Rule 38e: the direct pieces are `erased` revisions. Remove drops every revision of every deleted row; anonymise
-	 * drops `purge` fields from the targets' earlier revisions (a revision left empty goes). Both drop notices linking
-	 * a deleted row.
+	 * drops `purge` fields from the targets' earlier revisions (a revision left empty goes). Durable audit defers the
+	 * history purge until complete external acknowledgement. Both drop notices linking a deleted row.
 	 */
 	erase?:
 		| { mode: 'remove' }
@@ -188,12 +209,17 @@ function seqMeta(m: EngineManifest, writes: readonly Write[], today: string) {
 	return { counts, plan };
 }
 
-export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
-	const c = new Chain();
+export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): readonly Sql[] {
+	let c = new Chain();
+	const token = JSON.stringify([x.key, x.digest]);
+	const audited = new Set(
+		Object.entries(m.models).flatMap(([name, model]) => (model.table === undefined ? [name] : []))
+	);
 	gate(c, x.key, x.digest, x.issuedAt);
 	rate(c, x.rate);
 	x.before?.(c);
-	fingerprintAsserts(c, x.fingerprints ?? []);
+	fingerprintAsserts(c, [...(x.fingerprints ?? []), ...(x.readGuards?.fingerprints ?? [])]);
+	if (x.readGuards?.inconsistent === true) c.assert('false', 'fingerprint');
 	const erasures = x.erasures ?? (x.erase === undefined ? [] : [x.erase]);
 	const erasedTargets = x.writes
 		.filter((write) => write.erased ?? x.erase !== undefined)
@@ -252,7 +278,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 		);
 	}
 	const guard = (table: string) => (held.has(table) ? `${GATED} AND ${held.get(table)}` : GATED);
-	const pieces: Piece[] = [];
+	let pieces: Piece[] = [];
 	const on = (table: string) => pieces.filter((p) => p.table === table);
 	let n = 0;
 	const add = (
@@ -272,56 +298,33 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 	};
 	const byTable = Map.groupBy(x.writes, (w) => w.collection);
 
-	// deletes first, then cascades and `setNull` expanded in SQL (§5.2: FKs are NO ACTION, the engine cascades, depth ≤ 8)
-	const deleted = new Map<string, string[]>();
-	for (const [table, ws] of byTable) {
+	// Referential actions belong to the foreign keys. Their actual row changes enter the native capture buffer.
+	const deleteOrder: string[] = [];
+	const deleteTables = new Set(
+		x.writes.filter((write) => write.op === 'delete').map((write) => write.collection)
+	);
+	const visitDelete = (table: string, seen: Set<string>) => {
+		if (deleteOrder.includes(table) || seen.has(table)) return;
+		seen.add(table);
+		for (const relation of relations(m).all)
+			if (relation.targets.includes(table) && deleteTables.has(relation.from))
+				visitDelete(relation.from, seen);
+		deleteOrder.push(table);
+	};
+	for (const table of deleteTables) visitDelete(table, new Set());
+	let previousDelete: string | undefined;
+	for (const table of deleteOrder) {
+		const ws = byTable.get(table) ?? [];
 		const rows = ws
 			.filter((w) => w.op === 'delete')
 			.map((w) => ({ id: w.id, revision: w.revision }));
 		if (rows.length === 0) continue;
-		const name = add(
+		previousDelete = add(
 			table,
-			`DELETE FROM ${q(table)} t USING jsonb_populate_recordset(null::${q(table)}, ${c.p(rows)}::jsonb) r
-	WHERE t.id = r.id AND t.revision = r.revision AND ${guard(table)} ${RETURNING(table, 'delete', direct(table), erased(table, 'coalesce(new.id, old.id)'))}`,
+			`DELETE FROM ${q(table)} t USING jsonb_populate_recordset(${nullRowSql(table, cat.models.get(table)?.fields.keys() ?? [])}, ${c.p(rows)}::jsonb) r
+	WHERE t.id = r.id AND t.revision = r.revision AND ${guard(table)} ${previousDelete === undefined ? '' : `AND (SELECT count(*) FROM ${previousDelete})>=0`} ${RETURNING(table, 'delete', direct(table), erased(table, 'coalesce(new.id, old.id)'))}`,
 			{ rows: rows.length, ids: rows.map((r) => r.id) }
 		);
-		deleted.set(table, [name]);
-	}
-	for (let depth = 0, frontier = [...deleted.keys()]; depth < 8 && frontier.length > 0; depth++) {
-		const next: string[] = [];
-		for (const parent of frontier)
-			for (const rel of cat.models.get(parent)?.many.values() ?? []) {
-				const spec = m.relationships[`${rel.child}.${rel.column}`];
-				const rule = spec?.owned ? 'cascade' : (spec?.onDelete ?? 'restrict');
-				if (rule === 'restrict') continue;
-				const gone = `(${deleted
-					.get(parent)!
-					.map((d) => `SELECT id FROM ${d}`)
-					.join(' UNION ALL ')})`;
-				const erasedParent = `EXISTS (SELECT 1 FROM (${deleted
-					.get(parent)!
-					.map((d) => `SELECT id, erased FROM ${d}`)
-					.join(
-						' UNION ALL '
-					)}) parent WHERE parent.erased AND parent.id = old.${q(rel.column)}::text)`;
-				const others = on(rel.child)
-					.map((p) => ` AND t.id::text NOT IN (SELECT id FROM ${p.name})`)
-					.join('');
-				if (rule === 'cascade') {
-					const name = add(
-						rel.child,
-						`DELETE FROM ${q(rel.child)} t WHERE t.${q(rel.column)}::text IN ${gone}${others} AND ${GATED} ${RETURNING(rel.child, 'delete', "'cascade'", erasedParent)}`
-					);
-					deleted.set(rel.child, [...(deleted.get(rel.child) ?? []), name]);
-					next.push(rel.child);
-				} else
-					add(
-						rel.child,
-						`UPDATE ${q(rel.child)} t SET ${q(rel.column)} = NULL, revision = t.revision + 1, updated_at = ${c.p(x.now)}::timestamptz
-	WHERE t.${q(rel.column)}::text IN ${gone}${others} AND ${GATED} ${RETURNING(rel.child, 'update', "'cascade'", erasedParent)}`
-					);
-			}
-		frontier = [...new Set(next)];
 	}
 
 	// creates and updates, children before the parents whose roll-ups they feed
@@ -348,15 +351,15 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 				col: 'o' | 'n',
 				sign: string
 			) => `SELECT (s.row).${q(r.fk)} AS pid, ${sign}${r.kind === 'count' ? '1' : `coalesce((s.row).${q(r.childField!)}, 0)`} AS d, s.erased
-		FROM (SELECT jsonb_populate_record(null::${q(r.child)}, x.${col}) AS row, x.erased FROM (${union(src)}) x WHERE x.${col} IS NOT NULL) s
-		WHERE ${r.where === undefined ? 'true' : ownPredSql(r.where, 's.row', c)}`;
+		FROM (SELECT jsonb_populate_record(${nullRowSql(r.child, cat.models.get(r.child)?.fields.keys() ?? [])}, x.${col}) AS row, x.erased FROM (${union(src)}) x WHERE x.${col} IS NOT NULL) s
+		WHERE ${r.where === undefined ? 'true' : storeSync(ownPredSql(r.where, 's.row', c))}`;
 			const rd = c.cte(`rd${n++}`, `${side('o', '-')} UNION ALL ${side('n', '')}`);
 			return [{ field: r.field, rd }];
 		});
 		const fold = (f: { field: string; rd: string }, base: string, id: string) =>
 			`${base} + coalesce((SELECT sum(d) FROM ${f.rd} WHERE pid = ${id}), 0)`;
 		const ws = byTable.get(table) ?? [];
-		const fields = cat.models.get(table)?.fields ?? new Map();
+		const fields = cat.models.get(table)?.fields ?? new Map<string, FieldInfo>();
 
 		for (const shape of Map.groupBy(
 			ws.filter((w) => w.op === 'create'),
@@ -385,7 +388,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 				table,
 				`INSERT INTO ${q(table)} (${all.map(q).join(', ')})
 	SELECT ${[...cols.map((k) => `r.${q(k)}`), ...seqCols.map((f) => `(${seqExpr(f)})::${cat.models.get(table)!.fields.get(f)!.pg}`), ...folds.map((f) => fold(f, '0', 'r.id'))].join(', ')}
-	FROM jsonb_array_elements(${c.p(rows)}::jsonb) e(j), jsonb_populate_record(null::${q(table)}, e.j) r WHERE ${guard(table)} ${RETURNING(table, 'create', direct(table), erased(table, 'coalesce(new.id, old.id)'))}`
+	FROM jsonb_array_elements(${c.p(rows)}::jsonb) e(j), jsonb_populate_record(${nullRowSql(table, cat.models.get(table)?.fields.keys() ?? [])}, e.j) r WHERE ${guard(table)} ${RETURNING(table, 'create', direct(table), erased(table, 'coalesce(new.id, old.id)'))}`
 			);
 		}
 		for (const shape of Map.groupBy(
@@ -406,7 +409,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 			add(
 				table,
 				`UPDATE ${q(table)} t SET ${[...sets, ...folds.map((f) => `${q(f.field)} = ${fold(f, `t.${q(f.field)}`, 't.id')}`), 'revision = t.revision + 1'].join(', ')}
-	FROM jsonb_populate_recordset(null::${q(table)}, ${c.p(rows)}::jsonb) r WHERE t.id = r.id AND t.revision = r.revision AND ${guard(table)} ${RETURNING(table, 'update', direct(table), erased(table, 'coalesce(new.id, old.id)'))}`,
+	FROM jsonb_populate_recordset(${nullRowSql(table, cat.models.get(table)?.fields.keys() ?? [])}, ${c.p(rows)}::jsonb) r WHERE t.id = r.id AND t.revision = r.revision AND ${guard(table)} ${RETURNING(table, 'update', direct(table), erased(table, 'coalesce(new.id, old.id)'))}`,
 				{ rows: rows.length, ids: rows.map((r) => r.id) }
 			);
 		}
@@ -430,46 +433,161 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 		}
 	}
 
-	const all =
-		pieces.length === 0
-			? 'SELECT NULL::text c, NULL::text id, NULL::int revision, NULL::text op, NULL::text cause, false AS erased, NULL::jsonb o, NULL::jsonb n WHERE false'
-			: union(pieces);
-	c.cte('allp', all);
+	const hasWrites = pieces.length > 0;
+	const origins = (source: readonly Piece[]) => {
+		if (source.length === 0) return;
+		c.cte(
+			'native_origins',
+			`INSERT INTO pg_temp.bolt_origins(token,c,id,revision,op,cause,erased)
+			SELECT ${c.p(token)},c,id,revision,op,cause,erased FROM (${union(source)}) rows ON CONFLICT DO NOTHING RETURNING id`
+		);
+	};
+	origins(pieces);
+	const ordinary = pieces.filter((piece) => !audited.has(piece.table));
+	if (ordinary.length > 0)
+		c.cte(
+			'native_system_changes',
+			`INSERT INTO pg_temp.bolt_changes(token,c,id,revision,op,cause,erased,o,n)
+			SELECT ${c.p(token)},c,id,revision,op,cause,erased,o,n FROM (${union(ordinary)}) rows RETURNING id`
+		);
+	// One row, one UPDATE: a decision records its authorization here, not in a second writer of the same temp row.
+	c.cte(
+		'native_fresh',
+		`UPDATE pg_temp.bolt_write_context SET fresh=${GATED}${x.approvalDecision === undefined ? '' : ', authorized=(SELECT id FROM ap_authorize)'}
+		WHERE token=${c.p(token)} RETURNING fresh`
+	);
+	const mutation = c.sql('(SELECT fresh FROM native_fresh) AS fresh');
+
+	// A following command sees every native FK action and its row trigger's journal entry.
+	c = new Chain();
+	c.cte(
+		'idem',
+		`SELECT ${c.p(x.key)}::text AS key FROM pg_temp.bolt_write_context WHERE token=${c.p(token)} AND fresh`
+	);
+	if (x.approvalDecision !== undefined)
+		c.cte(
+			'ap_authorize',
+			`SELECT authorized AS id FROM pg_temp.bolt_write_context WHERE token=${c.p(token)} AND fresh AND authorized IS NOT NULL`
+		);
+	c.cte('native_source', `SELECT * FROM pg_temp.bolt_changes WHERE token=${c.p(token)}`);
+	pieces = [];
+	for (const table of order) {
+		const folds = rollups(m, cat, table).flatMap((r) => {
+			const cascade = c.cte(
+				`cascade${n++}`,
+				`SELECT * FROM native_source WHERE c=${c.p(r.child)} AND cause='cascade'`
+			);
+			const sources = [{ name: cascade, table: r.child }, ...on(r.child)];
+			const side = (
+				image: 'o' | 'n',
+				sign: string
+			) => `SELECT (s.row).${q(r.fk)} AS pid,${sign}${r.kind === 'count' ? '1' : `coalesce((s.row).${q(r.childField!)},0)`} AS d,s.erased
+				FROM (SELECT jsonb_populate_record(${nullRowSql(r.child, cat.models.get(r.child)?.fields.keys() ?? [])},x.${image}) AS row,x.erased FROM (${union(sources)}) x WHERE x.${image} IS NOT NULL) s
+				WHERE ${r.where === undefined ? 'true' : storeSync(ownPredSql(r.where, 's.row', c))}`;
+			const delta = c.cte(`native_delta${n++}`, `${side('o', '-')} UNION ALL ${side('n', '')}`);
+			return [{ field: r.field, delta }];
+		});
+		if (folds.length === 0) continue;
+		const sources = `(${folds.map((fold) => `SELECT pid,erased FROM ${fold.delta}`).join(' UNION ALL ')})`;
+		add(
+			table,
+			`UPDATE ${q(table)} t SET ${[
+				...folds.map(
+					(fold) =>
+						`${q(fold.field)}=t.${q(fold.field)}+coalesce((SELECT sum(d) FROM ${fold.delta} WHERE pid=t.id),0)`
+				),
+				'revision=t.revision+1',
+				`updated_at=${c.p(x.now)}::timestamptz`
+			].join(',')}
+		WHERE t.id IN (${folds.map((fold) => `SELECT pid FROM ${fold.delta} GROUP BY pid HAVING sum(d)<>0`).join(' UNION ')}) AND ${GATED}
+		${RETURNING(table, 'update', "'derived'", `EXISTS (SELECT 1 FROM ${sources} source WHERE source.pid=new.id AND source.erased) AND NOT EXISTS (SELECT 1 FROM ${sources} source WHERE source.pid=new.id AND NOT source.erased)`)}`
+		);
+	}
+	origins(pieces);
+	const systemDerived = pieces.filter((piece) => !audited.has(piece.table));
+	if (systemDerived.length > 0)
+		c.cte(
+			'native_system_derived',
+			`INSERT INTO pg_temp.bolt_changes(token,c,id,revision,op,cause,erased,o,n)
+			SELECT ${c.p(token)},c,id,revision,op,cause,erased,o,n FROM (${union(systemDerived)}) rows RETURNING id`
+		);
+	c.cte(
+		'row_events',
+		`SELECT seq,c,id,revision,op,cause,erased,o,n FROM native_source${pieces.map((piece, index) => ` UNION ALL SELECT ${9000000000000000 + index}::bigint AS seq,c,id,revision,op,cause,erased,o,n FROM ${piece.name}`).join('')}`
+	);
+	c.cte('allp', netRows('row_events'));
 	// the approval lock (lock.ts); a decision's own rollback is the request's, and a new request holds no row yet
 	const hit =
-		x.approvalDecision === undefined && pieces.length > 0
-			? lockPieces(m, cat, c, x.actor, 'allp')
+		x.rollback !== true && hasWrites
+			? lockPieces(m, cat, c, x.actor, 'allp', x.approvalDecision?.request)
 			: null;
-	if (pieces.length > 0) {
-		const request =
-			x.approval !== undefined
-				? `coalesce((SELECT id FROM ${hit} LIMIT 1), ${c.p(x.approval.requestId)}::uuid)`
-				: x.approvalDecision !== undefined
-					? `${c.p(x.approvalDecision.request)}::uuid`
-					: hit === null
-						? 'NULL::uuid'
-						: `(SELECT id FROM ${hit} LIMIT 1)`;
+	if (x.approvalDecision !== undefined && hit !== null)
+		c.assertWith(
+			`NOT EXISTS (SELECT 1 FROM ${hit})`,
+			'underApproval',
+			`(SELECT id::text || ' An approval decision cannot change another held request.' FROM ${hit} LIMIT 1)`
+		);
+	if (x.transactionStage === true && hit !== null)
+		c.assertWith(
+			`NOT EXISTS (SELECT 1 FROM ${hit})`,
+			'underApproval',
+			`(SELECT id::text || ' An interactive transaction cannot edit an existing approval request.' FROM ${hit} LIMIT 1)`
+		);
+	const request =
+		x.approval !== undefined
+			? `coalesce((SELECT id FROM ${hit} LIMIT 1), ${c.p(x.approval.requestId)}::uuid)`
+			: x.approvalDecision !== undefined
+				? `${c.p(x.approvalDecision.request)}::uuid`
+				: hit === null
+					? 'NULL::uuid'
+					: `(SELECT id FROM ${hit} LIMIT 1)`;
+	if (hasWrites) {
 		c.cte(
 			'history_source',
 			`SELECT allp.*, ${c.p(x.now)}::timestamptz AS at, ${c.p(actorRef(x.actor))}::text AS actor FROM allp
-			${erasures.some((spec) => spec.mode === 'remove') ? "WHERE NOT erased OR op <> 'delete' OR cause = 'erased'" : ''}`
+			WHERE NOT (c=ANY(ARRAY[${[...audited].map((table) => c.p(table)).join(',')}]::text[]))
+			${erasures.some((spec) => spec.mode === 'remove') ? "AND (NOT erased OR op <> 'delete' OR cause = 'erased')" : ''}`
 		);
 		historyPiece(c, 'history_source', x.restored, request);
 	}
 	x.approval?.pieces(c, hit);
-	if (erasures.length > 0 && pieces.length > 0) erasePieces(c, erasures);
+	x.resubmit?.pieces(c);
+	if (erasures.length > 0 && hasWrites) erasePieces(c, erasures);
 	c.cte('effectp', 'SELECT * FROM allp WHERE NOT erased');
-	queueTriggered(m, c, x.now, actorRef(x.actor), 'effectp'); // event runs exclude erased rows (rule 50)
-	if (byTable.has('sys_integration')) feedConfigurationPiece(m, c, x.now, 'effectp');
-	// an outbound send is irreversible: a record an approval request holds sends only once it is approved (approvals.ts),
+	if (x.transactionStage !== true) queueTriggered(m, c, x.now, actorRef(x.actor), 'effectp'); // event runs exclude erased rows (rule 50)
+	if (x.transactionStage !== true && x.approvalDecision === undefined && x.rollback !== true) {
+		const notified = Object.entries(m.collections).filter(
+			([model, spec]) => spec.notify === true && byTable.has(model)
+		);
+		if (notified.length > 0)
+			enqueue(c, {
+				select: notified
+					.map(
+						([model]) =>
+							`SELECT 'bolt.notify'::text AS automation, jsonb_build_object('collection', ${c.p(model)}::text,
+			'event', jsonb_build_object('kind', 'write', 'action', e.op, 'records', jsonb_agg(coalesce(e.n, e.o) ORDER BY e.id),
+			'previous', jsonb_agg(e.o ORDER BY e.id), 'actor', ${c.p(x.actor)}::jsonb)) AS input,
+			${c.p(x.now)}::timestamptz AS due_at, 'schedule'::text AS cause, 0 AS depth
+			FROM effectp e WHERE e.c = ${c.p(model)} AND e.cause = 'direct' GROUP BY e.op`
+					)
+					.join(' UNION ALL ')
+			});
+	}
+	// a sync write is irreversible: a record an approval request holds queues only once it is approved (approvals.ts),
 	// and a rollback restores a record without sending it again
-	// (a routed write that joined an open request sends what that request does not hold; one that opened its own, nothing)
-	if (x.approvalDecision === undefined && (x.approval === undefined || hit !== null))
-		outboundPiece(
+	// (a routed write that joined an open request queues what that request does not hold; one that opened its own, nothing)
+	if (
+		x.transactionStage !== true &&
+		x.approvalDecision === undefined &&
+		x.rollback !== true &&
+		(x.approval === undefined || hit !== null)
+	)
+		syncOutboxPiece(
 			m,
 			c,
 			x.now,
-			new Set(byTable.keys()),
+			new Set(Object.keys(m.models)),
+			x.actor,
 			hit === null
 				? 'effectp'
 				: c.cte(
@@ -478,27 +596,108 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): Sql {
 	WHERE r ->> 'collection' = x.c AND r ->> 'id' = x.id)${x.approval === undefined ? '' : ` AND EXISTS (SELECT 1 FROM ${hit})`}`
 					)
 		);
-	if (x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
-	if (x.notices.length > 0)
+	if (x.transactionStage !== true && x.runs.length > 0)
+		enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
+	if (x.transactionStage !== true && x.notices.length > 0)
 		noticeInsert(c, 'notices', x.notices, x.now, GATED, m.teams, m.workspace.signup?.policies);
-	x.pieces?.(c); // hook:integrations
+	x.pieces?.(c); // hook:syncs
 
 	// in the act's own order (the input's; `records[0]` is what was written), anything else after by collection and id
 	const at = c.p(Object.fromEntries(x.writes.map((w, i) => [`${w.collection}/${w.id}`, i])));
 	const records = `(SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'revision', revision) ORDER BY (${at}::jsonb ->> (c || '/' || id))::int NULLS LAST, c, id), '[]'::jsonb) FROM allp WHERE cause IN ('direct', 'erased'))`;
-	const commitOutcome = `jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records})`;
+	const commitOutcome = () =>
+		`jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records})`;
 	const outcome =
-		x.approval === undefined
-			? commitOutcome
-			: `CASE WHEN ${hit === null ? 'false' : `EXISTS (SELECT 1 FROM ${hit})`} THEN ${commitOutcome}
+		x.resubmit?.pending === true
+			? `jsonb_build_object('kind', 'pendingApproval', 'requestId', ${c.p(x.resubmit.request)}::text, 'records', ${records})`
+			: x.approval === undefined
+				? commitOutcome()
+				: `CASE WHEN ${hit === null ? 'false' : `EXISTS (SELECT 1 FROM ${hit})`} THEN ${commitOutcome()}
 		ELSE jsonb_build_object('kind', 'pendingApproval', 'requestId', ${c.p(x.approval.requestId)}::text, 'records', ${records}) END`;
 	const result = answer(c, x.key, x.digest, outcome);
-	const tables = [...new Set(pieces.map((p) => p.table))];
-	return c.sql(`${result}, (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'op', op, 'revision', revision,
+	const tables = affectedTables(m, cat, x.writes);
+	c.cte(
+		'native_result',
+		`SELECT ${result}, (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'op', op, 'revision', revision,
 		'old', ${numericText(cat, tables, 'o')}, 'new', ${numericText(cat, tables, 'n')}, 'cause', cause)), '[]'::jsonb) FROM allp) || ${noticeCaptures(c)} AS captured, ${nextDue(c)} AS next_due,
 		(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM allp WHERE c = 'sys_integration'
 		AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy', o->'import_start')
-		IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy', n->'import_start'))) AS changed_instances${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}`);
+		IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy', n->'import_start'))) AS changed_instances, ${x.readGuards === undefined ? 'false' : 'EXISTS (SELECT 1 FROM idem)'} AS read_guards_applied${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}`
+	);
+	c.cte(
+		'native_saved',
+		`UPDATE pg_temp.bolt_write_context context SET answer=to_jsonb(result),request=${request}
+		FROM native_result result WHERE context.token=${c.p(token)} RETURNING context.answer`
+	);
+	return [
+		...captureStart(
+			{
+				token,
+				now: x.now,
+				actor: actorRef(x.actor),
+				direct: x.writes.map((write) => `${write.collection}/${write.id}`),
+				erased: erasedTargets,
+				mode: (x.restored?.length ?? 0) > 0 ? 'restore' : 'write',
+				...(x.approvalDecision === undefined ? {} : { request: x.approvalDecision.request }),
+				...(x.restored === undefined
+					? {}
+					: {
+							restored: Object.fromEntries(
+								x.restored.map((row) => [`${row.collection}/${row.id}`, row.revision])
+							)
+						})
+			},
+			by,
+			Object.fromEntries(
+				erasures.flatMap((spec) =>
+					spec.mode === 'anonymise'
+						? spec.ids.map((id) => [`${spec.collection}/${id}`, spec.purge] as const)
+						: []
+				)
+			)
+		),
+		mutation,
+		c.sql('(SELECT answer FROM native_saved) AS result'),
+		captureFinish(token, x.approvalDecision !== undefined)
+	];
+}
+
+/** The native action closure also bounds numeric decoding and locks before any domain mutation. */
+export function affectedTables(
+	m: EngineManifest,
+	cat: Catalog,
+	writes: readonly Write[]
+): string[] {
+	const affected = new Set(writes.map((write) => write.collection));
+	const deleted = new Set(
+		writes.filter((write) => write.op === 'delete').map((write) => write.collection)
+	);
+	for (let changed = true; changed;) {
+		changed = false;
+		for (const relation of relations(m).all) {
+			if (!relation.targets.some((target) => deleted.has(target))) continue;
+			const action =
+				relation.spec.onDelete ?? (relation.spec.owned === true ? 'cascade' : 'restrict');
+			if (action === 'restrict') continue;
+			if (!affected.has(relation.from)) {
+				affected.add(relation.from);
+				changed = true;
+			}
+			if (action === 'cascade' && !deleted.has(relation.from)) {
+				deleted.add(relation.from);
+				changed = true;
+			}
+		}
+		for (const table of Object.keys(m.models))
+			if (
+				!affected.has(table) &&
+				rollups(m, cat, table).some((rollup) => affected.has(rollup.child))
+			) {
+				affected.add(table);
+				changed = true;
+			}
+	}
+	return [...affected].sort();
 }
 
 /**
@@ -539,9 +738,11 @@ export function compileOutcomeRecord(
 
 /** Columns history never keeps: the generated search document and the platform embedding. */
 const UNHISTORIED = `ARRAY['bolt_search', 'bolt_embedding']`;
-/** Rule 38e(a–c): the history purge and the notices of removed rows. The `erased` revision is this statement's own
- * insert, which no other piece sees, so it survives both purges. */
+/** Rule 38e(a–c): purge prior history and notices while retaining the direct erasure's own receipt. */
 function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]): void {
+	const operation = "nullif(current_setting('bolt.audit',true),'')";
+	// Durable audit must capture the erase's own before image before its history can disappear.
+	const immediate = `${operation} IS NULL`;
 	// A request holding an erased row goes with it: its log names the record and may quote it.
 	for (const [name, sql] of Object.entries(
 		purgeProposals(
@@ -553,23 +754,41 @@ function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]
 		)
 	))
 		c.cte(name, sql);
-	if (erasures.some((e) => e.mode === 'remove'))
+	if (erasures.some((e) => e.mode === 'remove')) {
+		c.cte(
+			'defer_removed',
+			`INSERT INTO bolt_audit_erase(operation,collection,record,revision,mode,keep_marker)
+			SELECT ${operation},x.c,x.id::uuid,x.revision,'remove',x.cause='erased'
+			FROM allp x WHERE x.erased AND x.op='delete' AND x.id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			AND ${operation} IS NOT NULL AND ${GATED}
+			ON CONFLICT DO NOTHING RETURNING record`
+		);
 		c.cte(
 			'purge_removed',
-			`DELETE FROM bolt_history h USING allp x WHERE x.erased AND x.op = 'delete' AND h.collection = x.c AND h.record::text = x.id AND ${GATED}`
+			`DELETE FROM bolt_history h USING allp x WHERE x.erased AND x.op = 'delete' AND h.collection = x.c AND h.record::text = x.id
+			AND NOT (x.cause='erased' AND h.revision=x.revision) AND ${immediate} AND ${GATED}`
 		);
+	}
 	for (const [index, e] of erasures.entries()) {
 		if (e.mode === 'remove') continue;
 		const fields = `ARRAY(SELECT jsonb_array_elements_text(${c.p(e.purge)}::jsonb))`;
 		const at = `h.collection = ${c.p(e.collection)} AND h.record::text IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb)) AND h.changes ?| ${fields}
-		AND h.cause <> 'erased'`;
+		AND h.revision < (SELECT min(x.revision) FROM allp x WHERE x.c=h.collection AND x.id=h.record::text)`;
+		c.cte(
+			`defer_anonymised${index}`,
+			`INSERT INTO bolt_audit_erase(operation,collection,record,revision,mode,purge,keep_marker)
+			SELECT ${operation},x.c,x.id::uuid,x.revision,'anonymise',${fields},true FROM allp x
+			WHERE x.c=${c.p(e.collection)} AND x.id IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb))
+			AND x.id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			AND ${operation} IS NOT NULL AND ${GATED} ON CONFLICT DO NOTHING RETURNING record`
+		);
 		c.cte(
 			`purge${index}`,
-			`UPDATE bolt_history h SET changes = h.changes - ${fields} WHERE ${at} AND h.changes - ${fields} <> '{}'::jsonb AND ${GATED}`
+			`UPDATE bolt_history h SET changes = h.changes - ${fields} WHERE ${at} AND (h.changes - ${fields} <> '{}'::jsonb OR h.cause='erased') AND ${immediate} AND ${GATED}`
 		);
 		c.cte(
 			`purge_empty${index}`,
-			`DELETE FROM bolt_history h WHERE ${at} AND h.changes - ${fields} = '{}'::jsonb AND ${GATED}`
+			`DELETE FROM bolt_history h WHERE ${at} AND h.cause<>'erased' AND h.changes - ${fields} = '{}'::jsonb AND ${immediate} AND ${GATED}`
 		);
 	}
 }
@@ -590,17 +809,18 @@ export function historyPiece(
 	const from = marks === null ? 'NULL::int' : `(${marks}::jsonb ->> (x.c || '/' || x.id))::int`;
 	c.cte(
 		`history_${source}`,
-		`INSERT INTO bolt_history (collection, record, revision, at, actor, op, cause, changes, restored_from, request)
+		`INSERT INTO bolt_history (collection, record, revision, at, actor, op, cause, changes, restored_from, request, operation, meta)
 	SELECT x.c, x.id::uuid, x.revision, x.at, x.actor, x.op, CASE WHEN ${mark} THEN 'restored' ELSE x.cause END,
-		CASE x.op WHEN 'create' THEN x.n - ${UNHISTORIED} WHEN 'delete' THEN '{}'::jsonb
+		CASE WHEN x.op='create' OR (x.erased AND x.op='update') THEN x.n - ${UNHISTORIED} WHEN x.op='delete' THEN '{}'::jsonb
 		ELSE (SELECT coalesce(jsonb_object_agg(k, v), '{}'::jsonb) FROM jsonb_each(x.n) AS e(k, v)
 			WHERE k NOT IN ('revision', 'updated_at', 'updated_by') AND k <> ALL (${UNHISTORIED}) AND x.o->k IS DISTINCT FROM v) END,
-		CASE WHEN ${mark} THEN ${from} END, ${request}
+		CASE WHEN ${mark} THEN ${from} END, ${request}, nullif(current_setting('bolt.audit',true),''),
+		jsonb_build_object('id',x.id,'revision',coalesce(x.n,x.o)->'revision','updated_at',coalesce(x.n,x.o)->'updated_at','updated_by',coalesce(x.n,x.o)->'updated_by','created_at',coalesce(x.n,x.o)->'created_at','created_by',coalesce(x.n,x.o)->'created_by')
 	FROM ${source} x WHERE x.id::text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`
 	);
 }
 export const CommitAnswer = Schema.Struct({
-	outcome: Schema.NullOr(Outcome),
+	outcome: Schema.NullOr(WriteOutcome),
 	captured: Schema.Array(
 		Schema.Struct({
 			collection: Schema.String,
@@ -614,15 +834,140 @@ export const CommitAnswer = Schema.Struct({
 	),
 	next_due: Schema.NullOr(Schema.String),
 	changed_instances: Schema.Array(Schema.String),
-	approval_decided: Schema.optionalKey(Schema.Number)
+	approval_decided: Schema.optionalKey(Schema.Number),
+	read_guards_applied: Schema.optionalKey(Schema.Boolean)
 });
 export type CommitAnswer = typeof CommitAnswer.Type;
-/** SQL owns what was queued and which links changed; publish only after its successful commit. */
-export const committed = Effect.fn('Bolt.committed')(function* (
+export type CommitPublisher = (
 	answer: Pick<CommitAnswer, 'captured' | 'next_due' | 'changed_instances'>,
 	outcome?: Outcome
+) => Effect.Effect<number>;
+/** Native orchestration only: stages remain ordinary guarded writes on the leased connection. */
+export type CommitStageShape = {
+	execute: (
+		db: TenantDbShape,
+		manifest: EngineManifest,
+		catalog: Catalog,
+		commit: Commit,
+		lock?: Lock
+	) => Effect.Effect<readonly CommitAnswer[], EngineError>;
+	publisher: (publish: CommitPublisher) => void;
+};
+export const CommitStage = Context.Reference<CommitStageShape | undefined>('bolt/CommitStage', {
+	defaultValue: () => undefined
+});
+
+/** A guarded provisional write and its post-image approval baseline settle in the same locked native batch. */
+export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
+	db: TenantDbShape,
+	manifest: EngineManifest,
+	catalog: Catalog,
+	commit: Commit,
+	lock?: Lock
+) {
+	const stage = yield* CommitStage;
+	if (stage !== undefined) return yield* stage.execute(db, manifest, catalog, commit, lock);
+	const guards = commit.readGuards;
+	const guarded =
+		guards !== undefined && (guards.fingerprints.length > 0 || guards.inconsistent === true);
+	const tables =
+		guarded || lock?.tables !== undefined
+			? [
+					...new Set([
+						...(lock?.tables ?? []),
+						...(guards?.tables ?? []),
+						...affectedTables(manifest, catalog, commit.writes),
+						...(commit.approval === undefined ? [] : ['bolt_approvals', 'approval_request'])
+					])
+				].sort()
+			: lock?.tables;
+	const locked: Lock | undefined =
+		tables === undefined ? lock : { ...lock, tables, mode: 'SHARE ROW EXCLUSIVE' };
+	const statements = compileCommit(manifest, catalog, commit);
+	const results = yield* db.transaction({
+		statements: [
+			...statements,
+			...(guarded && commit.approval !== undefined
+				? [readGuardBaseline(commit.approval.requestId, guards, guards.sourceEpoch)]
+				: [])
+		],
+		...(locked === undefined ? {} : { lock: locked })
+	});
+	return yield* Schema.decodeUnknownEffect(Schema.Array(CommitAnswer))(
+		results[statements.length - 1]?.rows ?? []
+	).pipe(Effect.mapError((error) => BoltError.make('badAnswer', 'commit', error.message, error)));
+});
+
+/** Native net effects become visible only with the outer transaction receipt. */
+export function transactionEffects(
+	m: EngineManifest,
+	c: Chain,
+	now: string,
+	actor: EngineActor,
+	captured: readonly Captured[],
+	held = false
+): void {
+	const source = c.cte(
+		'transaction_effects',
+		`SELECT x.* FROM jsonb_to_recordset(${c.p(
+			captured.map((row) => ({
+				c: row.collection,
+				id: row.id,
+				revision: row.revision,
+				op: row.op,
+				cause: row.cause,
+				erased: row.cause === 'erased',
+				o: row.old,
+				n: row.new
+			}))
+		)}::jsonb) AS x(c text,id text,revision int,op text,cause text,erased boolean,o jsonb,n jsonb) WHERE ${GATED}`
+	);
+	queueTriggered(m, c, now, actorRef(actor), source);
+	const written = new Set(captured.map((row) => row.collection));
+	const notified = Object.entries(m.collections).filter(
+		([model, spec]) => spec.notify === true && written.has(model)
+	);
+	if (notified.length > 0)
+		enqueue(c, {
+			select: notified
+				.map(
+					([
+						model
+					]) => `SELECT 'bolt.notify'::text AS automation, jsonb_build_object('collection', ${c.p(model)}::text,
+		'event', jsonb_build_object('kind', 'write', 'action', e.op, 'records', jsonb_agg(coalesce(e.n,e.o) ORDER BY e.id),
+		'previous', jsonb_agg(e.o ORDER BY e.id), 'actor', ${c.p(actor)}::jsonb)) AS input,
+		${c.p(now)}::timestamptz AS due_at, 'schedule'::text AS cause, 0 AS depth FROM ${source} e
+		WHERE e.c = ${c.p(model)} AND e.cause = 'direct' GROUP BY e.op`
+				)
+				.join(' UNION ALL ')
+		});
+	if (!held) syncOutboxPiece(m, c, now, written, actor, source);
+}
+
+/** SQL owns what was queued and which links changed; publish only after its successful commit. */
+export const committed: (
+	answer: Pick<CommitAnswer, 'captured' | 'next_due' | 'changed_instances'>,
+	outcome?: WriteOutcome
+) => Effect.Effect<number, never, Live | Wake | Links> = Effect.fn('Bolt.committed')(function* (
+	answer: Pick<CommitAnswer, 'captured' | 'next_due' | 'changed_instances'>,
+	outcome?: WriteOutcome
 ) {
 	const live = yield* Live;
+	const stage = yield* CommitStage;
+	if (stage !== undefined) {
+		const wake = yield* Wake,
+			links = yield* Links;
+		stage.publisher((next, settled) =>
+			committed(next, settled).pipe(
+				Effect.provideService(Live, live),
+				Effect.provideService(Wake, wake),
+				Effect.provideService(Links, links),
+				Effect.provideService(CommitStage, undefined),
+				Effect.provideService(SqlSessionDb, undefined)
+			)
+		);
+		return yield* live.v;
+	}
 	if (answer.next_due !== null) yield* (yield* Wake).at(answer.next_due);
 	if (answer.changed_instances.length > 0) {
 		const links = yield* Links;

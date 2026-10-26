@@ -6,11 +6,11 @@
 	while following, and scrolling up stops following.
 -->
 <script lang="ts">
-	import { attach, fork, query } from '@norbital-ai/ui/effect';
+	import { attach, fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Deferred, Effect, Schedule, Semaphore } from 'effect';
 	import { tick } from 'svelte';
 	import { watch } from 'runed';
-	import { Button, Icon } from '@norbital-ai/ui';
+	import { Button, Icon, StructuredData } from '@norbital-ai/ui';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { LogLevel, LogRow } from '../../engine/contracts.ts';
 	import type { ShellApi } from '../api-types.ts';
@@ -59,7 +59,7 @@
 			})
 		)
 	);
-	const page = query(() => {
+	const page = observeOnce(() => {
 		const own = asked;
 		const obsolete = request?.filter !== own.filter ? request?.done : undefined;
 		return (obsolete === undefined ? Effect.void : Deferred.succeed(obsolete, undefined)).pipe(
@@ -160,19 +160,14 @@
 			.filter((x) => x !== '')
 			.join(' ');
 	};
-	const detail = (r: LogRow) =>
-		JSON.stringify(
-			{
-				at: r.at,
-				invocation: r.invocation,
-				run: r.run,
-				conversation: r.conversation,
-				turn: r.turn,
-				attributes: r.attributes
-			},
-			null,
-			2
-		);
+	const detail = (r: LogRow) => ({
+		at: r.at,
+		invocation: r.invocation,
+		run: r.run,
+		conversation: r.conversation,
+		turn: r.turn,
+		attributes: r.attributes
+	});
 	const TONE: { readonly [l in LogLevel]: string } = {
 		info: 'text-muted-foreground',
 		warn: 'text-amber-800 dark:text-amber-300',
@@ -298,10 +293,9 @@
 							>
 						</button>
 						{#if open[r.id]}
-							<pre
-								class="mx-2 mb-1 overflow-x-auto rounded-md bg-background p-2 whitespace-pre-wrap break-all text-foreground">{detail(
-									r
-								)}</pre>
+							<div class="mx-2 mb-1 min-w-0 rounded-md bg-background p-2">
+								<StructuredData value={detail(r)} name={t('Event details')} />
+							</div>
 						{/if}
 					</div>
 				{/each}

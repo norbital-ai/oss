@@ -8,16 +8,17 @@ import { format, resolveConfig } from 'prettier';
 import { describe, expect, it } from '@effect/vitest';
 import { discover } from '../src/compiler/discover.ts';
 import { ROLES } from '../src/decl/layout.ts';
-import { load, manifestErrors, type Manifest } from '../src/compiler/load.ts';
-import { systemIndex } from '../src/compiler/names.ts';
+import { load, manifestErrors, spec, type Manifest } from '../src/compiler/load.ts';
+import { modelParts, systemIndex } from '../src/compiler/names.ts';
 import { Effect, FileSystem, Layer, Result, Schema } from 'effect';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { RANK, schemaObjects } from '../src/engine/schema/ddl.ts';
+import { RANK, schemaObjects } from '@norbital-ai/store';
 import { engineObjects } from '../src/engine/schema/engine.ts';
 import { plan, schemaSlice } from '../src/engine/schema/plan.ts';
 import { catalog } from '../src/protocol/catalog.ts';
+import { storeSync } from '../src/protocol/errors.ts';
 import { decodeIdentity } from '../src/engine/write/pack.ts';
 import { SYSTEM } from '../src/system/index.ts';
 import { Port } from '../src/engine/port.ts';
@@ -30,7 +31,6 @@ const EMPTY: EngineManifest = {
 	relationships: {},
 	collections: {},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -62,7 +62,9 @@ function rendered(): { [table: string]: Shape } {
 	} = {};
 	const bare = (s: string) => s.replaceAll('"', '');
 	const lit = (d: string) => d.replace(/^'(.*)'::\w+$/, '$1').replace(/^\((.*)\)$/, '$1');
-	for (const o of schemaObjects(schemaSlice(EMPTY)).sort((a, b) => RANK[a.rank] - RANK[b.rank])) {
+	for (const o of storeSync(schemaObjects(schemaSlice(EMPTY))).sort(
+		(a, b) => RANK[a.rank] - RANK[b.rank]
+	)) {
 		if (!Object.hasOwn(SYSTEM.models, o.table) || o.id.startsWith('source:')) continue;
 		const t = (out[o.table] ??= {
 			key: '',
@@ -101,6 +103,8 @@ function rendered(): { [table: string]: Shape } {
 				else t.checks.push(d.replace(/^check /, ''));
 				continue;
 			}
+			// native row guards are their own contract (the trigger test below); this shape covers tables, columns and constraints
+			if (/^(?:create|drop) trigger /.test(sql)) continue;
 			m = /^create (unique )?index "\w+" on "\w+" (.*)$/.exec(sql);
 			if (m) {
 				(m[1] === undefined ? t.indexes : t.unique).push(bare(m[2]!));
@@ -126,49 +130,46 @@ function rendered(): { [table: string]: Shape } {
 
 // Native schema expectations include relationship indexes; teams are source, so `team` is plain text with no key.
 const EXPECTED: { [table: string]: Shape } = {
-	sys_user: {
-		key: 'id text primary key',
+	approval_request: {
+		key: 'id uuid primary key',
 		columns: {
-			email: 'text',
-			name: 'text not null',
-			kind: 'text not null default staff',
-			active: 'boolean not null default true',
-			admin: 'boolean not null default false',
-			signup: 'boolean not null default false',
-			party: 'jsonb',
-			party_id: "text generated always as (((party ->> 'id'))::text) stored",
-			phone: 'text',
-			telegram: 'text',
+			collection_name: 'text not null',
+			record_id: 'text not null',
+			action: 'text not null',
+			status: 'text not null',
+			step: 'int not null',
+			steps: 'int not null',
+			step_names: 'jsonb not null',
+			approver_teams: 'jsonb not null',
+			approver_users: 'jsonb not null',
+			superseder_teams: 'jsonb not null',
+			closed_at: 'timestamptz',
+			closed_by: 'text',
 			revision: 'int not null default 1',
-			phone_key: "text generated always as ((regexp_replace(phone, '\\D', '', 'g'))::text) stored",
-			created_at: 'timestamptz not null default now()',
-			team: 'text'
+			created_at: 'timestamptz not null'
 		},
-		unique: ['(lower(email))', '(phone_key)'],
+		unique: ["(collection_name, record_id) where (status = 'ONGOING'::text)"],
 		checks: [
-			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
-			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",
-			"(kind in ('staff', 'external'))"
+			"((approver_teams is null or store_json_valid(approver_teams, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"((approver_users is null or store_json_valid(approver_users, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"((step_names is null or store_json_valid(step_names, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"((superseder_teams is null or store_json_valid(superseder_teams, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"(action in ('create', 'update', 'delete'))",
+			'(isfinite(closed_at))',
+			'(isfinite(created_at))',
+			"(status in ('ONGOING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUPERSEDED'))"
 		]
 	},
-	sys_integration: {
+	requestor: {
 		key: 'id text primary key',
 		columns: {
-			integration: 'text not null',
-			name: 'text not null',
-			named: 'boolean not null default false',
-			envoy: 'text',
-			active: 'boolean not null default true',
-			configuration: 'jsonb not null default {}',
-			import_start: 'jsonb',
-			status: 'jsonb',
-			epoch: 'text',
-			revision: 'int not null default 1',
-			owner: 'text'
+			user_id: 'text not null',
+			approval_request_id: 'uuid not null'
 		},
-		indexes: ['(owner)'],
-		unique: ['(owner, integration) where (owner is not null)'],
-		fks: ['(owner) references sys_user (id)']
+		indexes: ['(approval_request_id)'],
+		fks: [
+			'(approval_request_id) references approval_request (id) on delete restrict on update restrict'
+		]
 	},
 	sys_api_key: {
 		key: 'id text primary key',
@@ -176,53 +177,17 @@ const EXPECTED: { [table: string]: Shape } = {
 			name: 'text not null',
 			prefix: 'text not null',
 			hash: 'text not null',
-			created_by: 'text',
+			team: 'text',
 			revoked_at: 'timestamptz',
 			last_used_at: 'timestamptz',
 			revision: 'int not null default 1',
 			created_at: 'timestamptz not null default now()',
-			team: 'text'
+			created_by: 'text'
 		},
 		unique: ['(prefix)'],
 		indexes: ['(created_by)'],
-		fks: ['(created_by) references sys_user (id)']
-	},
-	sys_invitation: {
-		key: 'id text primary key',
-		columns: {
-			email: 'text',
-			phone: 'text',
-			team: 'text',
-			external: 'boolean not null default false',
-			party: 'jsonb',
-			invited_by: 'text',
-			expires_at: 'timestamptz not null',
-			accepted_at: 'timestamptz',
-			revoked_at: 'timestamptz',
-			revision: 'int not null default 1'
-		},
-		indexes: ['(invited_by)', '(lower(email))', '(phone)'],
-		fks: ['(invited_by) references sys_user (id)'],
-		checks: ['((email is not null or phone is not null))']
-	},
-	sys_session: {
-		key: 'id text primary key',
-		columns: {
-			user: 'text not null',
-			token_hash: 'text not null',
-			via: 'text not null',
-			impersonated_by: 'text',
-			created_at: 'timestamptz not null',
-			expires_at: 'timestamptz not null',
-			refreshed_at: 'timestamptz not null'
-		},
-		unique: ['(token_hash)'],
-		indexes: ['(impersonated_by)', '(user)'],
-		fks: [
-			'(impersonated_by) references sys_user (id)',
-			'(user) references sys_user (id) on delete cascade'
-		],
-		checks: ["(via in ('code', 'invitation', 'signup', 'host'))"]
+		fks: ['(created_by) references sys_user (id) on delete restrict on update restrict'],
+		checks: ['(isfinite(created_at))', '(isfinite(last_used_at))', '(isfinite(revoked_at))']
 	},
 	sys_challenge: {
 		key: 'address_mac text primary key',
@@ -230,63 +195,13 @@ const EXPECTED: { [table: string]: Shape } = {
 			code_mac: 'text not null',
 			attempts: 'int not null default 0',
 			expires_at: 'timestamptz not null'
-		}
-	},
-	sys_config: { key: 'key text primary key', columns: { value: 'text not null' } },
-	sys_run: {
-		key: 'id text primary key',
-		columns: {
-			automation: 'text not null',
-			input: 'jsonb not null',
-			due_at: 'timestamptz not null',
-			key: 'text',
-			cause: 'text not null',
-			depth: 'int not null',
-			state: 'text not null default queued',
-			attempts: 'int not null default 0',
-			leases: 'int not null default 0',
-			run_key: 'text',
-			started_at: 'timestamptz',
-			finished_at: 'timestamptz',
-			progress: 'jsonb',
-			output: 'jsonb',
-			error: 'jsonb',
-			results: 'jsonb not null default []',
-			actor: 'text',
-			starter: 'jsonb'
 		},
-		unique: ['(key)'],
-		indexes: ["(due_at) where (state = 'queued'::text)"]
+		checks: ['(isfinite(expires_at))']
 	},
-	sys_notification: {
-		key: 'id text primary key',
+	sys_config: {
+		key: 'key text primary key',
 		columns: {
-			recipient: 'jsonb not null',
-			title: 'text not null',
-			body: 'text',
-			link: 'jsonb',
-			once: 'text',
-			at: 'timestamptz not null',
-			member: 'text',
-			read_at: 'timestamptz'
-		},
-		unique: ['(once)'],
-		indexes: ['(member, at) where (member is not null)']
-	},
-	sys_file: {
-		key: 'id text primary key',
-		columns: {
-			name: 'text not null',
-			mime: 'text not null',
-			size: 'int not null',
-			key: 'text not null',
-			sha256: 'text not null',
-			field: 'text not null',
-			revision: 'int not null default 1',
-			created_at: 'timestamptz not null',
-			created_by: 'text',
-			updated_at: 'timestamptz',
-			updated_by: 'text'
+			value: 'text not null'
 		}
 	},
 	sys_conversation: {
@@ -314,7 +229,104 @@ const EXPECTED: { [table: string]: Shape } = {
 			integration: 'text'
 		},
 		indexes: ['(integration)'],
-		fks: ['(integration) references sys_integration (id) on delete cascade']
+		fks: ['(integration) references sys_integration (id) on delete cascade on update restrict'],
+		checks: [
+			"((goals is null or store_json_valid(goals, '{kind:json,optional:true}'::jsonb) is true))",
+			"((inputs is null or store_json_valid(inputs, '{default:[],kind:json}'::jsonb) is true))",
+			"((outputs is null or store_json_valid(outputs, '{default:[],kind:json}'::jsonb) is true))",
+			"((participants is null or store_json_valid(participants, '{kind:json,optional:true}'::jsonb) is true))",
+			"((plan is null or store_json_valid(plan, '{kind:json,optional:true}'::jsonb) is true))",
+			"((read is null or store_json_valid(read, '{default:{},kind:json}'::jsonb) is true))",
+			'(isfinite(created_at))',
+			'(isfinite(lease_until))',
+			'(isfinite(updated_at))'
+		]
+	},
+	sys_file: {
+		key: 'id text primary key',
+		columns: {
+			name: 'text not null',
+			mime: 'text not null',
+			size: 'int not null',
+			key: 'text not null',
+			sha256: 'text not null',
+			field: 'text not null',
+			revision: 'int not null default 1',
+			created_at: 'timestamptz not null',
+			created_by: 'text',
+			updated_at: 'timestamptz',
+			updated_by: 'text'
+		},
+		checks: ['(isfinite(created_at))', '(isfinite(updated_at))']
+	},
+	sys_inbox: {
+		key: 'id uuid primary key',
+		columns: {
+			sync: 'text not null',
+			delivery: 'text not null',
+			received_at: 'timestamptz not null',
+			headers: 'jsonb',
+			body: 'jsonb',
+			consumed_at: 'timestamptz',
+			instance: 'text not null'
+		},
+		unique: ['nulls not distinct (sync, instance, delivery)'],
+		indexes: ['(instance)', '(sync, instance, received_at) where (consumed_at is null)'],
+		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict'],
+		checks: [
+			"((body is null or store_json_valid(body, '{kind:json,optional:true}'::jsonb) is true))",
+			"((headers is null or store_json_valid(headers, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(consumed_at))',
+			'(isfinite(received_at))'
+		]
+	},
+	sys_integration: {
+		key: 'id text primary key',
+		columns: {
+			integration: 'text not null',
+			name: 'text not null',
+			named: 'boolean not null default false',
+			envoy: 'text',
+			active: 'boolean not null default true',
+			configuration: 'jsonb not null default {}',
+			import_start: 'jsonb',
+			status: 'jsonb',
+			epoch: 'text',
+			revision: 'int not null default 1',
+			owner: 'text'
+		},
+		unique: ['(owner, integration) where (owner is not null)'],
+		indexes: ['(owner)'],
+		fks: ['(owner) references sys_user (id) on delete restrict on update restrict'],
+		checks: [
+			"((configuration is null or store_json_valid(configuration, '{default:{},kind:json}'::jsonb) is true))",
+			"((import_start is null or store_json_valid(import_start, '{kind:json,optional:true}'::jsonb) is true))",
+			"((status is null or store_json_valid(status, '{kind:json,optional:true}'::jsonb) is true))"
+		]
+	},
+	sys_invitation: {
+		key: 'id text primary key',
+		columns: {
+			email: 'text',
+			phone: 'text',
+			external: 'boolean not null default false',
+			team: 'text',
+			party: 'jsonb',
+			expires_at: 'timestamptz not null',
+			accepted_at: 'timestamptz',
+			revoked_at: 'timestamptz',
+			revision: 'int not null default 1',
+			invited_by: 'text'
+		},
+		indexes: ['(invited_by)', '(lower(email))', '(phone)'],
+		fks: ['(invited_by) references sys_user (id) on delete restrict on update restrict'],
+		checks: [
+			'((email is not null or phone is not null))',
+			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(accepted_at))',
+			'(isfinite(expires_at))',
+			'(isfinite(revoked_at))'
+		]
 	},
 	sys_message: {
 		key: 'id text primary key',
@@ -356,11 +368,6 @@ const EXPECTED: { [table: string]: Shape } = {
 			next_attempt_at: 'timestamptz',
 			claimed_at: 'timestamptz',
 			error: 'text',
-			record: 'jsonb',
-			rule: 'text',
-			key: 'text',
-			hash: 'text',
-			class: 'text',
 			message: 'jsonb',
 			thread: 'text',
 			epoch: 'text',
@@ -368,8 +375,6 @@ const EXPECTED: { [table: string]: Shape } = {
 			presume_at: 'timestamptz',
 			integration: 'text'
 		},
-		unique: ['(key)'],
-		checks: ["(class in ('message', 'command'))"],
 		indexes: [
 			"(conversation) where (state = 'pending'::text)",
 			"(conversation) where (state = 'queued'::text)",
@@ -378,31 +383,236 @@ const EXPECTED: { [table: string]: Shape } = {
 			'(integration, provider_id)',
 			"(seq) where (status in ('queued'::text, 'sending'::text))"
 		],
-		fks: ['(integration) references sys_integration (id) on delete cascade']
+		fks: ['(integration) references sys_integration (id) on delete cascade on update restrict'],
+		checks: [
+			"((about is null or store_json_valid(about, '{kind:json,optional:true}'::jsonb) is true))",
+			"((as is null or store_json_valid(as, '{kind:json,optional:true}'::jsonb) is true))",
+			"((content is null or store_json_valid(content, '{kind:json,optional:true}'::jsonb) is true))",
+			"((delivery is null or store_json_valid(delivery, '{default:[],kind:json}'::jsonb) is true))",
+			"((email is null or store_json_valid(email, '{kind:json,optional:true}'::jsonb) is true))",
+			"((message is null or store_json_valid(message, '{kind:json,optional:true}'::jsonb) is true))",
+			"((meta is null or store_json_valid(meta, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(claimed_at))',
+			'(isfinite(created_at))',
+			'(isfinite(deleted_at))',
+			'(isfinite(edited_at))',
+			'(isfinite(next_attempt_at))',
+			'(isfinite(presume_at))',
+			'(isfinite(sent_at))',
+			'(isfinite(source_at))'
+		]
 	},
-	approval_request: {
+	sys_notification: {
+		key: 'id text primary key',
+		columns: {
+			recipient: 'jsonb not null',
+			title: 'text not null',
+			body: 'text',
+			link: 'jsonb',
+			attachments: 'jsonb not null default []',
+			once: 'text',
+			at: 'timestamptz not null',
+			member: 'text',
+			read_at: 'timestamptz'
+		},
+		unique: ['(once)'],
+		indexes: ['(member, at) where (member is not null)'],
+		checks: [
+			"((attachments is null or store_json_valid(attachments, '{default:[],kind:json}'::jsonb) is true))",
+			"((link is null or store_json_valid(link, '{kind:json,optional:true}'::jsonb) is true))",
+			"((recipient is null or store_json_valid(recipient, '{kind:json}'::jsonb) is true))",
+			'(isfinite(at))',
+			'(isfinite(read_at))'
+		]
+	},
+	sys_outbox: {
 		key: 'id uuid primary key',
 		columns: {
-			collection_name: 'text not null',
-			record_id: 'text not null',
-			action: 'text not null',
-			status: 'text not null',
-			step: 'int not null',
-			steps: 'int not null',
-			approver_teams: 'jsonb not null',
-			superseder_teams: 'jsonb not null',
-			closed_at: 'timestamptz',
-			closed_by: 'text',
-			revision: 'int not null default 1',
-			created_at: 'timestamptz not null'
+			seq: 'bigint generated by default as identity',
+			sync: 'text not null',
+			model: 'text not null',
+			record: 'text not null',
+			op: 'text not null',
+			record_revision: 'int not null',
+			image: 'jsonb',
+			changed: 'jsonb not null default []',
+			key: 'text not null',
+			status: 'text not null default queued',
+			attempts: 'int not null default 0',
+			next_attempt_at: 'timestamptz not null',
+			claimed_at: 'timestamptz',
+			error: 'jsonb',
+			epoch: 'text',
+			acked_at: 'timestamptz',
+			result: 'jsonb',
+			at: 'timestamptz not null',
+			instance: 'text not null',
+			writer: 'text'
 		},
-		unique: ["(collection_name, record_id) where (status = 'ONGOING'::text)"]
+		unique: [
+			'(key)',
+			"(sync, instance, record) where (attempts = '0'::int and status = 'queued'::text)"
+		],
+		indexes: [
+			'(instance)',
+			"(next_attempt_at) where (status = 'queued'::text)",
+			"(sync) where (status = 'dead'::text)",
+			"(sync, record, seq) where (status in ('queued'::text, 'sending'::text))",
+			'(writer)'
+		],
+		fks: [
+			'(instance) references sys_integration (id) on delete cascade on update restrict',
+			'(writer) references sys_user (id) on delete set null on update restrict'
+		],
+		checks: [
+			"((changed is null or store_json_valid(changed, '{default:[],kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"((error is null or store_json_valid(error, '{kind:json,optional:true}'::jsonb) is true))",
+			"((image is null or store_json_valid(image, '{kind:json,optional:true}'::jsonb) is true))",
+			"((result is null or store_json_valid(result, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(acked_at))',
+			'(isfinite(at))',
+			'(isfinite(claimed_at))',
+			'(isfinite(next_attempt_at))',
+			"(op in ('create', 'update', 'delete'))",
+			"(status in ('queued', 'sending', 'acked', 'failed', 'dead', 'skipped'))"
+		]
 	},
-	requestor: {
+	sys_run: {
 		key: 'id text primary key',
-		columns: { approval_request_id: 'uuid not null', user_id: 'text not null' },
-		indexes: ['(approval_request_id)'],
-		fks: ['(approval_request_id) references approval_request (id)']
+		columns: {
+			automation: 'text not null',
+			input: 'jsonb not null',
+			due_at: 'timestamptz not null',
+			key: 'text',
+			cause: 'text not null',
+			depth: 'int not null',
+			state: 'text not null default queued',
+			attempts: 'int not null default 0',
+			leases: 'int not null default 0',
+			run_key: 'text',
+			started_at: 'timestamptz',
+			finished_at: 'timestamptz',
+			progress: 'jsonb',
+			output: 'jsonb',
+			error: 'jsonb',
+			results: 'jsonb not null default []',
+			actor: 'text',
+			starter: 'jsonb'
+		},
+		unique: ['(key)'],
+		indexes: ["(due_at) where (state = 'queued'::text)"],
+		checks: [
+			"((error is null or store_json_valid(error, '{kind:json,optional:true}'::jsonb) is true))",
+			"((input is null or store_json_valid(input, '{kind:json}'::jsonb) is true))",
+			"((output is null or store_json_valid(output, '{kind:json,optional:true}'::jsonb) is true))",
+			"((progress is null or store_json_valid(progress, '{kind:json,optional:true}'::jsonb) is true))",
+			"((results is null or store_json_valid(results, '{default:[],kind:json}'::jsonb) is true))",
+			"((starter is null or store_json_valid(starter, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(due_at))',
+			'(isfinite(finished_at))',
+			'(isfinite(started_at))'
+		]
+	},
+	sys_session: {
+		key: 'id text primary key',
+		columns: {
+			token_hash: 'text not null',
+			via: 'text not null',
+			created_at: 'timestamptz not null',
+			expires_at: 'timestamptz not null',
+			refreshed_at: 'timestamptz not null',
+			agent: 'text',
+			user: 'text not null',
+			impersonated_by: 'text'
+		},
+		unique: ['(token_hash)'],
+		indexes: ['(impersonated_by)', '(user)'],
+		fks: [
+			'(impersonated_by) references sys_user (id) on delete restrict on update restrict',
+			'(user) references sys_user (id) on delete cascade on update restrict'
+		],
+		checks: [
+			'(isfinite(created_at))',
+			'(isfinite(expires_at))',
+			'(isfinite(refreshed_at))',
+			"(via in ('code', 'invitation', 'signup', 'host'))"
+		]
+	},
+	sys_sync: {
+		key: 'id uuid primary key',
+		columns: {
+			sync: 'text not null',
+			partition: 'text not null default ',
+			cursor: 'jsonb',
+			cycle: 'int not null default 0',
+			phase: 'text not null default read',
+			health: 'jsonb',
+			digest: 'text not null',
+			version: 'int not null default 0',
+			started_at: 'timestamptz not null default now()',
+			last_read_at: 'timestamptz',
+			last_change_at: 'timestamptz',
+			last_hint_at: 'timestamptz',
+			instance: 'text not null'
+		},
+		unique: ['nulls not distinct (sync, instance, partition)'],
+		indexes: ['(instance)'],
+		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict'],
+		checks: [
+			"((cursor is null or store_json_valid(cursor, '{kind:json,optional:true}'::jsonb) is true))",
+			"((health is null or store_json_valid(health, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(last_change_at))',
+			'(isfinite(last_hint_at))',
+			'(isfinite(last_read_at))',
+			'(isfinite(started_at))',
+			"(phase in ('read', 'reconcile'))"
+		]
+	},
+	sys_sync_row: {
+		key: 'id uuid primary key',
+		columns: {
+			sync: 'text not null',
+			partition: 'text not null default ',
+			remote_id: 'text not null',
+			record: 'text not null',
+			remote_version: 'text',
+			cycle: 'int not null',
+			acked_revision: 'int',
+			instance: 'text not null'
+		},
+		unique: [
+			'nulls not distinct (sync, instance, record)',
+			'nulls not distinct (sync, instance, remote_id)'
+		],
+		indexes: ['(instance)', '(sync, instance, partition, cycle)'],
+		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict']
+	},
+	sys_user: {
+		key: 'id text primary key',
+		columns: {
+			email: 'text',
+			name: 'text not null',
+			kind: 'text not null default staff',
+			active: 'boolean not null default true',
+			admin: 'boolean not null default false',
+			signup: 'boolean not null default false',
+			team: 'text',
+			party: 'jsonb',
+			phone: 'text',
+			telegram: 'text',
+			revision: 'int not null default 1',
+			created_at: 'timestamptz not null default now()',
+			party_id: "text generated always as (((party ->> 'id'))::text) stored",
+			phone_key: "text generated always as ((regexp_replace(phone, '\\D', '', 'g'))::text) stored"
+		},
+		unique: ['(lower(email))', '(phone_key)'],
+		checks: [
+			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
+			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
+			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",
+			'(isfinite(created_at))',
+			"(kind in ('staff', 'external'))"
+		]
 	}
 };
 
@@ -419,22 +629,24 @@ describe('the built-in layer is compiled as a workspace is', () => {
 					try: () => resolveConfig(file),
 					catch: Port.failure('fixture.format')
 				}).pipe(Effect.orDie);
+				const loaded = yield* load(ROOT, files);
 				const generated = yield* Effect.tryPromise({
-					try: () => format(systemIndex(files), { ...options, filepath: file }),
+					try: () => format(systemIndex(files, loaded.manifest), { ...options, filepath: file }),
 					catch: Port.failure('fixture.format')
 				}).pipe(Effect.orDie);
 				expect(generated).toBe(yield* fs.readFileString(file));
-				const loaded = yield* load(ROOT, files);
 				expect(loaded.errors).toEqual([]);
 				expect(manifestErrors(loaded.manifest, 'system')).toEqual([]);
-				const spec = (d: unknown) => (d as { spec?: unknown }).spec ?? d;
+				const parts = modelParts(loaded.manifest.model);
 				expect(
 					JSON.parse(
 						JSON.stringify({
-							models: loaded.manifest.model,
-							relationships: loaded.manifest.relationship[''],
+							models: Object.fromEntries(parts.map(([name, part]) => [name, part.model])),
+							relationships: Object.assign({}, ...parts.map(([, part]) => part.relationships)),
 							collections: Object.fromEntries(
-								Object.entries(loaded.manifest.collection).map(([k, v]) => [k, spec(v)])
+								parts.flatMap(([name, part]) =>
+									part.collection === undefined ? [] : [[name, part.collection]]
+								)
 							),
 							integrations: Object.fromEntries(
 								Object.entries(loaded.manifest.integration_definition).map(([k, v]) => [k, spec(v)])
@@ -456,13 +668,21 @@ describe('the built-in layer is compiled as a workspace is', () => {
 			}).pipe(Effect.provide(Platform))
 	);
 
-	it('every system collection has its model, and the private models (sessions, challenges, config) are no collection', () => {
+	it('every system collection has its model, and private auth, config and sync models are no collection', () => {
 		for (const c of Object.keys(SYSTEM.collections)) expect(SYSTEM.models[c]).toBeDefined();
 		expect(
 			Object.keys(SYSTEM.models)
 				.filter((m) => !Object.hasOwn(SYSTEM.collections, m))
 				.sort()
-		).toEqual(['sys_challenge', 'sys_config', 'sys_session']);
+		).toEqual([
+			'sys_challenge',
+			'sys_config',
+			'sys_inbox',
+			'sys_outbox',
+			'sys_session',
+			'sys_sync',
+			'sys_sync_row'
+		]);
 	});
 });
 
@@ -480,14 +700,26 @@ describe('the schema plan renders the built-in native contract', () => {
 			expect(now[table]).toEqual({ ...shape, ...sorted });
 		});
 
+	it('guards every system table with its native row rules', () => {
+		const triggers = storeSync(schemaObjects(schemaSlice(EMPTY)))
+			.filter((o) => o.id.startsWith('trigger:') && Object.hasOwn(SYSTEM.models, o.table))
+			.map((o) => o.id)
+			.sort();
+		expect(triggers).toEqual(
+			Object.keys(SYSTEM.models)
+				.map((table) => `trigger:${table}.store_row_rules`)
+				.sort()
+		);
+	});
+
 	it("the empty-database plan creates the layer's tables and the engine's private objects; the same slice plans no step", () => {
-		const p = plan(null, EMPTY);
+		const p = storeSync(plan(null, EMPTY));
 		for (const t of Object.keys(SYSTEM.models))
 			expect(p.steps.some((s) => s.id === `create:table:${t}`)).toBe(true);
 		expect(p.steps.filter((s) => s.id.startsWith('create:engine:'))).toHaveLength(
 			engineObjects().length
 		);
-		expect(plan(p.slice, EMPTY).steps).toEqual([]);
+		expect(storeSync(plan(p.slice, EMPTY)).steps).toEqual([]);
 	});
 
 	it('an FK to a system table takes its key type: text to sys_user, uuid to approval_request; a workspace model uuid', () => {
@@ -501,7 +733,7 @@ describe('the schema plan renders the built-in native contract', () => {
 			}
 		};
 		const col = (c: string) =>
-			schemaObjects(schemaSlice(m)).find((o) => o.id === `column:notes.${c}`)!.create[0];
+			storeSync(schemaObjects(schemaSlice(m))).find((o) => o.id === `column:notes.${c}`)!.create[0];
 		expect([col('owner'), col('request'), col('parent')]).toEqual([
 			'alter table "notes" add column "owner" text',
 			'alter table "notes" add column "request" uuid',
@@ -510,7 +742,7 @@ describe('the schema plan renders the built-in native contract', () => {
 	});
 
 	it('a system table has no engine columns or approval index, and its uniques are plain (an on-conflict arbiter)', () => {
-		const run = schemaObjects(schemaSlice(EMPTY)).filter((o) => o.table === 'sys_run');
+		const run = storeSync(schemaObjects(schemaSlice(EMPTY))).filter((o) => o.table === 'sys_run');
 		expect(run.some((o) => o.id.includes('__approval__'))).toBe(false);
 		expect(run.flatMap((o) => o.create).filter((s) => s.includes('deferrable'))).toEqual([]);
 	});
@@ -564,44 +796,41 @@ describe('a workspace cannot reach into the built-in layer', () => {
 			Effect.gen(function* () {
 				expect(
 					yield* workspace({
-						'src/data/model/+sys_user.model.ts': '',
-						'src/data/model/+requestor.model.ts': '',
-						'src/data/model/+bolt_x.model.ts': '',
-						'src/data/model/+approval_request.model.ts': '',
-						'src/data/model/+orders.model.ts': ''
+						'src/data/model/sys_user/+model.ts': '',
+						'src/data/model/requestor/+model.ts': '',
+						'src/data/model/bolt_x/+model.ts': '',
+						'src/data/model/approval_request/+model.ts': '',
+						'src/data/model/orders/+model.ts': ''
 					})
 				).toEqual([
-					'discover/reserved-name src/data/model/+approval_request.model.ts',
-					'discover/reserved-name src/data/model/+bolt_x.model.ts',
-					'discover/reserved-name src/data/model/+requestor.model.ts',
-					'discover/reserved-name src/data/model/+sys_user.model.ts'
+					'discover/reserved-name src/data/model/approval_request/+model.ts',
+					'discover/reserved-name src/data/model/bolt_x/+model.ts',
+					'discover/reserved-name src/data/model/requestor/+model.ts',
+					'discover/reserved-name src/data/model/sys_user/+model.ts'
 				]);
 			})
 	);
-	it('refuses `table` on a workspace model and a relationship on a system model: load/system-only, load/system-owned', () => {
-		const m = {
-			model: {
-				notes: {
-					description: 'n',
-					label: 'body',
-					fields: { body: { kind: 'text' } },
-					table: { primary: 'text' }
-				}
-			},
-			relationship: {
-				'': { 'sys_user.favourite': { to: 'notes' }, 'notes.owner': { to: 'sys_user' } }
-			}
-		};
+	it('refuses system table metadata on a workspace model', () => {
 		const manifest: Manifest = Schema.decodeUnknownSync(
 			Schema.Record(
 				Schema.Literals(ROLES.map(({ role }) => role)),
 				Schema.Record(Schema.String, Schema.Unknown)
 			)
-		)({ ...Object.fromEntries(ROLES.map(({ role }) => [role, {}])), ...m });
-		expect(manifestErrors(manifest).map((e) => e.code)).toEqual([
-			'load/system-only',
-			'load/system-owned'
-		]);
+		)({
+			...Object.fromEntries(ROLES.map(({ role }) => [role, {}])),
+			model: {
+				notes: {
+					name: 'notes',
+					spec: {
+						description: 'Notes',
+						label: 'body',
+						fields: { body: { kind: 'text' } },
+						table: { primary: 'text' }
+					}
+				}
+			}
+		});
+		expect(manifestErrors(manifest).map((error) => error.code)).toEqual(['load/system-only']);
 		expect(manifestErrors(manifest, 'system')).toEqual([]);
 	});
 });

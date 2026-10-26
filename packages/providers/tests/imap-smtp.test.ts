@@ -26,8 +26,8 @@ import {
 import { fakeImap, fakeSmtp } from './mail-servers.ts';
 
 // These protocol fixtures own real loopback servers. Production destination policy is tested separately.
-vi.mock('@norbital-ai/bolt/engine', async (original) => {
-	const actual = await original<typeof import('@norbital-ai/bolt/engine')>();
+vi.mock('@norbital-ai/bolt/node', async (original) => {
+	const actual = await original<typeof import('@norbital-ai/bolt/node')>();
 	const { Effect } = await import('effect');
 	const { Socket } = await import('node:net');
 	return {

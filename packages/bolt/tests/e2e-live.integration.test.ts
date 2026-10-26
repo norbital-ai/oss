@@ -7,12 +7,10 @@ import { lowerRead } from '../src/engine/query/engine.ts';
 import { Live, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { program } from './support/guest-fixture.ts';
-import { ACME, guest, manifest, seed } from './engine-fixture.ts';
+import { ACME, callbacks as manifest, guest, seed } from './engine-fixture.ts';
 
 const workspace = Layer.unwrap(
-	program(guest.source).pipe(
-		Effect.map((guest) => TestWorkspace.layer({ manifest, guest, transforms: ['orders'], seed }))
-	)
+	program(guest.source).pipe(Effect.map((guest) => TestWorkspace.layer({ manifest, guest, seed })))
 );
 
 describe('a live subscription on the engine', () => {
@@ -38,7 +36,7 @@ describe('a live subscription on the engine', () => {
 				);
 				const conn = yield* Deferred.await(hello);
 				yield* live.register(conn, 'orders', {
-					read: lowerRead(manifest, 'read', ['orders', { all: true, select: { title: true } }])
+					read: lowerRead(manifest, 'query', ['orders', { all: true, select: { title: true } }])
 				});
 				const r = yield* writes.act({
 					collection: 'orders',

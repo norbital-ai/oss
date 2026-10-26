@@ -4,9 +4,9 @@
 	of its automation with the same input. Run now starts any automation the member may start that needs no input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`).
 -->
 <script lang="ts">
-	import { fork, live } from '@norbital-ai/ui/effect';
+	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Array as EffectArray, Effect, Predicate, Schedule, Stream } from 'effect';
-	import { Button, Combobox, Show, Table } from '@norbital-ai/ui';
+	import { Button, Combobox, Show, Table, useKinds } from '@norbital-ai/ui';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
@@ -31,10 +31,11 @@
 		onRun: (id: string | null) => void;
 	} = $props();
 
-	const runs = live(() =>
+	const kinds = useKinds();
+	const runs = observe(() =>
 		Stream.fromEffectSchedule(api.runs({ limit: 500 }), Schedule.spaced('3 seconds'))
 	);
-	const detail = live(() =>
+	const detail = observe(() =>
 		run === null ? null : Stream.fromEffectSchedule(api.run(run), Schedule.spaced('3 seconds'))
 	);
 	const runRow = (r: RunView) => ({
@@ -166,6 +167,7 @@
 
 {#if run !== null && one !== null}
 	{@const w = warnings(one)}
+	{@const input = kinds.automations?.[one.automation]?.input}
 	<DetailSheet
 		title={`${one.automation} · ${t(one.status)}`}
 		acts={acts(one)}
@@ -185,8 +187,12 @@
 			},
 			{ label: t('Warnings'), value: w.length === 0 ? undefined : w.join('\n') },
 			{ label: t('Progress'), value: one.progress ?? undefined },
-			{ label: t('Input'), value: one.input },
-			{ label: t('Result'), value: one.result }
+			{
+				label: t('Input'),
+				value: one.input,
+				kind: input === undefined ? { kind: 'json' } : { kind: 'object', fields: input }
+			},
+			{ label: t('Result'), value: one.result, kind: { kind: 'json' } }
 		]}
 	>
 		{#snippet summary()}

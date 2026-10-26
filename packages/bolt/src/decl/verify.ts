@@ -1,6 +1,7 @@
-// The `__verify` line (§3.3.9, X-12). What a model literal cannot see, because it lives in `+relationship.ts` or in
-// another model, is checked once over the whole names index: `.norbital/names.ts` ends with
-// `export const __verify: Check<Verify> = true;`, which fails tsc with every message below.
+// The `__verify` line (§3.3.9, X-12). What a model literal cannot see, because it lives in another model (an inverse
+// declared by another model's ref, a roll-up over a relation back, a FK named in `label`), is checked once over the whole
+// generated names index: `.norbital/names.ts` ends with `export const __verify: Check<Verify> = true;`, which fails tsc
+// with every message below. A model's own ref fields check their target and inverse in `model()`.
 import type {
 	Columns,
 	DuplicateInverse,

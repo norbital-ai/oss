@@ -5,7 +5,6 @@
 // child conversation run under the delegating turn's `as`, never wider. Hosts drive `drain`; nothing here names a host.
 // A claimed turn holds a one-minute lease its heartbeat renews and queues the platform run `agent.turn`, so a turn
 // whose process died is taken over once the lease lapses (rule 48), and never runs twice at once.
-import { randomUUID } from 'node:crypto';
 import {
 	Cause,
 	Clock,
@@ -17,15 +16,27 @@ import {
 	FiberSet,
 	Layer,
 	Option,
-	Predicate,
 	Queue,
 	Schedule,
 	Schema,
 	Scope,
 	Stream
 } from 'effect';
+import * as EffectArray from 'effect/Array';
 import { Port, type PortFailure } from '../port.ts';
-import { Ai, Convert, Files, Geo } from '../ports.ts';
+import {
+	Ai,
+	Bundler,
+	Convert,
+	Docs,
+	Files,
+	GuestIsolates,
+	Geo,
+	Http,
+	Images,
+	Logs,
+	Mcp
+} from '../ports.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import {
 	Agents as AgentsTag,
@@ -47,7 +58,6 @@ import {
 import { Unavailable } from '../../decl/errors.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { PHASES, stepLabel, type StudioPhase } from '../../shell/studio/model.ts';
 import { TurnHandlers } from './turns.ts';
 import { attachmentsFor, fileAttachments } from './attachments.ts';
 import { Chain } from '../write/sql.ts';
@@ -63,8 +73,8 @@ import {
 	MSG,
 	preview
 } from '../conversations/store.ts';
-import { localOf } from '@norbital-ai/std/zone';
-import type { EngineManifest } from '../manifest.ts';
+import { bindingsAt } from '../query/reader.ts';
+import type { EngineManifest, SkillSpec } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { AiRequest, AiResponse, Authority, Bindings } from '../contracts.ts';
@@ -78,7 +88,6 @@ import {
 	outline,
 	outputText,
 	projection,
-	scratchPath,
 	state,
 	system
 } from './context.ts';
@@ -116,21 +125,13 @@ import {
 	ReadInput,
 	type AttachmentPort,
 	type HostTool,
-	type SandboxPort,
 	type ToolContext,
 	type WorkspacePort
 } from './tools.ts';
 export { inferFacility } from './ai.ts';
 export { mcpServers } from './mcp.ts';
 export { type As } from './schema.ts';
-export type {
-	HostTool,
-	HostToolContext,
-	AttachmentPort,
-	SandboxPort,
-	WorkspacePort
-} from './tools.ts';
-import { logged } from '../guest/telemetry.ts';
+export type { HostTool, HostToolContext, AttachmentPort, WorkspacePort } from './tools.ts';
 export type AgentEngine = {
 	manifest: EngineManifest;
 	db: TenantDbShape;
@@ -142,7 +143,14 @@ export type AgentEngine = {
 	files?: Files['Service'] | undefined;
 	/** The host's document converter: the `document` tool. */
 	convert?: Convert['Service'] | undefined;
+	/** Fresh guest isolates for `run_js`, and the outbound HTTP a granted script's `http` makes. */
+	guest?: GuestIsolates['Service'] | undefined;
+	http?: Http['Service'] | undefined;
+	/** The host's confined bundler: `run_js` runs a skill's file only where there is one. */
+	bundler?: Bundler['Service'] | undefined;
 };
+/** A host skill (the platform authoring skill, a person's own): its tree's listing and each file's bytes by path. */
+export type HostSkill = SkillSpec & { read(path: string): Promise<Uint8Array> };
 export type DrainOptions = {
 	force?: boolean | undefined;
 	receipts?: readonly Receipt[] | undefined;
@@ -166,19 +174,18 @@ export type AgentConfig = {
 	mcp?: McpHost;
 	attachments?: AttachmentPort;
 	geocoder?: Geo['Service'];
-	/** The released source and its type index (`workspace_search`, `workspace_type`, the outline); a host reads it from the artifact (`workspaceFiles`). */
+	docs?: Docs['Service'];
+	/** The released source (`workspace_search`, the outline); a host reads it from the artifact (`workspaceFiles`). */
 	workspace?: WorkspacePort;
 	/** The person's Studio draft for `workspace_search { draft: true }`; none where they author nothing. */
 	draft?: (a: Authority) => Promise<WorkspacePort | undefined>;
-	/** Ad-hoc compute for `sandbox_run` (in-app staff turns, under the `sandbox_run` tool capability). */
-	sandbox?: SandboxPort;
 	/** Host tools (Workspace Studio authoring, browser, personal skills): a fixed list, or the person's catalogue per turn. */
 	hostTools?:
 		readonly HostTool[] | ((a: Authority, conversation: string) => Promise<readonly HostTool[]>);
 	/** Host skills merged into `skill` on in-app staff turns: the platform authoring skill, the person's own skills. */
-	skills?: (a: Authority) => Promise<{
-		readonly [name: string]: string;
-	}>;
+	skills?: (a: Authority) => Promise<{ readonly [name: string]: HostSkill }>;
+	/** The workspace's skill files (the artifact's `skills/<name>/`, `skillFiles`): a file run reads its tree here. */
+	skillFiles?: (skill: string, path: string) => Promise<Uint8Array>;
 	/** A host call that has not answered by then becomes a background job (default 30 s). */
 	hostInlineMs?: number;
 	/** The deadlines port's `announce` for this scope: a recovery run's due time (rule 52a). */
@@ -225,10 +232,6 @@ export const NUDGE = {
 	cutTool:
 		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.'
 } as const;
-/** The whole results of this conversation's clipped tool calls, as `read_output` and the scratch files hold them. */
-const Outputs = Schema.Array(
-	Schema.Struct({ call: Schema.String, tool: Schema.String, full: Schema.Json })
-);
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
 	failed:
@@ -241,9 +244,7 @@ export const FIXED = {
 	limit:
 		'I stopped here: the assistant reached its spending limit for this month. An administrator can raise it in Settings.',
 	unreported:
-		'The workspace restarted before this reported back, so whether it finished is unknown. Check before running it again.',
-	/** A call whose own last step restarts the workspace (a publish's switch-over): the step it reached is its answer. */
-	restartedDuring: (step: string) => `The workspace restarted during: ${step}`
+		'The workspace restarted before this reported back, so whether it finished is unknown. Check before running it again.'
 } as const;
 /** A confirmation card's second answer (a repeat press, another tab): refused, so its call never runs twice. */
 export const ANSWERED = 'This was already answered.';
@@ -261,8 +262,24 @@ const j = (v: unknown): Json => (v === undefined || v === null ? null : JSON.str
 export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const e = config.engine,
 		m: EngineManifest = e.manifest,
-		db = e.db;
+		db = e.db,
+		mcpPort = yield* Mcp,
+		logs = yield* Logs;
 	const authorities = new Authorities(m, 'agent');
+	// the workspace's skills, their files read from the release where the host binds them
+	const skillFiles = config.skillFiles;
+	const workspaceSkills: ToolContext['skills'] = Object.fromEntries(
+		Object.entries(m.agent.skills).map(([name, skill]) => [
+			name,
+			{
+				...skill,
+				read: (path: string) =>
+					skillFiles === undefined
+						? Port.unavailable('agent.skills', 'the host binds no skill files')
+						: Port.attempt('agent.skills', () => skillFiles(name, path))
+			}
+		])
+	);
 	const resolve =
 		config.resolve ??
 		Effect.fn('Agents.work1')(function* (as: As) {
@@ -302,7 +319,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	/** A shared message piece: the rows reach live transcripts as written, with no re-read (rule 65). */
 	const changed = Effect.fn('Agents.changed')(function* (
 		statement: { text: string; params: readonly Json[] },
-		deleted = false
+		deleted: boolean = false
 	) {
 		const chain = new Chain();
 		chain.params.push(...statement.params);
@@ -350,6 +367,19 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	/** A row the step wrote that must not stay (a failed step's partial reply): its removal reaches live transcripts too. */
 	const discard = (row: MessageRow) =>
 		changed(q('DELETE FROM sys_message m WHERE id = $1', row.id), true);
+	/** A reply or a call a turn left unfinished (a stop, a closed generation, a dead process) is finished as interrupted. */
+	const unfinished = (conversation: string, of?: string) =>
+		changed(
+			q(
+				`UPDATE sys_message m SET state = NULL, meta = CASE WHEN role = 'assistant' THEN coalesce(meta, '{"tag":"cut"}'::jsonb) ELSE meta END,
+				content = CASE WHEN role = 'tool' THEN content || '{"result":{"error":"The turn ended before this call finished."}}'::jsonb ELSE content END
+				WHERE conversation = $1 AND state IN ('streaming', 'running') ${of === undefined ? '' : 'AND turn = $2'}`,
+				of === undefined ? [conversation] : [conversation, of]
+			)
+		).pipe(
+			Effect.tapCause(Effect.logWarning),
+			Effect.catch(() => Effect.succeed([]))
+		);
 	const conversation = Effect.fn('Agents.work5')(function* (id: string) {
 		const [r] = yield* db.read([q(`SELECT ${CONV_COLS} FROM sys_conversation WHERE id = $1`, id)]);
 		const row = r!.rows[0];
@@ -439,7 +469,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			)
 		);
 	const start = Effect.fn('Agents.start')(function* (o: Parameters<AgentsShape['start']>[0]) {
-		const id = randomUUID();
+		const id = globalThis.crypto.randomUUID();
 		yield* convChanged(
 			q(
 				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, integration, parent, model) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING to_jsonb(c) AS r`,
@@ -513,13 +543,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
             WHERE id = ${chain.p(id)} AND (status = 'idle' OR (status = 'running' AND lease_until < ${chain.p(now)}::timestamptz)) RETURNING *`
 		);
 		enqueueTurn(chain, id, due, 'EXISTS (SELECT 1 FROM c)');
+		// `taken` reads the statement's snapshot, before the claim: the turn was running under a lapsed lease
 		const [result] = yield* db.returning(
 			Schema.Struct({
 				images: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				next_due: Schema.NullOr(Schema.String)
+				next_due: Schema.NullOr(Schema.String),
+				taken: Schema.Boolean
 			}),
 			chain.sql(
-				`(SELECT coalesce(jsonb_agg(to_jsonb(c)), '[]'::jsonb) FROM c) AS images, ${nextDue(chain)}::text AS next_due`
+				`(SELECT coalesce(jsonb_agg(to_jsonb(c)), '[]'::jsonb) FROM c) AS images, ${nextDue(chain)}::text AS next_due,
+				EXISTS (SELECT 1 FROM sys_conversation WHERE id = ${chain.p(id)} AND status = 'running') AS taken`
 			)
 		);
 		if (result === undefined)
@@ -528,7 +561,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			);
 		if (result.images.length > 0) e.live.publish(conversationCommit(result.images));
 		if (result.next_due !== null) yield* config.announce?.(result.next_due) ?? Effect.void;
-		return result.images.length === 1;
+		return result.images.length !== 1 ? null : result.taken ? 'takeover' : 'claimed';
 	});
 	/** Idle only when nothing is queued; otherwise the turn goes on (a message landed as it finished). */
 	const settle = Effect.fn('Agents.work9')(function* (id: string) {
@@ -585,18 +618,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			].join('\n\n'),
 			// the reviewer reads what was done, not the executor's reasoning
 			messages: [
-				...messages(projection(rows, conv).filter((r) => r.role !== 'system')).map((x) =>
-					x.role !== 'assistant' ||
-					x.content === null ||
-					typeof x.content !== 'object' ||
-					Array.isArray(x.content)
-						? x
-						: {
-								...x,
-								content: Object.fromEntries(
-									Object.entries(x.content).filter(([k]) => k !== 'reasoning')
-								) as Json
-							}
+				...messages(
+					projection(rows, conv).filter((r) => r.role !== 'system'),
+					undefined,
+					false
 				),
 				{ role: 'user', content: 'Give your verdict.' }
 			],
@@ -637,8 +662,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		id: string,
 		options: DrainOptions = {}
 	): Effect.fn.Return<{ ran: boolean; reply: MessageRow | null }, EngineError, Scope.Scope> {
-		if (!(yield* claim(id))) return { ran: false, reply: null };
-		const turn = randomUUID();
+		const admitted = yield* claim(id);
+		if (admitted === null) return { ran: false, reply: null };
+		const turn = globalThis.crypto.randomUUID();
 		yield* Effect.gen(function* () {
 			const now = (yield* config.bindings).now;
 			yield* db.write(
@@ -654,7 +680,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			Effect.repeat(Schedule.spaced(AGENT_LIMITS.heartbeatMs)),
 			Effect.forkScoped
 		);
-		const mcp = yield* mcpSessions(m, config.mcp);
+		const mcp = yield* mcpSessions(m, config.mcp).pipe(Effect.provideService(Mcp, mcpPort));
 		let mcpTools: Effect.Success<ReturnType<typeof mcp.tools>> | null = null,
 			mcpFor = '';
 		const receipts: Receipt[] = [...(options.receipts ?? [])],
@@ -679,7 +705,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const { cost, call } = r.usage,
 				over = cost !== undefined && cost > AI_GAUGE_USD,
 				incomplete = cost === undefined || call === undefined;
-			yield* logged({
+			yield* logs.write({
 				at: (yield* config.bindings).now,
 				severity: incomplete || over ? 'warn' : 'info',
 				event: 'ai.call',
@@ -833,7 +859,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				code === 'unavailable' && detail === NO_AI
 					? 'AI provider not configured'
 					: (detail ?? code);
-			yield* logged({
+			yield* logs.write({
 				at: (yield* config.bindings).now,
 				severity: code === 'unavailable' ? 'warn' : 'error',
 				event: 'agent.failed',
@@ -897,6 +923,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		});
 		yield* Effect.gen(function* () {
 			let inputs: string[] = [];
+			// rule 48: a turn taken over mid-work (its generation closed, its process died) goes on from its transcript and
+			// answers; its input was already consumed, so only a turn that had replied or was waiting on a card settles
+			if (admitted === 'takeover') {
+				yield* unfinished(id);
+				const last = (yield* transcript(id)).at(-1);
+				force ||=
+					last?.meta?.tag !== 'reply' && last?.meta?.tag !== 'failed' && last?.state !== 'confirm';
+			}
 			for (;;) {
 				// an administrator's runtime settings narrow the model and cap the month's spend (settings.ts)
 				const settings = yield* agentSettings(db);
@@ -1003,19 +1037,25 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 										: Promise.resolve([])
 								)
 							: config.hostTools;
-				const skills =
-					hostSide && config.skills !== undefined
-						? {
-								...m.agent.skills,
-								...(yield* Port.attempt('agent.skills', () => config.skills!(authority)))
-							}
-						: m.agent.skills;
+				const skills: ToolContext['skills'] = {
+					...workspaceSkills,
+					...(hostSide && config.skills !== undefined
+						? Object.fromEntries(
+								Object.entries(
+									yield* Port.attempt('agent.skills', () => config.skills!(authority))
+								).map(([name, skill]) => [
+									name,
+									{
+										...skill,
+										read: (path: string) => Port.attempt('agent.skills', () => skill.read(path))
+									}
+								])
+							)
+						: {})
+				};
 				const who = rows.findLast((r) => r.as !== null && r.role === 'user');
-				const tz = (
-					who?.content as {
-						tz?: Json;
-					} | null
-				)?.tz;
+				const said = who === undefined || who.role === 'tool' ? null : who.content,
+					tz = typeof said === 'object' ? said?.tz : undefined;
 				const b = yield* config.bindings;
 				const ctx: ToolContext = {
 					engine: e,
@@ -1025,13 +1065,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					turn,
 					mode,
 					inApp: inApp(conv),
-					tz: typeof tz === 'string' ? tz : undefined,
+					tz,
 					question: who?.text ?? undefined,
 					child: conv.parent !== null,
 					delegation:
 						conv.parent === null &&
 						(conv.envoy === null ? staff : envoySpec?.delegation === 'enabled'),
 					mcp,
+					logs,
 					mcpTools,
 					hostTools,
 					attachments: config.attachments,
@@ -1041,7 +1082,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							? yield* Port.attempt('agent.draft', () => config.draft!(authority))
 							: undefined,
 					geocoder: config.geocoder,
-					sandbox: config.sandbox,
+					docs: config.docs,
 					skills,
 					agents: ['workspace', ...Object.keys(m.envoys)],
 					receipts,
@@ -1115,18 +1156,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 									call
 								)
 							]))[0]!.rows[0]?.['full'] ?? undefined
-						);
-					}),
-					outputs: Effect.fn('Agents.outputs')(function* () {
-						const [r] = yield* db.read([
-							q(
-								`SELECT content->>'id' AS call, content->>'name' AS tool, meta->'full' AS full FROM sys_message
-						WHERE conversation = $1 AND role = 'tool' AND meta->>'tag' = 'output' ORDER BY seq`,
-								id
-							)
-						]);
-						return yield* Schema.decodeUnknownEffect(Outputs)(r?.rows ?? []).pipe(
-							Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error))
 						);
 					}),
 					history: Effect.fn('Agents.work23')(function* (text, scope, limit) {
@@ -1574,7 +1603,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						if (
 							result !== null &&
 							typeof result === 'object' &&
-							!Array.isArray(result) &&
+							!EffectArray.isArray<typeof result>(result) &&
 							'error' in result
 						) {
 							const n = (failures.get(key) ?? 0) + 1;
@@ -1586,14 +1615,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_output`
 						const shown = answer.bounded === true ? result : bounded(result).value,
 							clipped = JSON.stringify(shown) !== JSON.stringify(result);
-						// the model does not see its own call ids, so the note names the one read_output takes; the whole text is
-						// also a file in the worktree a workspace sandbox run sees, for code to grep or parse
-						const path = scratchPath(id, call.id, call.name);
-						const more =
-							`clipped: the whole result (${new TextEncoder().encode(outputText(result)).length} bytes) is ${path}. read_output { call: '${call.id}', offset } reads it on` +
-							(config.sandbox === undefined
-								? ''
-								: `; sandbox_run { workspace: true, … } sees it at /workspace/${path}`);
+						// the model does not see its own call ids, so the note names the one read_output takes
+						const more = `clipped: the whole result (${new TextEncoder().encode(outputText(result)).length} bytes). read_output { call: '${call.id}', offset } reads it on`;
 						yield* wrote(
 							yield* rewrite(
 								step,
@@ -1671,21 +1694,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 				})
 			),
-			Effect.ensuring(
+			Effect.onExit((exit) =>
 				Effect.gen(function* () {
 					// a reply or a call the turn left unfinished (a stop, a crash) is finished as interrupted before the turn reads idle
 					if (streaming !== null) yield* streaming.end();
-					yield* changed(
-						q(
-							`UPDATE sys_message m SET state = NULL, meta = CASE WHEN role = 'assistant' THEN coalesce(meta, '{"tag":"cut"}'::jsonb) ELSE meta END,
-				content = CASE WHEN role = 'tool' THEN content || '{"result":{"error":"The turn ended before this call finished."}}'::jsonb ELSE content END
-				WHERE conversation = $1 AND state IN ('streaming', 'running') `,
-							id
-						)
-					).pipe(
-						Effect.tapCause(Effect.logWarning),
-						Effect.catch(() => Effect.succeed([]))
-					);
+					yield* unfinished(id, turn);
+					// interrupted while still running (a stop sets `stopped` first): the generation closed (a drain, a handover,
+					// a reload). The turn keeps its lapsing lease and its queued agent.turn run, so the next owner answers (rule 48)
+					if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return;
 					yield* convChanged(
 						q(
 							`WITH s AS (UPDATE sys_conversation SET status = 'idle', lease_until = NULL WHERE id = $1 AND status = 'running' RETURNING *),
@@ -1740,7 +1756,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			q(
 				`UPDATE sys_message m SET content = content || '{"resumed":true}'::jsonb
 				WHERE m.role = 'tool' AND m.state IS NULL AND m.meta->>'tag' = 'confirm' AND NOT m.content ? 'resumed'
-				AND (m.content->'result' ? 'restarted' OR m.content->'result'->>'error' = $1)
+				AND m.content->'result'->>'error' = $1
 				AND NOT EXISTS (SELECT 1 FROM sys_message a WHERE a.conversation = m.conversation AND a.seq > m.seq AND a.role = 'assistant')`,
 				FIXED.unreported
 			)
@@ -2076,23 +2092,19 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						j({
 							id: call.id,
 							name: call.name,
-							...(Predicate.isObject(r.content) && typeof r.content['studio'] === 'string'
-								? { studio: r.content['studio'] }
+							...(r.role === 'tool' && r.content.studio !== undefined
+								? { studio: r.content.studio }
 								: {}),
 							result
 						})
 					)
 				);
-			// a host call's steps reach the card live while it runs; the settle replaces them
-			const steps = yield* Queue.unbounded<StudioPhase>();
-			/** The last phase the call reported: what the card says if the workspace restarts mid-call. */
-			let reached: StudioPhase | null = null;
 			const answer = Effect.gen(function* () {
 				let result: Json = { declined: true };
 				if (approve) {
 					const authority = yield* resolve(as);
 					if (authority === null) result = { error: FIXED.stale };
-					else if (call.name === 'read') {
+					else if (call.name === 'query') {
 						const input = yield* Schema.decodeUnknownEffect(ReadInput)(call.input).pipe(
 							Effect.mapError((error) =>
 								BoltError.make('invalidInput', 'decode', error.message, error)
@@ -2116,47 +2128,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							query: name.slice(dot + 1),
 							input: input.input ?? {}
 						});
-					} else if (call.name !== 'act') {
-						// a held host tool runs on approval as the person, still gated as when it was offered
-						const staff = authority.actor.kind === 'member' && !authority.actor.external;
-						const tools =
-							!staff || config.hostTools === undefined
-								? []
-								: typeof config.hostTools === 'function'
-									? yield* Port.attempt('agent.hostTools', () =>
-											typeof config.hostTools === 'function'
-												? config.hostTools(authority, r.conversation)
-												: Promise.resolve([])
-										).pipe(Effect.catch(() => Effect.succeed([])))
-									: config.hostTools;
-						const host = tools.find(
-							(t) =>
-								t.name === call.name &&
-								t.confirm === true &&
-								(authority.admin || authority.capabilities.tools.includes(t.name))
-						);
-						result =
-							host === undefined
-								? { error: `${call.name} is no longer offered to you.` }
-								: yield* Port.attempt(host.name, (signal) =>
-										host.call(
-											call.input,
-											{
-												actor: authority.actor,
-												conversation: r.conversation,
-												turn: r.turn ?? r.id,
-												callId: call.id,
-												attach: () => {},
-												progress: (phase) => {
-													reached = phase;
-													Queue.offerUnsafe(steps, phase);
-												}
-											},
-											signal
-										)
-									).pipe(
-										Effect.catch((failure) => Effect.succeed<Json>({ error: failure.message }))
-									);
 					} else
 						result = yield* performAll(
 							{
@@ -2178,31 +2149,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				}
 				return result;
 			});
-			const result = yield* Effect.scoped(
-				Effect.gen(function* () {
-					yield* Stream.fromQueue(steps).pipe(
-						Stream.runForEach((step) =>
-							changed(
-								q(
-									`UPDATE sys_message m SET content = content || jsonb_build_object('progress', $2::text) WHERE id = $1 AND state = 'approved' `,
-									messageId,
-									step
-								)
-							).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
-						),
-						Effect.forkScoped
-					);
-					return yield* answer;
-				})
-			).pipe(
+			const result = yield* answer.pipe(
 				Effect.catch((failure) => Effect.succeed<Json>({ error: failure.message })),
-				// the call can outlive this generation (a publish restarts the workspace): the card still gets its answer
+				// the call can outlive this generation: the card still gets its answer
 				Effect.onInterrupt(() =>
-					settle(
-						reached === null
-							? { error: FIXED.unreported }
-							: { restarted: FIXED.restartedDuring(stepLabel(PHASES.indexOf(reached))) }
-					).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+					settle({ error: FIXED.unreported }).pipe(
+						Effect.tapCause(Effect.logWarning),
+						Effect.ignore
+					)
 				)
 			);
 			yield* settle(result);
@@ -2236,14 +2190,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const tools = new Map<string, number>();
 			for (const r of rows)
 				if (r.role === 'tool') {
-					const n = String(
-						(
-							r.content as {
-								name?: Json;
-							} | null
-						)?.name ?? 'tool'
-					);
-					tools.set(n, (tools.get(n) ?? 0) + 1);
+					tools.set(r.content.name, (tools.get(r.content.name) ?? 0) + 1);
 				}
 			const out = [
 				`# ${conv.title ?? 'Conversation'}`,
@@ -2266,7 +2213,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	return api;
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;
-/** What the host adds to every agent (its tools, skills, sandbox, draft source). */
+/** What the host adds to every agent (its tools, skills, draft source). */
 export type AgentHostConfig = Omit<AgentConfig, 'engine' | 'ai' | 'bindings' | 'announce'>;
 export const AgentHost = Context.Reference<AgentHostConfig>('bolt/AgentHost', {
 	defaultValue: () => ({})
@@ -2282,22 +2229,19 @@ export const AgentsLive = Layer.effectContext(
 			approvals = yield* Approvals;
 		const ai = yield* Ai,
 			files = yield* Files,
+			images = yield* Images,
 			convert = yield* Convert,
+			guest = yield* GuestIsolates,
+			http = yield* Http,
+			bundler = yield* Effect.serviceOption(Bundler),
 			geo = yield* Geo,
+			docs = yield* Docs,
 			wake = yield* Wake,
 			turnHandlers = yield* TurnHandlers,
 			runHandlers = yield* RunHandlers,
 			host = yield* AgentHost;
 		const bindings = Clock.currentTimeMillis.pipe(
-			Effect.map((now) => {
-				const at = new Date(now).toISOString();
-				return {
-					now: at,
-					today: localOf(now, manifest.workspace.tz).date,
-					tz: manifest.workspace.tz,
-					params: {}
-				};
-			})
+			Effect.map((now) => bindingsAt(now, manifest.workspace.tz))
 		);
 		const api = yield* agents({
 			...host,
@@ -2310,13 +2254,17 @@ export const AgentsLive = Layer.effectContext(
 				act: writes.act,
 				approvals,
 				files,
-				convert
+				convert,
+				guest,
+				http,
+				...Option.match(bundler, { onNone: () => ({}), onSome: (b) => ({ bundler: b }) })
 			},
 			ai,
 			bindings,
 			announce: wake.at,
-			attachments: host.attachments ?? fileAttachments(db, files),
-			geocoder: host.geocoder ?? geo
+			attachments: host.attachments ?? fileAttachments(db, files, images),
+			geocoder: host.geocoder ?? geo,
+			docs
 		});
 		yield* turnHandlers.register('Agent', api.drain);
 		const handlers = {

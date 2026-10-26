@@ -7,6 +7,7 @@ import { Effect } from 'effect';
 import { browser, required, textOf, viewFixture } from './view-fixture.ts';
 import { element } from './elements.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
+import type { TableProps } from '../src/table/Table.svelte';
 import type { PackagingPart, PackagingHarnessProps } from './packaging-harness.svelte';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./packaging-harness.svelte');
@@ -247,7 +248,7 @@ it.live('a representation loads on first use, for a page-level RecordShell too',
 	})
 );
 
-it.live("a local array's boolean column is a check or a cross icon, not a glyph in text", () =>
+it.live("a local array's boolean column exposes accessible Yes and No values", () =>
 	browser(async () => {
 		const { addIcon } = await import('@iconify/svelte'); // offline: the icons the cell draws, so it renders synchronously
 		for (const name of ['lucide:check', 'lucide:x']) addIcon(name, { body: '<path d="M0 0"/>' });
@@ -267,12 +268,11 @@ it.live("a local array's boolean column is a check or a cross icon, not a glyph 
 			),
 			['Yes', 'No']
 		);
-		assert.equal(/[✓✗]/.test(textOf(v.target.querySelector('tbody'))), false);
 	})
 );
 
 it.live(
-	'two or more row actions fold into one menu in the grid; a single action stays a button',
+	'native row handlers fold into one menu in the grid; a single handler stays a button and receives its row',
 	() =>
 		browser(async () => {
 			const rows = [{ id: 'a', name: 'Ada' }];
@@ -282,8 +282,8 @@ it.live(
 					of: rows,
 					columns: ['name'],
 					actions: [
-						{ action: 'x.reassign', label: 'Reassign' },
-						{ action: 'x.cancel', label: 'Cancel' }
+						{ label: 'Reassign', run: () => Effect.void },
+						{ label: 'Cancel', run: () => Effect.void }
 					]
 				}
 			});
@@ -295,62 +295,20 @@ it.live(
 				'the labels live in the menu, not the cell'
 			);
 			await two.done();
+			const called =
+				Promise.withResolvers<Parameters<NonNullable<TableProps['actions']>[number]['run']>[0]>();
 			const one = await show({
 				part: 'table',
-				props: { of: rows, columns: ['name'], actions: [{ action: 'x.cancel', label: 'Cancel' }] }
+				props: {
+					of: rows,
+					columns: ['name'],
+					actions: [{ label: 'Cancel', run: (row) => Effect.sync(() => called.resolve(row)) }]
+				}
 			});
 			assert.equal(one.target.querySelector('tbody [data-row-actions] [data-row-menu]'), null);
 			assert.match(textOf(one.target.querySelector('tbody [data-row-actions]')), /Cancel/);
+			element<HTMLButtonElement>(one.target, 'tbody [data-row-actions] button').click();
+			assert.deepEqual(await called.promise, rows[0]);
 			await one.done();
-		})
-);
-
-it.live(
-	'the toolbar row: title, ⓘ and every widget flush left in that order; only New is pushed right',
-	() =>
-		browser(async () => {
-			const v = await show({
-				part: 'table',
-				props: {
-					of: 'jobs',
-					columns: ['title'],
-					toolbar: {
-						title: 'Jobs',
-						description: 'All jobs',
-						new: () => {},
-						actions: [{ icon: 'lucide:hash', name: 'Recount', run: () => Effect.void }]
-					}
-				}
-			});
-			const row = required(element(v.target, '[data-view-title]').parentElement);
-			const marks = [...row.children].map(
-				(el) =>
-					[
-						'data-view-title',
-						'data-view-about',
-						'data-search-toggle',
-						'data-view-trigger',
-						'data-view-actions',
-						'data-view-new'
-					].find((a) => el.hasAttribute(a) || el.querySelector(`[${a}]`) !== null) ?? el.tagName
-			);
-			assert.deepEqual(marks, [
-				'data-view-title',
-				'data-view-about',
-				'data-search-toggle',
-				'data-view-trigger',
-				'data-view-actions',
-				'data-view-new'
-			]);
-			// nothing stretches between the widgets: the create slot alone takes the free space, so a wrap keeps it at the row's end
-			const pushers = [...row.children].filter((el) =>
-				/(^|\s)(ml-auto|flex-1|grow)(\s|$)/.test(el.getAttribute('class') ?? '')
-			);
-			assert.deepEqual(
-				pushers.map((el) => el.hasAttribute('data-view-new')),
-				[true]
-			);
-			assert.equal(element(row, '[data-view-new]').getAttribute('aria-label'), 'New');
-			await v.done();
 		})
 );

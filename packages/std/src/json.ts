@@ -8,6 +8,5 @@ export const parseJsonResult = (text: string): Result.Result<unknown, SyntaxErro
 
 /** The parsed value, or null for invalid JSON (never a throw). */
 export function parseJson(text: string): unknown {
-	const result = parseJsonResult(text);
-	return result._tag === 'Success' ? result.success : null;
+	return Result.getOrNull(parseJsonResult(text));
 }

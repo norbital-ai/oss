@@ -1,4 +1,4 @@
-import type { Obj } from '../conversations/value.ts';
+import type { RowData } from '../contracts.ts';
 const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => ({ text, params });
 // Envoys (§4.4, P22, rules 57–60; authority by P32). An envoy is a source role (`src/agent/envoy/+<id>.envoy.ts`)
 // deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
@@ -13,6 +13,7 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // sender header (a steer: the running turn takes it at its next step); its turn holds the authority `identity/actor.ts`
 // compiles — a group's the envoy's policies alone, a linked member's DM theirs joined (`dm: 'union'`) or bound (`'envoy'`).
 import { Clock, Context, Effect, FiberSet, Layer, Predicate, Schema } from 'effect';
+import * as EffectArray from 'effect/Array';
 import type { EnvoySpec } from '../../decl/runtime/agent.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
@@ -40,7 +41,7 @@ import { DELIVER, EPOCH } from '../integrations/outbound.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import { canonicalHandle, memberByHandle } from './senders.ts';
-import { logged } from '../guest/telemetry.ts';
+import { Logs } from '../ports.ts';
 export type EnvoysConfig = {
 	engine: Pick<AgentEngine, 'manifest' | 'db'>;
 	conversations: Pick<ConversationsShape, 'send'>;
@@ -82,6 +83,7 @@ type Arrived = {
 };
 export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 	const { manifest: m, db } = cfg.engine;
+	const logs = yield* Logs;
 	const clock =
 		cfg.clock ?? Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString()));
 	const authorities = cfg.authorities ?? new Authorities(m, 'envoys');
@@ -97,7 +99,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		envoy: string,
 		a: Arrived,
 		key: 'envoys.receive' | 'envoys.unrecognised',
-		turn = false
+		turn: boolean = false
 	) {
 		const desk = yield* authorities.envoy(db, {
 			envoy,
@@ -151,7 +153,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 	const admit = Effect.fn('Agents.admit')(function* (input: Json) {
 		const x = Predicate.isObject(input) ? input : {};
 		const id = String(x['message'] ?? ''),
-			mentions = Array.isArray(x['mentions'])
+			mentions = EffectArray.isArray(x['mentions'])
 				? x['mentions'].filter((j): j is string => typeof j === 'string')
 				: [];
 		const [res] = yield* db.read([
@@ -178,7 +180,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			conv = def === undefined ? undefined : conversationOf(def);
 		if (spec === undefined || def === undefined || conv === undefined) {
 			// fail closed: an instance deployed to an envoy this release no longer declares answers nobody
-			yield* logged({
+			yield* logs.write({
 				at: yield* clock,
 				severity: 'warn',
 				event: 'envoy.unknown',
@@ -199,7 +201,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 				group: r['kind'] === 'group',
 				email: conv.kind === 'email',
 				handle: conv.handle,
-				label: def.conversation === undefined ? def.driver : name,
+				label: def.driver,
 				sender: String(r['sender'] ?? ''),
 				senderName: (r['sender_name'] ?? null) as string | null,
 				text: String(r['text']),
@@ -221,7 +223,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			// A group message that named ids and was still not taken is the one case nobody can explain from outside: record
 			// what the provider actually sent, so `Studio → Runtime` answers why a mention did not reach the envoy.
 			if (a.group && a.mentions.length > 0)
-				yield* logged({
+				yield* logs.write({
 					at: yield* clock,
 					severity: 'info',
 					event: 'conversation.unaddressed',
@@ -336,7 +338,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			def = conv === undefined ? undefined : definitionOf(m, String(conv['definition']));
 		if (conv === undefined || def === undefined) return 0;
 		const email = conversationOf(def)?.kind === 'email',
-			last = (conv['last'] ?? {}) as Obj;
+			last = (conv['last'] ?? {}) as RowData;
 		const message = email
 			? `jsonb_build_object('to', jsonb_build_array($4::text), 'subject', $5::text, 'text', m.text, 'thread', $6::text)`
 			: `jsonb_build_object('to', $1::text, 'text', m.text)`;
@@ -352,7 +354,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		);
 		const source = messagePiece(
 			chain,
-			`UPDATE sys_message m SET direction = 'outbound', status = 'queued', class = 'message', integration = $2, message = ${message},
+			`UPDATE sys_message m SET direction = 'outbound', status = 'queued', integration = $2, message = ${message},
             epoch = ${EPOCH}, sent_at = $3::timestamptz, next_attempt_at = $3::timestamptz
             WHERE m.conversation = $1 AND m.role = 'assistant' AND m.direction IS NULL AND coalesce(m.text, '') <> '' AND m.state IS DISTINCT FROM 'streaming'
             AND ${email ? `m.meta->>'tag' IN ('reply', 'failed')` : `(m.meta IS NULL OR m.meta->>'tag' IN ('reply', 'failed'))`}`,

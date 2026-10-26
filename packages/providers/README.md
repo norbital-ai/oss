@@ -19,3 +19,8 @@ Entries:
 Each integration instance pairs with its own account and seals its credentials on the host; the
 package reads no host environment. `@whiskeysockets/baileys` is an optional dependency of the
 WhatsApp Web provider.
+
+Embedding hosts bind `openAiEmbeddings`'s `files(key, max)` to their tenant-scoped file reader.
+The engine sends stored-file metadata; the provider loads each batch in the host, so image bytes
+do not cross the Cell. Inline file bytes remain available for host-supplied inputs. File reads
+share the embedding call's cancellation and propagate their original failure.

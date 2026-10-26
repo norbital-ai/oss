@@ -4,8 +4,7 @@ import { HttpClient, HttpClientRequest } from 'effect/unstable/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';
-import { storedCredential } from '../link.ts';
-import { field, hostCall, same, str, withFetch, type Obj } from '../util.ts';
+import { field, hostCall, same, str, storedCredential, withFetch, type Obj } from '../util.ts';
 
 const API = 'https://slack.com/api';
 const TRANSIENT = new Set([

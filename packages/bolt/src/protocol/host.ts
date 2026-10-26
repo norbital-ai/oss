@@ -2,7 +2,6 @@ import { Context, Effect, Fiber, FiberSet, Layer, Option, Record, Ref } from 'ef
 import type * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
 import { Outbound, Runs } from '../engine/services.ts';
-import { withRequestCpu } from '../engine/guest/request-cpu.ts';
 import { NOT_IN_PREVIEW, ShellConfig, ShellHandler } from '../shell/host.ts';
 import { BoltError } from './errors.ts';
 import { AgentCallTable, AgentTurns, boltRoutes, RateLimits } from './http.ts';
@@ -75,7 +74,7 @@ export const BoltHostLive = Layer.effect(
 								if (Option.isSome(answer)) return answer;
 							}
 							return Option.none();
-						}).pipe(withRequestCpu)
+						})
 					).pipe(Effect.flatMap(Fiber.join));
 				}),
 			settled: turns.settled

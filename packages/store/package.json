@@ -1,0 +1,56 @@
+{
+	"name": "@norbital-ai/store",
+	"version": "0.0.2",
+	"description": "One typed data layer for Bolt workspaces and their hosts: schema declarations, the SQL each read, write and migration emits, and the decoders of its rows. It never connects to a database.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/store"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/store",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		},
+		"./sqlserver": {
+			"types": "./build/sqlserver.d.ts",
+			"default": "./build/sqlserver.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/store",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@norbital-ai/std": "workspace:*",
+		"fflate": "0.8.3"
+	},
+	"peerDependencies": {
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@electric-sql/pglite": "^0.5.5",
+		"@types/node": "^26.2.0",
+		"effect": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "4.1.11"
+	}
+}

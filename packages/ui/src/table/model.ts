@@ -1,10 +1,9 @@
 import { formatValue as show } from '../kinds/kind.js';
 import type { Fields, Kind } from '../kinds/kind.js';
 import type { CollectionExposure } from '../kinds/context.js';
-import type { Row, Values } from '../collection/types.js';
+import type { Values } from '../collection/types.js';
 import type { ViewBolt } from '../client/contract.js';
 import { fill, humanize, msg } from '../text/messages.js';
-import { objectsOf, rowsOf } from '../read/results.js';
 import { valueAt } from '../cell/value.js';
 export type TableState = { after: string | null; q: string };
 /** Cursor and search from the URL (`?<key>.after=…`, final-ui rule 8). */
@@ -24,20 +23,13 @@ export function writeTableState(
 	put('q', s.q);
 	return out;
 }
-/** L-BOLT-495: `/semantic <text>` reads the search box by meaning (rule 16), fused with the lexical match. */
-export const SEMANTIC_SEARCH = /^\/semantic(\s+|$)/;
 /**
- * The toolbar's `/<name>` search indexes: `semantic` over `search.semantic` (text, sent as `/semantic <text>`), then each
- * named similarity the viewer reads and each named query it holds, taking its typed `input`. `why` says why the box cannot
- * run one: an input a person never types (a raw vector, a derived kind), or a view that cannot show ranked rows (`typed` false).
+ * The toolbar's `/<name>` search modes: `semantic` over `search.semantic` (its input the box's text), then each of the
+ * model's search indexes (`search.indexes`), taking its typed `input` as a small form. Each answers its nearest rows in
+ * place of the page. `why` says why the box cannot run one: an input a person never types (a raw vector, a derived
+ * kind), or a view that cannot show ranked rows (`typed` false).
  */
-export type SearchIndex = {
-	name: string;
-	hint: string;
-	via?: 'similar' | 'query';
-	input?: Fields;
-	why: string | null;
-};
+export type SearchIndex = { name: string; hint: string; input?: Fields; why: string | null };
 export function searchIndexes(
 	x: CollectionExposure | undefined,
 	typed: boolean,
@@ -46,58 +38,26 @@ export function searchIndexes(
 	const untypable = (k: Kind): boolean =>
 		['seq', 'sum', 'count', 'vector', 'state'].includes(k.kind) ||
 		(k.kind === 'list' && k.of.kind === 'number');
-	const named = (
-		via: 'similar' | 'query',
-		of: { readonly [n: string]: { input: Fields; description: string } } = {}
-	): SearchIndex[] =>
-		Object.entries(of).map(([name, s]) => {
-			const raw = Object.entries(s.input).find(([, k]) => untypable(k))?.[0];
-			return {
-				name,
-				hint: s.description,
-				via,
-				input: s.input,
-				why:
-					raw !== undefined
-						? fill(text.raw, { field: s.input[raw]?.label ?? humanize(raw) })
-						: typed
-							? null
-							: text.view
-			};
-		});
+	const why = (raw: string | undefined, input: Fields) =>
+		raw !== undefined
+			? fill(text.raw, { field: input[raw]?.label ?? humanize(raw) })
+			: typed
+				? null
+				: text.view;
 	return [
-		...(x?.semantic === true ? [{ name: 'semantic', hint: text.meaning, why: null }] : []),
-		...named('similar', x?.similarity),
-		...named('query', x?.queries)
+		...(x?.semantic === true
+			? [{ name: 'semantic', hint: text.meaning, why: why(undefined, {}) }]
+			: []),
+		...Object.entries(x?.indexes ?? {}).map(([name, s]) => ({
+			name,
+			hint: s.description,
+			input: s.input,
+			why: why(Object.entries(s.input).find(([, k]) => untypable(k))?.[0], s.input)
+		}))
 	];
 }
 /** A `/` the box holds with no index chosen yet: the picker's text, never a search term. */
 export const SLASH = /^\/\S*$/;
-/**
- * The rows a `/<query>` index answers, in its order: a query whose output is a list of objects naming `collection` by an
- * `id` field returns those ids (the view reads the rows); any other output is taken as the rows themselves.
- */
-export function queryIds(
-	out: unknown,
-	output: Kind | undefined,
-	collection: string
-): { ids: string[] } | { rows: readonly Row[] } {
-	const item =
-		output?.kind === 'list' && output.of.kind === 'object' ? output.of.fields : undefined;
-	const key = Object.entries(item ?? {}).find(
-		([, k]) => k.kind === 'id' && k.of === collection
-	)?.[0];
-	if (key === undefined) return { rows: rowsOf(out) };
-	return {
-		ids: [
-			...new Set(
-				objectsOf(out)
-					.map((r) => r[key])
-					.filter((v): v is string => typeof v === 'string')
-			)
-		]
-	};
-}
 /** A local array's search over its columns (PH GAP-15: client-side). */
 export const searchRows = <R extends Values>(
 	rows: readonly R[],

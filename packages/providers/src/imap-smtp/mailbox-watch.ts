@@ -1,6 +1,6 @@
 import { ImapFlow } from 'imapflow';
 import { Effect, Queue, Semaphore, Stream } from 'effect';
-import { pinnedLookup, publicDestination } from '@norbital-ai/bolt/engine';
+import { pinnedLookup, publicDestination } from '@norbital-ai/bolt/node';
 import { checkServerIdentity } from 'node:tls';
 import { ProviderUnavailable, type ProviderFailure } from '../errors.ts';
 import { mailCall, serverFailure, type Cursor, type Login, type Mailbox } from './model.ts';

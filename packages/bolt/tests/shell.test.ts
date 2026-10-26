@@ -2,10 +2,12 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, afterEach, describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
-import { Effect, Layer, ManagedRuntime, Option, Result, Schema } from 'effect';
+import { Context, Effect, Layer, ManagedRuntime, Option, Result, Schema } from 'effect';
 import { mountEdge } from '@norbital-ai/ui/effect';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Files } from '../src/engine/ports.ts';
+import { DbError } from '../src/engine/errors.ts';
+import { Files, Images } from '../src/engine/ports.ts';
+import { imagesPort } from '../src/node/images.ts';
 import { manifest as baseManifest } from './engine-fixture.ts';
 import { canOpenKiosk } from '../src/decl/runtime/kiosk.ts';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
@@ -35,9 +37,7 @@ import {
 	foldPhase,
 	languageOf,
 	reach,
-	reviewAge,
-	reviewFreshness,
-	reviewNextOwner,
+	ageText,
 	routedEnvironment,
 	settleDrafts,
 	stepLabel,
@@ -47,6 +47,10 @@ import {
 	type StudioState
 } from '../src/shell/studio/model.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
+/** The Node host's image port, as the agent's attachments read through it. */
+const hostImages = Effect.map(Layer.build(Images.fromAbi(imagesPort)), (context) =>
+	Context.get(context, Images)
+);
 const decodeOp = (value: unknown) => Option.getOrNull(Schema.decodeUnknownOption(StudioOp)(value));
 
 beforeEach(() => {
@@ -211,25 +215,22 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...baseManifest,
 			models: {
 				jobs: {
+					description: 'Work orders on site',
 					label: 'title',
 					fields: { title: { kind: 'text' }, pay: { kind: 'money' }, notes: { kind: 'text' } },
 					search: { text: ['title'] }
 				},
-				sites: { label: 'name', fields: { name: { kind: 'text' } } }
+				sites: { description: 'Work sites', label: 'name', fields: { name: { kind: 'text' } } }
 			},
 			relationships: { 'jobs.site': { to: 'sites', optional: true } },
 			collections: {
 				jobs: {
-					description: 'Work orders on site',
 					read: { fields: ['title', 'pay'], relations: ['site'] },
-					actions: {
-						close: { description: 'Close', input: {}, target: 'record' },
-						sweep: { description: 'x', input: {}, internal: true }
-					}
+					update: { input: { columns: ['title'] } }
 				}
 			},
 			integrations: {}
-		})
+		} satisfies EngineManifest)
 	);
 	it('exposes candidate inputs for source approval routes without granting ordinary writes', () => {
 		const source: EngineManifest = {
@@ -248,16 +249,14 @@ describe('exposure (the boot catalog ui reads)', () => {
 				jobs: {
 					read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }],
 					history: [],
-					create: [],
-					update: [],
+					create: [
+						{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'], approval: true }
+					],
+					update: [
+						{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'], approval: true }
+					],
 					delete: [],
-					approval: {
-						create: [{ fields: ['title'], steps: [['reviewers']] }],
-						update: [{ fields: ['title'], steps: [['reviewers']] }],
-						delete: []
-					},
 					queries: [],
-					actions: [],
 					moves: {},
 					masks: {}
 				}
@@ -267,7 +266,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			create: { columns: ['title'], proposalOnly: true },
 			update: { columns: ['title'] }
 		});
-		expect(auth.collections['jobs']?.update).toEqual([]);
+		expect(auth.collections['jobs']?.update.filter((arm) => arm.approval !== true)).toEqual([]);
 	});
 	it('exposes native integration instance forms by their grants without exposing the host fence', () => {
 		const admin = exposure(em, { ...member([]), admin: true })['sys_integration'];
@@ -289,9 +288,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					create: [],
 					update: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['configuration'] }],
 					delete: [],
-					approval: { create: [], update: [], delete: [] },
 					queries: [],
-					actions: [],
 					moves: {},
 					masks: {}
 				}
@@ -356,15 +353,15 @@ describe('exposure (the boot catalog ui reads)', () => {
 			collections: {
 				jobs: {
 					read: { fields: ['title', 'pay'], relations: ['site'] },
-					update: { input: { columns: ['title', 'site'] } }
+					update: { input: { columns: ['title', 'site'] } },
+					syncs: { jobs: { with: 'operations', read: true } }
 				}
 			},
 			integrations: {
 				operations: {
 					description: 'Operations source',
 					driver: 'sqlserver',
-					configuration: {},
-					feeds: { jobs: { into: 'jobs', key: ['remote_id'] } }
+					configuration: {}
 				}
 			}
 		};
@@ -373,8 +370,8 @@ describe('exposure (the boot catalog ui reads)', () => {
 			update: { columns: ['title'] },
 			fields: { pay: { kind: 'money' } },
 			relations: { site: { targets: ['sites'] } },
-			readonlyFields: { pay: 'integrationOwned', site: 'ownedParent' },
-			integration: 'operations.jobs'
+			readonlyFields: { pay: 'syncOwned', site: 'ownedParent' },
+			syncs: { jobs: { kind: 'remote', with: 'operations' } }
 		});
 		expect(exposure(source, member([]))['jobs']).toBeUndefined();
 		const auth: Authority = {
@@ -386,20 +383,18 @@ describe('exposure (the boot catalog ui reads)', () => {
 					create: [],
 					update: [],
 					delete: [],
-					approval: { create: [], update: [], delete: [] },
 					queries: [],
-					actions: [],
 					moves: {},
 					masks: {}
 				}
 			}
 		};
-		expect(exposure(source, auth)['jobs']?.integration).toBeUndefined();
-		expect(
-			exposure(source, { ...auth, automations: ['operations.jobs'] })['jobs']?.integration
-		).toBe('operations.jobs');
+		expect(exposure(source, auth)['jobs']?.syncs).toBeUndefined();
+		expect(exposure(source, { ...auth, automations: ['jobs.sync.jobs'] })['jobs']?.syncs).toEqual({
+			jobs: { kind: 'remote', with: 'operations' }
+		});
 	});
-	it('sends relations, the held actions and the fields masked on some rows; never an unexposed field', () => {
+	it('sends relations, guarded write inputs and fields masked on some rows; never an unexposed field', () => {
 		const auth: Authority = {
 			...member([]),
 			collections: {
@@ -407,11 +402,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 					read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }],
 					history: [],
 					create: [],
-					update: [],
+					update: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'] }],
 					delete: [],
-					approval: { create: [], update: [], delete: [] },
 					queries: [],
-					actions: ['close'],
 					moves: {},
 					masks: { pay: { t: 'const', value: false } }
 				}
@@ -423,7 +416,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 				search: ['title'],
 				fields: { title: { kind: 'text' }, pay: { kind: 'money' } },
 				relations: { site: { targets: ['sites'], optional: true } },
-				actions: { close: { input: {}, target: 'record', description: 'Close' } },
+				update: { columns: ['title'] },
 				masked: ['pay'],
 				description: 'Work orders on site'
 			}
@@ -439,7 +432,10 @@ describe('exposure (the boot catalog ui reads)', () => {
 					jobs: {
 						...em.models['jobs']!,
 						label: 'code',
-						computed: { code: { kind: 'text', expr: { field: 'title' } } }
+						computed: {
+							code: { kind: 'text', expr: { field: 'title' } },
+							quantity: { kind: 'decimal', scale: 6, expr: 1 }
+						}
 					}
 				},
 				collections: { jobs: { ...em.collections['jobs'], read: { fields: 'all' } } }
@@ -447,7 +443,11 @@ describe('exposure (the boot catalog ui reads)', () => {
 		);
 		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({
 			label: ['code'],
-			fields: { title: { kind: 'text' }, code: { kind: 'text' } }
+			fields: {
+				title: { kind: 'text' },
+				code: { kind: 'text' },
+				quantity: { kind: 'decimal', scale: 6 }
+			}
 		});
 		expect(exposure(em, { ...member([]), admin: true })['jobs']!.fields).not.toHaveProperty('code');
 	});
@@ -553,9 +553,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					create: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'] }],
 					update: [],
 					delete: [],
-					approval: { create: [], update: [], delete: [] },
 					queries: [],
-					actions: [],
 					moves: {},
 					masks: {}
 				}
@@ -601,9 +599,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					create: [],
 					update: [],
 					delete: [],
-					approval: { create: [], update: [], delete: [] },
 					queries: [],
-					actions: [],
 					moves: {},
 					masks: {}
 				}
@@ -672,6 +668,7 @@ describe('preview environments drop the meta tools', () => {
 				inbox: 2,
 				push: null,
 				visitor: null,
+				automations: {},
 				catalog: {}
 			},
 			'/',
@@ -800,7 +797,7 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 				catch: (cause) => new Error(String(cause))
 			})
 	);
-	it('a visitor subscribes read/get views of granted reads only; members subscribe anything', () => {
+	it('a visitor subscribes model pages and records of granted queries only; members subscribe anything', () => {
 		const admits = BoltRoutes['POST /__bolt/live'].admits;
 		if (admits === undefined) throw new Error('The live route has no admission rule.');
 		const visitor: Authority = {
@@ -813,30 +810,28 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 					create: [],
 					update: [],
 					delete: [],
-					approval: { create: [], update: [], delete: [] },
 					queries: [],
-					actions: [],
 					moves: {},
 					masks: {}
 				}
 			}
 		};
-		expect(admits(visitor, { m: 'read', a: ['openings', {}] })).toBe(true);
+		expect(admits(visitor, { m: 'query', a: ['openings', {}] })).toBe(true);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'get', a: ['openings', 'id'] })
+			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['openings', { id: 'id' }] })
 		).toBe(true);
-		expect(BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'read', a: ['orders', {}] })).toBe(
+		expect(BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['orders', {}] })).toBe(
 			false
 		);
 		expect(
 			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'aggregate', a: ['openings', {}] })
 		).toBe(false);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['openings', 'q', {}] })
+			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['openings.q', {}] })
 		).toBe(false);
 		expect(BoltRoutes['POST /__bolt/live'].admits(visitor, undefined)).toBe(false);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(member([]), { m: 'query', a: ['openings', 'q', {}] })
+			BoltRoutes['POST /__bolt/live'].admits(member([]), { m: 'query', a: ['openings.q', {}] })
 		).toBe(true);
 	});
 });
@@ -879,6 +874,7 @@ describe('sidebar model', () => {
 		inbox: 2,
 		push: null,
 		visitor: null,
+		automations: {},
 		catalog: {}
 	});
 	const tree = (
@@ -939,7 +935,7 @@ describe('sidebar model', () => {
 			page: 'clock'
 		});
 		expect(route(m, new URL('http://x/kiosk/nope/clock'))).toEqual({ kind: 'notFound' });
-		expect(framePolicy(m, '/kiosk/lobby/welcome')).toBe('frame-ancestors *');
+		expect(framePolicy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
 		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'lobby', page: 'welcome' })).toBe(true);
 		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'clock', page: 'clock' })).toBe(false);
 		expect(
@@ -994,64 +990,58 @@ describe('Studio port boundary', () => {
 			decodeOp([])
 		]).toEqual([null, null, null, null, null, null]);
 	});
-	it('decodes the collaboration ops (L-COL-188, 190): switch, rebase, preview, exit and mr.*', () => {
+	it("decodes a merge with the destructive steps it accepts, and a held request's decision", () => {
 		expect([
-			decodeOp({ op: 'switch', target: '3' }),
-			decodeOp({ op: 'rebase' }),
-			decodeOp({ op: 'preview' }),
-			decodeOp({ op: 'exit' })
+			decodeOp({ op: 'change.merge', id: '1' }),
+			decodeOp({ op: 'change.merge', id: '1', accept: ['drop column leave.days'] }),
+			decodeOp({ op: 'approval.decide', id: 'a1', kind: 'approved' }),
+			decodeOp({ op: 'approval.decide', id: 'a1', kind: 'rejected' })
 		]).toEqual([
-			{ op: 'switch', target: '3' },
-			{ op: 'rebase' },
-			{ op: 'preview' },
-			{ op: 'exit' }
+			{ op: 'change.merge', id: '1' },
+			{ op: 'change.merge', id: '1', accept: ['drop column leave.days'] },
+			{ op: 'approval.decide', id: 'a1', kind: 'approved' },
+			{ op: 'approval.decide', id: 'a1', kind: 'rejected' }
 		]);
-		expect(decodeOp({ op: 'mr.open', title: 'Leave rules' })).toEqual({
-			op: 'mr.open',
-			title: 'Leave rules'
-		});
-		expect(decodeOp({ op: 'mr.decide', id: '1', kind: 'changes_requested', reason: 'no' })).toEqual(
-			{ op: 'mr.decide', id: '1', kind: 'changes_requested', reason: 'no' }
-		);
-		expect(decodeOp({ op: 'mr.merge', id: '1' })).toEqual({ op: 'mr.merge', id: '1' });
 		expect([
-			decodeOp({ op: 'switch' }),
-			decodeOp({ op: 'mr.open', title: '' }),
-			decodeOp({ op: 'mr.decide', id: '1', kind: 'lgtm' }),
-			decodeOp({ op: 'mr.comment', id: '1' }),
-			decodeOp({ op: 'mr.ready' })
+			decodeOp({ op: 'change.merge', id: '1', accept: [''] }),
+			decodeOp({ op: 'change.merge' }),
+			decodeOp({ op: 'approval.decide', id: 'a1', kind: 'changes_requested' }),
+			decodeOp({ op: 'approval.decide', kind: 'approved' })
+		]).toEqual([null, null, null, null]);
+	});
+	it('decodes current change operations and refuses incomplete input', () => {
+		expect([
+			decodeOp({ op: 'change.open', title: 'Leave rules' }),
+			decodeOp({ op: 'change.open', id: '3' }),
+			decodeOp({ op: 'preview' }),
+			decodeOp({ op: 'preview', id: '3' }),
+			decodeOp({ op: 'change.close', id: '3' })
+		]).toEqual([
+			{ op: 'change.open', title: 'Leave rules' },
+			{ op: 'change.open', id: '3' },
+			{ op: 'preview' },
+			{ op: 'preview', id: '3' },
+			{ op: 'change.close', id: '3' }
+		]);
+		expect(decodeOp({ op: 'change.open', title: 'x'.repeat(300) })).toEqual({
+			op: 'change.open',
+			title: 'x'.repeat(200)
+		});
+		expect([
+			decodeOp({ op: 'change.open' }),
+			decodeOp({ op: 'change.open', title: '' }),
+			decodeOp({ op: 'change.close' }),
+			decodeOp({ op: 'preview', id: '' }),
+			decodeOp({ op: 'preview', id: 3 })
 		]).toEqual([null, null, null, null, null]);
 	});
-	it('names the next owner and freshness of a merge request, and its review age (L-BOLT-526)', () => {
-		const mr = (
-			state: 'draft' | 'ready' | 'merged' | 'closed',
-			behind = 0,
-			decision: 'approved' | 'changes_requested' | null = null
-		) => ({
-			state,
-			behind,
-			decision:
-				decision === null ? null : { kind: decision, by: 'r', at: 't', commit: 'h', reason: null }
-		});
-		expect([
-			reviewFreshness(mr('ready')),
-			reviewFreshness(mr('ready', 2)),
-			reviewFreshness(mr('closed', 2))
-		]).toEqual(['current', 'live_advanced', 'terminal']);
-		expect([
-			reviewNextOwner(mr('draft')),
-			reviewNextOwner(mr('ready')),
-			reviewNextOwner(mr('ready', 1)),
-			reviewNextOwner(mr('ready', 0, 'changes_requested')),
-			reviewNextOwner(mr('ready', 0, 'approved')),
-			reviewNextOwner(mr('merged'))
-		]).toEqual(['author', 'reviewer', 'author', 'author', 'reviewer', 'complete']);
+	it('says an age in short words', () => {
 		const t0 = Date.parse('2026-09-01T00:30:00.000Z');
 		expect([
-			reviewAge('2026-09-01T00:30:00.000Z', t0),
-			reviewAge('2026-09-01T00:30:00.000Z', t0 + 90 * 60_000),
-			reviewAge('bad', t0),
-			reviewAge(null, t0)
+			ageText('2026-09-01T00:30:00.000Z', t0),
+			ageText('2026-09-01T00:30:00.000Z', t0 + 90 * 60_000),
+			ageText('bad', t0),
+			ageText(null, t0)
 		]).toEqual(['just now', '1h', '', '']);
 	});
 	it('marks every ancestor folder of a draft, and edits a path in its language (L-BOLT-528)', () => {
@@ -1072,31 +1062,39 @@ describe('Studio port boundary', () => {
 			decodeManifest({
 				...baseManifest,
 				workspace: { tz: 'UTC', locale: 'en', secrets: { API: { label: 'API' } } },
-				collections: { b: {}, a: {} },
-				pipelines: { a: {} },
-				apps: { x: {} },
-				policies: { rep: {} },
+				models: {
+					b: { description: 'B records', label: 'name', fields: { name: { kind: 'text' } } },
+					a: { description: 'A records', label: 'name', fields: { name: { kind: 'text' } } }
+				},
+				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
+				policies: { rep: { description: 'Representative', grants: {} } },
 				envoys: {},
-				automations: { nightly: {} },
+				automations: { nightly: { description: 'Nightly task', runAs: 'trigger' } },
 				connections: { stripe: { integration: 'stripe' }, mail: { integration: 'mail' } },
-				mcp: { docs: {} },
-				integrations: { mail: {}, stripe: {} }
-			})
+				mcp: { docs: { description: 'Documentation tools', url: 'API' } },
+				integrations: {
+					mail: { description: 'Mailbox', driver: 'email' },
+					stripe: {
+						description: 'Stripe API',
+						driver: 'http',
+						http: { baseUrl: 'https://api.stripe.com' }
+					}
+				}
+			} satisfies EngineManifest)
 		);
 		const files = Object.fromEntries(
 			[
 				'src/+workspace.ts',
 				'src/+secrets.ts',
-				'src/data/collection/a/+collection.ts',
-				'src/data/collection/b/+collection.ts',
-				'src/data/collection/a/+pipeline.ts',
+				'src/data/model/a/+model.ts',
+				'src/data/model/b/+model.ts',
 				'src/app/x/+app.ts',
 				'src/access_control/policy/+rep.policy.ts',
 				'src/automation/+nightly.automation.ts',
 				'src/integration/stripe/+integration.ts',
 				'src/agent/mcp/+docs.mcp.ts',
 				'src/integration/mail/+integration.ts'
-			].map((p) => [p, ''])
+			].map((p) => [p, { bytes: 0 }])
 		);
 		const state: StudioState = {
 			commit: 'h',
@@ -1112,8 +1110,7 @@ describe('Studio port boundary', () => {
 			Object.entries(v.sections!).map(([s, es]) => [s, es.map((e) => e.name)])
 		);
 		expect(names).toEqual({
-			collections: ['a', 'b'],
-			pipelines: ['a'],
+			models: ['a', 'b'],
 			apps: ['x'],
 			kiosks: [],
 			policies: ['rep'],
@@ -1121,6 +1118,10 @@ describe('Studio port boundary', () => {
 			remotes: ['docs', 'mail', 'stripe'],
 			secrets: ['API']
 		});
+		expect(v.sections!.models).toEqual([
+			{ name: 'a', path: 'src/data/model/a/+model.ts' },
+			{ name: 'b', path: 'src/data/model/b/+model.ts' }
+		]);
 		expect(v.sections?.policies).toEqual([
 			{ name: 'rep', path: 'src/access_control/policy/+rep.policy.ts' }
 		]);
@@ -1138,20 +1139,21 @@ describe('Studio port boundary', () => {
 			decodeManifest({
 				...baseManifest,
 				workspace: { tz: 'UTC', locale: 'en' },
-				collections: { a: {} },
-				pipelines: {},
-				apps: { x: {} },
+				models: {
+					a: { description: 'A records', label: 'name', fields: { name: { kind: 'text' } } }
+				},
+				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: {},
 				envoys: {},
 				automations: {},
 				connections: {},
 				mcp: {},
 				integrations: {}
-			})
+			} satisfies EngineManifest)
 		);
 		const v = studioView({
 			commit: 'h',
-			files: { 'src/app/x/+app.ts': '' },
+			files: { 'src/app/x/+app.ts': { bytes: 0 } },
 			changes: [],
 			manifest,
 			log: [],
@@ -1213,7 +1215,10 @@ describe('Studio port boundary', () => {
 		expect(stepLabel(-1)).toBe('Getting ready…');
 	});
 	it('suggests a save description from the drafts; a save carries it as its message', () => {
-		const files = { 'src/i18n/+messages.ts': '', 'src/data/+payroll.model.ts': '' };
+		const files = {
+			'src/i18n/+messages.ts': { bytes: 0 },
+			'src/data/+payroll.model.ts': { bytes: 0 }
+		};
 		expect(suggestMessage({ 'src/i18n/+messages.ts': 'x' }, files)).toBe('Update i18n messages');
 		expect(suggestMessage({ 'src/data/+payroll.model.ts': null, 'notes.txt': 'n' }, files)).toBe(
 			'Remove payroll model, Add notes'
@@ -1252,15 +1257,18 @@ describe('read_attachment over the files port', () => {
 						}
 					]),
 				write: () => Effect.die('unused write'),
+				session: () =>
+					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
 				get: (key) => Effect.succeed(new TextEncoder().encode(`bytes of ${key}`)),
 				put: () => Effect.die('unused put'),
 				url: () => Effect.die('unused url'),
-				remove: () => Effect.die('unused remove')
+				remove: () => Effect.die('unused remove'),
+				download: () => Effect.die('unused download')
 			});
-			const a = fileAttachments(db, files);
+			const a = fileAttachments(db, files, yield* hostImages);
 			expect(yield* a.read({ id: 'f1', name: 'a.csv' }, 'sheet')).toEqual({
 				name: 'a.csv',
 				mime: 'text/csv',
@@ -1281,6 +1289,8 @@ describe('read_attachment over the files port', () => {
 				const db = TenantDb.typed({
 					read: () => Effect.succeed([{ rows: [{ key: 'k', mime: 'image/heic' }], affected: 0 }]),
 					write: () => Effect.die('unused write'),
+					session: () =>
+						Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 					transaction: () => Effect.die('unused transaction')
 				});
 				const files = Files.of({
@@ -1290,9 +1300,10 @@ describe('read_attachment over the files port', () => {
 						),
 					put: () => Effect.die('unused put'),
 					url: () => Effect.die('unused url'),
-					remove: () => Effect.die('unused remove')
+					remove: () => Effect.die('unused remove'),
+					download: () => Effect.die('unused download')
 				});
-				const got = yield* fileAttachments(db, files).read({ id: 'f' }, 'image');
+				const got = yield* fileAttachments(db, files, yield* hostImages).read({ id: 'f' }, 'image');
 				if (
 					typeof got !== 'object' ||
 					got === null ||
@@ -1317,9 +1328,32 @@ describe('workspace media', () => {
 });
 
 describe('embedding', () => {
-	it('only a site page may be framed by another website; every other page, and a route that is none, by the workspace alone', () => {
-		expect(framePolicy(m, '/app/hr/kiosk/clock')).toBe('frame-ancestors *');
-		expect(framePolicy(m, '/app/sales/deals')).toBe("frame-ancestors 'self'");
+	const partner = 'https://partner.example';
+	const embedded: EngineManifest = {
+		...m,
+		apps: {
+			...m.apps,
+			'hr/kiosk': {
+				title: 'Kiosk',
+				description: 'd',
+				icon: 'i',
+				pages: {
+					clock: { title: 'Clock', portal: true, embed: [partner, 'https://b.example:8443'] }
+				}
+			}
+		},
+		kiosks: { lobby: { ...m.kiosks!['lobby']!, embed: [partner] } }
+	};
+	it('a kiosk or portal page is framed by the workspace and the origins its `embed` names; without `embed`, by the workspace alone', () => {
+		expect(framePolicy(embedded, '/app/hr/kiosk/clock')).toBe(
+			`frame-ancestors 'self' ${partner} https://b.example:8443`
+		);
+		expect(framePolicy(embedded, '/kiosk/lobby/welcome')).toBe(`frame-ancestors 'self' ${partner}`);
+		expect(framePolicy(m, '/app/hr/kiosk/clock')).toBe("frame-ancestors 'self'");
+		expect(framePolicy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
+	});
+	it('every other page, and a route that is none, is framed by the workspace alone', () => {
+		expect(framePolicy(embedded, '/app/sales/deals')).toBe("frame-ancestors 'self'");
 		expect(framePolicy(m, '/sign-in')).toBe("frame-ancestors 'self'");
 		expect(framePolicy(m, '/nowhere')).toBe("frame-ancestors 'self'");
 	});
@@ -1381,6 +1415,27 @@ describe('shell HTTP failures', () => {
 			expect(
 				yield* Effect.flip(shellApi(async () => new Response('not JSON')).boot())
 			).toMatchObject({ status: 200, code: 'protocol' });
+		})
+	);
+	it.effect("decodes each route's answer once: a malformed value is a protocol failure", () =>
+		Effect.gen(function* () {
+			const answering = (value: unknown) => shellApi(async () => Response.json({ value }));
+			expect(
+				yield* answering({
+					email: true,
+					phone: false,
+					whatsapp: false,
+					signup: ['email'],
+					locale: 'en'
+				}).methods()
+			).toEqual({ email: true, phone: false, whatsapp: false, signup: ['email'], locale: 'en' });
+			expect(yield* Effect.flip(answering({ email: 'yes', locale: 'en' }).methods())).toMatchObject(
+				{ status: 200, code: 'protocol' }
+			);
+			expect(yield* Effect.flip(answering({ id: 7 }).verify('a', 'b'))).toMatchObject({
+				status: 200,
+				code: 'protocol'
+			});
 		})
 	);
 });

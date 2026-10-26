@@ -1,15 +1,20 @@
 // The act pipeline (rule 19), in rule order: rate admission → decode → marked-retry lookup → the caller judged once on
-// the submitted shape → observed-revision checks → one transform invocation → defaults, upsert resolution and
+// the submitted shape → observed-revision checks → batched per-verb callbacks → defaults and
 // model rules → post-image scope and the approval route → one write statement (rule 20), or the outcome record.
 import type { Json } from '../../decl/values.ts';
-import { Outcome as OutcomeSchema } from '../../protocol/schema.ts';
+const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
+import { encodeWire } from '@norbital-ai/std/wire';
+import { inputSchema } from '@norbital-ai/std/kind';
+import { audited, auditActor } from '../audit-operation.ts';
+import { Audit } from '../audit.ts';
+import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
+import { WriteOutcome as OutcomeSchema } from '../../protocol/schema.ts';
 import type {
 	RecordCapabilities,
 	RecordRestriction,
 	RecordParentContext
 } from '../../protocol/record-contracts.ts';
 import type {
-	ApprovalRoute,
 	Arm,
 	Authority,
 	Bindings,
@@ -17,30 +22,33 @@ import type {
 	Invocation,
 	InputPath,
 	Lock,
-	NoticeRow,
 	Outcome,
 	RowData,
 	Sql,
 	WriteArm
 } from '../contracts.ts';
-import type { Pred } from '../../protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
 import type { Bridge } from '../services.ts';
 import { layered, type EngineManifest } from '../manifest.ts';
 import type { GuestShape as GuestPort } from '../services.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { LIMITS } from '../contracts.ts';
 import { SerializationReplay, type EngineError } from '../errors.ts';
-import { BoltError } from '../../protocol/errors.ts';
+import { BoltError, fromStore } from '../../protocol/errors.ts';
 import { admitMove, readScope } from '../access/authority.ts';
-import { catalogOf, toPred } from '../access/pred.ts';
+import { catalogOf } from '../access/pred.ts';
 import { approvalHook } from '../approvals/approvals.ts';
+
+const MiB = 1024 * 1024;
+/** One act holds every row until its single insert: the cell's safe input budget, measured at ten-chunk bulk creates. */
+const ACT_INPUT_BYTES = 8 * MiB;
+const ACT_ROWS = 4_000;
 import { readHistory } from '../query/history.ts';
-import type { ApprovalMatchData } from '../approvals/configuration.ts';
-import { holders } from '../approvals/lock.ts';
-import { matches } from '../approvals/route.ts';
+import { heldFields, holders } from '../approvals/lock.ts';
+import { Snapshot } from '../approvals/snapshot.ts';
 import { Effect, Layer, Predicate, Schema } from 'effect';
+import * as EffectArray from 'effect/Array';
 import {
-	Activation,
 	Guest,
 	Live,
 	Links,
@@ -54,17 +62,26 @@ import {
 	type PlannedCommit,
 	type InvocationEvents
 } from '../services.ts';
-import { TenantDb as TenantDbService, TenantTx } from '../db/tenant-db.ts';
+import { TenantDb as TenantDbService } from '../db/tenant-db.ts';
 export type { ActRequest, ActResult } from '../services.ts';
-import { q, type Catalog } from '../../protocol/catalog.ts';
+import { indexColumn, nullRowSql, q, SYSTEM_COLUMNS, type Catalog } from '@norbital-ai/store';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
-import { compileGets } from '../query/sql.ts';
-import { coalescing, memoReads, readComposed, readEngine } from '../query/engine.ts';
-import { composable } from '../query/sql.ts';
-import { constraintIndex, type ConstraintMeta } from '../schema/ddl.ts';
-import { schemaSlice } from '../schema/plan.ts';
+import { toPred } from '../access/pred.ts';
+import { compileGets } from '@norbital-ai/store';
+import {
+	coalescing,
+	memoReads,
+	readComposed,
+	readEngine,
+	readTargets,
+	ReadDeps
+} from '../query/engine.ts';
+import { composable, readOptions } from '../query/reader.ts';
+import { constraintIndex } from '../schema/plan.ts';
+import { type ConstraintMeta } from '@norbital-ai/store';
 import {
 	compileCommit,
+	executeCommit,
 	compileOutcomeRecord,
 	committed,
 	CommitAnswer,
@@ -73,24 +90,13 @@ import {
 	type Write
 } from './commit.ts';
 import { changed, Flattener, modelKey, withDefaults, type Item, type Sel } from './flatten.ts';
-import {
-	canonical,
-	Chain,
-	decided,
-	KEY_REUSE,
-	minter,
-	sha256Hex,
-	databaseValue,
-	fingerprinting,
-	type Fingerprint
-} from './sql.ts';
-import { prospectiveBridge, retainsPrepared } from './prospective.ts';
+import { canonical, sha256Hex, databaseValue } from '@norbital-ai/store';
+import { decided, KEY_REUSE, minter, fingerprinting, type Fingerprint } from './sql.ts';
+import { prospectiveBridge } from './prospective.ts';
 import { replayOnce } from './replay.ts';
 import { erase } from './erase.ts';
-import { collectionNotices } from '../notifications/rules.ts';
 import { importPlan, importRefs, type ImportPlan } from './import.ts';
 import { embedQueued, embedWrites } from '../integrations/embed.ts'; // hook:integrations
-import { fedOf } from '../integrations/feeds.ts';
 import { instanceTransform } from '../integrations/instances.ts';
 import { SYSTEM } from '../../system/index.ts';
 /** The generated verbs (X-24): `import` (rule 30) and `erase` (rule 38e) included. */
@@ -98,24 +104,37 @@ type Obj = {
 	readonly [k: string]: Json;
 };
 export type Verb = 'create' | 'update' | 'delete' | 'upsert' | 'import' | 'erase';
-/** Rules 44–46 (P3): the approval flow's hook point. The write area only calls it. */
+/** The snapshot that opens or resumes a request. */
+export type StepsSnapshot = Extract<ApprovalSnapshot, { kind: 'steps' }>;
+export type HeldRecord = {
+	readonly id: string;
+	readonly action: 'create' | 'update' | 'delete';
+	readonly values: RowData;
+};
+/** Approval persistence belongs to the approval engine; the write engine evaluates the grant's callback. */
 export interface ApprovalHook {
-	/**
-	 * A denied write whose source routes match commits at once and opens a request: its route snapshot and the pieces
-	 * that persist it (and its notices) in the same statement. Direct grants bypass this hook.
-	 */
 	route(act: {
-		collection: string;
-		record: string;
-		action: 'create' | 'update' | 'delete';
-		authority: Authority;
-		bindings: Bindings;
-		/** Retry-stable request id seed: the invocation and its key. */
-		seed: string;
-		routes: readonly ApprovalRoute[];
-		/** The root collection's rows as written, for the notices' recipients. */
-		records: readonly { id: string; action: string; values: RowData }[];
+		readonly collection: string;
+		readonly record: string;
+		readonly action: 'create' | 'update' | 'delete';
+		readonly authority: Authority;
+		readonly bindings: Bindings;
+		readonly seed: string;
+		readonly snapshot: StepsSnapshot;
+		readonly records: readonly HeldRecord[];
 	}): Effect.Effect<NonNullable<Commit['approval']> | Outcome, EngineError>;
+	resubmit(act: {
+		readonly request: string;
+		readonly authority: Authority;
+		readonly bindings: Bindings;
+		readonly snapshot: StepsSnapshot | { readonly kind: 'allow' };
+		readonly changed: readonly {
+			readonly collection: string;
+			readonly id: string;
+			readonly fields: readonly string[];
+		}[];
+		readonly records: readonly HeldRecord[];
+	}): Effect.Effect<NonNullable<Commit['resubmit']>, EngineError>;
 }
 export type WriteEngine = {
 	log?: InvocationEvents;
@@ -125,8 +144,6 @@ export type WriteEngine = {
 	) => Effect.Effect<number>;
 	manifest: EngineManifest;
 	db: TenantDb;
-	/** Collections that attach a transform body (the manifest strips bodies). */
-	transforms?: ReadonlySet<string>;
 	guest?: GuestPort;
 	/**
 	 * The transform's reads as the workspace (rule 15); `tables()` names what it read, for rule 26's lock, and
@@ -146,39 +163,24 @@ export type WriteEngine = {
 	approval?: ApprovalHook;
 };
 type ModeContext = {
-	feed?:
-		| Extract<
-				ActMode,
-				{
-					_tag: 'Feed';
-				}
-		  >
-		| undefined;
-	sink?:
-		| Extract<
-				ActMode,
-				{
-					_tag: 'Record';
-				}
-		  >['sink']
-		| undefined;
-	pending?: ReadonlyMap<string, RowData> | undefined;
-	delivery: boolean;
+	sync?: Extract<ActMode, { _tag: 'Sync' }>;
+	sink?: Extract<ActMode, { _tag: 'Record' }>['sink'];
+	pending?: ReadonlyMap<string, RowData>;
 };
 export const modeContext = (mode: ActMode): ModeContext => {
 	switch (mode._tag) {
 		case 'Direct':
-			return { delivery: mode.delivery === true };
-		case 'Feed':
-			return { feed: mode, delivery: true };
+			return {};
+		case 'Sync':
+			return { sync: mode };
 		case 'Record':
-			return { sink: mode.sink, pending: mode.pending, delivery: false };
+			return { sink: mode.sink, pending: mode.pending };
 	}
 };
 const constraints = new WeakMap<EngineManifest, ReadonlyMap<string, ConstraintMeta>>();
 export const constraintsOf = (m: EngineManifest): ReadonlyMap<string, ConstraintMeta> => {
 	let c = constraints.get(m);
-	if (c === undefined) constraints.set(m, (c = constraintIndex(schemaSlice(m))));
+	if (c === undefined) constraints.set(m, (c = constraintIndex(m)));
 	return c;
 };
 type RefusalCode = Extract<
@@ -291,8 +293,8 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	const m = e.manifest,
 		cat = catalogOf(m),
 		b = r.bindings;
-	const { feed, sink, pending } = modeContext(r.mode);
-	const auth = feed ? { ...r.authority, admin: true } : r.authority; // hook:integrations — no grant admits a feed's page
+	const { sync, sink, pending } = modeContext(r.mode);
+	const auth = sync ? { ...r.authority, admin: true } : r.authority; // A sync page is workspace work, outside caller grants.
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
 	// 1. rate admission (host memory, rule 38): never recorded
 	const limited = e.admit?.(r);
@@ -307,8 +309,8 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			BoltError.make('unknownCollection', 'decode', `unknown collection '${r.collection}'`)
 		);
 	const sel = (
-		feed
-			? { columns: feed.fields } // hook:integrations
+		sync
+			? { columns: sync.fields } // hook:integrations
 			: r.verb === 'update'
 				? spec.update?.input
 				: r.verb === 'delete'
@@ -316,12 +318,13 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					: spec.create?.input
 	) as Sel | undefined;
 	const key0 = modelKey(m, r.collection);
-	// rule 28: an upsert names its record by `id` (a feed's by the model key), so it needs both arms
-	const byId = r.verb === 'upsert' && !feed;
+	// An upsert uses an explicit id or the model's natural key and needs both caller-facing write arms.
+	const byId = r.verb === 'upsert';
 	if (
 		sel === undefined ||
 		(r.verb === 'upsert' &&
-			(r.onConflict === undefined || (byId ? spec.update === undefined : key0.length === 0)))
+			(r.onConflict === undefined ||
+				(byId ? sync === undefined && spec.update === undefined : key0.length === 0)))
 	)
 		return none(refused('forbidden', `${r.collection} does not accept ${r.verb}.`));
 	// rule 30: an import's options and its refs by key values, resolved before decode (one read per target)
@@ -336,6 +339,25 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	const mint = minter(r.invocationId, b.now);
 	const f = new Flattener(m, cat, mint);
 	const inputs = imp?.rows ?? list(r.input, r.verb);
+	// A bulk act holds every row until one atomic insert: refuse before the flattener copies them past the cell's budget.
+	let inputBytes = 0;
+	for (const input of inputs) {
+		inputBytes += JSON.stringify(input)?.length ?? 0;
+		if (inputBytes > ACT_INPUT_BYTES)
+			return none(
+				refused(
+					'overflow',
+					`An act writes at most ${ACT_INPUT_BYTES / MiB} MiB of input; split the work into smaller acts.`
+				)
+			);
+	}
+	if (inputs.length > ACT_ROWS)
+		return none(
+			refused(
+				'overflow',
+				`An act writes at most ${ACT_ROWS} rows; split the work into smaller acts.`
+			)
+		);
 	if (byId) {
 		const invalid = inputs.findIndex((x) => !Predicate.isObject(x));
 		if (invalid >= 0)
@@ -379,7 +401,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					!onFile.has(k(r.collection, String(x['id'])))
 			)
 		: -1;
-	if (missing >= 0)
+	if (missing >= 0 && sync === undefined)
 		return none(
 			refused('notFound', `No ${r.collection} has this id.`, [
 				...(inputs.length > 1 || Array.isArray(r.input) ? [missing] : []),
@@ -399,23 +421,30 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			const { id, ...row } = x as Obj;
 			if (typeof id !== 'string') {
 				const at = f.items.length;
-				f.create(r.collection, sel, row, path);
+				f.create(
+					r.collection,
+					sel,
+					row,
+					path,
+					undefined,
+					key0.length === 0 ? undefined : { on: key0, onConflict: r.onConflict! }
+				);
 				upserted.push(f.items[at]?.change.id ?? null);
 			} else {
 				upserted.push(id);
-				if (r.onConflict === 'update')
+				if (sync !== undefined && !onFile.has(k(r.collection, id)))
+					f.create(r.collection, sel, row, path, undefined, undefined, id);
+				else if (r.onConflict === 'update')
 					f.update(
 						r.collection,
-						spec.update!.input as Sel,
+						sync === undefined ? (spec.update!.input as Sel) : sel,
 						id,
 						row,
 						r.observed?.[id] ?? null,
 						path
 					);
 			}
-		} else if (r.verb === 'upsert')
-			f.create(r.collection, sel, x, path, undefined, { on: key0, onConflict: r.onConflict! });
-		else if (r.verb === 'update')
+		} else if (r.verb === 'update')
 			f.update(
 				r.collection,
 				sel,
@@ -460,11 +489,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				path
 			);
 	});
-	feed?.removals.forEach((x, i) =>
-		'set' in x
-			? f.update(r.collection, sel, x.target, x.set, null, ['removed', i])
-			: f.delete(r.collection, x.target, null, ['removed', i])
-	);
+	sync?.deletes.forEach((id, i) => f.delete(r.collection, id, null, ['deletes', i]));
 	if (f.problems.length > 0) {
 		const [first] = f.problems;
 		return none(
@@ -475,7 +500,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			)
 		);
 	}
-	const owned = feedOwnership(m, r, f.items); // hook:integrations
+	const owned = syncOwnership(m, r, f.items); // hook:integrations
 	if (owned !== null) return none(owned);
 	if (f.items.length > LIMITS.changesPerAct)
 		return none(refused('overflow', `An act writes at most ${LIMITS.changesPerAct} rows.`));
@@ -490,15 +515,13 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	const own = yield* memoReads(yield* coalescing(e.db));
 	// rule 30: `prune` deletes the caller-readable rows inside its `Where` whose key the import does not name; an
 	// import's rows matched by key are resolved in the same round trip
-	const transforms = e.transforms?.has(r.collection) === true;
-	const matching =
-		imp !== undefined && transforms
-			? resolveUpserts(
-					own,
-					m,
-					f.items.filter((i) => i.parent === undefined && i.change.op === 'upsert')
-				)
-			: Effect.succeed(new Map<Item, RowData>());
+	const matching = f.items.some((item) => item.change.op === 'upsert')
+		? resolveUpserts(
+				own,
+				m,
+				f.items.filter((i) => i.change.op === 'upsert')
+			)
+		: Effect.succeed(new Map<Item, RowData>());
 	const [matched, pruneIds] = yield* Effect.all(
 		[matching, imp?.prune === undefined ? Effect.succeed([]) : imp.prune(own, auth, b, f.items)],
 		{ concurrency: 'unbounded' }
@@ -508,57 +531,50 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		if (!Array.isArray(ids)) return none(ids);
 		for (const id of ids) f.delete(r.collection, id, null, ['prune']);
 	}
-	// the host reads (rule 20's `a`): every existing row the input names and every ref it supplies, and — when the
-	// collection's transform will see them — the root rows in wire form (an import's matched ones too): one round
-	// trip, one statement
-	const wireIds = !transforms
-		? []
-		: [
-				...new Set([
-					...f.items
-						.filter(
-							(i) =>
-								i.parent === undefined &&
-								i.change.collection === r.collection &&
-								(i.change.op === 'update' || i.change.op === 'delete')
-						)
-						.map((i) => i.change.id),
-					...[...matched.values()].map((row) => String(row['id']))
-				])
-			];
-	const wired = wireRows(own, cat, r.collection, wireIds, b).pipe(
-		Effect.map(
-			(rows) =>
-				new Map(rows.flatMap((row, i) => (row === null ? [] : [[wireIds[i]!, row] as const])))
-		)
-	);
 	const visibility = new Map<string, boolean>();
 	const scope = { authority: auth, bindings: b, visibility };
-	const [wiredRows, pre] = yield* Effect.all(
+	const pre = yield* readRows(
+		own,
+		cat,
 		[
-			wired,
-			readRows(
-				own,
-				cat,
-				[
-					...f.items
-						.filter((i) => i.change.op === 'update' || i.change.op === 'delete')
-						.map((i) => [i.change.collection, i.change.id] as const),
-					...f.items.flatMap((i) =>
-						i.change.op === 'upsert' &&
-						i.change.on.length === 1 &&
-						i.change.on[0] === 'id' &&
-						typeof i.change.values['id'] === 'string'
-							? [[i.change.collection, i.change.values['id']] as const]
-							: []
-					),
-					...f.items.flatMap((i) => i.refs.map((x) => [x.to, x.id] as const))
-				],
-				scope
-			)
+			...f.items
+				.filter((i) => i.change.op === 'update' || i.change.op === 'delete')
+				.map((i) => [i.change.collection, i.change.id] as const),
+			...f.items.flatMap((i) =>
+				i.change.op === 'upsert' &&
+				i.change.on.length === 1 &&
+				i.change.on[0] === 'id' &&
+				typeof i.change.values['id'] === 'string'
+					? [[i.change.collection, i.change.values['id']] as const]
+					: []
+			),
+			...[...matched].map(([item, row]) => [item.change.collection, String(row['id'])] as const),
+			...f.items.flatMap((i) => i.refs.map((x) => [x.to, x.id] as const))
 		],
-		{ concurrency: 'unbounded' }
+		scope
 	);
+	for (const [item, row] of matched) {
+		const id = String(row['id']);
+		pre.set(k(item.change.collection, id), row);
+		if (byId && item.change.collection === r.collection && item.parent === undefined) {
+			const index = typeof item.change.path[0] === 'number' ? item.change.path[0] : 0;
+			upserted[index] = id;
+			onFile.set(k(r.collection, id), row);
+		}
+		if (item.change.op === 'upsert') {
+			const previous = item.change.id;
+			item.change.id = id;
+			for (const child of f.items)
+				if (child.parent?.collection === item.change.collection && child.parent.id === previous) {
+					child.parent = { ...child.parent, id };
+					if (child.change.op !== 'delete')
+						child.change =
+							child.change.op === 'update'
+								? { ...child.change, set: { ...child.change.set, [child.parent.fk]: id } }
+								: { ...child.change, values: { ...child.change.values, [child.parent.fk]: id } };
+				}
+		}
+	}
 	for (const [key, row] of pending ?? []) if (!pre.has(key)) pre.set(key, row); // hook:callables
 	// a relation predicate (a `via` arm, rule 35, or an `{ is }` scope) walks one-relations to any depth: every stored
 	// row it reaches is preloaded in one more round trip, only when the caller holds such an arm
@@ -581,8 +597,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			const judged = operations.filter(
 				(operation) =>
 					item.parent === undefined ||
-					(auth.collections[change.collection]?.[operation] ?? []).length > 0 ||
-					(auth.collections[change.collection]?.approval?.[operation] ?? []).length > 0
+					(auth.collections[change.collection]?.[operation] ?? []).length > 0
 			);
 			const named =
 				change.op === 'upsert' &&
@@ -642,6 +657,18 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		}
 	// 4. the caller, judged once on the shape it submitted (rules 19, 34, 35, 36)
 	const readable = (c: string, row: RowData) => readableBy(env, c, row, visibility);
+	const unchanged = f.items.flatMap((item): (readonly [string, string])[] =>
+		item.parent === undefined &&
+		item.change.op === 'update' &&
+		suppliedChanges(item, pre.get(k(item.change.collection, item.change.id)) ?? null).length === 0
+			? [[item.change.collection, item.change.id]]
+			: []
+	);
+	const resubmitting = new Set(
+		(auth.admin ? [] : yield* holders(e.db, unchanged, auth.actor))
+			.filter((request) => request.state === 'ChangesRequested' && request.requester)
+			.map((request) => k(request.collection, request.record))
+	);
 	for (const it of f.items) {
 		const c = it.change,
 			named =
@@ -670,16 +697,19 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		}
 		if (
 			auth.admin ||
-			(it.parent !== undefined &&
-				(auth.collections[c.collection]?.[action] ?? []).length === 0 &&
-				(auth.collections[c.collection]?.approval?.[action] ?? []).length === 0)
+			(it.parent !== undefined && (auth.collections[c.collection]?.[action] ?? []).length === 0)
 		)
 			continue; // `via` the parent
 		const supplied = suppliedChanges(it, row ?? null);
 		const verdict = judgePre(auth, env, c.collection, action, row ?? null, supplied);
-		if (action === 'update' && supplied.length === 0 && verdict !== true)
+		if (
+			action === 'update' &&
+			supplied.length === 0 &&
+			verdict !== true &&
+			!resubmitting.has(k(c.collection, named))
+		)
 			return none(refused('forbidden', 'You may not make this change.', c.path));
-		const candidates = candidateRoutes(m, env, c.collection, action, row ?? null, supplied);
+		const candidates = approvalArms(env, c.collection, action, row ?? null, supplied);
 		if (verdict !== true && candidates.length === 0)
 			return none(
 				refused(
@@ -760,7 +790,6 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				pre,
 				imp,
 				byId ? upserted : undefined,
-				wiredRows,
 				own,
 				visibility
 			);
@@ -776,10 +805,13 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					id: w.id,
 					revision: w.op === 'create' ? 1 : w.revision + 1
 				}));
+				const request =
+					planned.commit.approval?.requestId ??
+					(planned.commit.resubmit?.pending === true ? planned.commit.resubmit.request : undefined);
 				return none(
-					planned.commit.approval
-						? { kind: 'pendingApproval', requestId: planned.commit.approval.requestId, records }
-						: { kind: 'committed', output: planned.commit.output, records }
+					request === undefined
+						? { kind: 'committed', output: planned.commit.output, records }
+						: { kind: 'pendingApproval', requestId: request, records }
 				);
 			}
 			if (imp?.dryRun)
@@ -793,9 +825,11 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				);
 			return yield* Effect.gen(function* () {
 				yield* take('info', 'act.settled', { writes: planned.commit.writes.length });
-				const rows = yield* e.db.returning(
-					CommitAnswer,
-					compileCommit(m, cat, { ...planned.commit, ...common }),
+				const rows = yield* executeCommit(
+					e.db,
+					m,
+					cat,
+					{ ...planned.commit, ...common },
 					planned.lock
 				);
 				const row = rows[0];
@@ -808,6 +842,10 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				return {
 					outcome,
 					captured: row.captured,
+					...(row.read_guards_applied === true &&
+					(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+						? { readGuardsConsumed: true as const }
+						: {}),
 					v: e.committed === undefined ? 0 : yield* e.committed(row, outcome)
 				};
 			}).pipe(
@@ -852,23 +890,6 @@ function hopPaths(
 				: p.t === 'not'
 					? walk(p.of)
 					: [];
-	const matching = (match: ApprovalMatchData | undefined): Pred[] =>
-		match === undefined
-			? []
-			: [
-					...(match.record === undefined ? [] : [toPred(m, c, match.record)]),
-					...(match.previous === undefined ? [] : [toPred(m, c, match.previous)]),
-					...(match.and ?? []).flatMap(matching),
-					...(match.or ?? []).flatMap(matching),
-					...matching(match.not)
-				];
-	const proposals = operations
-		.flatMap((operation) => (operation === 'read' ? [] : (a?.approval?.[operation] ?? [])))
-		.flatMap((route) => [
-			...(route.where === undefined ? [] : [toPred(m, c, route.where)]),
-			...(route.previous === undefined ? [] : [toPred(m, c, route.previous)]),
-			...matching(route.match)
-		]);
 	const arms = operations.flatMap((operation) => a?.[operation] ?? []);
 	return [
 		...arms.flatMap(
@@ -877,8 +898,7 @@ function hopPaths(
 					previous?: Pred;
 				}
 			) => [...walk(x.where), ...(x.previous === undefined ? [] : walk(x.previous))]
-		),
-		...proposals.flatMap(walk)
+		)
 	];
 }
 const readHops = Effect.fn('Bolt.readHops')(function* (
@@ -923,12 +943,12 @@ const readHops = Effect.fn('Bolt.readHops')(function* (
 				.join(' ');
 			return {
 				target: path[d]![1],
-				text: `SELECT ${exactRowSql(cat, path[d]![1], `t${d}`)} AS j FROM ${q(path[0]![1])} t0 JOIN jsonb_populate_recordset(null::${q(path[0]![1])}, $1::jsonb) r ON t0.id = r.id ${joins}`,
+				text: `SELECT ${exactRowSql(cat, path[d]![1], `t${d}`)} AS j FROM ${q(path[0]![1])} t0 JOIN jsonb_populate_recordset(${nullRowSql(path[0]![1], cat.models.get(path[0]![1])?.fields.keys() ?? [])}, $1::jsonb) r ON t0.id = r.id ${joins}`,
 				params: [JSON.stringify([...ids].map((id) => ({ id })))]
 			};
 		})
 	);
-	if (statements.length === 0) return new Map();
+	if (statements.length === 0) return new Map<string, RowData>();
 	const res = yield* readComposed(
 		db,
 		statements.map(({ text, params }) => composable({ text, params }))
@@ -952,7 +972,9 @@ const list = (input: Json, verb: Verb): readonly Json[] => {
 					} | null
 				)?.target
 			: undefined;
-	return Array.isArray(t) ? t.map((target) => ({ ...(input as object), target })) : [input];
+	return EffectArray.isArray<typeof t>(t)
+		? t.map((target) => ({ ...(input as object), target }))
+		: [input];
 };
 export const stateField = (m: EngineManifest, model: string): string | undefined =>
 	Object.entries(m.models[model]?.fields ?? {}).find(([, x]) => x.kind === 'state')?.[0];
@@ -970,7 +992,6 @@ function judgePost(
 ):
 	| {
 			ok: true;
-			routes: readonly ApprovalRoute[];
 	  }
 	| {
 			ok: false;
@@ -978,17 +999,19 @@ function judgePost(
 	  } {
 	const is = (p: Parameters<typeof evaluate>[2], row: RowData | null) =>
 		row !== null && evaluate(env, c, p, row);
-	const scoped = (env.authority!.collections[c]?.[o] ?? []).filter((a) =>
-		o === 'create'
-			? is(a.where, post)
-			: o === 'delete'
-				? is(a.where, pre)
-				: is(a.previous ?? a.where, pre) && is(a.where, post)
+	const scoped = (env.authority!.collections[c]?.[o] ?? []).filter(
+		(a) =>
+			!a.approval &&
+			(o === 'create'
+				? is(a.where, post)
+				: o === 'delete'
+					? is(a.where, pre)
+					: is(a.previous ?? a.where, pre) && is(a.where, post))
 	);
 	if (scoped.length === 0) return { ok: false };
 	const admits = (a: WriteArm, f: string) => a.fields === 'all' || a.fields.includes(f);
 	const field = supplied.find((f) => !scoped.some((a) => admits(a, f)));
-	return field !== undefined ? { ok: false, field } : { ok: true, routes: [] };
+	return field !== undefined ? { ok: false, field } : { ok: true };
 }
 /** An unchanged scalar restatement needs no field grant; relationship actions remain explicit changes. */
 function suppliedChanges(item: Item, row: RowData | null): readonly string[] {
@@ -1000,60 +1023,113 @@ function suppliedChanges(item: Item, row: RowData | null): readonly string[] {
 		(field) => !Object.hasOwn(values, field) || Object.hasOwn(differences, field)
 	);
 }
-/** Candidate admission is advisory until the final post-image and match are known. */
-export function candidateRoutes(
-	m: EngineManifest,
+/** Approval arms whose pre-image and fields admit a submitted shape, in policy order. */
+function approvalArms(
 	env: EvalEnv,
 	collection: string,
-	operation: 'create' | 'update' | 'delete',
+	operation: Write['op'],
 	row: RowData | null,
 	supplied: readonly string[]
-): readonly ApprovalRoute[] {
-	const auth = env.authority;
-	if (auth == null) return [];
-	if (
-		row !== null &&
-		supplied.some((field) => {
-			const mask = auth.collections[collection]?.masks[field];
-			return mask !== undefined && !evaluate(env, collection, mask, row);
-		})
-	)
-		return [];
-	return (auth.collections[collection]?.approval?.[operation] ?? []).filter(
-		(route) =>
-			(route.fields === undefined || supplied.every((field) => route.fields?.includes(field))) &&
+): readonly WriteArm[] {
+	return (env.authority?.collections[collection]?.[operation] ?? []).filter(
+		(arm) =>
+			arm.approval === true &&
 			(operation === 'create' ||
-				(row !== null &&
-					((route.previous ?? route.where) === undefined ||
-						evaluate(env, collection, toPred(m, collection, route.previous ?? route.where), row))))
+				(row !== null && evaluate(env, collection, arm.previous ?? arm.where, row))) &&
+			supplied.every((field) => arm.fields === 'all' || arm.fields.includes(field))
 	);
 }
-function proposalRoute(
-	m: EngineManifest,
+const FlowSnapshot = Schema.Union([
+	Snapshot,
+	Schema.Struct({ kind: Schema.Literal('allow') }),
+	Schema.Struct({ kind: Schema.Literal('deny'), message: Schema.String })
+]);
+const approvalFlow = Effect.fn('Bolt.approvalFlow')(function* (
+	e: WriteEngine,
+	request: ActRequest,
 	env: EvalEnv,
-	w: Write,
-	pre: RowData | null,
-	supplied: readonly string[]
-): ApprovalRoute | undefined {
-	const auth = env.authority;
-	if (auth == null) return undefined;
+	write: Write,
+	previous: RowData | null,
+	fields: readonly string[],
+	changes?: readonly string[]
+): Effect.fn.Return<{ snapshot: ApprovalSnapshot | Outcome; guest: boolean }, EngineError> {
 	const post =
-		w.op === 'create' ? { ...w.values, id: w.id } : w.op === 'update' ? { ...pre, ...w.set } : null;
-	const row = {
-		op: w.op,
-		pre,
-		post,
-		changed: w.op === 'create' ? Object.keys(w.values) : w.op === 'update' ? Object.keys(w.set) : []
+		write.op === 'create'
+			? { ...write.values, id: write.id }
+			: write.op === 'update'
+				? { ...previous, ...write.set, id: write.id }
+				: null;
+	const state = stateField(e.manifest, write.collection),
+		next = write.op === 'update' && state !== undefined ? write.set[state] : undefined;
+	const moveDenied =
+		state !== undefined &&
+		typeof next === 'string' &&
+		previous !== null &&
+		!admitMove(env.authority!, write.collection, state, String(previous[state]), next);
+	if (judgePost(env, write.collection, write.op, previous, post, fields).ok && !moveDenied)
+		return { snapshot: { kind: 'allow' }, guest: false };
+	const arm = approvalArms(env, write.collection, write.op, previous, fields).find((candidate) => {
+		const image = write.op === 'delete' ? previous : post;
+		return image !== null && evaluate(env, write.collection, candidate.where, image);
+	});
+	if (arm === undefined)
+		return { snapshot: refused('forbidden', 'You may not make this change.'), guest: false };
+	if (e.guest === undefined)
+		return yield* BoltError.make('noGuest', 'guest', 'this host runs no guest code');
+	const b = request.bindings,
+		actor = env.authority!.actor;
+	const decimal = inputSchema({ kind: 'decimal', scale: 0 });
+	const image = (row: RowData | null) =>
+		Effect.try({
+			try: () =>
+				row === null
+					? null
+					: Object.fromEntries(
+							Object.entries(row).map(([name, value]) => {
+								const field = env.cat.models.get(write.collection)?.fields.get(name);
+								return [
+									name,
+									field?.pg === 'numeric' && value !== null
+										? encodeWire(
+												Schema.decodeUnknownSync(field.many ? Schema.Array(decimal) : decimal)(
+													value
+												)
+											)
+										: value
+								];
+							})
+						),
+			catch: (error) =>
+				BoltError.make('badAnswer', 'guest', 'The approval row did not decode.', error)
+		});
+	const invocation: Invocation = {
+		id: `${request.invocationId}:approval:${write.collection}:${write.op}:${write.id}`,
+		kind: 'approval',
+		target: `${arm.policy}.${write.collection}.${write.op}`,
+		input: {
+			op: write.op,
+			record: yield* image(post ?? previous),
+			previous: write.op === 'update' ? yield* image(previous) : null,
+			changed:
+				changes ??
+				(write.op === 'create'
+					? Object.keys(write.values)
+					: write.op === 'update'
+						? Object.keys(write.set)
+						: []),
+			requester: actor.kind === 'member' ? { id: actor.id, team: actor.teams[0] ?? null } : null
+		},
+		ctx: { actor, now: b.now, today: b.today, tz: b.tz, seed: request.invocationId },
+		budget: { crossings: 0, readBytes: 0 }
 	};
-	const image = post ?? pre;
-	return candidateRoutes(m, env, w.collection, w.op, w.op === 'create' ? post : pre, supplied).find(
-		(route) =>
-			(route.where === undefined ||
-				(image !== null &&
-					evaluate(env, w.collection, toPred(m, w.collection, route.where), image))) &&
-			matches(m, w.collection, env.bindings, auth, route.match, row, env)
+	const g = yield* e.guest.invoke(invocation, { cross: () => Effect.succeed([]) });
+	if (g.kind === 'failed') return { snapshot: yield* guestFailure(g.error), guest: true };
+	if (g.kind === 'refused') return { snapshot: refused('refused', g.message), guest: true };
+	const snapshot = yield* Schema.decodeUnknownEffect(FlowSnapshot)(g.output).pipe(
+		Effect.mapError((error) => BoltError.make('invalidSpec', 'guest', error.message, error))
 	);
-}
+	return { snapshot, guest: true };
+});
 /** Rule 13: the caller's read scope admits `row` (an administrator reads everything). */
 function readableBy(
 	env: EvalEnv,
@@ -1081,7 +1157,8 @@ export function judgePre(
 	  } {
 	const arms = (auth.collections[collection]?.[o] ?? []).filter(
 		(a: WriteArm) =>
-			o === 'create' || (row !== null && evaluate(env, collection, a.previous ?? a.where, row))
+			!a.approval &&
+			(o === 'create' || (row !== null && evaluate(env, collection, a.previous ?? a.where, row)))
 	);
 	if (arms.length === 0) return {};
 	const field = supplied.find((s) => !arms.some((a) => a.fields === 'all' || a.fields.includes(s)));
@@ -1159,30 +1236,29 @@ export const readRows = Effect.fn('Bolt.readRows')(function* (
 	const res = yield* readComposed(db, [
 		...tables.map((t) =>
 			composable({
-				text: `SELECT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(null::${q(t)}, $1::jsonb) r ON t.id = r.id`,
+				text: `SELECT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(${nullRowSql(t, cat.models.get(t)?.fields.keys() ?? [])}, $1::jsonb) r ON t.id = r.id`,
 				params: [
 					JSON.stringify([...new Set(byTable.get(t)!.map(([, id]) => id))].map((id) => ({ id })))
 				]
 			})
 		),
-		...checks.map((table) => {
+		...(yield* Effect.forEach(checks, (table) => {
 			if (scope === undefined)
-				throw BoltError.make('internal', 'admission', 'read visibility requires its caller scope');
+				return Effect.fail(
+					BoltError.make('internal', 'admission', 'read visibility requires its caller scope')
+				);
 			const ids = [
 				...new Set(want.filter(([collection]) => collection === table).map(([, id]) => id))
 			];
 			for (const id of ids) scope.visibility.set(k(table, id), false);
-			return composable(
-				compileGets(
-					cat,
-					table,
-					ids,
-					{ fields: ['id'], relations: {} },
-					{ as: 'caller', authority: scope.authority },
-					scope.bindings
-				)
-			);
-		})
+			return compileGets(
+				cat,
+				table,
+				ids,
+				{ fields: ['id'], relations: {} },
+				readOptions({ as: 'caller', authority: scope.authority }, scope.bindings)
+			).pipe(Effect.map(composable), Effect.mapError(fromStore));
+		}))
 	]);
 	for (const [index, table] of checks.entries())
 		for (const row of res[tables.length + index]?.rows ?? []) {
@@ -1215,276 +1291,302 @@ const plan = Effect.fn('Bolt.plan')(function* (
 	pre: Map<string, RowData>,
 	imp?: ImportPlan,
 	upserted?: (string | null)[],
-	wired: ReadonlyMap<string, RowData> = new Map(),
 	own: TenantDb = e.db,
-	visibility = new Map<string, boolean>()
+	visibility: Map<string, boolean> = new Map<string, boolean>()
 ): Effect.fn.Return<Planned, EngineError> {
-	const { feed, delivery } = modeContext(r.mode);
+	const { sync } = modeContext(r.mode);
 	const m = e.manifest,
 		auth = env.authority!,
 		b = r.bindings,
-		cat = env.cat; // hook:integrations — the act's judged authority
-	let items = submitted,
-		readTables: readonly string[] = [],
-		fingerprints: readonly Fingerprint[] = [];
-	const identities = new Map(
-		submitted.map((item) => [
-			JSON.stringify([item.change.collection, item.change.path]),
-			item.change.id
-		])
-	);
-	const preparedCreates = new Map<string, Item>();
-	const guardsDeletes =
-		m.collections[r.collection]?.delete !== undefined &&
-		'transform' in m.collections[r.collection]!.delete!;
-	const deleteGuard = r.verb === 'delete' && guardsDeletes;
-	// an import's pruned rows face the delete guard too: they are `{ $delete: true }` inputs after the batch's rows
-	const pruneGuard = imp?.prune !== undefined && guardsDeletes;
-	// a feed page's one transform sees its upserts and its `removed` patches; a page of deletes alone has no row for it (hook:integrations)
-	const runs =
-		e.transforms?.has(r.collection) === true &&
-		(r.verb !== 'delete' || deleteGuard) &&
-		(feed === undefined ||
-			submitted.some((i) => i.parent === undefined && i.change.op !== 'delete'));
-	// 6. one transform invocation over the whole batch (rule 27); its payload is the workspace's own work (rule 19)
-	if (runs) {
-		if (e.guest === undefined)
-			return yield* Effect.fail(BoltError.make('noGuest', 'guest', 'this host runs no guest code'));
-		// an import's pruned rows are deletes beside the batch, inputs of it only when the collection guards its deletes
-		const roots = submitted.filter(
-			(i) =>
-				i.parent === undefined && (r.verb === 'delete' || pruneGuard || i.change.op !== 'delete')
-		);
-		const inputs = imp?.rows ?? list(r.input, r.verb);
-		// an import's rows matched by key reach the transform with the stored rows they would update (its guards see them)
-		const matched =
-			imp === undefined
-				? new Map<Item, RowData>()
-				: yield* resolveUpserts(
-						own,
-						m,
-						roots.filter((i) => i.change.op === 'upsert')
-					);
-		const invocation: Invocation = {
-			id: r.invocationId,
-			kind: 'transform',
-			target: r.collection,
-			input: roots.map((it, i) => {
-				// a feed's `removed` patch (path `['removed', n]`, after the page's upserts) is the update it is, its stored row in `existing`
-				const input =
-					it.change.op === 'delete'
-						? { $delete: true }
-						: feed !== undefined && it.change.op === 'update'
-							? (
-									feed.removals[Number(it.change.path[1])] as {
-										set: RowData;
-									}
-								).set
-							: r.verb === 'update'
-								? (
-										inputs[i] as {
-											set: Json;
-										}
-									).set
-								: inputs[i]!;
-				return r.verb === 'upsert' && feed === undefined && Predicate.isObject(input)
-					? Object.fromEntries(Object.entries(input).filter(([field]) => field !== 'id'))
-					: input;
-			}),
-			ctx: {
-				actor: auth.actor,
-				policies: auth.policies,
-				admin: auth.admin,
-				now: b.now,
-				today: b.today,
-				tz: b.tz,
-				seed: r.invocationId,
-				staged: submitted.map((item) => ({
-					collection: item.change.collection,
-					id: item.change.id,
-					path: item.change.path,
-					operation: item.change.op,
-					...(item.parent === undefined
-						? {}
-						: {
-								parent: {
-									collection: item.parent.collection,
-									id: item.parent.id,
-									relation: item.parent.rel,
-									field: item.parent.fk
-								}
-							})
-				})),
-				existing: yield* Effect.fnUntraced(function* () {
-					const ids = roots.map((it) =>
-						pre.has(k(it.change.collection, it.change.id))
-							? it.change.id
-							: matched.has(it)
-								? String(matched.get(it)!['id'])
-								: null
-					);
-					// the root rows read with `pre`; only an import's key-matched rows are read here
-					return ids.some((id) => id !== null && !wired.has(id))
-						? yield* wireRows(e.db, cat, r.collection, ids, b)
-						: ids.map((id) => (id === null ? null : (wired.get(id) ?? null)));
-				})()
-			},
-			budget: {
-				cpuMs: LIMITS.guestCpuMs,
-				crossings: LIMITS.crossings.sync,
-				readBytes: LIMITS.readBytes
-			}
-		};
-		const originalBridge = e.bridge?.(invocation, own) ?? {
-			cross: (calls: Parameters<Bridge['cross']>[0]) =>
-				Effect.succeed(
-					calls.map((): CrossAnswer => ({
-						ok: false,
-						error: {
-							kind: 'bolt',
-							code: 'noBridge',
-							message: 'this host gives the transform no reads'
-						}
-					}))
-				)
-		};
-		const bridge = prospectiveBridge(
-			e,
-			r,
-			env,
-			submitted,
-			pre,
+		cat = env.cat;
+	let items: Item[] = submitted.map((item) => ({
+		...item,
+		change:
+			item.change.op === 'update'
+				? { ...item.change, set: { ...item.change.set } }
+				: item.change.op === 'delete'
+					? { ...item.change }
+					: { ...item.change, values: { ...item.change.values } },
+		...(item.parent === undefined ? {} : { parent: { ...item.parent } })
+	}));
+	let runs = false;
+	const readTables = new Set<string>(),
+		fingerprints: Fingerprint[] = [];
+	const token = (item: Item) => canonical([item.change.collection, item.change.path]);
+	const identities = new Map(submitted.map((item) => [token(item), item.change.id]));
+	const supplied = new Map(submitted.map((item) => [token(item), item.supplied]));
+	const importRows: { index: number | null; id: string | null; action: string }[] = [];
+	const upsertOutput: string[] = [];
+	const descendants = (item: Item, root: Item) =>
+		item !== root &&
+		item.change.path.length > root.change.path.length &&
+		root.change.path.every((part, at) => item.change.path[at] === part);
+	const depth = (item: Item) =>
+		item.change.path.filter(
+			(part, index) =>
+				typeof part === 'string' &&
+				typeof item.change.path[index + 1] === 'number' &&
+				['create', 'update', 'upsert', 'delete', 'link', 'unlink'].includes(part)
+		).length;
+	let children: ReadonlyMap<string, readonly Item[]> = new Map();
+	const payload = (item: Item, nested = false): RowData => {
+		const c = item.change;
+		if (c.op === 'delete') return {};
+		const values: Record<string, Json> = { ...(c.op === 'update' ? c.set : c.values) };
+		if (nested && item.parent !== undefined && c.op !== 'update') delete values[item.parent.fk];
+		for (const child of (children.get(k(c.collection, c.id)) ?? []).filter(
+			(one) => depth(one) === depth(item) + 1 && descendants(one, item)
+		)) {
+			const rel = child.parent!.rel;
+			const action = child.change.path.findLast(
+				(part) =>
+					typeof part === 'string' &&
+					['create', 'update', 'upsert', 'delete', 'link', 'unlink'].includes(part)
+			);
+			if (typeof action !== 'string') continue;
+			const group: { [key: string]: Json } = Predicate.isObject(values[rel])
+				? { ...values[rel] }
+				: {};
+			const existing = group[action];
+			const list: Json[] = jsonArray(existing) ? [...existing] : [];
+			const sub = payload(child, true);
+			list.push(
+				action === 'update'
+					? { target: child.change.id, set: sub }
+					: action === 'upsert'
+						? { id: child.change.id, ...sub }
+						: ['delete', 'link', 'unlink'].includes(action)
+							? child.change.id
+							: sub
+			);
+			group[action] = list;
+			values[rel] = group;
+		}
+		return values;
+	};
+	// Parent callbacks may replace their native children. Each following level resolves its own keys before callbacks.
+	for (let level = 0; level <= LIMITS.writeDepth; level++) {
+		const current = items.filter((item) => depth(item) === level);
+		const matches = yield* resolveUpserts(
 			own,
-			identities,
-			preparedCreates,
-			originalBridge
+			m,
+			current.filter((item) => item.change.op === 'upsert')
 		);
-		const g = yield* e.guest.invoke(invocation, bridge);
-		readTables = bridge.tables?.() ?? [];
-		fingerprints = bridge.fingerprints?.() ?? [];
-		if (g.kind === 'refused')
-			return {
-				guest: true,
-				outcome: {
-					kind: 'refused',
-					code: 'refused',
-					message: g.message,
-					rule: `${r.collection}.transform`,
-					...(g.field === undefined ? {} : { field: g.field })
-				}
-			};
-		if (g.kind === 'failed') return { guest: true, outcome: yield* guestFailure(g.error) };
-		if (r.verb !== 'delete') {
-			const out = g.output;
-			if (!Array.isArray(out) || out.length !== roots.length)
-				return yield* Effect.fail(
-					BoltError.make('transformShape', 'guest', 'a transform returns one payload per input')
-				);
-			// a row the transform adds mints from its own seed: the invocation's seed would replay the sequence the
-			// submitted paths took, so a child added before a later root would take that root's id
-			const again = new Flattener(m, cat, minter(`${r.invocationId}:transform`, b.now), identities);
-			roots.forEach((it, i) => {
-				const c = it.change;
-				if (c.op === 'delete') return;
-				if (c.op === 'update') again.update(c.collection, 'any', c.id, out[i], c.revision, c.path);
-				else
-					again.create(
-						c.collection,
-						'any',
-						out[i],
-						c.path,
-						undefined,
-						c.op === 'upsert' ? { on: c.on, onConflict: c.onConflict } : undefined
-					);
-			});
-			if (again.problems.length > 0)
-				return yield* Effect.fail(
-					BoltError.make(
-						'transformPayload',
-						'guest',
-						again.problems.map((p) => `${p.path.join('.')}: ${p.message}`).join('; ')
-					)
-				);
-			for (const item of again.items) {
-				const assigned = identities.get(JSON.stringify([item.change.collection, item.change.path]));
-				if (assigned !== undefined && assigned !== item.change.id)
-					return yield* Effect.fail(
-						BoltError.make(
-							'transformIdentity',
-							'guest',
-							'a transform must preserve the engine-assigned identity of each submitted native path'
-						)
-					);
-			}
-			// the same id twice in one act would commit unnoticed; the disjoint seed above makes this unreachable, and this keeps it so
-			const reservedIds = new Set(identities.values());
+		for (const item of current) {
+			const c = item.change;
+			if (c.op !== 'upsert') continue;
+			const found = matches.get(item),
+				root = imp !== undefined && item.parent === undefined;
 			if (
-				again.items.some(
-					(item) =>
-						!identities.has(JSON.stringify([item.change.collection, item.change.path])) &&
-						reservedIds.has(item.change.id)
-				)
+				found !== undefined &&
+				(!readableBy(env, c.collection, found, visibility) || (root && imp.onConflict === 'refuse'))
 			)
-				return yield* Effect.fail(
-					BoltError.make(
-						'transformIdentity',
-						'guest',
-						"a transform must preserve the engine-assigned identity of each submitted native path: a row it adds would take another path's identity"
-					)
-				);
-			for (const [token, reservation] of preparedCreates) {
-				const final = again.items.find(
-					(item) => JSON.stringify([item.change.collection, item.change.path]) === token
-				);
-				const values =
-					final?.change.op === 'create'
-						? final.change.values
-						: final?.change.op === 'update'
-							? final.change.set
-							: null;
-				const reserved =
-					reservation.change.op === 'create'
-						? reservation.change.values
-						: reservation.change.op === 'update'
-							? reservation.change.set
-							: null;
-				if (
-					final === undefined ||
-					final.change.op !== reservation.change.op ||
-					final.change.id !== reservation.change.id ||
-					!retainsPrepared(values, reserved)
-				)
-					return {
-						guest: true,
-						outcome: refused(
-							'internal',
-							'every prepared native action must retain its reserved operation, identity and values at its reserved path'
-						)
-					};
+				return {
+					guest: runs,
+					outcome: refused('unique', 'A record with these values already exists.', c.path)
+				};
+			if (found === undefined && c.on.length === 1 && c.on[0] === 'id' && sync === undefined)
+				return {
+					guest: runs,
+					outcome: refused('notFound', `No ${c.collection} has this id.`, [...c.path, 'id'])
+				};
+			const id = found === undefined ? c.id : String(found['id']);
+			const skip = found === undefined && root && imp.onMissing === 'skip';
+			if (r.verb === 'upsert' && item.parent === undefined) upsertOutput.push(id);
+			if (root)
+				importRows.push({
+					index: Number(c.path[0]),
+					id: skip ? null : id,
+					action: skip
+						? 'skipped'
+						: found === undefined
+							? 'created'
+							: c.onConflict === 'keep'
+								? 'kept'
+								: 'updated'
+				});
+			if (skip || (found !== undefined && c.onConflict === 'keep')) {
+				items = items.filter((one) => one !== item && !descendants(one, item));
+				continue;
 			}
-			// the caller's supplied fields are what grants admit; the transform's own additions need no `fields` entry (rule 35)
-			const supplied = new Map(submitted.map((s) => [s.change.path.join('.'), s.supplied]));
-			items = [
-				...again.items.map((it) => ({
-					...it,
-					supplied: supplied.get(it.change.path.join('.')) ?? []
-				})),
-				...submitted.filter(
-					(i) => i.parent === undefined && (!roots.includes(i) || i.change.op === 'delete')
-				)
-			];
-			const more = yield* readRows(
-				e.db,
-				cat,
-				items.flatMap((i) =>
-					i.change.op === 'update' || i.change.op === 'delete'
-						? pre.has(k(i.change.collection, i.change.id))
-							? []
-							: [[i.change.collection, i.change.id] as const]
-						: []
+			if (found !== undefined) pre.set(k(c.collection, id), found);
+			const values = Object.fromEntries(
+				Object.entries(c.values).filter(
+					([field]) => field !== 'id' && (found === undefined || !c.on.includes(field))
 				)
 			);
-			for (const [key, row] of more) pre.set(key, row);
+			item.change =
+				found === undefined
+					? { collection: c.collection, id, path: c.path, op: 'create', values }
+					: {
+							collection: c.collection,
+							id,
+							path: c.path,
+							op: 'update',
+							set: values,
+							revision: Number(found['revision'])
+						};
+			identities.set(token(item), id);
+			if (id !== c.id)
+				for (const child of items) {
+					if (
+						child.parent?.collection !== c.collection ||
+						child.parent.id !== c.id ||
+						!descendants(child, item)
+					)
+						continue;
+					child.parent = { ...child.parent, id };
+					if (child.change.op !== 'delete')
+						child.change =
+							child.change.op === 'update'
+								? { ...child.change, set: { ...child.change.set, [child.parent.fk]: id } }
+								: { ...child.change, values: { ...child.change.values, [child.parent.fk]: id } };
+				}
+		}
+		const groups = Map.groupBy(
+			items.filter((item) => depth(item) === level),
+			(item) => canonical([item.change.collection, item.change.op])
+		);
+		for (const roots of groups.values()) {
+			const first = roots[0];
+			if (first === undefined || first.change.op === 'upsert') continue;
+			const collection = first.change.collection,
+				verb = first.change.op;
+			if (!hasCallback(m, collection, verb)) continue;
+			if (e.guest === undefined)
+				return yield* BoltError.make('noGuest', 'guest', 'this host runs no guest code');
+			children = Map.groupBy(
+				items.filter((item) => item.parent !== undefined),
+				(item) => k(item.parent!.collection, item.parent!.id)
+			);
+			const ids = roots.map((item) => (item.change.op === 'create' ? null : item.change.id));
+			const before = yield* wireRows(own, cat, collection, ids, b);
+			for (let offset = 0; offset < roots.length; offset += LIMITS.writeChunk) {
+				const chunk = roots.slice(offset, offset + LIMITS.writeChunk),
+					seed = `${r.invocationId}:${collection}:${verb}:${level}:${offset / LIMITS.writeChunk}`;
+				const input: Json[] = [];
+				for (const [index, item] of chunk.entries()) {
+					const stored = before[offset + index];
+					if (verb !== 'create' && stored == null)
+						return {
+							guest: runs,
+							outcome: refused('notFound', 'The record does not exist.', item.change.path)
+						};
+					input.push(
+						verb === 'create'
+							? payload(item)
+							: verb === 'update'
+								? { before: stored!, set: payload(item) }
+								: stored!
+					);
+				}
+				const invocation: Invocation = {
+					id: seed,
+					kind: verb,
+					target: collection,
+					input,
+					ctx: {
+						actor: auth.actor,
+						policies: auth.policies,
+						admin: auth.admin,
+						now: b.now,
+						today: b.today,
+						tz: b.tz,
+						seed
+					},
+					budget: { crossings: LIMITS.crossings.write, readBytes: LIMITS.readBytes }
+				};
+				const original = e.bridge?.(invocation, own) ?? transformBridge(m, own, invocation);
+				const bridge = prospectiveBridge(e, cat, b, auth.actor, items, pre, original);
+				const g = yield* e.guest.invoke(invocation, bridge);
+				runs = true;
+				for (const table of original.tables?.() ?? []) readTables.add(table);
+				fingerprints.push(...(original.fingerprints?.() ?? []));
+				if (g.kind === 'refused') {
+					const at = g.row === undefined ? undefined : chunk[g.row];
+					const row = at?.change.path.find((part) => typeof part === 'number');
+					return {
+						guest: true,
+						outcome: {
+							kind: 'refused',
+							code: 'refused',
+							message: g.message,
+							rule: `${collection}.${verb}`,
+							...(g.field === undefined ? {} : { field: g.field }),
+							...(typeof row === 'number' ? { row } : {})
+						}
+					};
+				}
+				if (g.kind === 'failed') return { guest: true, outcome: yield* guestFailure(g.error) };
+				if (verb === 'delete') {
+					if (g.output !== null)
+						return yield* BoltError.make(
+							'transformShape',
+							'guest',
+							'A delete check returns no payload.'
+						);
+					continue;
+				}
+				if (!Array.isArray(g.output) || g.output.length !== chunk.length)
+					return yield* BoltError.make(
+						'transformShape',
+						'guest',
+						'a write callback returns one payload per input'
+					);
+				const again = new Flattener(m, cat, minter(seed, b.now), identities);
+				for (const [index, item] of chunk.entries()) {
+					const c = item.change;
+					if (c.op === 'create')
+						again.create(collection, 'any', g.output[index], c.path, item.parent);
+					else if (c.op === 'update')
+						again.update(collection, 'any', c.id, g.output[index], c.revision, c.path, item.parent);
+				}
+				if (again.problems.length)
+					return yield* BoltError.make(
+						'transformPayload',
+						'guest',
+						again.problems
+							.map((problem) => `${problem.path.join('.')}: ${problem.message}`)
+							.join('; ')
+					);
+				const replacements: Item[] = again.items.map((item) => {
+					const belongs = chunk.find((root) => token(root) === token(item))?.belongs;
+					return {
+						...item,
+						supplied: supplied.get(token(item)) ?? [],
+						...(belongs === undefined ? {} : { belongs })
+					};
+				});
+				const replacedPaths = new Set(chunk.map((item) => canonical(item.change.path)));
+				items = [
+					...items.filter(
+						(item) =>
+							!replacedPaths.has(canonical(item.change.path)) &&
+							!item.change.path.some((_, index) =>
+								replacedPaths.has(canonical(item.change.path.slice(0, index)))
+							)
+					),
+					...replacements
+				];
+				for (const item of replacements) identities.set(token(item), item.change.id);
+				if (items.length > LIMITS.changesPerAct)
+					return {
+						guest: true,
+						outcome: refused('overflow', `An act writes at most ${LIMITS.changesPerAct} rows.`)
+					};
+				const more = yield* readRows(
+					own,
+					cat,
+					replacements.flatMap((item) =>
+						item.change.op === 'update' || item.change.op === 'delete'
+							? pre.has(k(item.change.collection, item.change.id))
+								? []
+								: [[item.change.collection, item.change.id] as const]
+							: []
+					)
+				);
+				for (const [key, row] of more) pre.set(key, row);
+			}
 		}
 	}
 	// sys_integration's transform is the engine's: it reads the manifest's definitions and envoys
@@ -1493,31 +1595,17 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		if ('kind' in t) return { guest: false, outcome: t };
 		items = [...t];
 	}
-	// a fed collection's rows change as its feed writes them, whatever the transform added (hook:integrations)
-	const owned = feedOwnership(m, r, items);
+	// Callback output remains subject to the model's sync ownership.
+	const owned = syncOwnership(m, r, items);
 	if (owned !== null) return { guest: runs, outcome: owned };
 	let guest = runs;
 	const stop = (outcome: Outcome): Planned => ({ guest, outcome });
 	// 7. upsert resolution read, defaults (rule 23a), model rules (rules 34, 40, 41), no-op updates (rule 29)
-	const upserts = items.filter((i) => i.change.op === 'upsert');
-	const existing = yield* resolveUpserts(own, m, upserts);
-	yield* readRows(
-		own,
-		cat,
-		[...existing].flatMap(([item, row]) =>
-			typeof row['id'] === 'string' &&
-			databaseReadScope(auth, item.change.collection) &&
-			!visibility.has(k(item.change.collection, row['id']))
-				? [[item.change.collection, row['id']] as const]
-				: []
-		),
-		{ authority: auth, bindings: b, visibility }
-	);
 	const writes: {
 		write: Write;
 		item: Item;
 	}[] = [];
-	const output: Json[] = [];
+	const resolvedImportIndices = new Set(importRows.map((row) => row.index));
 	const report: {
 		index: number | null;
 		id: string | null;
@@ -1537,66 +1625,20 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				)
 			);
 		const root = imp !== undefined && it.parent === undefined;
-		if (c.op === 'upsert') {
-			const found = existing.get(it);
-			if (found !== undefined) {
-				if (
-					!readableBy(env, c.collection, found, visibility) ||
-					(root && imp!.onConflict === 'refuse')
-				)
-					return stop(refused('unique', 'A record with these values already exists.', c.path));
-				output.push(String(found['id']));
-				pre.set(k(c.collection, String(found['id'])), found);
-				const set =
-					c.onConflict === 'keep'
-						? {}
-						: changed(
-								found,
-								Object.fromEntries(Object.entries(c.values).filter(([f]) => !c.on.includes(f)))
-							);
-				// a locked row is locked whatever names it: an upsert by id, by key, or an import's row (rules 30, 40)
-				if (feed === undefined) {
-					const locked = modelRules(m, c.collection, found, set);
-					if (locked !== null && !(delivery && locked.code === 'locked'))
-						return stop(refused(locked.code, locked.message, [...c.path, locked.field]));
-				}
-				if (root)
-					report.push({
-						index: Number(c.path[0]),
-						id: String(found['id']),
-						action: Object.keys(set).length > 0 ? 'updated' : 'kept'
-					});
-				if (Object.keys(set).length > 0)
-					writes.push({
-						write: {
-							collection: c.collection,
-							id: String(found['id']),
-							op: 'update',
-							set,
-							revision: Number(found['revision'])
-						},
-						item: it
-					});
-				continue;
-			}
-			// rule 28: a nested upsert by id names a child on file; it never creates one under an id it made up
-			if (c.on.length === 1 && c.on[0] === 'id' && feed === undefined)
-				return stop(refused('notFound', `No ${c.collection} has this id.`, [...c.path, 'id']));
-			// rule 30: `onMissing: 'skip'` only updates rows already on file
-			if (root && imp!.onMissing === 'skip') {
-				report.push({ index: Number(c.path[0]), id: null, action: 'skipped' });
-				continue;
-			}
-			output.push(c.id);
-		}
+		if (c.op === 'upsert')
+			return yield* BoltError.make(
+				'internal',
+				'commit',
+				'An unresolved upsert reached the commit planner.'
+			);
 		if (root)
 			report.push({
 				index: c.op === 'delete' ? null : Number(c.path[0]),
 				id: c.id,
-				action: c.op === 'delete' ? 'deleted' : 'created'
+				action: c.op === 'delete' ? 'deleted' : c.op === 'update' ? 'updated' : 'created'
 			});
-		if (c.op === 'create' || c.op === 'upsert') {
-			const values = { ...c.values } as Record<string, Json>;
+		if (c.op === 'create') {
+			const values: Record<string, Json> = { ...c.values };
 			const missing = withDefaults(m, cat, c.collection, values, auth.actor, b);
 			if (missing !== null)
 				return stop(refused('required', `${missing} is required.`, [...c.path, missing]));
@@ -1615,6 +1657,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			const row = pre.get(k(c.collection, c.id));
 			if (row === undefined) return stop(refused('notFound', 'The record does not exist.', c.path));
 			if (c.op === 'delete') {
+				const locked = modelLock(env, m, c.collection, row);
+				if (locked !== null) return stop(refused('locked', locked, c.path));
 				writes.push({
 					write: {
 						collection: c.collection,
@@ -1627,8 +1671,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				continue;
 			}
 			const set = changed(row, c.set);
-			const locked = modelRules(m, c.collection, row, set);
-			if (locked !== null && !((delivery || feed !== undefined) && locked.code === 'locked'))
+			const locked = modelRules(env, m, c.collection, row, set);
+			if (locked !== null && !(sync !== undefined && locked.code === 'locked'))
 				return stop(refused(locked.code, locked.message, [...c.path, locked.field])); // hook:envoys, hook:integrations
 			if (Object.keys(set).length > 0)
 				writes.push({
@@ -1657,8 +1701,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		for (const { write, item } of writes) {
 			if (
 				item.parent !== undefined &&
-				(auth.collections[write.collection]?.[write.op] ?? []).length === 0 &&
-				(auth.collections[write.collection]?.approval?.[write.op] ?? []).length === 0
+				(auth.collections[write.collection]?.[write.op] ?? []).length === 0
 			)
 				continue;
 			const row = pre.get(k(write.collection, write.id));
@@ -1681,132 +1724,338 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		))
 			pre.set(key, row);
 	}
-	// 8. the admitting grant's post-image scope on the root rows as the engine will write them, then its approval route
-	const routed: {
-		write: Write;
-		pre: RowData | null;
-		routes: readonly ApprovalRoute[];
-	}[] = [];
-	const routes: ApprovalRoute[] = [];
-	// A nested-only mutation still needs its parent's declared relationship permission, even when no scalar row changes.
-	for (const item of submitted) {
-		const change = item.change;
+	// 8. Direct admitting arms win; otherwise the first admitting approval arm evaluates its flow.
+	let approval: Commit['approval'], resubmit: Commit['resubmit'];
+	const records = (collection: string): HeldRecord[] =>
+		writes
+			.filter(({ write }) => write.collection === collection)
+			.map(({ write }) => ({
+				id: write.id,
+				action: write.op,
+				values: {
+					...pre.get(k(write.collection, write.id)),
+					...(write.op === 'create' ? write.values : write.op === 'update' ? write.set : {}),
+					id: write.id
+				}
+			}));
+	const checked: { write: Write; item: Item }[] = [...writes];
+	// A nested-only update still needs its parent's declared relationship permission.
+	for (const item of submitted)
 		if (
-			auth.admin ||
-			item.parent !== undefined ||
-			change.op !== 'update' ||
-			writes.some(
-				(entry) => entry.write.collection === change.collection && entry.write.id === change.id
+			!auth.admin &&
+			item.parent === undefined &&
+			item.change.op === 'update' &&
+			!checked.some(
+				({ write }) => write.collection === item.change.collection && write.id === item.change.id
 			)
-		)
-			continue;
-		const row = pre.get(k(change.collection, change.id));
-		if (row === undefined) continue;
-		const supplied = suppliedChanges(item, row);
-		if (judgePost(env, change.collection, 'update', row, row, supplied).ok) continue;
-		const write: Write = {
-			collection: change.collection,
-			id: change.id,
-			op: 'update',
-			set: {},
-			revision: Number(row['revision'])
-		};
-		const route = proposalRoute(m, env, write, row, supplied);
-		if (route === undefined)
-			return stop(refused('forbidden', 'You may not make this change.', change.path));
-		routes.push(route);
-		routed.push({ write, pre: row, routes: [route] });
-	}
-	for (const { write: w, item } of writes) {
+		) {
+			const row = pre.get(k(item.change.collection, item.change.id));
+			if (row !== undefined)
+				checked.push({
+					item,
+					write: {
+						collection: item.change.collection,
+						id: item.change.id,
+						op: 'update',
+						set: {},
+						revision: Number(row['revision'])
+					}
+				});
+		}
+	const fresh = new Set(
+		writes
+			.filter(({ write }) => write.op === 'create')
+			.map(({ write }) => k(write.collection, write.id))
+	);
+	const held = yield* holders(
+		own,
+		checked.flatMap(({ write }): (readonly [string, string])[] => [
+			...(write.op === 'create' ? [] : [[write.collection, write.id] as const]),
+			...[...(cat.models.get(write.collection)?.one ?? [])].flatMap(([fk, one]) => {
+				const parent =
+					write.op === 'create' ? write.values[fk] : pre.get(k(write.collection, write.id))?.[fk];
+				return m.relationships[`${write.collection}.${fk}`]?.owned &&
+					typeof parent === 'string' &&
+					!fresh.has(k(one.targets[0]!, parent))
+					? [[one.targets[0]!, parent] as const]
+					: [];
+			})
+		]),
+		auth.actor
+	);
+	const routed: { write: Write; snapshot: StepsSnapshot }[] = [];
+	for (const { write, item } of checked) {
 		if (
 			auth.admin ||
 			(item.parent !== undefined &&
-				(auth.collections[w.collection]?.[w.op] ?? []).length === 0 &&
-				(auth.collections[w.collection]?.approval?.[w.op] ?? []).length === 0)
+				(auth.collections[write.collection]?.[write.op] ?? []).length === 0)
 		)
 			continue;
-		const row = pre.get(k(w.collection, w.id)) ?? null;
-		const post = w.op === 'create' ? w.values : w.op === 'update' ? { ...row, ...w.set } : null;
-		const supplied = suppliedChanges(item, row);
-		const verdict = judgePost(env, w.collection, w.op, row, post, supplied);
-		const state = stateField(m, w.collection),
-			next = w.op === 'update' && state !== undefined ? w.set[state] : undefined;
-		const moveDenied =
-			state !== undefined &&
-			typeof next === 'string' &&
-			row !== null &&
-			!admitMove(auth, w.collection, state, String(row[state]), next);
-		if (verdict.ok && !moveDenied) continue;
-		const route = proposalRoute(m, env, w, row, supplied);
-		if (route === undefined)
-			return stop(
-				refused(
-					'forbidden',
-					'You may not make this change.',
-					!verdict.ok && verdict.field !== undefined
-						? [...item.change.path, verdict.field]
-						: item.change.path
-				)
-			);
-		routes.push(route);
-		routed.push({ write: w, pre: row, routes: [route] });
+		// Resubmission judges the whole pending change against its checkpoint below, including an unchanged Save.
+		if (
+			held.some(
+				(request) =>
+					request.state === 'ChangesRequested' &&
+					request.requester &&
+					request.collection === write.collection &&
+					request.record === write.id
+			)
+		)
+			continue;
+		const previous = pre.get(k(write.collection, write.id)) ?? null;
+		const evaluated = yield* approvalFlow(
+			e,
+			r,
+			env,
+			write,
+			previous,
+			suppliedChanges(item, previous),
+			[
+				...new Set([
+					...(write.op === 'create'
+						? Object.keys(write.values)
+						: write.op === 'update'
+							? Object.keys(write.set)
+							: []),
+					...suppliedChanges(item, previous).filter((field) =>
+						cat.models.get(write.collection)?.many.has(field)
+					)
+				])
+			]
+		);
+		guest ||= evaluated.guest;
+		const snapshot = evaluated.snapshot;
+		if (
+			snapshot.kind === 'refused' ||
+			snapshot.kind === 'conflict' ||
+			snapshot.kind === 'unknown' ||
+			snapshot.kind === 'committed' ||
+			snapshot.kind === 'pendingApproval'
+		)
+			return stop(snapshot);
+		if (snapshot.kind === 'deny')
+			return stop(refused('refused', snapshot.message, item.change.path));
+		if (snapshot.kind === 'steps') {
+			guest = true;
+			routed.push({ write, snapshot });
+		}
 	}
-	let approval: Commit['approval'];
-	// a routed write opens a request (provisional commit, rules 44–46); one on a record an open request holds joins that
-	// request instead — the statement decides both (commit.ts, lock.ts), so the check costs no round trip of its own
-	if (!auth.admin && routed.length > 0) {
+	if (routed.some((entry) => canonical(entry.snapshot) !== canonical(routed[0]!.snapshot)))
+		return stop(refused('approvalSplit', 'The rows in one act require different approval flows.'));
+	if (r.readGuards !== undefined && held.length > 0)
+		return stop(
+			refused(
+				'locked',
+				'A guarded automation write cannot join or resubmit an existing approval request.'
+			)
+		);
+	const saving = held.filter(
+		(request) => request.state === 'ChangesRequested' && request.requester
+	);
+	if (saving.length > 1)
+		return stop(refused('approvalSplit', 'One act cannot resubmit several approval requests.'));
+	if (saving[0] !== undefined) {
 		if (e.approval === undefined)
-			return yield* Effect.fail(
-				BoltError.make(
-					'noApproval',
-					'admission',
-					'a grant routes this write to approval, and no approval flow is wired'
-				)
+			return yield* BoltError.make('noApproval', 'admission', 'No approval flow is wired.');
+		const request = saving[0];
+		const written = writes.find(
+			({ write }) => write.collection === request.collection && write.id === request.record
+		)?.write;
+		const previous =
+			pre.get(k(request.collection, request.record)) ??
+			(yield* readRows(own, cat, [[request.collection, request.record]])).get(
+				k(request.collection, request.record)
 			);
-		const root =
-			writes.find(
-				({ item }) => item.parent === undefined && item.change.collection === r.collection
-			)?.write ?? routed.find(({ write }) => write.collection === r.collection)?.write;
-		if (root === undefined) {
-			// no root to open a request on: only a request that already holds a written row admits it
-			const held = writes.flatMap(({ write: w }): (readonly [string, string])[] => [
-				[w.collection, w.id],
-				...[...(cat.models.get(w.collection)?.one ?? [])].flatMap(([fk, one]) => {
-					const parent =
-						w.op === 'create' ? w.values[fk] : (pre.get(k(w.collection, w.id))?.[fk] ?? null);
-					return m.relationships[`${w.collection}.${fk}`]?.owned && typeof parent === 'string'
-						? [[one.targets[0]!, parent] as const]
-						: [];
-				})
-			]);
-			if ((yield* holders(own, held, auth.actor)).length === 0)
-				return stop(refused('forbidden', 'No approval route admits this change.'));
-		} else {
-			const route = yield* e.approval.route({
-				collection: r.collection,
-				record: root.id,
-				action: r.verb === 'update' ? 'update' : r.verb === 'delete' ? 'delete' : root.op,
-				authority: auth,
-				bindings: b,
-				seed: `${r.invocationId}:${r.key}`,
-				routes,
-				records: writes
-					.filter(({ write }) => write.collection === r.collection)
-					.map(({ write: w }) => ({
-						id: w.id,
-						action: w.op,
-						values:
-							w.op === 'create'
-								? { ...w.values, id: w.id }
-								: {
-										...pre.get(k(w.collection, w.id)),
-										...(w.op === 'update' ? w.set : {}),
-										id: w.id
-									}
-					}))
+		if (previous === undefined && written?.op !== 'create')
+			return stop(refused('notFound', 'The approval record does not exist.'));
+		const values: RowData = {
+			...previous,
+			...(written?.op === 'create' ? written.values : written?.op === 'update' ? written.set : {}),
+			id: request.record
+		};
+		const checkpoint = yield* readHistory(
+			own,
+			m,
+			{
+				kind: 'history',
+				collection: request.collection,
+				id: request.record,
+				at: { _tag: 'Before', before: request.id },
+				full: true
+			},
+			{ as: 'workspace' },
+			b
+		);
+		const before = Schema.is(Schema.Record(Schema.String, Schema.Json))(checkpoint)
+			? checkpoint
+			: null;
+		if (before === null && request.action !== 'create')
+			return stop({
+				kind: 'conflict',
+				records: [{ collection: request.collection, id: request.record, fields: [] }]
 			});
-			if ('kind' in route) return stop(route);
-			approval = route;
+		const system = new Set<string>(SYSTEM_COLUMNS);
+		const columns = new Map(
+			[...(cat.models.get(request.collection)?.fields.values() ?? [])].map((column) => [
+				column.column,
+				column
+			])
+		);
+		const pending = Object.fromEntries(
+			Object.entries(changed(before ?? {}, values)).filter(([field]) => {
+				const column = columns.get(field);
+				return (
+					!system.has(field) &&
+					!field.startsWith('bolt_') &&
+					column !== undefined &&
+					!column.computed &&
+					!column.derived &&
+					column.kind !== 'sum' &&
+					column.kind !== 'count'
+				);
+			})
+		);
+		const pendingFields = [
+			...new Set([
+				...Object.keys(pending).map((field) => columns.get(field)?.name.split('.')[0] ?? field),
+				...(yield* heldFields(own, m, cat, request.id)),
+				...submitted.flatMap((item) =>
+					item.change.collection === request.collection && item.change.id === request.record
+						? item.supplied.filter((field) => cat.models.get(request.collection)?.many.has(field))
+						: []
+				)
+			])
+		];
+		const root: Write =
+			request.action === 'create'
+				? { collection: request.collection, id: request.record, op: 'create', values }
+				: request.action === 'delete'
+					? {
+							collection: request.collection,
+							id: request.record,
+							op: 'delete',
+							revision: Number(previous?.['revision'])
+						}
+					: {
+							collection: request.collection,
+							id: request.record,
+							op: 'update',
+							set: pending,
+							revision: Number(previous?.['revision'])
+						};
+		guest = true;
+		const { snapshot } = yield* approvalFlow(
+			e,
+			r,
+			env,
+			root,
+			before,
+			root.op === 'create'
+				? written?.op === 'update'
+					? Object.keys(written.set)
+					: []
+				: pendingFields,
+			pendingFields
+		);
+		if (snapshot.kind !== 'steps' && snapshot.kind !== 'allow')
+			return stop(snapshot.kind === 'deny' ? refused('refused', snapshot.message) : snapshot);
+		guest = true;
+		resubmit = yield* e.approval.resubmit({
+			request: request.id,
+			authority: auth,
+			bindings: b,
+			snapshot,
+			changed: writes.map(({ write }) => ({
+				collection: write.collection,
+				id: write.id,
+				fields:
+					write.op === 'delete' ? [] : Object.keys(write.op === 'create' ? write.values : write.set)
+			})),
+			records:
+				records(request.collection).length > 0
+					? records(request.collection)
+					: [{ id: request.record, action: request.action, values }]
+		});
+	} else if (routed.length > 0 && held.length === 0) {
+		if (e.approval === undefined)
+			return yield* BoltError.make('noApproval', 'admission', 'No approval flow is wired.');
+		const root = checked.find(
+			({ item }) => item.parent === undefined && item.change.collection === r.collection
+		)?.write;
+		if (root === undefined)
+			return stop(refused('forbidden', 'No root record admits this approval.'));
+		const route = yield* e.approval.route({
+			collection: r.collection,
+			record: root.id,
+			action: root.op,
+			authority: auth,
+			bindings: b,
+			seed: `${r.invocationId}:${r.key}`,
+			snapshot: routed[0]!.snapshot,
+			records: records(r.collection)
+		});
+		if ('kind' in route) return stop(route);
+		approval = route;
+	}
+	// Pure search vectors are evaluated in bounded batches and join the same native row writes.
+	for (const [collection, entries] of Map.groupBy(
+		writes.filter(({ write }) => write.op !== 'delete'),
+		({ write }) => write.collection
+	)) {
+		for (const [name, index] of Object.entries(m.models[collection]?.search?.indexes ?? {})) {
+			if (index.field !== undefined) continue;
+			if (e.guest === undefined)
+				return yield* BoltError.make('noGuest', 'guest', 'this host runs no guest code');
+			for (let offset = 0; offset < entries.length; offset += LIMITS.writeChunk) {
+				const chunk = entries.slice(offset, offset + LIMITS.writeChunk),
+					seed = `${r.invocationId}:vector:${collection}:${name}:${offset / LIMITS.writeChunk}`;
+				const g = yield* e.guest.invoke(
+					{
+						id: seed,
+						kind: 'vector',
+						target: `${collection}.${name}`,
+						input: chunk.map(({ write }) => ({
+							...pre.get(k(collection, write.id)),
+							...(write.op === 'create' ? write.values : write.op === 'update' ? write.set : {}),
+							id: write.id
+						})),
+						ctx: { actor: auth.actor, now: b.now, today: b.today, tz: b.tz, seed },
+						budget: { crossings: 0, readBytes: 0 }
+					},
+					{ cross: () => Effect.succeed([]) }
+				);
+				guest = true;
+				if (g.kind === 'failed') return stop(yield* guestFailure(g.error));
+				if (g.kind === 'refused')
+					return stop(refused('internal', 'A pure search vector cannot refuse a write.'));
+				const vectors = yield* Schema.decodeUnknownEffect(
+					Schema.Array(Schema.NullOr(Schema.Array(Schema.Number)))
+				)(g.output).pipe(
+					Effect.mapError((error) => BoltError.make('badAnswer', 'guest', error.message, error))
+				);
+				if (
+					vectors.length !== chunk.length ||
+					vectors.some(
+						(vector) =>
+							vector !== null &&
+							(vector.length !== index.dim || vector.some((value) => !Number.isFinite(value)))
+					)
+				)
+					return yield* BoltError.make(
+						'badAnswer',
+						'guest',
+						`Index ${collection}.${name} returns exactly ${index.dim} finite numbers per row, or null.`
+					);
+				for (const [position, entry] of chunk.entries()) {
+					const write = entry.write,
+						column = indexColumn(name),
+						vector = vectors[position] ?? null;
+					if (write.op === 'create')
+						entry.write = { ...write, values: { ...write.values, [column]: vector } };
+					else if (write.op === 'update')
+						entry.write = { ...write, set: { ...write.set, [column]: vector } };
+				}
+			}
 		}
 	}
 	const embed = embedWrites(
@@ -1819,13 +2068,10 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		: []; // hook:integrations
 	if (JSON.stringify(plain).length > LIMITS.changeSetBytes)
 		return stop(refused('overflow', 'The change is too large for one act.'));
-	const tables = [...new Set([...plain.map((w) => w.collection), ...readTables])].sort();
-	guest ||= (m.collections[r.collection]?.notifications?.committed ?? []).some(
-		(rule) => 'to' in rule && rule.to === true
-	);
-	const noticed = yield* Effect.result(committedNotices(e, r, auth, routedRows(writes, pre)));
-	if (noticed._tag === 'Failure') return stop(yield* guestFailure(noticed.failure));
-	const notices = noticed.success;
+	const priorGuards = r.mode._tag === 'Record' ? undefined : r.readGuards;
+	const tables = [
+		...new Set([...plain.map((w) => w.collection), ...readTables, ...(priorGuards?.tables ?? [])])
+	].sort();
 	return {
 		guest,
 		commit: {
@@ -1840,105 +2086,88 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				pre
 			),
 			runs: queued,
-			notices,
+			notices: [],
 			output:
-				upserted ?? (r.verb === 'upsert' ? output : imp !== undefined ? { rows: report } : null),
+				upserted ??
+				(r.verb === 'upsert'
+					? upsertOutput
+					: imp !== undefined
+						? {
+								rows: [
+									...importRows,
+									...report.filter(
+										(row) => row.index === null || !resolvedImportIndices.has(row.index)
+									)
+								].sort((a, b) => (a.index ?? Infinity) - (b.index ?? Infinity))
+							}
+						: null),
 			...(approval === undefined ? {} : { approval }),
+			...(resubmit === undefined ? {} : { resubmit }),
 			...(guest && fingerprints.length > 0 ? { fingerprints } : {}),
-			...(feed === undefined ? {} : { pieces: feed.pieces })
+			...(priorGuards === undefined ? {} : { readGuards: priorGuards }),
+			...(sync === undefined ? {} : { pieces: sync.pieces })
 		},
-		...(guest && readTables.length > 0
+		...(priorGuards !== undefined || (guest && readTables.size > 0)
 			? { lock: { tables, mode: 'SHARE ROW EXCLUSIVE' as const } }
 			: {})
 	};
 });
-/** The act's root rows as written, with the image a `{ user }` recipient reads (the post-image; a delete's stored row). */
-const routedRows = (
-	writes: readonly {
-		write: Write;
-		item: Item;
-	}[],
-	pre: Map<string, RowData>
-) =>
-	writes
-		.filter((x) => x.item.parent === undefined)
-		.map(({ write: w }) => ({
-			write: w,
-			row:
-				w.op === 'create'
-					? w.values
-					: { ...pre.get(k(w.collection, w.id)), ...(w.op === 'update' ? w.set : {}) }
-		}));
-const committedNotices = (
-	e: WriteEngine,
-	r: ActRequest,
-	auth: Authority,
-	rows: readonly {
-		write: Write;
-		row: RowData;
-	}[]
-) => {
-	const mint = minter(`${r.invocationId}:notices`, r.bindings.now);
-	return collectionNotices(e.guest, e.manifest, {
-		collection: r.collection,
-		event: 'committed',
-		records: rows
-			.filter((x) => x.write.collection === r.collection)
-			.map((x) => ({ id: x.write.id, values: x.row, action: x.write.op })),
-		requestor: auth.actor.kind === 'member' ? auth.actor.id : null,
-		approvers: [],
-		actor: auth.actor,
-		bindings: r.bindings,
-		id: () => mint()
-	});
-};
-/**
- * hook:integrations (§2.1, §4.1) — a fed collection's rows: its feed's page writes only that collection and only the
- * feed's fields; every other writer, administrators included, only updates its local fields (its `update` columns).
- */
-function feedOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[]): Outcome | null {
-	const { feed } = modeContext(r.mode);
-	const fed = fedOf(m);
-	if (fed.size === 0) return null;
+/** Read-only syncs own their model; caller updates are limited to its declared local columns. */
+function readOnlySync(m: EngineManifest, collection: string): string | undefined {
+	return Object.entries(m.collections[collection]?.syncs ?? {}).find(
+		([, sync]) => sync.with !== 'file' && sync.read === true && sync.write !== true
+	)?.[0];
+}
+function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[]): Outcome | null {
+	const { sync } = modeContext(r.mode);
 	for (const { change: c } of items) {
 		const written =
 			c.op === 'update'
 				? Object.keys(c.set)
 				: c.op === 'delete'
 					? []
-					: Object.keys(c.values).filter((k) => k !== 'id');
-		if (feed !== undefined) {
+					: Object.keys(c.values).filter((field) => field !== 'id');
+		if (sync !== undefined) {
 			if (c.collection !== r.collection)
-				return refused('forbidden', `A feed writes only ${r.collection}.`, c.path);
-			const local = written.find((k) => !feed.fields.includes(k));
-			if (local !== undefined)
+				return refused('forbidden', `A sync writes only ${r.collection}.`, c.path);
+			const field = written.find((field) => !sync.fields.includes(field));
+			if (field !== undefined)
 				return refused(
 					'forbidden',
-					`'${local}' of ${c.collection} is local: its feed never writes it.`,
-					[...c.path, local]
+					`'${field}' of ${c.collection} is outside this sync's fields.`,
+					[...c.path, field]
 				);
 			continue;
 		}
-		const f = fed.get(c.collection);
-		if (f === undefined) continue;
+		const owner = readOnlySync(m, c.collection);
+		if (owner === undefined) continue;
 		if (c.op !== 'update')
+			return refused('forbidden', `${c.collection} is written by its sync ${owner}.`, c.path);
+		const local = m.collections[c.collection]?.update?.input.columns ?? [];
+		const field = written.find((field) => !local.includes(field));
+		if (field !== undefined)
 			return refused(
 				'forbidden',
-				`${c.collection} is written by its feed ${f.run}; only ${f.local.length === 0 ? 'it' : f.local.join(', ')} changes here.`,
-				c.path
-			);
-		const remote = written.find((k) => !f.local.includes(k));
-		if (remote !== undefined)
-			return refused(
-				'forbidden',
-				`'${remote}' of ${c.collection} is written by its feed ${f.run}.`,
-				[...c.path, remote]
+				`'${field}' of ${c.collection} is written by its sync ${owner}.`,
+				[...c.path, field]
 			);
 	}
 	return null;
 }
+const hasCallback = (m: EngineManifest, collection: string, verb: Write['op']): boolean =>
+	verb === 'delete'
+		? m.collections[collection]?.delete?.check === true
+		: m.collections[collection]?.[verb]?.transform === true;
+/** A model-level lock over the row's own fields, or `null`: application-layer immutability, never a database grant. */
+function modelLock(env: EvalEnv, m: EngineManifest, model: string, row: RowData): string | null {
+	const locked = m.models[model]?.locked;
+	return locked !== undefined && evaluate(env, model, toPred(m, model, locked), row)
+		? 'This record is locked and cannot be changed.'
+		: null;
+}
 /** Rules 34, 40, 41 on an update's changed fields: `to` edges, per-state `edit`, and an owned child's fixed parent key. */
 function modelRules(
+	env: EvalEnv,
 	m: EngineManifest,
 	model: string,
 	row: RowData,
@@ -1948,6 +2177,19 @@ function modelRules(
 	message: string;
 	field: string;
 } | null {
+	const locked = modelLock(env, m, model, row);
+	if (locked !== null) return { code: 'locked', message: locked, field: 'id' };
+	for (const [field, kind] of Object.entries(m.models[model]?.fields ?? {}))
+		if (kind.kind === 'enum' && kind.transitions !== undefined && set[field] !== undefined) {
+			const from = String(row[field] ?? ''),
+				next = String(set[field]);
+			if (from !== next && !(kind.transitions[from] ?? []).includes(next))
+				return {
+					code: 'invalidInput',
+					message: `'${from}' cannot move to '${next}'.`,
+					field
+				};
+		}
 	for (const fk of Object.keys(set))
 		if (m.relationships[`${model}.${fk}`]?.owned)
 			return {
@@ -2039,7 +2281,15 @@ export const wireRows = Effect.fn('Bolt.wireRows')(function* (
 	const want = ids.filter((id) => id !== null);
 	if (want.length === 0) return ids.map(() => null);
 	const [res] = yield* db.read([
-		composable(compileGets(cat, c, want, { fields: null, relations: {} }, { as: 'workspace' }, b))
+		composable(
+			yield* compileGets(
+				cat,
+				c,
+				want,
+				{ fields: null, relations: {} },
+				readOptions({ as: 'workspace' }, b)
+			).pipe(Effect.mapError(fromStore))
+		)
 	]);
 	const byId = new Map(
 		res!.rows.map((row) => [String((row['j'] as RowData | null)?.['id']), row['j'] as RowData])
@@ -2149,9 +2399,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		deleteInput = !freeLink && input?.['delete'] !== undefined;
 	}
 	const via = (verb: 'update' | 'delete') =>
-		parent !== undefined &&
-		(authority.collections[collection]?.[verb].length ?? 0) === 0 &&
-		(authority.collections[collection]?.approval?.[verb].length ?? 0) === 0;
+		parent !== undefined && (authority.collections[collection]?.[verb].length ?? 0) === 0;
 	const parentAdmits =
 		parentPermission === undefined || parentPermission.writable || parentPermission.proposal;
 	const parentReasons = parentPermission === undefined ? [] : parentPermission.reasons;
@@ -2196,8 +2444,13 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		],
 		authority.actor
 	);
-	if (holding.some((h) => !h.eligible)) restrictions.push('underApproval');
-	const remote = fedOf(m).get(collection)?.fields ?? []; // hook:integrations — the feed's fields
+	if (holding.some((h) => !h.eligible || h.readGuarded)) restrictions.push('underApproval');
+	const remote =
+		readOnlySync(m, collection) === undefined
+			? []
+			: Object.keys(model.fields).filter(
+					(field) => !(spec.update?.input.columns ?? []).includes(field)
+				);
 	const state = stateField(m, collection);
 	const stateKind = state === undefined ? undefined : model.fields[state];
 	const transitions =
@@ -2243,11 +2496,11 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 				judgePre(authority, env, collection, 'update', row, [field]) !== true)
 		)
 			reasons.push('noGrant');
-		if (remote.includes(field)) reasons.push('integrationOwned');
+		if (remote.includes(field)) reasons.push('syncOwned');
 		if (m.relationships[`${collection}.${field}`]?.owned) reasons.push('ownedParent');
 		if (field === state) {
 			if (moves.length === 0) reasons.push(transitions.length === 0 ? 'stateLocked' : 'noGrant');
-		} else if (modelRules(m, collection, row, { [field]: row[field] ?? null })?.code === 'locked')
+		} else if (modelRules(env, m, collection, row, { [field]: row[field] ?? null })?.code === 'locked')
 			reasons.push('stateLocked');
 		const proposal =
 			updateInput !== undefined &&
@@ -2258,7 +2511,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 				(via('update') ||
 					authority.admin ||
 					judgePre(authority, env, collection, 'update', row, [field]) === true)) ||
-				candidateRoutes(m, env, collection, 'update', row, [field]).length > 0);
+				approvalArms(env, collection, 'update', row, [field]).length > 0);
 		fields[field] = { writable: reasons.length === 0, proposal, reasons: [...new Set(reasons)] };
 	}
 	for (const relation of Object.keys(spec.update?.input.with ?? {})) {
@@ -2278,13 +2531,13 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 			judgePre(authority, env, collection, 'update', row, [relation]) !== true
 		)
 			reasons.push('noGrant');
-		if (modelRules(m, collection, row, { [relation]: null })?.code === 'locked')
+		if (modelRules(env, m, collection, row, { [relation]: null })?.code === 'locked')
 			reasons.push('stateLocked');
 		fields[relation] = {
 			writable: reasons.length === 0,
 			proposal:
 				reasons.every((reason) => reason === 'noGrant') &&
-				candidateRoutes(m, env, collection, 'update', row, [relation]).length > 0,
+				approvalArms(env, collection, 'update', row, [relation]).length > 0,
 			reasons: [...new Set(reasons)]
 		};
 	}
@@ -2294,15 +2547,15 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		spec.update !== undefined &&
 		nested.some(
 			(relation) =>
-				modelRules(m, collection, row, { [relation]: null }) === null &&
+				modelRules(env, m, collection, row, { [relation]: null }) === null &&
 				judgePre(authority, env, collection, 'update', row, [relation]) === true
 		);
 	const nestedProposal =
 		spec.update !== undefined &&
 		nested.some(
 			(relation) =>
-				modelRules(m, collection, row, { [relation]: null }) === null &&
-				candidateRoutes(m, env, collection, 'update', row, [relation]).length > 0
+				modelRules(env, m, collection, row, { [relation]: null }) === null &&
+				approvalArms(env, collection, 'update', row, [relation]).length > 0
 		);
 	if (!Object.values(fields).some((field) => field.writable) && !nestedWrite)
 		updateReasons.push('noGrant');
@@ -2338,7 +2591,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 					(via('delete') ||
 						authority.admin ||
 						judgePre(authority, env, collection, 'delete', row, []) === true)) ||
-					candidateRoutes(m, env, collection, 'delete', row, []).length > 0),
+					approvalArms(env, collection, 'delete', row, []).length > 0),
 			reasons: [...new Set(deleteReasons)]
 		},
 		moves: state !== undefined && fields[state]?.writable ? { [state]: moves } : {},
@@ -2364,7 +2617,7 @@ const resolveUpserts = Effect.fn('Bolt.resolveUpserts')(function* (
 				}
 			).on; // hook:integrations — the act's own key
 			return composable({
-				text: `SELECT DISTINCT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(null::${q(t)}, $1::jsonb) r
+				text: `SELECT DISTINCT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(${nullRowSql(t, cat.models.get(t)?.fields.keys() ?? [])}, $1::jsonb) r
 			ON ${on.map((f) => `t.${q(f)} IS NOT DISTINCT FROM r.${q(f)}`).join(' AND ')}`,
 				params: [
 					JSON.stringify(
@@ -2398,14 +2651,17 @@ const resolveUpserts = Effect.fn('Bolt.resolveUpserts')(function* (
 				on: readonly string[];
 			}
 		).on;
+		const indexed = new Map(
+			res[i]!.rows.map((row) => [canonical(on.map((field) => String(row[field] ?? null))), row])
+		);
 		for (const it of byTable.get(t)!) {
 			const v = (
 				it.change as {
 					values: RowData;
 				}
 			).values;
-			const row = res[i]!.rows.find((row) =>
-				on.every((f) => String(row[f] ?? null) === String(databaseValue(v[f] ?? null)))
+			const row = indexed.get(
+				canonical(on.map((field) => String(databaseValue(v[field] ?? null))))
 			);
 			if (row !== undefined) found.set(it, row);
 		}
@@ -2451,7 +2707,7 @@ const validateCustom = Effect.fn('Bolt.validateCustom')(function* (
 			)
 				continue;
 			const values = byKind.get(spec.of!) ?? byKind.set(spec.of!, []).get(spec.of!)!;
-			for (const x of spec.many && Array.isArray(v) ? v : [v])
+			for (const x of spec.many && EffectArray.isArray<typeof v>(v) ? v : [v])
 				values.push({ value: x, path: [...item.change.path, f] });
 		}
 	}
@@ -2473,7 +2729,6 @@ const validateCustom = Effect.fn('Bolt.validateCustom')(function* (
 					seed: r.invocationId
 				},
 				budget: {
-					cpuMs: LIMITS.guestCpuMs,
 					crossings: LIMITS.crossings.sync,
 					readBytes: LIMITS.readBytes
 				}
@@ -2490,7 +2745,7 @@ const validateCustom = Effect.fn('Bolt.validateCustom')(function* (
 		);
 		if (g.kind === 'failed') return yield* guestFailure(g.error);
 		if (g.kind === 'refused') return refused('invalidInput', g.message, values[0]!.path);
-		const out = Array.isArray(g.output) ? g.output : [];
+		const out = EffectArray.isArray<typeof g.output>(g.output) ? g.output : [];
 		const i = out.findIndex((x) => typeof x === 'string');
 		if (i >= 0) return refused('invalidInput', String(out[i]), values[i]!.path);
 	}
@@ -2515,49 +2770,36 @@ function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError> {
 			return Effect.fail(error);
 	}
 }
-class DryRunRollback extends Schema.TaggedError<DryRunRollback>()('DryRunRollback', {
-	outcome: OutcomeSchema
-}) {}
 const dryRun = Effect.fn('Bolt.dryRun')(function* (
 	db: TenantDb,
-	sql: Sql,
+	statements: readonly Sql[],
 	lock: Lock | undefined,
 	meta: ReadonlyMap<string, ConstraintMeta>
 ) {
 	return yield* db
-		.transaction(
-			Effect.gen(function* () {
-				const tx = yield* TenantTx;
-				const rows = yield* tx.query(sql);
-				const answer = yield* Schema.decodeUnknownEffect(CommitAnswer)(rows.rows[0]).pipe(
-					Effect.mapError((error) => BoltError.make('badAnswer', 'commit', error.message, error))
-				);
-				return yield* Effect.fail(
-					new DryRunRollback({
-						outcome: answer.outcome ?? refused('refused', 'The outcome was lost.')
-					})
-				);
-			}),
-			lock
-		)
+		.transaction({ statements, rollback: true, ...(lock === undefined ? {} : { lock }) })
 		.pipe(
+			Effect.flatMap((rows) =>
+				Schema.decodeUnknownEffect(CommitAnswer)(rows[statements.length - 1]?.rows[0]).pipe(
+					Effect.mapError((error) => BoltError.make('badAnswer', 'commit', error.message, error)),
+					Effect.map((answer) => answer.outcome ?? refused('refused', 'The outcome was lost.'))
+				)
+			),
 			Effect.catch((error) =>
-				error instanceof DryRunRollback
-					? Effect.succeed(error.outcome)
-					: error instanceof BoltError
-						? Effect.fail(error)
-						: Effect.try({
-								try: () => decided(error, meta).outcome,
-								catch: (cause) =>
-									cause instanceof BoltError
-										? cause
-										: BoltError.make('bug', 'commit', String(cause), cause)
-							})
+				error instanceof BoltError
+					? Effect.fail(error)
+					: Effect.try({
+							try: () => decided(error, meta).outcome,
+							catch: (cause) =>
+								cause instanceof BoltError
+									? cause
+									: BoltError.make('bug', 'commit', String(cause), cause)
+						})
 			)
 		);
 });
 
-/** Workspace reads shared by direct writes and verbs recorded inside an action (rules 15, 26). */
+/** Workspace reads shared by direct writes and verbs recorded in an atomic batch (rules 15, 26). */
 export function transformBridge(
 	manifest: EngineManifest,
 	db: TenantDb,
@@ -2596,12 +2838,12 @@ export function transformBridge(
 					error: {
 						kind: 'bolt',
 						code: 'unsupported',
-						message: `a transform cannot ${call._tag}`
+						message: `a write callback cannot ${call._tag}`
 					}
 				}));
 				for (const [index, call] of calls.entries()) {
 					if (call._tag !== 'read') continue;
-					tables.add(call.read.collection);
+					for (const table of readTargets(reader.catalog, call.read)) tables.add(table);
 					const cte =
 						call.read.kind === 'read' || call.read.kind === 'get' ? call.read.cte : undefined;
 					const scope = cte === undefined ? index : cte.split(':', 1)[0];
@@ -2624,6 +2866,7 @@ export function transformBridge(
 								{ ...bindings, params: group.params }
 							)
 							.pipe(
+								Effect.provideService(ReadDeps, tables),
 								Effect.map((values) => {
 									for (const [position, { index }] of group.reads.entries())
 										answers[index] = { ok: true, value: values[position] ?? null };
@@ -2656,17 +2899,16 @@ export const WritesLive = Layer.effect(
 		const manifest = yield* Manifest;
 		const db = yield* TenantDbService;
 		const guest = yield* Guest;
-		const activation = yield* Activation;
 		const telemetry = yield* Telemetry;
 		const live = yield* Live;
 		const wake = yield* Wake;
 		const links = yield* Links;
+		const audit = yield* Audit;
 		const engine: WriteEngine = {
 			manifest,
 			db,
 			guest,
-			transforms: activation.transforms,
-			approval: approvalHook(manifest, db, guest),
+			approval: approvalHook(manifest, db),
 			committed: (answer, outcome) =>
 				committed(answer, outcome).pipe(
 					Effect.provideService(Live, live),
@@ -2680,14 +2922,34 @@ export const WritesLive = Layer.effect(
 				Effect.scoped(
 					Effect.gen(function* () {
 						const log = yield* telemetry.open({ invocation: request.invocationId });
-						const result = yield* act({ ...engine, log }, request);
+						const operation = yield* idempotency(engine, request, request.authority);
+						const work = act({ ...engine, log }, request);
+						const result = yield* request.mode._tag === 'Record'
+							? work
+							: audited(
+									db,
+									{
+										category: 'write',
+										action: `${request.collection}.${request.verb}`,
+										actor: auditActor(request.authority.actor),
+										invocation: request.invocationId,
+										outcomeKey: operation.key,
+										digest: operation.digest,
+										payload: encodeWire({
+											input: request.input,
+											observed: request.observed,
+											onConflict: request.onConflict
+										})
+									},
+									work
+								);
 						const v =
 							request.verb === 'erase' && result.outcome.kind === 'committed'
 								? live.syncChanged('approval_request')
 								: yield* live.v;
 						return { ...result, v };
 					})
-				)
+				).pipe(Effect.provideService(Audit, audit))
 		};
 	})
 );

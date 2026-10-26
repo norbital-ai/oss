@@ -83,15 +83,18 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 		const file = '.agents/skills/example/SKILL.md';
 		yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true });
 		yield* fs.writeFileString(path.join(root, '.norbital-doctor-effect-scope.json'), '[]');
-		const badTs = 'task.run(async (payload, services) => services.read("notes"));';
-		const badJs = 'bolt.automation({ description: "job" }).run(async () => 1);';
-		const badSvelte = 'job.run(async (value, api) => api.read("notes"));';
+		const badTs =
+			'task("job", { description: "job", runAs: "trigger", run: async (payload, services) => services.query("notes") });';
+		const badJs =
+			'bolt.automation("job", { description: "job", runAs: "trigger", run: async () => 1 });';
+		const badSvelte =
+			'job("job", { description: "job", runAs: "trigger", run: async (value, api) => api.query("notes") });';
 		const lines = [
 			'# Tenant bodies',
 			'Prose mentioning a.run(async (input, ctx) => ctx.read("notes")) is not code.',
 			'```ts',
 			'import { automation as defineJob } from "@norbital-ai/bolt";',
-			'const first = defineJob({ description: "job" });',
+			'const first = defineJob;',
 			'const task = first;',
 			badTs,
 			'```',
@@ -102,7 +105,7 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 			'~~~svelte',
 			'<script lang="ts">',
 			'import { automation } from "@norbital-ai/bolt";',
-			'const job = automation({ description: "job" });',
+			'const job = automation;',
 			badSvelte,
 			'</script>',
 			'<button>Presentation</button>',
@@ -123,18 +126,18 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 			'```ts',
 			'import { automation } from "@norbital-ai/bolt";',
 			'function shadowed(automation) {',
-			'  const task = automation({ description: "presentation" });',
-			'  task.run(async (input, ctx) => ctx.read("notes"));',
+			'  const task = automation;',
+			'  task("presentation", { description: "presentation", runAs: "trigger", run: async (input, ctx) => ctx.query("notes") });',
 			'}',
-			'const isolated = automation({ description: "job" });',
+			'const isolated = automation;',
 			'```',
 			'```ts',
-			'isolated.run(async (input, ctx) => ctx.read("notes"));',
+			'isolated("job", { description: "job", runAs: "trigger", run: async (input, ctx) => ctx.query("notes") });',
 			'```',
 			'````markdown',
 			'```ts',
 			'import { automation } from "@norbital-ai/bolt";',
-			'automation({ description: "quoted example" }).run(async () => 1);',
+			'automation("quoted", { description: "quoted example", runAs: "trigger", run: async () => 1 });',
 			'```',
 			'````'
 		];
@@ -158,10 +161,16 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 			source
 				.replace(
 					badTs,
-					'task.run(function* (payload, services) { return yield* services.read("notes"); });'
+					'task("job", { description: "job", runAs: "trigger", run: function* (payload, services) { return yield* services.query("notes"); } });'
 				)
-				.replace(badJs, 'bolt.automation({ description: "job" }).run(function* () { return 1; });')
-				.replace(badSvelte, 'job.run(function* (value, api) { return yield* api.read("notes"); });')
+				.replace(
+					badJs,
+					'bolt.automation("job", { description: "job", runAs: "trigger", run: function* () { return 1; } });'
+				)
+				.replace(
+					badSvelte,
+					'job("job", { description: "job", runAs: "trigger", run: function* (value, api) { return yield* api.query("notes"); } });'
+				)
 		);
 		expect(findings()).toEqual([]);
 	}).pipe(Effect.provide(NodeServices.layer))
@@ -301,13 +310,13 @@ export { type Other } from './named-export-type-only.js';`,
 				'src/lib/named-export-type-only.ts': `export type Other = string; ${violation}`,
 				'src/lib/background.ts': violation,
 				'src/lib/server/billing.ts': violation,
-				'src/data/collection/.draft/+collection.ts': `import '../../../lib/draft-only.js'; export default {};`,
+				'src/data/model/.draft/+model.ts': `import '../../../lib/draft-only.js'; export default {};`,
 				'src/lib/draft-only.ts': violation,
 				'src/routes/+server.ts': `import '../lib/server/billing.js';`,
 				'src/lib/ui.ts': violation,
 				'src/lib/ui.worker.ts': violation,
 				'src/app/desk/+page.svelte': `<script>import '../../lib/ui.js'; new Worker(new URL('../../lib/ui.worker.ts', import.meta.url));</script>`,
-				'src/data/model/+record.model.ts': `import { pause } from '../declaration-helper.js'; export default { default: pause };`,
+				'src/data/model/record/+model.ts': `import { pause } from '../../declaration-helper.js'; export default { default: pause };`,
 				'src/data/declaration-helper.ts': violation,
 				'packages/bolt/package.json': '{"name":"@norbital-ai/bolt"}',
 				'packages/bolt/src/index.ts': `export { pause } from './decl/declaration.js';`,

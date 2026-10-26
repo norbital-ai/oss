@@ -3,18 +3,18 @@
 // compiler, so any host (bolt start or an adapter) loads packs through `@norbital-ai/bolt/engine` without the build toolchain.
 import { EMBED } from '../integrations/embed.ts';
 import { SYSTEM } from '../../system/index.ts';
-import { Effect, FileSystem, Option, Schema } from 'effect';
-import { TenantTx } from '../db/tenant-db.ts';
+import { Effect, FileSystem, Schema, Stream } from 'effect';
 import { enqueue } from '../runs/queue.ts';
 import { Chain } from './sql.ts';
-import { join } from 'node:path';
 import type { Json } from '../../decl/values.ts';
-import type { RowData } from '../contracts.ts';
+import type { RowData, Sql } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { seed as restore } from './seed.ts';
+import { restorer } from './seed.ts';
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
+import { catalogOf } from '../access/pred.ts';
+import { nullRowSql, q } from '@norbital-ai/store';
 export type SeedAsset = {
 	path: string;
 	sha256: string;
@@ -119,98 +119,188 @@ const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
 	Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text).pipe(
 		Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause))
 	);
-/** Open is scoped by FileSystem; every parse failure and interruption releases the handle. */
-const readRowsFile = Effect.fn('Bolt.readPackRows')(function* (path: string) {
-	return yield* Effect.scoped(
-		Effect.gen(function* () {
-			const fs = yield* FileSystem.FileSystem;
-			const file = yield* fs.open(path);
-			const decoder = new TextDecoder();
-			const rows: RowData[] = [];
-			let pending = '';
-			while (true) {
-				const chunk = yield* file.readAlloc(1024 * 1024);
-				if (Option.isNone(chunk)) break;
-				pending += decoder.decode(chunk.value, { stream: true });
-				let end;
-				while ((end = pending.indexOf('\n')) >= 0) {
-					const line = pending.slice(0, end);
-					pending = pending.slice(end + 1);
-					if (line !== '') rows.push(yield* decodeJson(RowSchema, line));
-				}
-			}
-			pending += decoder.decode();
-			if (pending !== '') rows.push(yield* decodeJson(RowSchema, pending));
-			return rows;
-		})
-	);
+/** A rows file's lines, cut from its bytes (the artifact port reads whole files): one row each, decoded as it is read. */
+function* linesOf(bytes: Uint8Array) {
+	let start = 0;
+	for (let at = bytes.indexOf(10); at !== -1; start = at + 1, at = bytes.indexOf(10, start))
+		if (at > start) yield bytes.subarray(start, at);
+	if (start < bytes.length) yield bytes.subarray(start);
+}
+/** A pack as a loader takes it: its `pack.json` and each collection's rows from row `from`, streamed when restored. */
+export type PackSource = {
+	readonly dir: string;
+	readonly meta: PackJson;
+	readonly rows: (collection: string, from: number) => Stream.Stream<RowData, BoltError>;
+};
+export const sourceOf = (pack: Pack): PackSource => ({
+	dir: pack.dir,
+	meta: pack.meta,
+	rows: (collection, from) => Stream.fromIterable((pack.rows[collection] ?? []).slice(from))
 });
-export const readPack = Effect.fn('Bolt.readPack')(function* (dir: string) {
+/** A pack whose rows stay on disk until each collection is restored, a line at a time (a cell holds 128 MiB). */
+export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
-	const meta = yield* decodeJson(PackSchema, yield* fs.readFileString(join(dir, 'pack.json')));
+	// posix, relative to a release in a cell or absolute in-process
+	const meta = yield* decodeJson(PackSchema, yield* fs.readFileString(`${dir}/pack.json`));
+	// the collection being restored, read once for all of its steps; the rows a step skips are cut, never decoded
+	let held: { collection: string; bytes: Uint8Array } | undefined;
+	const bytesOf = (collection: string) =>
+		held?.collection === collection
+			? Effect.succeed(held.bytes)
+			: fs.readFile(`${dir}/rows/${collection}.jsonl`).pipe(
+					Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause)),
+					Effect.tap((bytes) =>
+						Effect.sync(() => {
+							held = { collection, bytes };
+						})
+					)
+				);
+	const text = new TextDecoder();
+	return {
+		dir,
+		meta,
+		rows: (collection: string, from: number) =>
+			Object.hasOwn(meta.rows, collection)
+				? Stream.unwrap(
+						Effect.map(bytesOf(collection), (bytes) =>
+							Stream.fromIterable(linesOf(bytes)).pipe(
+								Stream.drop(from),
+								Stream.mapEffect((line) => decodeJson(RowSchema, text.decode(line)))
+							)
+						)
+					)
+				: Stream.empty
+	} satisfies PackSource;
+});
+/** Every collection's rows in memory, for in-process hosts and test kits. */
+export const readPack = Effect.fn('Bolt.readPack')(function* (dir: string) {
+	const source = yield* readPackSource(dir);
 	const entries = yield* Effect.forEach(
-		Object.keys(meta.rows),
+		Object.keys(source.meta.rows),
 		(c) =>
-			readRowsFile(join(dir, 'rows', `${c}.jsonl`)).pipe(Effect.map((rows) => [c, rows] as const)),
+			Stream.runCollect(source.rows(c, 0)).pipe(
+				Effect.map((rows) => [c, Array.from(rows)] as const)
+			),
 		{ concurrency: 'unbounded' }
 	);
-	return { dir, meta, rows: Object.fromEntries(entries) };
+	return { dir, meta: source.meta, rows: Object.fromEntries(entries) } satisfies Pack;
 });
+/** A pack load's step: `more` while steps remain; `loaded`, or `hadRows` when the database had rows and nothing changed. */
+export type PackStep = 'more' | 'loaded' | 'hadRows';
 /**
- * Rule 70: loads a pack only into a database with no workspace rows (`false` when it had some and nothing changed):
- * identity stages first, then the restore of every collection in relationship order.
+ * Rule 70: loads a pack only into a database with no workspace rows, in bounded steps (compute model §3: one unit of
+ * work each): identity first, then the restore of every collection in relationship order (`restorer`'s steps).
  */
+export const packLoader = Effect.fn('Bolt.packLoader')(function* (
+	db: TenantDb,
+	m: EngineManifest,
+	pack: PackSource,
+	now: string
+) {
+	const identities: ReadonlySet<string> = new Set(IDENTITY);
+	const cat = catalogOf(m);
+	const collections = Object.keys(pack.meta.rows);
+	const tenant = collections.filter((c) => !identities.has(c));
+	const identityStep = Effect.gen(function* () {
+		// every collection is named (an unknown one is refused); only the members and instances are read here
+		const identityRows = Object.fromEntries(
+			yield* Effect.forEach(collections, (c) =>
+				(identities.has(c) ? Stream.runCollect(pack.rows(c, 0)) : Effect.succeed([])).pipe(
+					Effect.map((rows) => [c, Array.from(rows)] as const)
+				)
+			)
+		);
+		const identity = yield* Effect.try({
+			try: () => decodeIdentity(m, identityRows),
+			catch: (error) =>
+				error instanceof BoltError
+					? error
+					: BoltError.make('seedDecode', 'decode', String(error), error)
+		});
+		const tables = [
+			...IDENTITY,
+			...Object.keys(m.models).filter((table) => !Object.hasOwn(SYSTEM.models, table))
+		];
+		const [probe] = yield* db.read([
+			{
+				text:
+					tables
+						.map((t) => `SELECT 1 FROM "${t}"${SEEDED[t] === undefined ? '' : ` ${SEEDED[t]}`}`)
+						.join(' UNION ALL ') + ' LIMIT 1',
+				params: []
+			}
+		]);
+		if (probe!.rows.length > 0) return false;
+		const probeSql = tables
+			.map(
+				(table) =>
+					`select 1 from ${q(table)}${SEEDED[table] === undefined ? '' : ` ${SEEDED[table]}`}`
+			)
+			.join(' union all ');
+		const body = `begin if exists (${probeSql}) then raise exception using errcode = 'BP001', message = 'the seed database is no longer empty'; end if; end`;
+		const statements: Sql[] = [{ text: `do '${body.replaceAll("'", "''")}'`, params: [] }];
+		// Collection and decoding finished before the batch: no stream, file or guest work holds its locks.
+		for (const table of IDENTITY)
+			for (const rows of Map.groupBy(identity[table] ?? [], (row) =>
+				IDENTITY_COLUMNS[table]!.filter((column) => row[column] !== undefined).join()
+			).values()) {
+				const columns = IDENTITY_COLUMNS[table]!.filter((column) => rows[0]![column] !== undefined);
+				statements.push({
+					text: `insert into ${q(table)} (${columns.map(q).join(', ')}) select ${columns.map((column) => `r.${q(column)}`).join(', ')}
+					from jsonb_populate_recordset(${nullRowSql(table, cat.models.get(table)?.fields.keys() ?? [])}, $1::jsonb) r on conflict (id) do nothing`,
+					params: [JSON.stringify(rows)]
+				});
+			}
+		return yield* db
+			.transaction({
+				statements,
+				lock: { tables, mode: 'SHARE ROW EXCLUSIVE', advisory: ['bolt:seed'] }
+			})
+			.pipe(
+				Effect.as(true),
+				Effect.catchTag('DbError', (error) =>
+					error.sqlstate === 'BP001' ? Effect.succeed(false) : Effect.fail(error)
+				)
+			);
+	});
+	const restore = yield* restorer(m, db, { collections: tenant, rows: pack.rows }, now);
+	// a pack writes past the acts that queue `bolt.embed`: seeded rows of a semantic collection would never get a vector
+	const embed = Effect.suspend(() => {
+		if (!tenant.some((c) => m.models[c]?.search?.semantic !== undefined)) return Effect.void;
+		const chain = new Chain();
+		enqueue(chain, [{ automation: EMBED, input: {}, dueAt: now, cause: 'updated', depth: 0 }]);
+		return db.write(chain.sql('1')).pipe(Effect.asVoid);
+	});
+	let identified = false,
+		answer: 'loaded' | 'hadRows' | undefined;
+	const step = Effect.gen(function* () {
+		if (answer !== undefined) return answer;
+		if (!identified) {
+			const restored = yield* identityStep;
+			identified = true;
+			if (!restored) answer = 'hadRows';
+			return answer ?? ('more' as const);
+		}
+		if (yield* restore.step) return 'more' as const;
+		yield* embed;
+		answer = 'loaded';
+		return answer;
+	});
+	return { step };
+});
+/** A loader's steps one after another, to its answer (in-process hosts and test kits; a cell host enters each alone). */
+export const drain = <E, R>(step: Effect.Effect<PackStep, E, R>) =>
+	Effect.gen(function* () {
+		let answer = yield* step;
+		while (answer === 'more') answer = yield* step;
+		return answer;
+	});
+/** `packLoader` whole: `false` when the database had rows and nothing changed. */
 export const loadPack = Effect.fn('Bolt.loadPack')(function* (
 	db: TenantDb,
 	m: EngineManifest,
-	pack: Pack,
+	pack: PackSource,
 	now: string
 ) {
-	const identity = yield* Effect.try({
-		try: () => decodeIdentity(m, pack.rows),
-		catch: (error) =>
-			error instanceof BoltError
-				? error
-				: BoltError.make('seedDecode', 'decode', String(error), error)
-	});
-	const tables = [
-		...IDENTITY,
-		...Object.keys(m.models).filter((table) => !Object.hasOwn(SYSTEM.models, table))
-	];
-	const [probe] = yield* db.read([
-		{
-			text:
-				tables
-					.map((t) => `SELECT 1 FROM "${t}"${SEEDED[t] === undefined ? '' : ` ${SEEDED[t]}`}`)
-					.join(' UNION ALL ') + ' LIMIT 1',
-			params: []
-		}
-	]);
-	if (probe!.rows.length > 0) return false;
-	// ponytail: identity and the restore are two transactions; one, when the restore takes a caller's transaction
-	yield* db.transaction(
-		Effect.gen(function* () {
-			const tx = yield* TenantTx;
-			// one insert per shape: a column a row leaves out takes its default, never another row's null
-			for (const t of IDENTITY)
-				for (const rows of Map.groupBy(identity[t] ?? [], (r) =>
-					IDENTITY_COLUMNS[t]!.filter((c) => r[c] !== undefined).join()
-				).values()) {
-					const cols = IDENTITY_COLUMNS[t]!.filter((c) => rows[0]![c] !== undefined);
-					const text = `INSERT INTO ${t} (${cols.map((c) => `"${c}"`).join(', ')}) SELECT ${cols.map((c) => `r."${c}"`).join(', ')}
-				FROM jsonb_populate_recordset(null::${t}, $1::jsonb) r ON CONFLICT (id) DO NOTHING`;
-					yield* tx.query({ text, params: [JSON.stringify(rows)] });
-				}
-		})
-	);
-	const identities: ReadonlySet<string> = new Set(IDENTITY);
-	const tenant = Object.fromEntries(Object.entries(pack.rows).filter(([c]) => !identities.has(c)));
-	if (Object.keys(tenant).length > 0) yield* restore(m, db, tenant, now);
-	// a pack writes past the acts that queue `bolt.embed`: seeded rows of a semantic collection would never get a vector
-	if (Object.keys(tenant).some((c) => m.models[c]?.search?.semantic !== undefined)) {
-		const chain = new Chain();
-		enqueue(chain, [{ automation: EMBED, input: {}, dueAt: now, cause: 'updated', depth: 0 }]);
-		yield* db.write(chain.sql('1'));
-	}
-	return true;
+	return (yield* drain((yield* packLoader(db, m, pack, now)).step)) === 'loaded';
 });

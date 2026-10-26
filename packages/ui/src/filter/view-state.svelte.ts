@@ -1,9 +1,11 @@
 // The view popover's state for a `Table` or `Board` (rule 16b): filter rows and sort keys, read strictly from the URL
-// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`orderBy` a read sends. The condition catalogue
-// (`filter.options`) is the same one a description is offered; the builder renders it, never an operator table of its own.
+// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`orderBy` a read sends. A relative condition
+// ("this month") stays relative in the rows and the URL; the read gets its literal at the page's day clock, so it rolls
+// over at midnight in the workspace zone. The condition catalogue (`filter.options`) is the same one a description is
+// offered; the builder renders it, never an operator table of its own.
 import { Effect, Result } from 'effect';
 import { untrack } from 'svelte';
-import type { CollectionExposure } from '../kinds/context.js';
+import { useKinds, type CollectionExposure } from '../kinds/context.js';
 import type { Json, ViewBolt } from '../client/contract.js';
 import {
 	clauses,
@@ -18,6 +20,7 @@ import {
 	sortable,
 	toWhere,
 	writeViewUrl,
+	type FilterClock,
 	type Node,
 	type Offer,
 	type SortKey,
@@ -29,23 +32,32 @@ type Catalog = { readonly [collection: string]: CollectionExposure };
 export type ViewState = ReturnType<typeof viewState>;
 
 export function viewState(
-	bolt: ViewBolt,
+	bolt: ViewBolt | undefined,
 	o: {
 		key: () => string;
 		collection: () => string;
 		catalog: () => Catalog;
 		initialFilter: () => Json | undefined;
+		/** Controlled row views own their URL state and never apply this viewer's transforms. */
+		enabled?: () => boolean;
 	}
 ) {
 	const params = () =>
 		typeof location === 'undefined' ? new URLSearchParams() : new URL(location.href).searchParams;
+	const words: Pick<ViewBolt, 't'> = bolt ?? { t: (key) => key };
 	const DROPPED = () =>
-		msg(bolt, 'view.dropped', 'A filter or sort from the link no longer applies and was removed');
+		msg(words, 'view.dropped', 'A filter or sort from the link no longer applies and was removed');
+	const day = $derived(o.enabled?.() === false ? undefined : bolt?.clock('day'));
+	const zone = useKinds().zone ?? 'UTC';
+	const clock = (): FilterClock => {
+		if (day === undefined) throw new Error('A filtered view needs the shell clock.');
+		return { today: day.today, now: day.now, zone };
+	};
 
 	/** `bolt.decode` per top-level clause (it keeps or drops each top-level key; an `and` list is one key), or null when the
 	 * client has none (a local array, a test host): the typed rows then are the check. */
 	function decode(c: string, q: { where?: Json; orderBy?: Json }) {
-		if (bolt.decode === undefined || c.startsWith('$')) return null;
+		if (bolt?.decode === undefined || c.startsWith('$')) return null;
 		return Result.getOrElse(
 			Result.try({
 				try: () => bolt.decode?.(c, q) ?? null,
@@ -56,6 +68,7 @@ export function viewState(
 	}
 	/** URL → rows and keys: each top-level clause and key decoded alone; the bad ones dropped with one notice. */
 	function load() {
+		if (o.enabled?.() === false) return { rows: [], order: [], touched: false, notice: null };
 		const c = o.collection(),
 			cat = o.catalog(),
 			url = readViewUrl(params(), o.key());
@@ -63,9 +76,10 @@ export function viewState(
 		let dropped = url.badJson ? 1 : 0;
 		const rows: Node[] = [];
 		for (const clause of clauses(url.where ?? o.initialFilter() ?? null)) {
-			const d = decode(c, { where: clause });
-			const n = d !== null && d.dropped.length > 0 ? null : fromWhere(cat, c, clause);
-			if (n !== null) rows.push(...n);
+			const n = fromWhere(cat, c, clause);
+			const w = n === null ? null : rowsWhere(cat, c, n, clock());
+			const d = w === null ? null : decode(c, { where: w });
+			if (n !== null && (d === null || d.dropped.length === 0)) rows.push(...n);
 			else if (fromUrl) dropped++;
 		}
 		let text = url.order ?? '';
@@ -104,7 +118,7 @@ export function viewState(
 	function loadOffers(): Effect.Effect<void> {
 		return Effect.suspend(() => {
 			const spec = offerSpec;
-			if (bolt.options === undefined || loaded === spec || loading === spec) return Effect.void;
+			if (bolt?.options === undefined || loaded === spec || loading === spec) return Effect.void;
 			loading = spec;
 			loaded = null;
 			offers = [];
@@ -132,13 +146,16 @@ export function viewState(
 		});
 	}
 
-	// what the read sends: the viewer's rows, each re-checked by `bolt.decode` when the client has it (rule 11a)
+	// what the read sends: the viewer's rows at the page's clock, each re-checked by `bolt.decode` when the client has it
+	// (rule 11a)
 	const lowered = $derived.by(() => {
+		if (o.enabled?.() === false) return { where: undefined, dropped: 0 };
 		const c = o.collection(),
+			at = clock(),
 			parts: Where[] = [];
 		let dropped = 0;
 		for (const n of rows) {
-			const w = toWhere(o.catalog(), c, n);
+			const w = toWhere(o.catalog(), c, n, at);
 			if (w === null) continue;
 			const d = decode(c, { where: w });
 			if (d !== null && d.dropped.length > 0) dropped++;
@@ -150,6 +167,7 @@ export function viewState(
 		};
 	});
 	$effect(() => {
+		if (o.enabled?.() === false) return;
 		const next = writeViewUrl(params(), o.key(), {
 			where: rowsWhere(o.catalog(), o.collection(), rows),
 			touched,
@@ -207,10 +225,10 @@ export function viewState(
 						'message' in why &&
 						String(why.message) !== ''
 							? String(why.message)
-							: msg(bolt, 'view.describeFailed', 'Could not build a filter from that description');
+							: msg(words, 'view.describeFailed', 'Could not build a filter from that description');
 					return false;
 				};
-				if (bolt.describe === undefined || text.trim() === '') return Effect.succeed(false);
+				if (bolt?.describe === undefined || text.trim() === '') return Effect.succeed(false);
 				const collection = o.collection();
 				return bolt
 					.describe(collection, text.trim(), localFilterFields(collection, o.catalog()[collection]))

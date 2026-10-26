@@ -11,7 +11,7 @@ import { label, msg } from '../text/messages.js';
  * while it loads. Never the id: a record the viewer cannot read says so.
  */
 export function recordLabels(
-	bolt: Pick<ViewBolt, 'get' | 't' | 'locale'>,
+	bolt: Pick<ViewBolt, 'query' | 't' | 'locale'>,
 	catalog: () => { readonly [c: string]: CollectionExposure } | undefined
 ) {
 	const known = new SvelteMap<string, string>();
@@ -22,7 +22,7 @@ export function recordLabels(
 		if (hit !== undefined || asked.has(key)) return hit ?? '…';
 		asked.add(key);
 		fork(
-			bolt.get<Row | null>(target, id).pipe(
+			bolt.query<Row | null>(target, { id }).pipe(
 				Effect.tap((row) =>
 					Effect.sync(() =>
 						known.set(

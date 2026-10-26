@@ -39,8 +39,8 @@ describe('needsGuest (rule 71, L-COL-107)', () => {
 				yield* needsGuest(
 					post('/__bolt/q', {
 						reads: [
-							{ m: 'read', a: ['t', {}] },
-							{ m: 'get', a: ['t', 'x'] }
+							{ m: 'query', a: ['t', {}] },
+							{ m: 'query', a: ['t', { id: 'x' }] }
 						]
 					})
 				)
@@ -81,14 +81,18 @@ describe('needsGuest (rule 71, L-COL-107)', () => {
 				yield* needsGuest(
 					post('/__bolt/q', {
 						reads: [
-							{ m: 'get', a: ['t', 'x'] },
+							{ m: 'query', a: ['t', { id: 'x' }] },
 							{ m: 'query', a: ['t.open'] }
 						]
 					})
 				)
 			).toBe(true);
 			expect(
-				yield* needsGuest(post('/__bolt/q', { reads: [{ m: 'similar', a: ['t.like'] }] }))
+				yield* needsGuest(
+					post('/__bolt/q', {
+						reads: [{ m: 'query', a: ['t', { search: { like: {} }, limit: 1 }] }]
+					})
+				)
 			).toBe(true);
 			expect(
 				yield* needsGuest(

@@ -1,18 +1,20 @@
-// Collection queries and actions, starts, visitors and refusal scoping (rules 31, 32, 33, 33a, 38d) on PGlite.
+// Queries, generated atomic batches, queued automations, visitors and refusal scoping on PGlite.
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Logger, Option, Result, Schema } from 'effect';
+import { vi } from 'vitest';
+import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { decodeManifest } from '../src/engine/manifest.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
-import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TenantDb, type DbBatch } from '../src/engine/db/tenant-db.ts';
 import { Callables } from '../src/engine/services.ts';
+import { row } from '../src/engine/system/rows.ts';
 import { program } from './support/guest-fixture.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { HEADERS, uuidv7 } from '../src/protocol/wire.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, Sql } from '../src/engine/contracts.ts';
+import type { Authority } from '../src/engine/contracts.ts';
 import { DbError } from '../src/engine/errors.ts';
-import type { Outcome } from '../src/engine/contracts.ts';
-import { ActConflict, ActRefused, actFailure } from '../src/decl/errors.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import { ActConflict, actFailure } from '../src/decl/errors.ts';
 import { forActor } from '../src/engine/callables/index.ts';
 import { KitInvalid, TestWorkspace, type ActOptions, type TestOptions } from '../src/test/index.ts';
 
@@ -45,31 +47,20 @@ const manifest = Result.getOrThrow(
 			customers: { read: { fields: 'all' } },
 			orders: {
 				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'region', 'customer'] } },
+				create: { input: { columns: ['title', 'region', 'customer'] }, transform: true },
 				update: { input: { columns: ['title', 'status'] } },
 				queries: {
 					mine: { description: 'My orders', input: {}, output: { kind: 'int' } },
 					secret: { description: 'Internal', input: {}, output: { kind: 'int' }, internal: true }
-				},
-				actions: {
-					place: {
-						description: 'Place',
-						input: { title: { kind: 'text' }, customer: { kind: 'id', of: 'customers' } },
-						output: { kind: 'text' }
-					},
-					submit: { description: 'Submit', input: {}, target: 'record', output: { kind: 'text' } },
-					audit: { description: 'Internal', input: {}, internal: true, output: { kind: 'text' } },
-					boom: { description: 'Throws', input: {} }
 				}
 			},
 			notes: { read: { fields: 'all' }, create: { input: { columns: ['text', 'order'] } } }
 		},
 		integrations: {},
-		pipelines: {},
 		policies: {
 			rep: {
 				description: 'Rep',
-				automations: ['followup'],
+				automations: ['followup', 'place', 'submit', 'revise', 'boom'],
 				grants: {
 					customers: { read: true },
 					orders: {
@@ -77,20 +68,39 @@ const manifest = Result.getOrThrow(
 						create: true,
 						update: 'read',
 						moves: { status: ['draft->submitted'] },
-						queries: ['mine', 'secret'],
-						actions: ['place', 'submit', 'boom', 'audit']
+						queries: ['mine', 'secret']
 					},
 					notes: { read: true, create: true }
 				}
 			},
-			// may call `place` but writes no orders: the action's recorded write is judged as this caller (rule 33)
+			// A trigger-run automation keeps this caller's grants; starting it grants no order writes.
 			clerk: {
 				description: 'Clerk',
-				grants: { customers: { read: true }, orders: { read: true, actions: ['place'] } }
+				automations: ['place'],
+				grants: { customers: { read: true }, orders: { read: true } }
 			}
 		},
 		teams: { Rep: ['rep'], Clerk: ['clerk'] },
 		automations: {
+			place: {
+				description: 'Place an order',
+				input: { title: { kind: 'text' }, customer: { kind: 'id', of: 'customers' } },
+				output: { kind: 'text' },
+				runAs: 'trigger'
+			},
+			submit: {
+				description: 'Submit an order',
+				input: { order: { kind: 'id', of: 'orders' } },
+				output: { kind: 'text' },
+				runAs: 'trigger'
+			},
+			revise: {
+				description: 'Apply an observed extraction',
+				input: { order: { kind: 'id', of: 'orders' }, revision: { kind: 'int' } },
+				output: { kind: 'text' },
+				runAs: 'trigger'
+			},
+			boom: { description: 'Throws', input: {}, runAs: 'trigger' },
 			followup: {
 				description: 'Follow up',
 				input: { order: { kind: 'id', of: 'orders' } },
@@ -106,26 +116,43 @@ const manifest = Result.getOrThrow(
 	})
 );
 
-const guest = program(`export default { collection: { orders: { bodies: {
-	queries: {
-		mine: function* (input, ctx) { return (yield* ctx.read('orders', { all: true })).rows.length; },
-		secret: function* () { return 42; },
-	},
-	actions: {
-		place: function* (input, ctx) {
-			const o = yield* ctx.act('orders.create', { title: input.title, region: 'north', customer: input.customer });
-			const id = o.records[0].id;
-			yield* ctx.act('notes.create', { text: 'placed ' + input.title, order: id });
-			if (input.title === 'no') return yield* ctx.refuse('not that one', { field: 'title' });
-			const run = yield* ctx.schedule('followup', { order: id }, { at: { now: '+1h' } });
-			yield* ctx.notify({ to: { policy: 'rep' }, title: 'Placed' });
-			return id + ':' + run.automation + ':' + (yield* ctx.query('orders', 'secret', {}));
-		},
-		submit: function* (input, ctx) { yield* ctx.act('orders.update', { target: ctx.target.id, set: { status: 'submitted' } }); return ctx.target.title; },
-		audit: function* () { return 'ok'; },
-		boom: function* () { throw new Error('a bug'); },
-	},
-} } } };`);
+const guest = program(`import { Effect } from 'effect';
+import { ActRefused } from '@norbital-ai/bolt/errors';
+export default {
+ collection: { orders: { bodies: {
+  create: function* (inputs, ctx) {
+   for (const [row, input] of inputs.entries())
+    if (input.title === 'no') return yield* ctx.refuse('not that one', { field: 'title', row });
+   return inputs;
+  },
+  queries: {
+   mine: function* (input, ctx) { return (yield* ctx.query('orders', { all: true })).rows.length; },
+   secret: function* () { return 42; }
+  }
+ } } },
+ automation: {
+  place: { body: function* (input, ctx) {
+   if (input.title === 'no') return yield* Effect.fail(new ActRefused({code:'refused', message:'not that one', field:'title', rule:'place'}));
+   const o = yield* ctx.act('orders.create', { title: input.title, region: 'north', customer: input.customer });
+   const id = o.records[0].id;
+   yield* ctx.act('notes.create', { text: 'placed ' + input.title, order: id });
+   const run = yield* ctx.schedule('followup', { order: id }, { at: { now: '+1h' } });
+   yield* ctx.notify({ to: [{ policy: 'rep' }], title: 'Placed' });
+   return id + ':' + run.automation + ':' + (yield* ctx.query('orders.secret', {}));
+  } },
+  submit: { body: function* (input, ctx) {
+   const target = yield* ctx.query('orders', { id: input.order });
+   yield* ctx.act('orders.update', { target: input.order, set: { status: 'submitted' } });
+   return target.title;
+  } },
+  revise: { body: function* (input, ctx) {
+   yield* ctx.act('orders.update', {target:input.order, set:{title:'extracted'}}, {observed:{[input.order]:input.revision}});
+   return 'extracted';
+  } },
+  boom: { body: function* () { throw new Error('a bug'); } },
+  followup: { body: function* (input) { return input.order; } }
+ }
+};`);
 const fixture = (options: Extract<TestOptions, { artifact?: never }> = {}) =>
 	Effect.gen(function* () {
 		const defaults =
@@ -180,14 +207,10 @@ const act = (
 			return Option.isSome(failure) ? Effect.fail(failure.value) : Effect.succeed(r.outcome);
 		})
 	);
-const answer = (
-	f: Fixture,
-	authority: Authority,
-	m: 'read' | 'get' | 'query',
-	a: readonly Json[]
-) => qReply(f.route, authority, { reads: [{ m, a }] }).pipe(Effect.map((r) => r.answers[0]));
+const answer = (f: Fixture, authority: Authority, a: readonly Json[]) =>
+	qReply(f.route, authority, { reads: [{ m: 'query', a }] }).pipe(Effect.map((r) => r.answers[0]));
 const read = (f: Fixture, authority: Authority, collection: string, q: Json) =>
-	answer(f, authority, 'read', [collection, q]).pipe(
+	answer(f, authority, [collection, q]).pipe(
 		Effect.flatMap(
 			Schema.decodeUnknownEffect(
 				Schema.Struct({
@@ -198,13 +221,9 @@ const read = (f: Fixture, authority: Authority, collection: string, q: Json) =>
 		)
 	);
 const get = (f: Fixture, authority: Authority, collection: string, id: string) =>
-	answer(f, authority, 'get', [collection, id, {}]);
+	answer(f, authority, [collection, { id }]);
 const query = (f: Fixture, authority: Authority, name: string, input: Json = {}) =>
-	answer(f, authority, 'query', [
-		name.slice(0, name.lastIndexOf('.')),
-		name.slice(name.lastIndexOf('.') + 1),
-		input
-	]);
+	answer(f, authority, [name, input]);
 const start = (
 	f: Fixture,
 	authority: Authority,
@@ -218,171 +237,261 @@ const start = (
 		id: options.id ?? uuidv7(Date.parse(f.t.clock.now()))
 	});
 
-describe('collection actions (rules 31, 33)', () => {
+const Run = row('sys_run', ['id', 'state', 'output', 'error', 'attempts']);
+const run = (f: Fixture, id: string) =>
+	f.t.db
+		.one(Run, {
+			text: 'SELECT id, state, output, error, attempts FROM sys_run WHERE id = $1',
+			params: [id]
+		})
+		.pipe(Effect.map(Option.getOrThrow));
+type Batch = Parameters<Fixture['calls']['acts']>[0]['acts'];
+const batch = (f: Fixture, authority: Authority, acts: Batch, key: string = crypto.randomUUID()) =>
+	f.calls
+		.acts({
+			name: 'act.many',
+			acts,
+			key,
+			invocationId: key,
+			issuedAt: f.t.clock.now(),
+			authority,
+			bindings: {
+				now: f.t.clock.now(),
+				today: f.t.clock.now().slice(0, 10),
+				tz: 'UTC',
+				params: {}
+			},
+			from: 'Client'
+		})
+		.pipe(
+			Effect.flatMap(({ outcome }) => {
+				const failure = actFailure(outcome);
+				return Option.isSome(failure) ? Effect.fail(failure.value) : Effect.succeed(outcome);
+			})
+		);
+
+// Retirement mapping: workflows use durable queued starts; observations, one-commit atomicity, late callback
+// refusal, serialization replay and idempotency stay on native generated verbs/batches.
+describe('generated batches and queued business workflows', () => {
 	it.live(
-		'backend observations survive nested actions and cannot relax the outer revision guard',
+		'queued ctx.act retains its observed revision, and generated batches keep their per-item guards',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const orders = manifest.collections['orders'];
-					if (orders === undefined) throw new Error('Missing order collection fixture');
-					const fk = yield* fixture({
-						manifest: {
-							...manifest,
-							collections: {
-								...manifest.collections,
-								orders: {
-									...orders,
-									actions: {
-										revise: {
-											description: 'Apply extraction',
-											target: 'record',
-											input: { revision: { kind: 'int' } }
-										},
-										forward: { description: 'Delegate extraction', target: 'record', input: {} }
-									}
-								}
-							}
-						},
-						guest: yield* program(`export default { collection: { orders: { bodies: { actions: {
-				revise: function* (input, ctx) { return yield* ctx.act('orders.update', { target: ctx.target.id, set: { title: 'extracted' } }, { observed: { [ctx.target.id]: input.revision } }); },
-				forward: function* (input, ctx) { return yield* ctx.act('orders.revise', { target: ctx.target.id, input: { revision: ctx.target.revision } }, { observed: { [ctx.target.id]: ctx.target.revision } }); }
-			} } } } };`),
-						seed: { customers: [{ id: ACME, name: 'Acme' }] }
-					});
-					const k = fk.t;
-					const admin = k.as(k.admin);
+					const f = yield* fixture();
+					const admin = f.t.as(f.t.admin);
 					const created = ok(
-						yield* act(fk, admin.authority, 'orders.create', {
+						yield* act(f, admin.authority, 'orders.create', {
 							title: 'original',
 							region: 'north',
 							customer: ACME
 						})
-					).records.find((row) => row.collection === 'orders');
+					).records[0];
 					if (created === undefined) throw new Error('Missing created order');
 					const updated = ok(
-						yield* act(fk, admin.authority, 'orders.update', {
+						yield* act(f, admin.authority, 'orders.update', {
 							target: created.id,
 							set: { title: 'newer edit' }
 						})
-					).records.find((row) => row.id === created.id);
+					).records[0];
 					if (updated === undefined) throw new Error('Missing updated order');
-					const stale = yield* Effect.flip(
-						act(fk, admin.authority, 'orders.revise', {
-							target: created.id,
-							input: { revision: created.revision }
-						})
+					const stale = uuidv7(Date.parse(f.t.clock.now()));
+					ok(
+						yield* start(
+							f,
+							admin.authority,
+							'revise',
+							{ order: created.id, revision: created.revision },
+							{ id: stale }
+						)
 					);
-					expect(stale, JSON.stringify(stale)).toMatchObject({ _tag: 'ActConflict' });
+					expect((yield* run(f, stale)).state).toBe('queued');
+					yield* f.t.runDue();
+					expect(yield* run(f, stale)).toMatchObject({
+						state: 'failed',
+						error: { code: 'conflict' }
+					});
 					expect(
 						yield* Effect.flip(
 							act(
-								fk,
+								f,
 								admin.authority,
-								'orders.forward',
-								{ target: created.id },
+								'orders.update',
+								{ target: created.id, set: { title: 'stale outer' } },
 								{ observed: { [created.id]: created.revision } }
 							)
 						)
 					).toMatchObject({ _tag: 'ActConflict' });
-					expect(yield* get(fk, admin.authority, 'orders', created.id)).toMatchObject({
+					expect(
+						yield* Effect.flip(
+							batch(f, admin.authority, [
+								{
+									collection: 'orders',
+									verb: 'update',
+									input: { target: created.id, set: { title: 'stale batch' } },
+									observed: { [created.id]: created.revision }
+								}
+							])
+						)
+					).toMatchObject({ _tag: 'ActConflict' });
+					expect(yield* get(f, admin.authority, 'orders', created.id)).toMatchObject({
 						title: 'newer edit',
 						revision: updated.revision
 					});
 					expect(
-						yield* act(
-							fk,
-							admin.authority,
-							'orders.forward',
-							{ target: created.id },
-							{ observed: { [created.id]: updated.revision } }
-						)
+						yield* batch(f, admin.authority, [
+							{
+								collection: 'orders',
+								verb: 'update',
+								input: { target: created.id, set: { title: 'extracted' } },
+								observed: { [created.id]: updated.revision }
+							}
+						])
 					).toMatchObject({ kind: 'committed' });
-					expect(yield* get(fk, admin.authority, 'orders', created.id)).toMatchObject({
+					expect(yield* get(f, admin.authority, 'orders', created.id)).toMatchObject({
 						title: 'extracted',
 						revision: updated.revision + 1
 					});
 				})
 			)
 	);
-
-	it.live('records every ctx.act, schedule and notice and commits them in the one statement', () =>
+	it.live(
+		'a queued workflow creates its order and note, schedules followup and notifies before returning its run output',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t,
+						rep = t.as(t.member(['rep']));
+					yield* t.db.write({
+						text: "INSERT INTO sys_user (id,name,team) VALUES ('u9','Rep','Rep')",
+						params: []
+					});
+					const id = uuidv7(Date.parse(t.clock.now()));
+					expect(
+						yield* start(f, rep.authority, 'place', { title: 'desk', customer: ACME }, { id })
+					).toMatchObject({ kind: 'committed', output: { id, automation: 'place', ids: [id] } });
+					expect((yield* run(f, id)).state).toBe('queued');
+					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
+					yield* t.runDue();
+					const order = (yield* read(f, rep.authority, 'orders', { all: true })).rows[0];
+					if (order === undefined || typeof order['id'] !== 'string')
+						throw new Error('Missing workflow order');
+					expect(yield* run(f, id)).toMatchObject({
+						state: 'succeeded',
+						output: order['id'] + ':followup:42',
+						error: null
+					});
+					expect(
+						(yield* read(f, rep.authority, 'notes', { all: true })).rows.map((n) => n['text'])
+					).toEqual(['placed desk']);
+					const [scheduled] = yield* rows(
+						f,
+						"SELECT automation,input,due_at,cause FROM sys_run WHERE automation='followup'"
+					);
+					expect(scheduled).toMatchObject({
+						automation: 'followup',
+						input: { order: order['id'] },
+						cause: 'schedule'
+					});
+					expect(new Date(String(scheduled?.['due_at'])).toISOString()).toBe(
+						'2026-09-25T11:00:00.000Z'
+					);
+					expect(
+						t.fakes.deadlines.announced.map(({ scope, at }) => ({ scope, at: Date.parse(at) }))
+					).toContainEqual({ scope: 'test', at: Date.parse('2026-09-25T10:00:00.000Z') });
+					expect(yield* rows(f, 'SELECT title,member FROM sys_notification')).toEqual([
+						{ title: 'Placed', member: 'u9' }
+					]);
+				})
+			)
+	);
+	it.live('independent generated verbs across collections commit in one native batch', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture(),
-					t = f.t;
-				const rep = t.as(t.member(['rep']));
-				// L-BOLT-354: the `{ policy: 'rep' }` notice fans out to the one member on file who holds it
-				yield* t.db.write({
-					text: `INSERT INTO sys_user (id, name,team) VALUES ('u9', 'Rep','Rep')`,
-					params: []
-				});
-				t.count.reset();
+					t = f.t,
+					rep = t.as(t.member(['rep']));
+				const parent = ok(
+					yield* act(f, rep.authority, 'orders.create', {
+						title: 'parent',
+						region: 'north',
+						customer: ACME
+					})
+				).records[0];
+				if (parent === undefined) throw new Error('Missing parent');
+				const commits = vi.spyOn(t.db, 'transaction');
 				const placed = ok(
-					yield* act(f, rep.authority, 'orders.place', { title: 'desk', customer: ACME })
+					yield* batch(f, rep.authority, [
+						{
+							collection: 'orders',
+							verb: 'create',
+							input: { title: 'desk', region: 'north', customer: ACME }
+						},
+						{
+							collection: 'notes',
+							verb: 'create',
+							input: { text: 'placed desk', order: parent.id }
+						}
+					])
 				);
-				expect(t.count.writes).toBe(1);
+				expect(commits).toHaveBeenCalledTimes(1);
 				expect(placed.records.map((r) => r.collection).sort()).toEqual(['notes', 'orders']);
-				const id = placed.records.find((r) => r.collection === 'orders')!.id;
-				expect(placed.output).toBe(`${id}:followup:42`);
 				expect(
 					(yield* read(f, rep.authority, 'notes', { all: true })).rows.map((n) => n['text'])
 				).toEqual(['placed desk']);
-				const [run] = yield* rows(f, `SELECT automation, input, due_at, cause FROM sys_run`);
-				expect(run).toMatchObject({
-					automation: 'followup',
-					input: { order: id },
-					cause: 'schedule'
-				});
-				expect(new Date(String(run!['due_at'])).toISOString()).toBe('2026-09-25T11:00:00.000Z');
-				// The same statement's notification is due now, before the scheduled followup.
-				expect(
-					t.fakes.deadlines.announced.map(({ scope, at }) => ({ scope, at: Date.parse(at) }))
-				).toEqual([{ scope: 'test', at: Date.parse('2026-09-25T10:00:00.000Z') }]);
-				expect(yield* rows(f, `SELECT title, member FROM sys_notification`)).toEqual([
-					{ title: 'Placed', member: 'u9' }
-				]);
 			})
 		)
 	);
-
-	it.live('a ctx.refuse after writes commits nothing and is recorded once', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				const rep = t.as(t.member(['rep']));
-				const first = yield* Effect.flip(
-					act(f, rep.authority, 'orders.place', { title: 'no', customer: ACME }, { key: 'k' })
-				);
-				expect(first).toEqual(
-					new ActRefused({
+	it.live(
+		'a late generated callback refusal commits no partial rows and a replay adds no business writes',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t,
+						rep = t.as(t.member(['rep']));
+					const operations: Batch = [
+						{
+							collection: 'orders',
+							verb: 'create',
+							input: { title: 'accepted first', region: 'north', customer: ACME }
+						},
+						{
+							collection: 'orders',
+							verb: 'create',
+							input: { title: 'no', region: 'north', customer: ACME }
+						}
+					];
+					const commits = vi.spyOn(t.db, 'transaction');
+					const first = yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'));
+					expect(first).toMatchObject({
+						_tag: 'ActRefused',
 						code: 'refused',
 						message: 'not that one',
-						field: 'title',
-						rule: 'orders.place'
-					})
-				);
-				t.count.reset();
-				expect(
-					yield* Effect.flip(
-						act(
-							f,
-							rep.authority,
-							'orders.place',
-							{ title: 'no', customer: ACME },
-							{ key: 'k', retry: true }
-						)
-					)
-				).toEqual(first);
-				expect(t.count.writes).toBe(0);
-				expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
-			})
-		)
+						field: 'title'
+					});
+					expect(commits).not.toHaveBeenCalled();
+					expect(yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'))).toEqual(
+						first
+					);
+					expect(commits).not.toHaveBeenCalled();
+					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
+					const id = uuidv7(Date.parse(t.clock.now()));
+					ok(yield* start(f, rep.authority, 'place', { title: 'no', customer: ACME }, { id }));
+					expect((yield* run(f, id)).state).toBe('queued');
+					yield* t.runDue();
+					expect(yield* run(f, id)).toMatchObject({
+						state: 'failed',
+						error: { code: 'refused', message: 'not that one', field: 'title', rule: 'place' }
+					});
+					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
+					expect(yield* rows(f, 'SELECT id FROM notes')).toEqual([]);
+				})
+			)
 	);
-
 	it.live(
-		'records a terminal serialization conflict after one callable replay and returns it on retry',
+		'records a terminal serialization conflict after one generated batch replay and returns it on retry',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -390,216 +499,181 @@ describe('collection actions (rules 31, 33)', () => {
 						inner = Context.get(storage, TenantDb);
 					let armed = false,
 						failures = 0;
-					const writes: Sql[] = [];
+					const attempts: DbBatch[] = [];
 					const db = TenantDb.typed({
 						read: inner.read,
-						transaction: inner.transaction,
-						write: (statement, lock) =>
+						transaction: (batch) =>
 							Effect.suspend(() => {
 								if (armed) {
-									writes.push(statement);
+									attempts.push(batch);
 									if (failures++ < 2)
 										return Effect.fail(DbError.make('40001', 'serialization fixture'));
 								}
-								return inner.write(statement, lock);
-							})
+								return inner.transaction(batch);
+							}),
+						session: inner.session,
+						write: inner.write
 					});
 					const f = yield* fixture({ db: Layer.succeed(TenantDb, db) }),
-						t = f.t;
-					const rep = t.as(t.member(['rep']));
-					yield* t.db.read([]);
+						rep = f.t.as(f.t.member(['rep']));
+					yield* f.t.db.read([]);
 					armed = true;
-					const first = yield* Effect.flip(
-						act(
-							f,
-							rep.authority,
-							'orders.place',
-							{ title: 'bounded callable', customer: ACME },
-							{ key: 'bounded-callable' }
-						)
-					);
+					const operations: Batch = [
+						{
+							collection: 'orders',
+							verb: 'create',
+							input: { title: 'bounded callable', region: 'north', customer: ACME }
+						}
+					];
+					const first = yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'));
 					expect(first).toEqual(new ActConflict({ records: [] }));
-					expect(writes).toHaveLength(3);
-					expect(writes[1]?.params).toEqual(writes[0]?.params);
+					expect(attempts).toHaveLength(3);
+					expect(attempts[1]?.statements).toEqual(attempts[0]?.statements);
 					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
-					writes.length = 0;
+					attempts.length = 0;
 					expect(
-						yield* Effect.flip(
-							act(
-								f,
-								rep.authority,
-								'orders.place',
-								{ title: 'bounded callable', customer: ACME },
-								{ key: 'bounded-callable', retry: true }
-							)
-						)
+						yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'))
 					).toEqual(first);
-					expect(writes).toHaveLength(0);
+					// A native replay checks the persisted outcome in one batch without adding business rows.
+					expect(attempts).toHaveLength(1);
+					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
 				})
 			)
 	);
-
-	it.live('an unmarked replay returns the first outcome and writes nothing new', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				const rep = t.as(t.member(['rep']));
-				const first = yield* act(
-					f,
-					rep.authority,
-					'orders.place',
-					{ title: 'desk', customer: ACME },
-					{ key: 'same' }
-				);
-				expect(
-					yield* act(
-						f,
-						rep.authority,
-						'orders.place',
-						{ title: 'desk', customer: ACME },
-						{ key: 'same' }
-					)
-				).toEqual(first);
-				expect(yield* rows(f, 'SELECT count(*)::int AS n FROM orders')).toEqual([{ n: 1 }]);
-				expect(
-					yield* Effect.flip(
-						act(
-							f,
-							rep.authority,
-							'orders.place',
-							{ title: 'other', customer: ACME },
-							{ key: 'same' }
-						)
-					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'keyReuse' });
-			})
-		)
-	);
-
 	it.live(
-		"an action's write is judged as the caller: a clerk who may call it but not write orders is forbidden",
+		'a generated verb replay returns the first outcome and adds no rows; changed input is keyReuse',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture(),
-						t = f.t;
+						rep = f.t.as(f.t.member(['rep']));
+					const input = { title: 'desk', region: 'north', customer: ACME };
+					const first = yield* act(f, rep.authority, 'orders.create', input, { key: 'same' });
+					expect(yield* act(f, rep.authority, 'orders.create', input, { key: 'same' })).toEqual(
+						first
+					);
+					expect(yield* rows(f, 'SELECT count(*)::int AS n FROM orders')).toEqual([{ n: 1 }]);
 					expect(
 						yield* Effect.flip(
-							act(f, t.as(t.member(['clerk'])).authority, 'orders.place', {
-								title: 'desk',
-								customer: ACME
+							act(f, rep.authority, 'orders.create', { ...input, title: 'other' }, { key: 'same' })
+						)
+					).toMatchObject({ _tag: 'ActRefused', code: 'keyReuse' });
+				})
+			)
+	);
+	it.live('a queued trigger-run workflow retains a clerk’s grants and cannot write orders', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture(),
+					id = uuidv7(Date.parse(f.t.clock.now()));
+				ok(
+					yield* start(
+						f,
+						f.t.as(f.t.member(['clerk'])).authority,
+						'place',
+						{ title: 'desk', customer: ACME },
+						{ id }
+					)
+				);
+				expect((yield* run(f, id)).state).toBe('queued');
+				yield* f.t.runDue();
+				expect(yield* run(f, id)).toMatchObject({ state: 'failed', error: { code: 'forbidden' } });
+				expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
+			})
+		)
+	);
+	it.live('automation admission and internal queries require their policy grants', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture(),
+					rep = f.t.as(f.t.member(['rep']));
+				expect(
+					yield* Effect.flip(
+						start(f, f.t.as(f.t.member([])).authority, 'place', { title: 'x', customer: ACME })
+					)
+				).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
+				expect(yield* Effect.flip(query(f, rep.authority, 'orders.secret'))).toMatchObject({
+					code: 'forbidden'
+				});
+			})
+		)
+	);
+	it.live(
+		'a start decodes its declared input and readable refs before queuing or invoking guest code',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						rep = f.t.as(f.t.member(['rep']));
+					expect(
+						yield* Effect.flip(start(f, rep.authority, 'place', { title: 1, customer: ACME }))
+					).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput', field: 'title' });
+					expect(
+						yield* Effect.flip(
+							start(f, rep.authority, 'place', {
+								title: 'x',
+								customer: '0199a000-0000-4000-8000-00000000dead'
 							})
 						)
-					).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
+					).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'customer' });
+					expect(yield* rows(f, 'SELECT id FROM sys_run')).toEqual([]);
 				})
 			)
 	);
-
 	it.live(
-		'is reachable only by policy, and an internal action only from server code (rule 33a)',
+		'a queued submit reads its explicit order input and preserves caller target visibility',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture(),
-						t = f.t;
+						rep = f.t.as(f.t.member(['rep']));
+					const order = ok(
+						yield* act(f, rep.authority, 'orders.create', {
+							title: 'chair',
+							region: 'north',
+							customer: ACME
+						})
+					).records[0];
+					if (order === undefined) throw new Error('Missing created order');
+					const id = uuidv7(Date.parse(f.t.clock.now()));
+					ok(yield* start(f, rep.authority, 'submit', { order: order.id }, { id }));
+					expect((yield* run(f, id)).state).toBe('queued');
+					yield* f.t.runDue();
+					expect(yield* run(f, id)).toMatchObject({ state: 'succeeded', output: 'chair' });
+					expect(yield* get(f, rep.authority, 'orders', order.id)).toMatchObject({
+						status: 'submitted'
+					});
 					expect(
 						yield* Effect.flip(
-							act(f, t.as(t.member([])).authority, 'orders.place', { title: 'x', customer: ACME })
+							start(f, f.t.as(f.t.member(['rep'])).authority, 'submit', { order: order.id })
 						)
-					).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-					expect(
-						yield* Effect.flip(act(f, t.as(t.member(['rep'])).authority, 'orders.audit', {}))
-					).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-					expect(
-						yield* Effect.flip(query(f, t.as(t.member(['rep'])).authority, 'orders.secret'))
-					).toMatchObject({ code: 'forbidden' });
+					).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'order' });
 				})
 			)
 	);
-
-	it.live('decodes the input and checks its refs before guest code (rules 23, 36)', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				const rep = t.as(t.member(['rep']));
-				expect(
-					yield* Effect.flip(act(f, rep.authority, 'orders.place', { title: 1, customer: ACME }))
-				).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput', field: 'title' });
-				expect(
-					yield* Effect.flip(
-						act(f, rep.authority, 'orders.place', {
-							title: 'x',
-							customer: '0199a000-0000-4000-8000-00000000dead'
-						})
-					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'customer' });
-			})
-		)
-	);
-
-	it.live('a record action runs on its target row', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				const rep = t.as(t.member(['rep']));
-				const id = ok(
-					yield* act(f, rep.authority, 'orders.create', {
-						title: 'chair',
-						region: 'north',
-						customer: ACME
-					})
-				).records[0]!.id;
-				expect(ok(yield* act(f, rep.authority, 'orders.submit', { target: id })).output).toBe(
-					'chair'
-				);
-				expect(yield* get(f, rep.authority, 'orders', id)).toMatchObject({ status: 'submitted' });
-				expect(
-					yield* Effect.flip(
-						act(f, t.as(t.member(['rep'])).authority, 'orders.submit', { target: id })
-					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'target' });
-			})
-		)
-	);
-
-	it.live('a guest failure is unknown, not a refusal, and is not recorded (rule 72a)', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const f = yield* fixture(),
-					t = f.t;
-				const rep = t.member(['rep']);
-				yield* t.db.read([]);
-				t.count.reset();
-				const errors: unknown[] = [];
-				const logger = Logger.layer([
-					Logger.make(({ logLevel, message }) => {
-						if (logLevel === 'Error') errors.push(message);
-					})
-				]);
-				const r = yield* f.calls
-					.action({
-						collection: 'orders',
-						action: 'boom',
-						input: {},
-						key: 'b',
-						issuedAt: t.clock.now(),
-						invocationId: 'inv-1',
-						authority: t.as(rep).authority,
-						bindings: { now: t.clock.now(), today: '2026-09-25', tz: 'UTC', params: {} },
-						from: 'Client'
-					})
-					.pipe(Effect.provide(logger));
-				expect(r.outcome).toEqual({ kind: 'unknown', invocation: 'inv-1' });
-				expect(r.error).toMatchObject({ code: 'guestError', message: 'a bug' });
-				// the wire says only `unknown`: the cause is logged with the callable and invocation
-				expect(errors).toEqual([['orders.boom settled unknown (inv-1): guestError: a bug']]);
-				expect(t.count.writes).toBe(0);
-			})
-		)
+	it.live(
+		'a queued guest failure is recorded on its run and restarting the same id never invokes it twice',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						rep = f.t.as(f.t.member(['rep'])),
+						id = uuidv7(Date.parse(f.t.clock.now()));
+					const first = yield* start(f, rep.authority, 'boom', {}, { id });
+					expect(first).toMatchObject({ kind: 'committed' });
+					expect((yield* run(f, id)).state).toBe('queued');
+					yield* f.t.runDue();
+					expect(yield* run(f, id)).toMatchObject({
+						state: 'failed',
+						attempts: 1,
+						error: { code: 'guestError', message: 'a bug' }
+					});
+					expect(yield* start(f, rep.authority, 'boom', {}, { id })).toEqual(first);
+					yield* f.t.runDue();
+					expect(yield* run(f, id)).toMatchObject({ state: 'failed', attempts: 1 });
+					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
+				})
+			)
 	);
 });
 
@@ -649,6 +723,14 @@ describe('start (rules 31, 33, 51)', () => {
 							customer: ACME
 						})
 					).records[0]!.id;
+					const order2 = ok(
+						yield* act(f, rep.authority, 'orders.create', {
+							title: 'y',
+							region: 'north',
+							customer: ACME
+						})
+					).records[0];
+					if (order2 === undefined) throw new Error('Missing second order');
 					const id = uuidv7(Date.parse(t.clock.now()));
 					const first = yield* start(f, rep.authority, 'followup', { order }, { id });
 					expect(first).toEqual({
@@ -658,23 +740,16 @@ describe('start (rules 31, 33, 51)', () => {
 					});
 					expect(yield* start(f, rep.authority, 'followup', { order }, { id })).toEqual(first);
 					expect(
-						yield* Effect.flip(start(f, rep.authority, 'followup', { order: ACME }, { id }))
+						yield* Effect.flip(start(f, rep.authority, 'followup', { order: order2.id }, { id }))
 					).toMatchObject({ _tag: 'ActRefused', code: 'keyReuse' });
 					expect(yield* rows(f, 'SELECT due_at, cause FROM sys_run')).toHaveLength(1);
 					// a bulk start queues one run per record in one request, and a retry of it is the same start
-					const order2 = ok(
-						yield* act(f, rep.authority, 'orders.create', {
-							title: 'y',
-							region: 'north',
-							customer: ACME
-						})
-					).records[0]!.id;
 					const ids = [uuidv7(Date.parse(t.clock.now())), uuidv7(Date.parse(t.clock.now()))];
 					const bulk = {
 						automation: 'followup',
 						runs: [
 							{ id: ids[0]!, input: { order } },
-							{ id: ids[1]!, input: { order: order2 } }
+							{ id: ids[1]!, input: { order: order2.id } }
 						]
 					};
 					expect(yield* act(f, rep.authority, 'start', bulk)).toEqual({
@@ -706,8 +781,9 @@ describe('the kit: signIn and the clock', () => {
 				expect(rep.authority.policies).toEqual(['rep']);
 				t.clock.advance('2h');
 				expect(t.clock.now()).toBe('2026-09-25T12:00:00.000Z');
-				ok(yield* act(f, rep.authority, 'orders.place', { title: 'desk', customer: ACME }));
-				const [run] = yield* rows(f, 'SELECT due_at FROM sys_run');
+				ok(yield* start(f, rep.authority, 'place', { title: 'desk', customer: ACME }));
+				yield* t.runDue();
+				const [run] = yield* rows(f, "SELECT due_at FROM sys_run WHERE automation = 'followup'");
 				expect(new Date(String(run!['due_at'])).toISOString()).toBe('2026-09-25T13:00:00.000Z');
 				expect((yield* Effect.flip(t.signIn('nobody@example.com'))).message).toBeTruthy();
 			})
@@ -786,7 +862,6 @@ const careers = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		pipelines: {},
 		policies: {
 			applicant: {
 				description: 'Apply',
@@ -1034,23 +1109,29 @@ describe('the kit compiles a workspace directory (root)', () => {
 					);
 					const files: { [p: string]: string } = {
 						'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
-						'src/data/model/+orders.model.ts': `export default { description: 'Orders', label: 'title', fields: { title: { kind: 'text' } } };`,
-						'src/data/collection/orders/+collection.ts': `import { collection } from '@norbital-ai/bolt';
-const c = collection('orders', { read: { fields: 'all' }, create: { input: { columns: ['title'] } },
-	queries: { count: { description: 'Count', input: {}, output: { kind: 'int' } } } });
-c.transform(function* (rows) { return rows.map((r) => ({ ...r, title: r.title.trim() })); });
-c.query('count', function* (input, ctx) { return (yield* ctx.read('orders', { all: true })).rows.length; });
-export default c;`,
-						'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true, queries: ['count'] } } };`,
-						'seed/orders.json': JSON.stringify([
-							{ id: '0199a000-0000-4000-8000-000000000001', title: 'seeded' }
-						])
+						'src/data/model/orders/+model.ts': `import { model } from '@norbital-ai/bolt';
+export default model('orders', {
+	description: 'Orders', label: 'title', fields: { title: { kind: 'text' } },
+	read: { fields: 'all' },
+	create: {
+		columns: ['title'],
+		transform: function* (rows) { return rows.map((r) => ({ ...r, title: r.title.trim() })); },
+	},
+	queries: { count: {
+		description: 'Count', input: {}, output: { kind: 'int' },
+		run: function* (input, ctx) { return (yield* ctx.query('orders', { all: true })).rows.length; },
+	} },
+});`,
+						'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true, queries: ['count'] } } };`
 					};
 					for (const [p, text] of Object.entries(files)) {
 						mkdirSync(dirname(join(root, p)), { recursive: true });
 						writeFileSync(join(root, p), text);
 					}
-					const fk = yield* fixture({ root });
+					const fk = yield* fixture({
+						root,
+						seed: { orders: [{ id: '0199a000-0000-4000-8000-000000000001', title: 'seeded' }] }
+					});
 					const k = fk.t;
 					const rep = k.as(k.member(['rep']));
 					const id = ok(yield* act(fk, rep.authority, 'orders.create', { title: '  desk ' }))
@@ -1089,13 +1170,16 @@ export default c;`,
 					const files: { [p: string]: string } = {
 						'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
 						'src/data/custom_field/code/+definition.ts': `import { customField } from '@norbital-ai/bolt';
-const f = customField({ description: 'An upper-case code', shape: { kind: 'text' } });
-export default f;
-f.validate((v) => /^[A-Z]+$/.test(v) ? undefined : 'Use capital letters only.');`,
-						'src/data/model/+orders.model.ts': `export default { description: 'Orders', label: 'title', fields: { title: { kind: 'text' },
-	code: { kind: 'custom', of: 'code', optional: true }, codes: { kind: 'custom', of: 'code', many: true, optional: true } } };`,
-						'src/data/collection/orders/+collection.ts': `import { collection } from '@norbital-ai/bolt';
-export default collection('orders', { read: { fields: 'all' }, create: { input: { columns: ['title', 'code', 'codes'] } }, update: { input: { columns: ['code'] } } });`,
+export default customField('code', {
+	description: 'An upper-case code', shape: { kind: 'text' },
+	validate: (v) => /^[A-Z]+$/.test(v) ? undefined : 'Use capital letters only.',
+});`,
+						'src/data/model/orders/+model.ts': `import { model } from '@norbital-ai/bolt';
+export default model('orders', {
+	description: 'Orders', label: 'title', fields: { title: { kind: 'text' },
+		code: { kind: 'custom', of: 'code', optional: true }, codes: { kind: 'custom', of: 'code', many: true, optional: true } },
+	read: 'all', create: { columns: ['title', 'code', 'codes'] }, update: { columns: ['code'] },
+});`,
 						'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true, update: true } } };`
 					};
 					for (const [p, text] of Object.entries(files)) {

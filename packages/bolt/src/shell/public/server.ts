@@ -1,4 +1,9 @@
 // The SSR $bolt alias reads only its current Svelte request context. Loader I/O belongs to pageServer's native ctx.
+import { Effect } from 'effect';
+import type { Query } from '../../page/page-bolt.ts';
+import type { Json } from '../../decl/values.ts';
+import { Instant, PlainDate } from '@norbital-ai/std/date';
+import { localOf } from '@norbital-ai/std/zone';
 import { getContext } from 'svelte';
 import type { ViewBolt } from '@norbital-ai/ui';
 import type { Bolt } from '../../page/bolt.ts';
@@ -20,23 +25,38 @@ const unavailable = (): never => {
 	);
 };
 
-/** State factories defer their sources until the client mounts; SSR can render their initial values. */
-export { live, query } from '@norbital-ai/ui/effect';
 /** The UI edge has no browser runtime on the server; synchronous rendering must never launch a workflow. */
 export const run: typeof import('@norbital-ai/ui/effect').run = unavailable;
 export const fork: typeof import('@norbital-ai/ui/effect').fork = unavailable;
 export const attach: typeof import('@norbital-ai/ui/effect').attach = unavailable;
 export { frameworkText } from '../i18n.ts';
 
+/** An SSR read carries no answer or subscription; page-server loader data provides its initial render. */
+const inert = <T>(method: Query<T>['read']['m'], args: readonly Json[]): Query<T> =>
+	Object.assign(Effect.never, {
+		current: undefined,
+		loading: true,
+		error: undefined,
+		read: { m: method, a: args },
+		then: <A = T, B = never>(
+			success?: ((value: T) => A | PromiseLike<A>) | null,
+			failure?: ((reason: unknown) => B | PromiseLike<B>) | null
+		) => Promise.reject<T>(new Error('SSR reads belong in pageServer.load')).then(success, failure)
+	});
 /** Views share the same narrow synchronous metadata; their interactive methods cannot perform SSR side effects. */
 export const bolt = {
-	read: unavailable,
-	get: unavailable,
-	aggregate: unavailable,
-	similar: unavailable,
-	history: unavailable,
-	query: unavailable,
-	live: unavailable,
+	aggregate: <T>(...args: readonly Json[]) => inert<T>('aggregate', args),
+	history: <T>(model: string, id: string, options?: { at?: Json }) =>
+		inert<T>('history', [model, id, ...(options?.at === undefined ? [] : [options.at])]),
+	query: <T>(...args: readonly Json[]) => inert<T>('query', args),
+	clock: () => {
+		const now = new Date().toISOString();
+		return {
+			now: Instant(now),
+			today: PlainDate(localOf(Date.parse(now), boot().workspace.tz).date)
+		};
+	},
+	convert: unavailable,
 	recordCapabilities: unavailable,
 	act: unavailable,
 	start: unavailable,
@@ -44,7 +64,7 @@ export const bolt = {
 	describe: unavailable,
 	options: unavailable,
 	upload: unavailable,
-	approvals: { process: unavailable, get: unavailable, list: unavailable },
+	approvals: { decide: unavailable, get: unavailable, list: unavailable },
 	restore: { preview: unavailable, run: unavailable },
 	session: { sendCode: unavailable, verify: unavailable },
 	get actor() {
@@ -77,7 +97,7 @@ export const bolt = {
 			: message.replace(/\{([^{}]+)\}/g, (whole, name: string) => String(vars[name] ?? whole));
 	}
 } satisfies ViewBolt &
-	Pick<Bolt, 'upload' | 'session'> & {
+	Pick<Bolt, 'upload' | 'session' | 'convert'> & {
 		readonly org: { readonly name: string; readonly logo: string | null };
 		readonly href: typeof href;
 	};

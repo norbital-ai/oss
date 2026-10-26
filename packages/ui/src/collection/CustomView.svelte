@@ -24,7 +24,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		children: Snippet<[readonly R[]]>;
 		/** No rows: the kit's `EmptyState` by default, this snippet instead, or `false` to draw the view empty (a calendar). */
 		empty?: Snippet | false;
-		/** The collection the view draws (a roster grid of `roster_entry`): its pipeline's import and export join the actions menu, scoped by `toolbar.context`. */
+		/** The collection the view draws (a roster grid of `roster_entry`): its file syncs' import, template and export join the actions menu, scoped by `toolbar.context`. */
 		collection?: string;
 	};
 </script>

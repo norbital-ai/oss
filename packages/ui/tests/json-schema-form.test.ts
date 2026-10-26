@@ -148,13 +148,13 @@ it.live(
 			assert.ok(array.target.querySelector(`label[for="${input.id}"]`));
 		})
 );
-it.live('unknown custom datatypes preserve their initial JSON in the raw editor', () =>
+it.live('unknown custom datatypes preserve their initial JSON in inferred fields', () =>
 	browser(async () => {
 		const { target } = await show({
 			schema: { type: 'object', 'x-norbital': { datatype: 'missing' } },
 			initial: { reference: 'kept' }
 		});
-		assert.ok(textOf(target).includes('kept'));
+		assert.equal(target.querySelector<HTMLInputElement>('input')?.value, 'kept');
 	})
 );
 it.live(
@@ -207,7 +207,7 @@ it.live(
 			const table = element(target, 'table');
 			assert.deepEqual(
 				[...table.querySelectorAll('thead th')].map((th) => textOf(th).trim()),
-				['Code*', 'Note', 'Until', 'Remove']
+				['Code*', 'Note', 'Until', 'Kept']
 			);
 			assert.equal(table.querySelectorAll('tbody tr').length, 1);
 			const cells = table.querySelectorAll<HTMLInputElement>('tbody input');

@@ -8,6 +8,9 @@ import { catalogue, jobs, type ToolContext } from '../src/engine/agent/tools.ts'
 import { mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AgentEngine } from '../src/engine/agent/index.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '../src/engine/errors.ts';
+import { Docs, Logs, Mcp } from '../src/engine/ports.ts';
+import { docsPort } from '../src/node/docs.ts';
 
 it("the reference namespaces are §7.3's, and every symbol they export has a summary", () => {
 	const reference = docs
@@ -56,11 +59,12 @@ it('the declaration functions and native mask guard are documented, and spec par
 	expect(fns).toEqual([
 		'app',
 		'automation',
-		'collection',
 		'customField',
 		'envoy',
 		'group',
+		'instanceId',
 		'integration',
+		'isInstance',
 		'isMasked',
 		'jsonDiff',
 		'kiosk',
@@ -68,9 +72,7 @@ it('the declaration functions and native mask guard are documented, and spec par
 		'messages',
 		'model',
 		'pageServer',
-		'pipeline',
 		'policy',
-		'relationship',
 		'secrets',
 		'team',
 		'workspace'
@@ -78,7 +80,7 @@ it('the declaration functions and native mask guard are documented, and spec par
 	const model = docs.symbol('bolt', 'model')!;
 	expect(model.signature).toContain('function model');
 	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
-	expect(model.params?.[0]?.fields?.map((f) => f.name)).toContain('fields');
+	expect(model.params?.[1]?.fields?.map((f) => f.name)).toContain('fields');
 	expect(docs.symbol('bolt', 'pageServer')?.params?.[0]?.fields?.map((f) => f.name)).toEqual([
 		'data',
 		'load'
@@ -93,9 +95,9 @@ it('svelte components list their props with the props docs', () => {
 });
 
 it('search ranks an exact name first and narrows by namespace', () => {
-	expect(docs.search('collection')[0]).toMatchObject({
+	expect(docs.search('model')[0]).toMatchObject({
 		namespace: 'bolt',
-		name: 'collection',
+		name: 'model',
 		kind: 'function'
 	});
 	expect(
@@ -125,7 +127,6 @@ const manifest: AgentEngine['manifest'] = {
 	integrations: {},
 	connections: {},
 	policies: {},
-	pipelines: {},
 	automations: {},
 	teams: {},
 	envoys: {},
@@ -136,7 +137,13 @@ const manifest: AgentEngine['manifest'] = {
 };
 const engine: AgentEngine = {
 	manifest,
-	db: TenantDb.typed({ read: unexpected, write: unexpected, transaction: unexpected }),
+	db: TenantDb.typed({
+		read: unexpected,
+		write: unexpected,
+		transaction: unexpected,
+		session: () =>
+			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions'))
+	}),
 	live: {
 		publish: unexpectedSync,
 		syncChanged: unexpectedSync,
@@ -153,13 +160,12 @@ const engine: AgentEngine = {
 	},
 	calls: {
 		query: unexpected,
-		action: unexpected,
 		acts: unexpected,
 		start: unexpected
 	},
 	read: unexpected,
 	act: unexpected,
-	approvals: { process: unexpected, view: unexpected, list: unexpected }
+	approvals: { decide: unexpected, view: unexpected, list: unexpected }
 };
 const docsTool = (external = false) =>
 	Effect.gen(function* () {
@@ -201,15 +207,16 @@ const docsTool = (external = false) =>
 			},
 			bindings: { now: '2026-10-13T00:00:00.000Z', today: '2026-10-13', tz: 'UTC', params: {} },
 			turn: 't',
-			outputs: () => Effect.succeed([]),
 			mode: 'agent',
 			inApp: true,
 			delegation: false,
 			child: false,
 			skills: {},
 			agents: [],
-			mcp: yield* mcpSessions(manifest),
+			mcp: yield* mcpSessions(manifest).pipe(Effect.provide(Mcp.unavailable)),
+			logs: yield* Logs,
 			mcpTools: [],
+			docs: yield* Docs.pipe(Effect.provide(Docs.fromAbi(docsPort()))),
 			hostTools: [],
 			receipts: [],
 			files: [],
@@ -267,8 +274,8 @@ it.effect(
 			expect(list).not.toMatchObject({
 				result: expect.arrayContaining([expect.objectContaining({ namespace: 'bolt/engine' })])
 			});
-			expect(yield* tool.run({ symbol: 'collection', namespace: 'bolt' }, 'c2')).toMatchObject({
-				result: [{ import: '@norbital-ai/bolt', name: 'collection' }]
+			expect(yield* tool.run({ symbol: 'model', namespace: 'bolt' }, 'c2')).toMatchObject({
+				result: [{ import: '@norbital-ai/bolt', name: 'model' }]
 			});
 			expect(yield* tool.run({ namespace: 'bolt/engine' }, 'c3')).toMatchObject({
 				result: { error: expect.stringMatching(/No namespace/) }

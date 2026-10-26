@@ -1,7 +1,6 @@
 // The owner's agent acceptance (2026-09-26) through the engine entry and the test kit, against a scripted model:
-// a skill authored at `src/agent/skill/+<n>.skill.md` is compiled and read by the agent; the workspace's source and
-// type index are generic tools (`workspace_search` for staff in the app, the outline in the prompt, `workspace_type` filtered by what the actor may
-// use); an MCP server reaches its URL and token through the workspace secrets with no host MCP binding; and an envoy over a
+// a skill authored at `src/agent/skill/<n>/+skill.md` is compiled and read by the agent; the workspace's source is a
+// generic tool (`workspace_search` for staff in the app, the outline in the prompt); an MCP server reaches its URL and token through the workspace secrets with no host MCP binding; and an envoy over a
 // fake WhatsApp: group chatter System 1 ignores gets nothing, a mention is answered, a DM is answered after triage.
 import { createServer, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -94,26 +93,15 @@ const desk = Array.from(
 	{ length: 1500 },
 	(_, n) => `\t<td class="col">{row["field_${n + 1}"]}</td>`
 ).join('\n');
-/** The artifact's workspace as a host binds it (`workspaceFiles`); the index entry is what `bolt build` wrote for the good fixture. */
+/** The artifact's workspace as a host binds it (`workspaceFiles`). */
 const workspace: WorkspacePort = {
-	files: async () => [
-		'src/agent/skill/+triage.skill.md',
-		'src/data/collection/orders/+collection.ts'
-	],
+	files: async () => ['src/agent/skill/triage/+skill.md', 'src/data/model/orders/+model.ts'],
 	read: async (p) =>
-		p === 'src/agent/skill/+triage.skill.md'
+		p === 'src/agent/skill/triage/+skill.md'
 			? '---\ndescription: Triage a notice\n---\n## Steps\nRead it.\n'
 			: p === DESK
 				? desk
-				: null,
-	types: async () => ({
-		'collections.orders.queries.count_placed': {
-			type: '{\n\tinput: {};\n\toutput: number;\n}',
-			docs: 'Placed orders',
-			source: 'src/data/collection/orders/+collection.ts:6'
-		},
-		'components.lib/panel': { type: '{\n\tjob: string;\n}', source: 'src/lib/panel.svelte' }
-	})
+				: null
 };
 
 const manifest = Result.getOrThrow(
@@ -127,7 +115,6 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		collections: { jobs: { read: { fields: 'all' } } },
 		integrations: {},
-		pipelines: {},
 		policies: { desk: { description: 'Desk', grants: { jobs: { read: true } } } },
 		teams: {},
 		automations: {},
@@ -152,14 +139,13 @@ const manifest = Result.getOrThrow(
 
 describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 	it.live(
-		'a compiled +triage.skill.md is listed in the static prompt beside the outline and read by the skill tool; workspace_type and workspace_search answer staff',
+		'a compiled triage/+skill.md is listed in the static prompt beside the outline and read by the skill tool; workspace_search answers staff',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const ai = cassette([
 						use('skill', { name: 'triage', section: 'Steps' }),
-						use('workspace_type', { name: 'collections.orders.queries.count_placed' }),
-						use('workspace_search', { path: 'src/agent/skill/+triage.skill.md' }),
+						use('workspace_search', { path: 'src/agent/skill/triage/+skill.md' }),
 						say('Read it first.')
 					]);
 					const { t, agent } = yield* setup({
@@ -177,20 +163,20 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 					});
 					expect((yield* agent.drain(c)).reply?.text).toBe('Read it first.');
 					expect(ai.requests[0]!.system).toContain('- triage: Triage a notice');
-					expect(ai.requests[0]!.system).toContain('# Workspace outline');
-					expect(ai.requests[0]!.system).toMatch(
-						/## Collections\n[^\n]+\n(?:[^\n]*\n)*- customers: Buyers \| name, rating, order_count \| create\(name, rating\?\)$/m
+					const customers = ai.requests[0]!.system?.split('\n').find((line) =>
+						line.includes('customers:')
 					);
+					for (const detail of ['Buyers', 'name', 'rating', 'order_count', 'create'])
+						expect(customers).toContain(detail);
 					expect(names(ai.requests[0])).toEqual(
-						expect.arrayContaining(['skill', 'workspace_type', 'workspace_search'])
+						expect.arrayContaining(['query', 'act', 'skill', 'workspace_search'])
 					);
+					expect(
+						ai.requests[0]!.tools?.find((tool) => tool.name === 'query')?.description
+					).toContain('customers');
 					expect(results(ai.requests[1]!)[0]).toBe('## Steps\n\nRead it.\n');
-					expect(results(ai.requests[2]!)[1]).toMatchObject({
-						type: '{\n\tinput: {};\n\toutput: number;\n}',
-						source: 'src/data/collection/orders/+collection.ts:6'
-					});
-					expect(results(ai.requests[3]!)[2]).toEqual({
-						path: 'src/agent/skill/+triage.skill.md',
+					expect(results(ai.requests[2]!)[1]).toEqual({
+						path: 'src/agent/skill/triage/+skill.md',
 						total: 6,
 						from: 1,
 						to: 6,
@@ -283,28 +269,24 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 			)
 	);
 
-	it.live(
-		'an external member gets workspace_type for what they may use only, no workspace_search and no outline',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const ai = cassette([use('workspace_type', {}), say('ok')]);
-					const { t, agent } = yield* setup({
-						manifest,
-						ports: ai.ports,
-						host: { agent: { workspace } }
-					});
-					yield* t.db.write(member('eve', { external: true }));
-					const c = yield* agent.start({ owner: 'eve' });
-					yield* agent.post({ conversation: c, as: { member: 'eve' }, text: 'types?' });
-					yield* agent.drain(c);
-					expect(names(ai.requests[0])).toContain('workspace_type');
-					expect(names(ai.requests[0])).not.toContain('workspace_search');
-					expect(ai.requests[0]!.system).not.toContain('# Workspace outline');
-					expect(unoffered(ai.requests[0]!)).toEqual([]);
-					expect(results(ai.requests[1]!)[0]).toEqual({ names: [] }); // no collection of hers, no components
-				})
-			)
+	it.live('an external member gets no workspace_search and no outline', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette([say('ok')]);
+				const { t, agent } = yield* setup({
+					manifest,
+					ports: ai.ports,
+					host: { agent: { workspace } }
+				});
+				yield* t.db.write(member('eve', { external: true }));
+				const c = yield* agent.start({ owner: 'eve' });
+				yield* agent.post({ conversation: c, as: { member: 'eve' }, text: 'types?' });
+				yield* agent.drain(c);
+				expect(names(ai.requests[0])).not.toContain('workspace_search');
+				expect(ai.requests[0]!.system).not.toContain('# Workspace outline');
+				expect(unoffered(ai.requests[0]!)).toEqual([]);
+			})
+		)
 	);
 });
 

@@ -21,7 +21,6 @@ const invocation = (input: Json): Invocation => ({
 		seed: 's'
 	},
 	budget: {
-		cpuMs: LIMITS.guestCpuMs,
 		crossings: LIMITS.crossings.sync,
 		readBytes: LIMITS.readBytes
 	}
@@ -36,7 +35,7 @@ describe('codec: guest reads hand real values, not wire tags', () => {
 				const source = `class Decimal { static of(s) { const d = new Decimal(); d.text = s; return d; } toJSON() { return this.text; } }
 globalThis[Symbol.for('norbital.std.Decimal')] = Decimal;
 export default { automation: { a: { body: function* (input, ctx) {
-	const row = yield* ctx.get('t', 'x');
+	const row = yield* ctx.query('t', { id: 'x' });
 	return { amount: row.amount instanceof Decimal, text: String(row.amount.text), day: row.day, at: row.at, span: row.span, json: row.json, input: input.due };
 } } } };`;
 				const row = {
@@ -103,7 +102,7 @@ describe('codec: $bolt reads hand pages real values', () => {
 				fetch,
 				openStream: () => ({ onmessage: null, onerror: null, close() {} })
 			});
-			const page = yield* bolt.read<{
+			const page = yield* bolt.query<{
 				rows: {
 					amount: Decimal;
 					day: string;

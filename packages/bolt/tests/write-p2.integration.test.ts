@@ -13,12 +13,18 @@ import { Logs } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
-import type { Pred, ReadIR } from '../src/protocol/ir-types.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import type { Pred } from '@norbital-ai/store';
+import type { ReadIR } from '../src/protocol/reads.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { readEngine } from '../src/engine/query/engine.ts';
 import { pruneHistory, readHistory } from '../src/engine/query/history.ts';
-import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
+import {
+	act,
+	type ActRequest,
+	type StepsSnapshot,
+	type WriteEngine
+} from '../src/engine/write/act.ts';
 import { restorePreview, restoreRecord, type RestoreTarget } from '../src/engine/write/restore.ts';
 import { admin, arm, authority, grants, NOW, TODAY } from './write-fixture.ts';
 import { manifest } from './write-p2.fixture.ts';
@@ -44,9 +50,15 @@ const fixture = Effect.gen(function* () {
 				count.writes++;
 				return inner.write(statement, lock);
 			}),
-		transaction: inner.transaction
+		transaction: (batch) =>
+			Effect.suspend(() => {
+				// Native commits use complete batches; dry runs execute the same SQL and roll back.
+				if (batch.rollback !== true) count.writes++;
+				return inner.transaction(batch);
+			}),
+		session: inner.session
 	});
-	yield* applyPlan(inner, plan(null, manifest), { accept: true });
+	yield* applyPlan(inner, yield* plan(null, manifest), { accept: true });
 	count.reads = 0;
 	count.writes = 0;
 	count.statements = 0;
@@ -128,31 +140,57 @@ const ImportReport = Schema.Struct({
 });
 const FALSE: Pred = { t: 'const', value: false };
 const REQUEST = '0199a000-0000-7000-8000-0000000000aa';
-/** A denied write with source fallback configuration. The fake hook still cannot mutate domain data. */
+/** A write admitted by its approval callback. The fake hook still cannot mutate domain data. */
 const routed = (op: 'create' | 'update') =>
 	authority({
 		orders: grants({
-			[op]: [],
-			approval: { create: [], update: [], delete: [], [op]: [{ steps: [['finance']] }] }
+			[op]: [{ ...arm(), approval: true }]
 		})
 	});
+const snapshot: StepsSnapshot = {
+	kind: 'steps',
+	steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
+	superseded_by: []
+};
 const holding: Partial<WriteEngine> = {
+	guest: {
+		invokeProgram: () => Effect.die('The approval fixture does not execute programs'),
+		invoke: () => Effect.succeed({ kind: 'ok', output: snapshot })
+	},
 	approval: {
 		route: () =>
 			Effect.succeed({
 				requestId: REQUEST,
-				route: { steps: [['finance']], superseded_by: [] },
+				route: snapshot,
 				pieces: () => {}
-			})
+			}),
+		resubmit: () => Effect.die('The approval fixture does not resubmit requests')
 	}
 };
-function transform(
+function callback(
 	body: (inv: Invocation) => GuestOutcome,
 	collection = 'orders',
 	calls: Invocation[] = []
 ): Partial<WriteEngine> {
+	const exposed = manifest.collections[collection];
+	if (exposed === undefined) throw new Error(`The callback fixture has no ${collection} contract`);
 	return {
-		transforms: new Set([collection]),
+		manifest: {
+			...manifest,
+			collections: {
+				...manifest.collections,
+				[collection]: {
+					...exposed,
+					...(exposed.create === undefined
+						? {}
+						: { create: { ...exposed.create, transform: true } }),
+					...(exposed.update === undefined
+						? {}
+						: { update: { ...exposed.update, transform: true } }),
+					...(exposed.delete === undefined ? {} : { delete: { check: true } })
+				}
+			}
+		},
 		guest: {
 			invokeProgram: () =>
 				Effect.die(new Error('This fixture does not execute supplied guest programs.')),
@@ -161,87 +199,97 @@ function transform(
 	};
 }
 
-describe('engine-owned staged transform identities', () => {
-	it.effect(
-		'exposes genuine root and owned child identities and persists those exact coordinates',
-		() =>
-			Effect.gen(function* () {
-				const calls: Invocation[] = [];
-				const result = yield* run(
-					{
-						verb: 'create',
-						input: { title: 'staged', lines: { create: [{ label: 'contract', amount: '1' }] } }
-					},
-					transform((inv) => ({ kind: 'ok', output: inv.input, cpuMs: 1 }), 'orders', calls)
-				);
-				ok(result.outcome);
-				const staged = required(
-					required(calls[0], 'transform call').ctx.staged,
-					'staged identities'
-				);
-				expect(staged).toHaveLength(2);
-				const parent = required(
-						staged.find((row) => row.collection === 'orders'),
-						'staged parent'
-					),
-					child = required(
-						staged.find((row) => row.collection === 'lines'),
-						'staged child'
-					);
-				expect(parent.parent).toBeUndefined();
-				expect(child.parent).toEqual({
-					collection: 'orders',
-					id: parent.id,
-					relation: 'lines',
-					field: 'order'
-				});
-				expect(child.path).toEqual(['lines', 'create', 0]);
-				expect((yield* one(Id, 'select id::text as id from orders')).id).toBe(parent.id);
-				expect(
-					yield* one(
-						Schema.Struct({ id: Schema.String, owner: Schema.String }),
-						'select id::text as id, "order"::text as owner from lines'
-					)
-				).toEqual({ id: child.id, owner: parent.id });
-			}).pipe(Effect.provide(P2FixtureLive))
+describe('engine-owned callback identities', () => {
+	it.effect('persists one parent and its owned child from the native create callback payload', () =>
+		Effect.gen(function* () {
+			const calls: Invocation[] = [];
+			const parents = callback((inv) => ({ kind: 'ok', output: inv.input }), 'orders', calls);
+			const children = callback((inv) => ({ kind: 'ok', output: inv.input }), 'lines', calls);
+			const result = yield* run(
+				{
+					verb: 'create',
+					input: { title: 'native', lines: { create: [{ label: 'contract', amount: '1' }] } }
+				},
+				{
+					...parents,
+					manifest: {
+						...manifest,
+						collections: {
+							...manifest.collections,
+							orders: required(parents.manifest?.collections.orders, 'parent callback contract'),
+							lines: required(children.manifest?.collections.lines, 'child callback contract')
+						}
+					}
+				}
+			);
+			const records = ok(result.outcome).records;
+			const parent = required(
+				records.find((row) => row.collection === 'orders'),
+				'created parent'
+			);
+			const child = required(
+				records.find((row) => row.collection === 'lines'),
+				'created child'
+			);
+			expect(
+				calls.map((call) => ({ kind: call.kind, target: call.target, input: call.input }))
+			).toEqual([
+				{
+					kind: 'create',
+					target: 'orders',
+					input: [{ title: 'native', lines: { create: [{ label: 'contract', amount: '1' }] } }]
+				},
+				{
+					kind: 'create',
+					target: 'lines',
+					input: [{ label: 'contract', amount: '1', order: parent.id }]
+				}
+			]);
+			expect((yield* one(Id, 'select id::text as id from orders')).id).toBe(parent.id);
+			expect(
+				yield* one(
+					Schema.Struct({ id: Schema.String, owner: Schema.String }),
+					'select id::text as id, "order"::text as owner from lines'
+				)
+			).toEqual({ id: child.id, owner: parent.id });
+		}).pipe(Effect.provide(P2FixtureLive))
 	);
 	it.effect(
-		'gives rows a multi-row transform adds fresh ids disjoint from every submitted path, and commits',
+		'gives children a multi-row callback adds distinct ids and replays without duplicating them',
 		() =>
 			Effect.gen(function* () {
 				const calls: Invocation[] = [];
-				const result = yield* run(
-					{ verb: 'create', input: [{ title: 'first' }, { title: 'second' }, { title: 'third' }] },
-					transform(
-						(inv) => ({
-							kind: 'ok',
-							output: Schema.decodeUnknownSync(
-								Schema.Array(Schema.Struct({ title: Schema.String }))
-							)(inv.input).map((row, index) =>
-								index < 2
-									? {
-											...row,
-											lines: {
-												create: [
-													{ label: `${row['title']}-a`, amount: '1' },
-													{ label: `${row['title']}-b`, amount: '2' }
-												]
-											}
+				const engine = callback(
+					(inv) => ({
+						kind: 'ok',
+						output: Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ title: Schema.String })))(
+							inv.input
+						).map((row, index) =>
+							index < 2
+								? {
+										...row,
+										lines: {
+											create: [
+												{ label: `${row['title']}-a`, amount: '1' },
+												{ label: `${row['title']}-b`, amount: '2' }
+											]
 										}
-									: row
-							),
-							cpuMs: 1
-						}),
-						'orders',
-						calls
-					)
+									}
+								: row
+						)
+					}),
+					'orders',
+					calls
 				);
+				const request: Over = {
+					verb: 'create',
+					input: [{ title: 'first' }, { title: 'second' }, { title: 'third' }],
+					key: 'callback-identities'
+				};
+				const result = yield* run(request, engine);
+				expect((yield* run({ ...request, retry: true }, engine)).outcome).toEqual(result.outcome);
+				expect(calls).toHaveLength(1);
 				const records = ok(result.outcome).records;
-				const staged = new Map(
-					required(required(calls[0], 'transform call').ctx.staged, 'staged identities').map(
-						(row) => [row.path.join('.'), row.id]
-					)
-				);
 				const orders = yield* rows(
 					Schema.Struct({ id: Schema.String, title: Schema.String }),
 					'select id::text as id, title from orders order by title'
@@ -254,14 +302,12 @@ describe('engine-owned staged transform identities', () => {
 				expect(lines).toHaveLength(4);
 				const ids = [...orders, ...lines].map((row) => row['id']);
 				expect(new Set(ids).size).toBe(7);
-				// every submitted root keeps the identity the engine assigned it before the transform
-				for (const [i, title] of ['first', 'second', 'third'].entries())
-					expect(
-						required(
-							orders.find((o) => o['title'] === title),
-							'order title'
-						).id
-					).toBe(staged.get(String(i)));
+				expect(
+					records
+						.filter((row) => row.collection === 'orders')
+						.map((row) => row.id)
+						.sort()
+				).toEqual(orders.map((row) => row.id).sort());
 				const idOfTitle = (title: string) =>
 					required(
 						orders.find((o) => o['title'] === title),
@@ -294,10 +340,11 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				const { outcome, captured } = yield* run({ verb: 'erase', input: { target: id } });
 				expect(ok(outcome).records).toEqual([{ collection: 'orders', id, revision: 3 }]);
 				// hook:identity — the removed rows reach live views only; no event trigger fires and no run is queued (38e(d))
-				expect(captured.map((x) => [x.collection, x.op])).toEqual([
-					['orders', 'delete'],
+				// owned children are deleted before the root they point at; order among them is not the contract
+				expect(captured.map((x) => [x.collection, x.op]).sort()).toEqual([
 					['lines', 'delete'],
-					['lines', 'delete']
+					['lines', 'delete'],
+					['orders', 'delete']
 				]);
 				expect(yield* one(Count, `select count(*)::int n from sys_run`)).toEqual({ n: 0 });
 				expect(count.writes).toBe(1);
@@ -322,7 +369,7 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 	);
 
 	it.effect(
-		'anonymise purges the fields and their computed readers from earlier revisions; the erased revision holds the set values',
+		'anonymise purges earlier field values and computed readers; the erased revision anchors the safe live row',
 		() =>
 			Effect.gen(function* () {
 				const id = yield* person('p1', 'Ada', 'ada@example.com');
@@ -359,10 +406,12 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 					code: 'p1',
 					email: 'ada@example.com'
 				});
-				expect(required(history[1], 'erased people history').changes).toEqual({
-					name: 'Erased',
-					shout: 'ERASED'
-				});
+				expect(required(history[1], 'erased people history').changes).toEqual(
+					(yield* one(
+						Schema.Struct({ row: Changes }),
+						`select to_jsonb(people) - array['bolt_search','bolt_embedding'] as row from people`
+					)).row
+				);
 				expect(
 					yield* one(
 						Schema.Struct({ name: Schema.String, shout: Schema.String }),
@@ -394,6 +443,19 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				expect(
 					(yield* run({ collection: 'people', verb: 'erase', input: { target: id } })).outcome
 				).toMatchObject({ code: 'locked' });
+				expect(
+					yield* Effect.flip(
+						(yield* P2Fixture).db.transaction({
+							statements: [
+								{
+									text: "SELECT set_config('store.write',$1,true)",
+									params: [JSON.stringify({ mode: 'write', anonymise: ['email'] })]
+								},
+								{ text: 'UPDATE people SET email=null WHERE id=$1::uuid', params: [id] }
+							]
+						})
+					)
+				).toMatchObject({ sqlstate: '23514' });
 				ok(
 					(yield* run({
 						collection: 'people',
@@ -801,8 +863,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 			const reviewed = authority({
 				orders: grants({
 					history: [arm()],
-					update: [],
-					approval: { create: [], update: [{ steps: [['finance']] }], delete: [] }
+					update: [{ ...arm(), approval: true }]
 				})
 			});
 			const p = yield* preview(at(id, 1), reviewed);
@@ -1136,12 +1197,12 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 	);
 
 	it.effect(
-		'delete: { transform: true } runs the transform as a guard for everyone, administrators included (rules 27, 35)',
+		'delete.check receives stored rows and guards everyone, administrators included (rules 27, 35)',
 		() =>
 			Effect.gen(function* () {
 				const calls: Invocation[] = [];
-				const guard = transform(
-					() => ({ kind: 'refused', message: 'the tag is in use', cpuMs: 1 }),
+				const guard = callback(
+					() => ({ kind: 'refused', message: 'the tag is in use' }),
 					'tags',
 					calls
 				);
@@ -1159,9 +1220,10 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 					kind: 'refused',
 					code: 'refused',
 					message: 'the tag is in use',
-					rule: 'tags.transform'
+					rule: 'tags.delete'
 				});
-				expect(calls.map((c) => c.input)).toEqual([[{ $delete: true }]]);
+				expect(calls.map((call) => call.kind)).toEqual(['delete']);
+				expect(calls.map((call) => call.input)).toMatchObject([[{ id: tag, name: 't' }]]);
 				// an administrator's delete faces the same guard: a business rule (a settled row) is not an authority question
 				expect(
 					(yield* run({ collection: 'tags', verb: 'delete', input: { target: tag } }, guard))
@@ -1199,7 +1261,7 @@ describe('engine/write: telemetry (§5.12)', () => {
 					(yield* run({ verb: 'create', input: { title: 1 } }, { log: yield* log() })).outcome
 				).toMatchObject({ code: 'invalidInput' });
 				expect(count.writes).toBe(1);
-				const refusing = transform(() => ({ kind: 'refused', message: 'no', cpuMs: 1 }));
+				const refusing = callback(() => ({ kind: 'refused', message: 'no' }));
 				expect(
 					(yield* run(
 						{ verb: 'create', input: { title: 'b' } },
@@ -1231,7 +1293,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 		act: () => Effect.Effect<Outcome, EngineError, P2Fixture>;
 	};
 	const refusing = (calls: Invocation[]) =>
-		transform(() => ({ kind: 'refused', message: 'guest', cpuMs: 1 }), 'orders', calls);
+		callback(() => ({ kind: 'refused', message: 'guest' }), 'orders', calls);
 	const targetOrder = Effect.fnUntraced(function* () {
 		const id = yield* order((yield* P2Fixture).nextTitle());
 		count.writes = 0;
@@ -1272,7 +1334,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 				).pipe(Effect.map((answer) => answer.outcome))
 		}),
 		(calls) => ({
-			name: 'the caller before transformations',
+			name: 'the caller before write callbacks',
 			expect: 'forbidden',
 			guest: false,
 			writes: 0,
@@ -1330,12 +1392,18 @@ describe('engine/write: pipeline order (rule 19)', () => {
 						input: { title: 'x' },
 						authority: authority({
 							orders: grants({
-								create: [arm(FALSE)],
-								approval: {
-									create: [{ where: { title: { eq: 'other' } }, steps: [['f']] }],
-									update: [],
-									delete: []
-								}
+								create: [
+									arm(FALSE),
+									{
+										...arm({
+											t: 'cmp',
+											field: 'title',
+											op: 'eq',
+											arg: { _tag: 'Lit', value: 'other' }
+										}),
+										approval: true
+									}
+								]
 							})
 						})
 					},
@@ -1344,7 +1412,8 @@ describe('engine/write: pipeline order (rule 19)', () => {
 							route: () =>
 								Effect.sync(() => {
 									throw new Error('routed');
-								})
+								}),
+							resubmit: () => Effect.die('resubmitted')
 						}
 					}
 				).pipe(Effect.map((answer) => answer.outcome))
@@ -1381,10 +1450,9 @@ describe('engine/write: guest failures (rules 42, 72a)', () => {
 		() =>
 			Effect.gen(function* () {
 				const failing = (code: Code) =>
-					transform(() => ({
+					callback(() => ({
 						kind: 'failed',
-						error: BoltError.make(code, 'guest', `${code}!`),
-						cpuMs: 1
+						error: BoltError.make(code, 'guest', `${code}!`)
 					}));
 				expect(
 					(yield* run({ verb: 'create', input: { title: 'a' } }, failing('guestError'))).outcome

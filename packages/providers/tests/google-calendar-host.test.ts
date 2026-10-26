@@ -3,7 +3,12 @@
 // added calendar gets its watch and a removed one's watch is stopped at Google and dropped from the sealed state.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import { EngineManifestSchema, layered, type Json } from '@norbital-ai/bolt/engine';
+import {
+	EngineManifestSchema,
+	layered,
+	type DriverOpen,
+	type Json
+} from '@norbital-ai/bolt/engine';
 import { googleCalendar } from '../src/google-calendar/index.ts';
 import { fakeFetch, json, until } from './kit.ts';
 import { engineHost } from './engine-host.ts';
@@ -16,7 +21,7 @@ const manifest = layered(
 			calendar_entries: {
 				description: 'A calendar event',
 				label: 'title',
-				key: ['account', 'calendar', 'external'],
+				key: ['calendar', 'external'],
 				fields: { calendar: { kind: 'text' }, external: { kind: 'text' }, title: { kind: 'text' } }
 			}
 		},
@@ -26,24 +31,25 @@ const manifest = layered(
 				where: { integration: { eq: 'google_calendar' } }
 			}
 		},
-		collections: { calendar_entries: { read: { fields: 'all' } } },
+		collections: {
+			calendar_entries: {
+				read: { fields: 'all' },
+				syncs: {
+					events: { with: 'google_calendar', partitions: 'calendars', read: true },
+					write_only: { with: 'google_calendar', write: true },
+					other: { with: 'other_calendar', read: true }
+				}
+			}
+		},
 		integrations: {
 			google_calendar: {
 				description: 'Calendars',
 				driver: 'calendar',
 				oauth: { client: 'GOOGLE_CLIENT', secret: 'GOOGLE_SECRET' },
-				configuration: { calendars: { kind: 'text', many: true, default: [] } },
-				feeds: {
-					events: {
-						into: 'calendar_entries',
-						key: ['calendar', 'external'],
-						from: 'driver',
-						partitions: 'calendars'
-					}
-				}
-			}
+				configuration: { calendars: { kind: 'text', many: true, default: [] } }
+			},
+			other_calendar: { description: 'Other calendars', driver: 'calendar' }
 		},
-		pipelines: {},
 		policies: {},
 		teams: {},
 		automations: {},
@@ -119,15 +125,31 @@ describe('the Google Calendar link on a host', { timeout: 15_000 }, () => {
 							GOOGLE_CLIENT: 'client-1',
 							GOOGLE_SECRET: 'shh'
 						};
-						const manager = yield* links([googleCalendar()], {
-							publicUrl: 'https://apex.example/acme',
-							secrets,
-							fetch: f
-						});
+						const opened: DriverOpen['syncs'][] = [],
+							provider = googleCalendar();
+						const manager = yield* links(
+							[
+								{
+									...provider,
+									open: (ctx) =>
+										Effect.sync(() => {
+											opened.push(ctx.syncs);
+										}).pipe(Effect.andThen(provider.open(ctx)))
+								}
+							],
+							{
+								publicUrl: 'https://apex.example/acme',
+								secrets,
+								fetch: f
+							}
+						);
 						yield* manager.resume;
 						yield* until(() => watched(f).length === 1);
+						expect(opened[0]).toEqual([
+							{ name: 'calendar_entries.sync.events', partitions: 'calendars' }
+						]);
 						expect(watched(f)).toEqual(['visits@example.com']);
-						const stored = yield* t.storedRead('sys_integration', {
+						const stored = yield* t.storedQuery('sys_integration', {
 							all: true,
 							select: { id: true }
 						});

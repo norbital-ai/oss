@@ -19,7 +19,6 @@ const manifest = Result.getOrThrow(
 		policies: {},
 		automations: {},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		connections: {},
 		envoys: {},

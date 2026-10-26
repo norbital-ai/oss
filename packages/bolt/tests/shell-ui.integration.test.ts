@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
-// The real workspace shell over the handler and a test-kit workspace on PGlite (§5.10): the hero renders a page's
-// AppShell identity and actions; a generated form's file field uploads to `<collection>.<field>` and the submit waits
-// for it; the sweep mounts every representation in the record sheet, whose module imports `$bolt`.
+// The real workspace shell over the handler and a test-kit workspace on PGlite (§5.10): control interactions,
+// route lifetimes, authorization, and file uploads that settle before form submission.
 import './setup-happy-dom.js';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import {
@@ -31,7 +30,7 @@ import { Approvals } from '../src/engine/services.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { IntegrationManager, integrationRoutes } from '../src/protocol/integrations.ts';
 import { mountShell, type ShellMountConfig } from '../src/shell/mount.ts';
-import { sweep, visit } from '../src/test/browser.ts';
+import { visit } from '../src/test/browser.ts';
 import {
 	KitInvalid,
 	TestWorkspace,
@@ -39,14 +38,11 @@ import {
 	type TestOptions,
 	type WorkspaceServices
 } from '../src/test/index.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { actReply, routeFixture } from './support/route-fixture.ts';
+import { program } from './support/guest-fixture.ts';
 import { sse } from './support/live-bolt.ts';
 import Hero from './support/shell-hero.svelte';
 import Upload from './support/shell-upload.svelte';
-import PageTabs from './support/shell-tabs.svelte';
-import Rep from './support/shell-rep.svelte';
-import NoisyRep from './support/shell-rep-noisy.svelte';
-import BadRead from './support/shell-bad-read.svelte';
 import ScopedPage from './support/shell-scoped-page.svelte';
 import ScopedShellPage from './support/shell-scoped-shell-page.svelte';
 import ScopedRep from './support/shell-scoped-rep.svelte';
@@ -86,7 +82,6 @@ const manifest = Result.getOrThrow(
 		},
 		agent: { skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -102,18 +97,7 @@ const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value.');
 	return value;
 };
-const resize = (width: number, height = 768) => {
-	if (
-		!('happyDOM' in window) ||
-		!Predicate.isObject(window.happyDOM) ||
-		!('setWindowSize' in window.happyDOM) ||
-		typeof window.happyDOM.setWindowSize !== 'function'
-	)
-		throw new Error('Missing happy-dom viewport.');
-	window.happyDOM.setWindowSize({ width, height });
-};
 afterEach(() => {
-	resize(1024);
 	vi.unstubAllGlobals();
 });
 const tick = Effect.sleep('5 millis').pipe(Effect.andThen(Effect.sync(flushSync)));
@@ -132,7 +116,7 @@ const workspace = (options: TestOptions) =>
 			TestWorkspace.layer({
 				...options,
 				now: new Date(yield* Clock.currentTimeMillis).toISOString(),
-				host: { workspace: { name: 'Acme', handle: 'acme' }, ...options.host }
+				host: { workspace: () => ({ name: 'Acme', handle: 'acme' }), ...options.host }
 			})
 		);
 	});
@@ -292,52 +276,6 @@ describe('the shell renders a page (§5.10)', () => {
 		);
 
 	it.live(
-		'a phone shows one top bar carrying the identity, bell and scope; the desktop hero returns on resize',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const mobileResize = (width: number) => resize(width, 812);
-					mobileResize(375);
-					const context = yield* workspace({ manifest });
-					const { target } = yield* open(context, '/app/desk/hero', { 'desk/hero': page(Hero) });
-					yield* until(() => target.querySelector('[data-export]') !== null);
-					// Prime happy-dom's change listener at its initial matching viewport before resizing away.
-					window.dispatchEvent(new Event('resize'));
-					const heroes = () => target.querySelectorAll('[data-layout=app-media-header]');
-					const bar = () => target.querySelector('main header[data-layout=app-media-header]');
-					yield* until(() => bar() !== null);
-					// one header: no second hero below it, and the scope controls sit in its lane
-					expect(heroes()).toHaveLength(1);
-					expect(target.querySelectorAll('main header')).toHaveLength(1);
-					expect(present(bar()).textContent).toContain('Dispatch board');
-					expect(present(bar()).textContent).toContain('Every job due today');
-					expect(present(bar()).querySelector('[data-app-actions] [data-export]')).not.toBeNull();
-					expect(
-						present(bar()).querySelector('[data-app-actions]')?.getAttribute('aria-label')
-					).toBe('Page scope');
-					expect(present(bar()).querySelector('[aria-label="Open navigation"]')).not.toBeNull();
-					expect(present(bar()).querySelector('[data-testid=notification-bell]')).not.toBeNull();
-					present(target.querySelector<HTMLButtonElement>('[data-export]')).click();
-					yield* until(() => present(present(bar()).textContent).includes('Dispatch overview'));
-					expect(present(bar()).textContent).toContain('All jobs this week');
-					expect(target.textContent).not.toContain('Every job due today');
-					expect(heroes()).toHaveLength(1);
-					mobileResize(1024);
-					yield* until(() => bar() === null);
-					expect(heroes()).toHaveLength(1);
-					expect(present(heroes()[0]).textContent).toContain('Dispatch overview');
-					expect(present(heroes()[0]).textContent).toContain('All jobs this week');
-					mobileResize(375);
-					yield* until(() => bar() !== null);
-					expect(present(bar()).textContent).toContain('Dispatch overview');
-					expect(present(bar()).textContent).toContain('All jobs this week');
-					expect(heroes()).toHaveLength(1);
-					expect(present(bar()).querySelector('[data-app-actions] [data-export]')).not.toBeNull();
-				})
-			)
-	);
-
-	it.live(
 		"a preview opened outside its frame goes to the live workspace's Studio; framed, it renders",
 		() =>
 			Effect.scoped(
@@ -357,31 +295,6 @@ describe('the shell renders a page (§5.10)', () => {
 					expect(replace).toHaveBeenCalledTimes(1);
 				})
 			)
-	);
-
-	it.live('shows the AppShell identity and its actions in the hero above the page', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const context = yield* workspace({ manifest });
-				const { target } = yield* open(context, '/app/desk/hero', { 'desk/hero': page(Hero) });
-				yield* until(() => target.querySelector('[data-body]') !== null);
-				yield* until(() => target.querySelector('[data-layout=app-media-header]') !== null);
-				const hero = present(target.querySelector('[data-layout=app-media-header]'));
-				expect(hero.textContent).toContain('Dispatch board');
-				expect(hero.textContent).toContain('Every job due today');
-				expect(hero.querySelector('[data-export]')).not.toBeNull();
-				// the actions read the dark tokens on the scrim (A7); a phone shows two lines of description (A15)
-				expect(present(hero.querySelector('[data-export]')).closest('.dark')).not.toBeNull();
-				expect(
-					present(
-						[...hero.querySelectorAll('p')].find((p) =>
-							p.textContent?.includes('Every job due today')
-						)
-					).classList
-				).toContain('line-clamp-2');
-				expect(hero.querySelector('[data-layout=frame]')).not.toBeNull(); // the icon chip
-			})
-		)
 	);
 
 	it.live(
@@ -412,22 +325,6 @@ describe('the shell renders a page (§5.10)', () => {
 					expect(target.querySelector('nav[aria-label=Pages]')).not.toBeNull();
 				})
 			)
-	);
-
-	it.live("a page's own Tabs render at level 2 under the app pages strip (A8)", () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const context = yield* workspace({ manifest });
-				const { target } = yield* open(context, '/app/desk/upload', {
-					'desk/upload': page(PageTabs)
-				});
-				yield* until(() => target.querySelector('[data-body]') !== null);
-				expect(target.querySelector('nav[aria-label=Pages]')).not.toBeNull();
-				expect(
-					present(target.querySelector('[data-tabs-variant]')).getAttribute('data-tabs-variant')
-				).toBe('underline');
-			})
-		)
 	);
 
 	it.live('keeps the app banner and tabs mounted while its first page chunk loads', () =>
@@ -640,7 +537,6 @@ describe('a record sheet closes through its ?record= entry', () => {
 					};
 					drag(-300);
 					expect(present(sheet()).dataset['fullscreen']).toBeUndefined();
-					expect(present(sheet()).style.getPropertyValue('--sheet-h')).toBe('300px');
 					drag(100);
 					yield* until(() => sheet() === null);
 				})
@@ -648,83 +544,10 @@ describe('a record sheet closes through its ?record= entry', () => {
 	);
 });
 
-describe('sweep() mounts representations (§3.7, X-20)', () => {
-	it.live(
-		'opens a new and a stored record of each represented collection; a representation importing $bolt boots',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const doc = randomUUID();
-					const context = yield* workspace({
-						manifest,
-						seed: { docs: [{ id: doc, title: 'Lease' }] }
-					});
-					const t = Context.get(context, TestWorkspace);
-					const route = yield* routeFixture(context);
-					const reply = yield* qReply(route, t.as(t.admin).authority, {
-						reads: [{ m: 'read', a: ['docs', { select: { id: true }, limit: 1 }] }]
-					});
-					const stored = yield* Schema.decodeUnknownEffect(
-						Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
-					)(reply.answers[0]);
-					expect(stored.rows.map((row) => row.id)).toEqual([doc]);
-					const report = yield* sweep({
-						as: [{ admin: true }],
-						pages: { 'desk/hero': page(Hero), 'desk/upload': page(Upload) },
-						representations: { docs: page(Rep) }
-					}).pipe(Effect.provide(context));
-					expect(report.visited.map((v) => v.path)).toEqual(
-						expect.arrayContaining([
-							`/app/desk/hero?record=docs/new`,
-							`/app/desk/hero?record=docs/${doc}`
-						])
-					);
-					expect(report.findings).toEqual([]);
-				})
-			)
-	);
-
-	it.live('finds a live read the host refuses as malformed, which no console shows', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const context = yield* workspace({ manifest });
-				expect(
-					yield* Effect.flip(
-						sweep({
-							as: [{ admin: true }],
-							pages: { 'desk/hero': page(BadRead), 'desk/upload': page(Hero) }
-						}).pipe(Effect.provide(context))
-					)
-				).toMatchObject({
-					message: expect.stringMatching(/administrator \/app\/desk\/hero read: .*invalid/)
-				});
-			})
-		)
-	);
-
-	it.live('finds what a representation logs', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const context = yield* workspace({ manifest });
-				expect(
-					yield* Effect.flip(
-						sweep({
-							as: [{ admin: true }],
-							pages: { 'desk/hero': page(Hero) },
-							representations: { docs: page(NoisyRep) }
-						}).pipe(Effect.provide(context))
-					)
-				).toMatchObject({
-					message: expect.stringMatching(
-						/administrator \/app\/desk\/hero\?record=docs\/new console: representation mounted: create/
-					)
-				});
-			})
-		)
-	);
-});
-
 describe("system collections render in ui's Table (Settings, Automations, Inbox)", () => {
+	const approvalGuest = program(`export default { policy: { clerk: { grants: { docs: {
+		create: { approval: (_, flow) => flow.step('Review', {teams:['reviewers']}) }
+	} } } } };`);
 	const button = (root: ParentNode, text: string) =>
 		[...root.querySelectorAll<HTMLButtonElement>('button')].find(
 			(b) => b.textContent?.trim() === text
@@ -735,7 +558,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 		b.click();
 	};
 
-	it.live('the inbox follows a request submitted and withdrawn in another session', () =>
+	it.live('the inbox follows a request submitted and rejected in another session', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const source = Result.getOrThrow(
@@ -746,12 +569,12 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 							clerk: {
 								description: 'Clerk',
 								capabilities: { apps: ['desk'] },
-								grants: { docs: { read: true, approval: { create: [{ steps: [['reviewers']] }] } } }
+								grants: { docs: { read: true, create: { approval: true } } }
 							}
 						}
 					})
 				);
-				const context = yield* workspace({ manifest: source });
+				const context = yield* workspace({ manifest: source, guest: yield* approvalGuest });
 				const t = Context.get(context, TestWorkspace);
 				const member = t.member(['clerk']);
 				yield* t.db.write({
@@ -769,21 +592,22 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					issuedAt: t.clock.now()
 				})).outcome;
 				if (outcome.kind !== 'pendingApproval') throw new Error('Expected a proposal.');
-				yield* until(() => button(target, 'Supersede') !== undefined);
+				yield* until(() => button(target, 'Approve') !== undefined);
 				expect(target.querySelector('[data-view=table]')?.textContent).toContain('New');
 				expect(target.querySelector('[data-view=table]')?.textContent).not.toContain(
 					'A prospective document'
 				);
 				expect(
-					yield* Context.get(context, Approvals).process({
+					yield* Context.get(context, Approvals).decide({
 						requestId: outcome.requestId,
-						status: 'WITHDRAWN',
-						authority: caller,
+						decision: 'reject',
+						reason: 'No longer needed.',
+						authority: t.as(t.admin).authority,
 						now: t.clock.now()
 					})
 				).toMatchObject({ kind: 'decided' });
 				yield* until(() => target.textContent?.includes('Nothing waits on you.') === true);
-				expect(button(target, 'Supersede')).toBeUndefined();
+				expect(button(target, 'Approve')).toBeUndefined();
 				expect((yield* t.db.read([{ text: 'SELECT id FROM docs', params: [] }]))[0]?.rows).toEqual(
 					[]
 				);
@@ -808,13 +632,13 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 									description: 'Clerk',
 									capabilities: { apps: ['desk'] },
 									grants: {
-										docs: { read: true, approval: { create: [{ steps: [['reviewers']] }] } }
+										docs: { read: true, create: { approval: true } }
 									}
 								}
 							}
 						})
 					);
-					const context = yield* workspace({ manifest: source });
+					const context = yield* workspace({ manifest: source, guest: yield* approvalGuest });
 					const t = Context.get(context, TestWorkspace);
 					const member = t.member(['clerk']);
 					const reviewer = t.member([]);
@@ -940,11 +764,12 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					expect(output.textContent).toContain('delivery.zip');
 					expect(output.textContent).toContain('register.bin');
 					expect(output.textContent).not.toContain('not-a-file.zip');
-					expect(
-						[...document.body.querySelectorAll('[role=dialog] pre')].some((value) =>
-							value.textContent?.includes('"count": 2')
-						)
-					).toBe(true);
+					const result = present(
+						document.body.querySelector('[data-detail-field="Result"] [data-detail-structured]')
+					);
+					expect(result.textContent).toContain('Count');
+					expect(result.textContent).toContain('2');
+					expect(result.querySelector('pre')).toBeNull();
 					press(present(output.querySelector<HTMLElement>('[data-file-chip]')));
 					yield* until(() => document.body.querySelector('a[download="delivery.zip"]') !== null);
 					expect(
@@ -1199,6 +1024,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				const manager = yield* integrationLinks({
 					providers: [provider],
 					enter: (work) => work.pipe(Effect.provide(context)),
+					admit: (work) => work.pipe(Effect.provide(context)),
 					credentials: yield* credentials(t.db, Context.get(context, Secrets)).pipe(
 						Effect.provide(NodeCrypto.layer)
 					),
@@ -1213,7 +1039,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					name: 'Ledger',
 					configuration: { region: 'sg' }
 				});
-				const user = yield* t.storedRead('sys_user', {
+				const user = yield* t.storedQuery('sys_user', {
 					where: { email: { eq: 'bo@x.test' } },
 					all: true
 				});

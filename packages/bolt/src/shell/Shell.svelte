@@ -12,6 +12,7 @@
 	import { PersistedState } from 'runed';
 	import { MediaQuery, SvelteMap } from 'svelte/reactivity';
 	import {
+		AppHeader,
 		Bound,
 		Center,
 		Cover,
@@ -71,11 +72,11 @@
 	import Inbox from './inbox/Inbox.svelte';
 	import Connections from './integration/Connections.svelte';
 	import Settings from './settings/Settings.svelte';
+	import Audit from './audit/Audit.svelte';
 	import Studio from './studio/Studio.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
 	import Nav from './Nav.svelte';
-	import MediaHeader from './MediaHeader.svelte';
 	import Finder from './finder/Finder.svelte';
 	import Home from './Home.svelte';
 	import Bell from './Bell.svelte';
@@ -165,6 +166,9 @@
 		get catalog() {
 			return boot?.catalog;
 		},
+		get automations() {
+			return boot?.automations;
+		},
 		get locale() {
 			return locale;
 		},
@@ -175,7 +179,7 @@
 		get currency() {
 			return config.manifest.workspace.currency;
 		},
-		read: (collection, options) => moduleBolt.read(collection, options),
+		query: (collection, options) => moduleBolt.query(collection, options),
 		// a generated form's file field: bytes to `<collection>.<field>`, links to the stored file
 		upload: (file, target) =>
 			moduleBolt
@@ -366,7 +370,7 @@
 			setCurrentBolt(client);
 			environment = result.success.surfaces.inbox
 				? yield* deviceSession(client.device, {
-						inbox: client.live({ read: { m: 'inbox', a: [] } }),
+						inbox: client.observe({ read: { m: 'inbox', a: [] } }),
 						vapid: result.success.push,
 						navigate,
 						store: (body) => api.push(body)
@@ -619,7 +623,7 @@
 	{:else if current.kind === 'page' || current.kind === 'kiosk'}
 		<!-- the open app's banner and its pages as tabs; on a phone the shell's top bar carries the banner, except a visitor's -->
 		{#if hero !== null && (!narrow.current || boot?.visitor !== null)}
-			<MediaHeader {...hero} compact={narrow.current} actionsLabel={t('Page scope')} />
+			<AppHeader {...hero} compact={narrow.current} actionsLabel={t('Page scope')} />
 		{/if}
 		{#if strip !== null}
 			<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
@@ -668,7 +672,9 @@
 		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
 	{:else if current.kind === 'connections' && connectable && boot?.actor?.kind === 'member' && bolt}
 		<Connections {api} {bolt} me={boot.actor.id} {t} {locale} />
-	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
+	{:else if current.kind === 'settings' && current.tab === 'audit' && boot?.surfaces.settings && boot.admin && bolt}
+		<Audit {api} {t} locale={bolt.locale} admin={boot.admin} />
+	{:else if current.kind === 'settings' && current.tab !== 'audit' && boot?.surfaces.settings && bolt}
 		<Settings
 			{api}
 			{bolt}
@@ -859,7 +865,7 @@
 				{#if narrow.current}
 					<!-- the phone's one top bar: navigation, the open app's identity over its banner, the bell, Norbius, then the page's scope -->
 					<div class="shrink-0" bind:offsetHeight={headerHeight}>
-						<MediaHeader
+						<AppHeader
 							compact
 							src={hero?.src ?? null}
 							icon={hero?.icon ?? null}
@@ -901,7 +907,7 @@
 									</Button>
 								{/if}
 							{/snippet}
-						</MediaHeader>
+						</AppHeader>
 					</div>
 				{/if}
 				<Stack gap="none" fill class="min-h-0 pb-[env(safe-area-inset-bottom)] md:pb-0">
@@ -943,7 +949,7 @@
 				bind:open={finding}
 				nav={boot.nav}
 				catalog={boot.catalog}
-				read={(c, o) => bolt!.read(c, o)}
+				read={(c, o) => bolt!.query(c, o)}
 				{t}
 				onNavigate={navigate}
 				onOpenRecord={(c, id) => openRecord(c, id)}

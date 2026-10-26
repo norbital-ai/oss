@@ -8,7 +8,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import logo from '../../assets/logo.svg';
-	import { Badge } from '../primitives/badge/index.js';
+	import Badge from '../primitives/badge/badge.svelte';
 	import { Bound, Center, Frame, Imposter, Inline, Stack } from '../layout/index.js';
 	import NorbiusField from './norbius-field.svelte';
 	import { accessHeight } from './access-height.js';

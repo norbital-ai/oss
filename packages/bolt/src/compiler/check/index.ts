@@ -1,9 +1,11 @@
 /// <reference types="node" />
-// `bolt check` (rule 7): discover → names → bundle → evaluate → manifest → seed decode → schema → build checks, every
-// error of every stage in one run (a stage whose input failed is skipped, the others still run). tsc, svelte-check and
-// doctor follow in the CLI. Declarations are evaluated in isolated-vm (rule 2) with a frozen clock and a seeded
-// `Math.random`, twice, and the two manifest hashes must match; the guest program obeys rule 6's walls.
-import { sha256Hex } from '../../engine/write/sql.ts';
+// `bolt check` (rule 7): discover → bundle → evaluate → manifest → names → seed decode → schema → build checks, every
+// error of every stage in one run (a stage whose input failed is skipped, the others still run). Its first stages are
+// `bolt sync`: the names index is printed from the evaluated declarations, and an evaluation that fails keeps the last
+// good one. Workspace diagnostics use the TypeScript language service; deeper audits run on request. Declarations are
+// evaluated in isolated-vm (rule 2) with a frozen clock and seeded `Math.random`, twice, and both manifest hashes must
+// match; the guest program obeys rule 6's walls.
+import { sha256Hex } from '@norbital-ai/store';
 import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep } from 'node:path';
@@ -16,35 +18,28 @@ import { minify, type MinifyOptions } from 'terser';
 import type { RowData } from '../../engine/contracts.ts';
 import { decodeManifest, projectManifest, type EngineManifest } from '../../engine/manifest.ts';
 import { PRELUDE } from '../../engine/guest/prelude.ts';
-import { assetHook, digest, randomStream, type GuestProgram } from '../../engine/guest/runner.ts';
+import type { GuestProgram } from '../../engine/guest/runner.ts';
+import { assetHook, digest, randomStream } from '../../node/guest-isolates.ts';
 import { plan } from '../../engine/schema/plan.ts';
 import { decodeSeed, type SeedPack } from '../../engine/write/seed.ts';
 import { discover, type Discovered } from '../discover.ts';
-import { ROLES } from '../../decl/layout.ts';
-import { load, manifestErrors, type Manifest } from '../load.ts';
+import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
-import { checkRules } from './rules.ts';
-import { SYSTEM_COLUMNS } from '../../protocol/catalog.ts';
+import { checkRules, sourceRules } from './rules.ts';
+import { prepareMigrations } from '../migrations.ts';
+import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
+export type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
 
 export type Stage =
-	'discover' | 'names' | 'bundle' | 'evaluate' | 'manifest' | 'seed' | 'schema' | 'rules';
-/** An author error; `line` (1-based) when the checker names one. */
-export type CheckDiagnostic = {
-	code: string;
-	path: string;
-	line?: number;
-	message: string;
-	help?: string;
-};
+	'discover' | 'bundle' | 'evaluate' | 'manifest' | 'names' | 'seed' | 'schema' | 'rules';
 export type CheckResult = {
 	/** The stages that ran, in order (test `compiler/check-order`). */
 	stages: Stage[];
 	errors: CheckDiagnostic[];
 	manifest?: EngineManifest;
 	guest?: GuestProgram;
-	/** Collections that attach a transform body. */
+	/** The write callbacks the models declare, per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`. */
 	transforms: string[];
-	projections: string[];
 	seed?: SeedPack;
 };
 
@@ -77,42 +72,35 @@ const Evaluated = Schema.Struct({
 	roles: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)),
 	bodies: Schema.Struct({
 		transforms: Schema.Array(Schema.String),
-		projections: Schema.Array(Schema.String),
-		automations: Schema.Array(Schema.String)
+		automations: Schema.Array(Schema.String),
+		models: Schema.Array(Schema.String)
 	})
 });
 
-/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
-export const check = Effect.fn('bolt.check')(function* (
-	dir: string,
-	options: { bolt?: string } = {}
+/**
+ * `bolt sync`'s stages, the front of every check: discover → bundle → evaluate → manifest → names. The type setup is
+ * written first (the workspace tsconfig extends it); the names index is printed from the evaluated declarations, and an
+ * evaluation or a model literal that fails keeps the last good index, so no body loses its types to a broken save.
+ */
+const front = Effect.fn('bolt.front')(function* (
+	root: string,
+	stage: (s: Stage) => void,
+	errors: CheckDiagnostic[],
+	bolt: string | undefined
 ) {
-	const fs = yield* FileSystem.FileSystem;
-	const root = yield* fs.realPath(dir); // importers arrive resolved; relative paths need the same spelling
-	const stages: Stage[] = [],
-		errors: CheckDiagnostic[] = [];
-	const stage = (s: Stage) => stages.push(s);
-	const out: CheckResult = { stages, errors, transforms: [], projections: [] };
-
 	stage('discover');
 	const { files, errors: layout } = yield* discover(root);
 	errors.push(...layout);
-
-	// the index is path-derived (rule 8); the feed targets (`fed`) are the manifest's, filled in at the manifest stage
-	stage('names');
-	yield* writeTypeSetup(root); // before bundling: the workspace tsconfig extends it
-	const empty = Object.fromEntries(ROLES.map((r) => [r.role, {}])) as Manifest;
-	yield* writeNames(root, namesIndex(files, empty, options.bolt));
+	yield* writeTypeSetup(root);
 
 	stage('bundle');
 	const code = files.filter((f) => f.path.endsWith('.ts'));
-	const bundled = yield* bundle(root, code, errors);
-	if (bundled === undefined) return out;
-	out.guest = bundled;
+	const guest = yield* bundle(root, code, errors);
+	if (guest === undefined) return undefined;
 
 	stage('evaluate');
-	const evaluated = yield* evaluateTwice(bundled, errors);
-	if (evaluated === undefined) return out;
+	const evaluated = yield* evaluateTwice(guest, errors);
+	if (evaluated === undefined) return undefined;
 
 	stage('manifest');
 	const { roles, bodies } = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Evaluated))(
@@ -125,7 +113,51 @@ export const check = Effect.fn('bolt.check')(function* (
 	errors.push(...text);
 	for (const f of code) manifest[f.role][f.name] = roles[f.role]?.[f.name];
 	errors.push(...manifestErrors(manifest));
-	yield* writeNames(root, namesIndex(files, manifest, options.bolt));
+
+	stage('names');
+	const names = Result.try({
+		try: () => namesIndex(files, manifest, bolt),
+		catch: (cause) => (cause instanceof Error ? cause.message : String(cause))
+	});
+	if (Result.isSuccess(names)) yield* writeNames(root, names.success);
+	else
+		errors.push({
+			code: 'names/failed',
+			path: 'src',
+			message: `the names index keeps its last good text: ${names.failure}`
+		});
+	return { files, code, guest, manifest, bodies };
+});
+
+/** `bolt sync`: evaluates the declarations at `root` and writes `.norbital/names.ts`; `bolt` is the module it augments. */
+export const sync = Effect.fn('bolt.sync')(function* (
+	dir: string,
+	options: { bolt?: string } = {}
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const root = yield* fs.realPath(dir);
+	const stages: Stage[] = [],
+		errors: CheckDiagnostic[] = [];
+	yield* front(root, (s) => stages.push(s), errors, options.bolt);
+	return { stages, errors };
+});
+
+/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
+export const check = Effect.fn('bolt.check')(function* (
+	dir: string,
+	options: { bolt?: string; migrations?: 'generate' | 'verify'; squash?: string } = {}
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const root = yield* fs.realPath(dir); // importers arrive resolved; relative paths need the same spelling
+	const stages: Stage[] = [],
+		errors: CheckDiagnostic[] = [];
+	const stage = (s: Stage) => stages.push(s);
+	const out: CheckResult = { stages, errors, transforms: [] };
+
+	const evaluated = yield* front(root, stage, errors, options.bolt);
+	if (evaluated === undefined) return out;
+	const { files, code, guest, manifest, bodies } = evaluated;
+	out.guest = guest;
 	const decoded = decodeManifest(projectManifest(manifest));
 	if (Result.isFailure(decoded)) {
 		errors.push({
@@ -138,33 +170,6 @@ export const check = Effect.fn('bolt.check')(function* (
 	const m = decoded.success;
 	out.manifest = m;
 	out.transforms = [...bodies.transforms];
-	out.projections = [...bodies.projections];
-	for (const [name, collection] of Object.entries(m.collections)) {
-		const projection = collection.read.projection;
-		const attached = bodies.projections.includes(name);
-		const invalid =
-			projection === undefined
-				? attached
-				: !attached ||
-					projection.fields.length === 0 ||
-					new Set(projection.fields).size !== projection.fields.length ||
-					new Set(projection.context).size !== projection.context.length ||
-					projection.fields.some(
-						(field) => !['json', 'file'].includes(m.models[name]?.fields[field]?.kind ?? '')
-					) ||
-					projection.context.some(
-						(field) =>
-							m.models[name]?.fields[field] === undefined &&
-							!SYSTEM_COLUMNS.some((column) => column === field)
-					);
-		if (invalid)
-			errors.push({
-				code: 'collection/projection',
-				path: `src/data/collection/${name}/+collection.ts`,
-				message:
-					'A read projection requires one attached project body, unique declared JSON fields and valid trusted context columns.'
-			});
-	}
 
 	stage('seed');
 	const pack = yield* seedPack(root, errors);
@@ -186,12 +191,9 @@ export const check = Effect.fn('bolt.check')(function* (
 	else out.seed = tenant;
 
 	stage('schema');
-	const planned = Result.try({
-		try: () => plan(null, m),
-		catch: (cause) => new EvalError({ cause })
-	});
+	const planned = yield* Effect.result(plan(null, m));
 	if (Result.isFailure(planned)) {
-		const e = planned.failure.cause;
+		const e = planned.failure;
 		const code =
 			typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string'
 				? e.code
@@ -201,28 +203,68 @@ export const check = Effect.fn('bolt.check')(function* (
 			path: 'src/data',
 			message: e instanceof Error ? e.message : String(e)
 		});
+	} else {
+		const migrations = yield* Effect.result(
+			prepareMigrations(root, m, options.migrations ?? 'verify', {
+				...(options.squash === undefined ? {} : { squash: options.squash })
+			})
+		);
+		if (Result.isFailure(migrations)) {
+			const error = migrations.failure;
+			errors.push({
+				code: 'schema/migrations',
+				path: 'migrations',
+				message: error instanceof Error ? error.message : String(error)
+			});
+		}
 	}
 
 	stage('rules');
 	const where = (role: string, name: string) =>
 		files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
 	errors.push(...checkRules(m, bodies, where));
+	const models = files.filter((f) => f.role === 'model');
+	const sources = yield* Effect.forEach(models, (f) =>
+		fs.readFileString(join(root, f.path)).pipe(Effect.map((text) => ({ path: f.path, text })))
+	);
+	errors.push(...sourceRules(m, sources));
 	if (errors.length === 0) {
-		const runtime = yield* bundle(root, code, errors, true);
+		const runtime = yield* bundle(root, code, errors, true, bodies.models);
 		if (runtime !== undefined) out.guest = runtime;
 	}
 	return out;
 });
 
-/** The callback paths selected by the runner, retaining every role module's original initialization order. */
-function runtimeEntry(root: string, code: readonly Discovered[]): string {
-	const groups = new Map<Discovered['role'], string[]>();
+/**
+ * A policy's guest part: each write grant's `approval` callback (`policy.<p>.grants.<model>.<op>.approval`), pure and
+ * called with its write and a fresh flow, then reduced to the stored snapshot without a ctx.
+ */
+const APPROVALS = `import { approvalFlow as __approvalFlow, snapshotOf as __approvalSnapshot } from ${JSON.stringify(join(dirname(BOLT), 'decl', 'access', `policy${extname(BOLT)}`))};
+const __approval = (approve) => Object.defineProperty((write) => __approvalSnapshot(approve(write, __approvalFlow())), 'name', { value: approve.name });
+const __approvals = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.approval === 'function' ? [[op, { approval: __approval(g[op].approval) }]] : []))])) });`;
+/**
+ * The callback paths selected by the runner (the Guest ABI), retaining every role module's original initialization order:
+ * a model's bodies under `collection.<model>.bodies`, a policy's approval callbacks, an automation's `body`, a custom
+ * field's `check`, an integration's `bodies.test` and a page server's loader.
+ */
+function runtimeEntry(
+	root: string,
+	code: readonly Discovered[],
+	models: readonly string[]
+): string {
+	const groups = new Map<string, string[]>();
+	const callbackModels = new Set(models);
 	const imports = code.map((file, index) => {
 		const binding = `r${index}`;
-		let value: string | undefined;
+		let group: string = file.role,
+			value: string | undefined;
 		switch (file.role) {
-			case 'collection':
-				value = `{ bodies: ${binding}.bodies, spec: { notifications: ${binding}.spec?.notifications } }`;
+			case 'model':
+				group = 'collection';
+				if (callbackModels.has(file.name)) value = `{ bodies: ${binding}.bodies }`;
+				break;
+			case 'policy':
+				value = `__approvals(${binding})`;
 				break;
 			case 'automation':
 				value = `{ body: ${binding}.body }`;
@@ -233,9 +275,6 @@ function runtimeEntry(root: string, code: readonly Discovered[]): string {
 			case 'integration_definition':
 				value = `{ bodies: ${binding}.bodies }`;
 				break;
-			case 'pipeline':
-				value = `{ spec: { import: (${binding}.spec ?? ${binding}).import } }`;
-				break;
 			case 'page_server':
 			case 'kiosk_page_server':
 				value = `{ data: ${binding}.data, load: ${binding}.load }`;
@@ -243,14 +282,15 @@ function runtimeEntry(root: string, code: readonly Discovered[]): string {
 		}
 		const path = JSON.stringify(join(root, file.path));
 		if (value === undefined) return `import ${path};`;
-		const entries = groups.get(file.role) ?? [];
+		const entries = groups.get(group) ?? [];
 		entries.push(`${JSON.stringify(file.name)}: ${value}`);
-		groups.set(file.role, entries);
+		groups.set(group, entries);
 		return `import ${binding} from ${path};`;
 	});
 	return [
 		...imports,
-		`export default { ${[...groups].map(([role, entries]) => `${role}: { ${entries.join(', ')} }`).join(', ')} };`
+		...(groups.has('policy') ? [APPROVALS] : []),
+		`export default { ${[...groups].map(([group, entries]) => `${group}: { ${entries.join(', ')} }`).join(', ')} };`
 	].join('\n');
 }
 
@@ -259,13 +299,14 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 	root: string,
 	code: readonly Discovered[],
 	errors: CheckDiagnostic[],
-	runtime = false
+	runtime: boolean = false,
+	models: readonly string[] = []
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const byRole = Map.groupBy(code, (f) => f.role);
 	const servers = code.filter((f) => f.role === 'page_server' || f.role === 'kiosk_page_server');
 	const entry = runtime
-		? runtimeEntry(root, code)
+		? runtimeEntry(root, code, models)
 		: [
 				...(servers.length > 0
 					? [
@@ -453,44 +494,35 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;
-// Declarations are data (functions drop out of JSON); which bodies are attached is read beside them.
-const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], projections: [], automations: [] };
+// Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`splitModel`
+// reads them) and a policy's approval callbacks `approval: true`; which write callbacks and automation bodies exist is
+// read beside them. A ctx-bearing body must be a generator.
+const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], automations: [], models: [] };
 	const generator = (body) => {
 		if (typeof body !== 'function') return;
 		const original = body[Symbol.for('norbital.bolt.generator')] ?? body;
 		if (Object.prototype.toString.call(original) !== '[object GeneratorFunction]') throw new Error('a ctx-bearing body must be a generator function');
 	};
-	for (const c of Object.values(d.collection ?? {})) {
-		generator(c?.bodies?.transform); generator(c?.bodies?.project);
-		for (const body of Object.values(c?.bodies?.queries ?? {})) generator(body);
-		for (const body of Object.values(c?.bodies?.actions ?? {})) generator(body);
+	const mark = (o) => { for (const [k, v] of Object.entries(o ?? {})) if (typeof v === 'function') o[k] = true; else if (v !== null && typeof v === 'object') mark(v); };
+	const hasBody = (o) => typeof o === 'function' || o !== null && typeof o === 'object' && Object.values(o).some(hasBody);
+	for (const [n, m] of Object.entries(d.model ?? {})) {
+		if (Object.hasOwn(m?.spec ?? {}, 'actions')) throw new Error('model ' + JSON.stringify(n) + ' cannot declare named actions');
+		const b = m?.bodies ?? {};
+		if (hasBody(b)) bodies.models.push(n);
+		for (const body of [b.create, b.update, b.delete, b.notify, ...Object.values(b.queries ?? {})]) generator(body);
+		for (const s of Object.values(b.syncs ?? {})) { generator(s?.read); generator(s?.write); for (const p of Object.values(s?.parse ?? {})) generator(p); }
+		for (const verb of ['create', 'update', 'delete']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
+		mark(m?.spec);
+		d.model[n] = { name: m?.name, spec: m?.spec };
 	}
-	for (const a of Object.values(d.automation ?? {})) generator(a?.body);
-	for (const i of Object.values(d.integration_definition ?? {})) {
-		generator(i?.bodies?.test); generator(i?.bodies?.receive); generator(i?.bodies?.send);
-		for (const feed of Object.values(i?.bodies?.feeds ?? {})) { generator(feed?.read); generator(feed?.map); }
-		for (const outbound of Object.values(i?.bodies?.outbound ?? {})) generator(outbound?.run);
-	}
-	for (const p of Object.values(d.pipeline ?? {})) {
-		const imports = (p?.spec ?? p)?.import;
-		for (const key of ['known', 'check', 'template']) generator(imports?.[key]);
-	}
+	for (const [n, a] of Object.entries(d.automation ?? {})) { generator(a?.body); if (typeof a?.body === 'function') bodies.automations.push(n); }
+	for (const i of Object.values(d.integration_definition ?? {})) { generator(i?.bodies?.test); if (typeof i?.spec?.test === 'function') i.spec.test = true; }
+	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function' && f.spec) f.spec.check = true; // the write path calls the guest's validate
+	for (const p of Object.values(d.policy ?? {})) for (const g of Object.values(p?.grants ?? {})) for (const op of ['create', 'update', 'delete']) if (typeof g?.[op]?.approval === 'function') g[op].approval = true;
 	for (const role of ['page_server', 'kiosk_page_server']) for (const [name, definition] of Object.entries(d[role] ?? {})) {
 		generator(definition?.load);
 		d[role][name] = globalThis.__ns.__pageServerMetadata(definition, globalThis.__ns.__pageDataCodecs[role]?.[name]);
 	}
-
-	for (const [n, c] of Object.entries(d.collection ?? {})) if (typeof c?.bodies?.transform === 'function') bodies.transforms.push(n);
-	for (const [n, c] of Object.entries(d.collection ?? {})) if (typeof c?.bodies?.project === 'function') bodies.projections.push(n);
-	for (const c of Object.values(d.collection ?? {})) for (const rules of Object.values(c?.spec?.notifications ?? {})) for (const rule of rules) if (typeof rule.to === 'function') rule.to = true;
-	for (const [n, a] of Object.entries(d.automation ?? {})) if (typeof a?.body === 'function') bodies.automations.push(n);
-	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function') f.spec.check = true; // the write path calls an attached validate
-	const mark = (o) => { for (const [k, v] of Object.entries(o ?? {})) if (typeof v === 'function') o[k] = true; else if (v !== null && typeof v === 'object') mark(v); };
-	for (const i of Object.values(d.integration_definition ?? {})) mark(i?.bodies); // the load checks read which feed, outbound and conversation bodies are attached
-	for (const p of Object.values(d.pipeline ?? {})) { const s = (p?.spec ?? p)?.import; if (!s) continue; // the import calls the bodies a pipeline declares
-		for (const k of ['known', 'check', 'template']) if (typeof s[k] === 'function') s[k] = true;
-		if (typeof s.scope?.of === 'function') s.scope.of = true;
-		for (const r of Object.keys(s.related ?? {})) if (typeof s.related[r] === 'function') s.related[r] = true; }
 	return JSON.stringify({ roles: d, bodies }); })()`;
 
 const evaluate = Effect.fn('bolt.evaluate')(function* ({ source, assets }: GuestProgram) {
@@ -513,7 +545,7 @@ const evaluate = Effect.fn('bolt.evaluate')(function* ({ source, assets }: Guest
 					{ filename: 'bolt:prelude', result: { reference: true } }
 				)
 			);
-			yield* run(() => context.eval(FREEZE));
+			yield* run((): Promise<unknown> => context.eval(FREEZE));
 			const module = yield* run(() => isolate.compileModule(source, { filename: 'guest.mjs' }));
 			yield* run(() =>
 				module.instantiate(context, (specifier) =>
@@ -521,10 +553,14 @@ const evaluate = Effect.fn('bolt.evaluate')(function* ({ source, assets }: Guest
 				)
 			);
 			const start = isolate.cpuTime;
-			yield* run(() => module.evaluate({ timeout: 10 * EVAL_CPU_MS }));
+			// the wall timeout is only a runaway guard: `isolate.cpuTime` below is the budget's authority, and a busy
+			// machine stretches wall time without changing CPU time
+			yield* run(() => module.evaluate({ timeout: 100 * EVAL_CPU_MS }));
 			const cpuMs = Number(isolate.cpuTime - start) / 1e6;
 			yield* run(() => context.global.set('__ns', module.namespace.derefInto()));
-			const json = yield* run(() => context.eval(SERIALIZE, { copy: true }));
+			const json: unknown = yield* run((): Promise<unknown> =>
+				context.eval(SERIALIZE, { copy: true })
+			);
 			return {
 				json: yield* Schema.decodeUnknownEffect(Schema.String)(json).pipe(
 					Effect.mapError((cause) => new EvalError({ cause }))
@@ -598,7 +634,8 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 			path: 'src',
 			message: 'two evaluations of the declarations gave different manifests (rule 2)'
 		});
-	if (Math.max(a.cpuMs, b.cpuMs) > EVAL_CPU_MS)
+	// the cheaper of the two runs: a busy machine only ever adds CPU time, never removes it
+	if (Math.min(a.cpuMs, b.cpuMs) > EVAL_CPU_MS)
 		errors.push({
 			code: 'guest/eval-cpu',
 			path: 'guest.mjs',

@@ -1,12 +1,11 @@
 // `integration('<name>', literal)`: one definition per `src/integration/<name>/+integration.ts` (the folder is the name).
-// A definition names one driver kind, its typed configuration and credential, the feeds that write collections from the
-// external account and the outbound rules that send or command for records. X-2: the literal holds the shapes; the bodies
-// (`test`, `feed`, `outbound`, `receive`, `send`) attach after it by name, so no literal's type depends on a body. Bolt's
-// conversation definitions (whatsapp, email, telegram, slack, discord, wechat) are this same declaration in its system
-// layer.
+// A definition is the connection only: one driver kind, its typed configuration and credential, OAuth, the HTTP base and
+// auth, webhook verification, a request rate and an inline `test` body. What a connection exchanges is declared on the
+// models it syncs (`model(…).syncs`, `./sync.ts`). Bolt's conversation definitions (whatsapp, email, telegram, slack,
+// discord, wechat) are this same declaration in its system layer.
 import type { Handle } from '../access/actor.ts';
-import { attached, type Body } from '../collection.ts';
-import type { BodyReturn, Eff, InputSel, Loose, Patch, QueryCtx, WorkspaceReads } from '../ctx.ts';
+import { attached, type Body } from '../body.ts';
+import type { BodyReturn, Eff } from '../ctx.ts';
 import type { FacilityFailure, Unavailable } from '../errors.ts';
 import type {
 	Checked,
@@ -18,32 +17,46 @@ import type {
 	ValidInputs,
 	ValueOf
 } from '../fields.ts';
+import type { InstanceId, IntegrationName, IntegrationSpecOf, Is } from '../names.ts';
 import type {
-	CollectionName,
-	ColumnValue,
-	InstanceId,
-	IntegrationName,
-	IntegrationSpecOf,
-	OmittableOnInsert,
-	OneRels,
-	ReadField,
-	Row,
-	WritableField
-} from '../names.ts';
-import type { Where } from '../where.ts';
-import type { FileRef, IanaZone, Id, Instant, Json, PlainDate, RecordRef } from '../values.ts';
+	FileRef,
+	IanaZone,
+	Id,
+	Instant,
+	Json,
+	PlainDate,
+	Rate,
+	RecordRef
+} from '../values.ts';
 import type { DatabaseRequest, DatabaseResult } from '../../engine/integrations/database.ts';
-import type { Cron, WebhookScheme } from './automation.ts';
-import type { ConnectionsOf, SecretName } from './names.ts';
+import type { WebhookScheme } from './automation.ts';
+import type { SecretName } from './names.ts';
+
+/** Checks the definition of a read integration instance before using its id in a definition-pinned ref. */
+export function instanceId<const D extends string>(
+	definition: Is<D, IntegrationName>,
+	instance: { readonly id: Id<'sys_integration'>; readonly integration: string }
+): InstanceId<D> {
+	if (!isInstance<D>(definition, instance))
+		throw new RangeError(`Expected an instance of '${definition}', got '${instance.integration}'`);
+	return instance.id;
+}
+/** Narrows a read instance and its id by its declared integration definition. */
+export function isInstance<const D extends string>(
+	definition: Is<D, IntegrationName>,
+	instance: { readonly id: Id<'sys_integration'>; readonly integration: string }
+): instance is { readonly id: InstanceId<D>; readonly integration: D } {
+	return instance.integration === definition;
+}
 
 // ── drivers: Bolt's kinds, each a static contract; the host implements a kind with its providers ──
 /**
  * Each driver's contract: `request`, what `ctx.request` takes (`http` ops or `database` statements); `credential`, the
  * definition declares the secret the host seals at pairing; `conversation`, the messages it carries and the member handle
- * a sender is matched by (`null`: none, so a private envoy admits nobody); `feed`, the items it pushes; `oauth`, the host
- * may run an OAuth grant with the definition's `oauth` client; `personal`, a member's own account syncs (never sends a
- * message, never an envoy; an outbound command may write back to it); `call`, what `ctx.request` takes through a pushing
- * driver's standing link (its provider's own API under its sign-in: a calendar's event writes).
+ * a sender is matched by (`null`: none, so a private envoy admits nobody); `items`, what it pushes to a sync's `read`
+ * (`items`); `oauth`, the host may run an OAuth grant with the definition's `oauth` client; `personal`, a member's own
+ * account syncs (never sends a message, never an envoy; a sync `write` may write back to it); `call`, what `ctx.request`
+ * takes through a pushing driver's standing link (its provider's own API under its sign-in: a calendar's event writes).
  */
 export const DRIVERS = {
 	http: { request: 'http', credential: true, oauth: true },
@@ -54,7 +67,7 @@ export const DRIVERS = {
 	slack: { conversation: { kind: 'chat', handle: null } },
 	discord: { conversation: { kind: 'chat', handle: null } },
 	wechat: { conversation: { kind: 'chat', handle: null } },
-	calendar: { feed: 'calendar', oauth: true, personal: true, call: 'http' }
+	calendar: { items: 'calendar', oauth: true, personal: true, call: 'http' }
 } as const;
 /** A driver kind: what a definition's `driver` names. */
 export type DriverName = keyof typeof DRIVERS;
@@ -100,10 +113,10 @@ export type InboundChat = {
 };
 /** A conversation's inbound message, by its kind. */
 export type Inbound<K> = K extends 'email' ? InboundMail : K extends 'chat' ? InboundChat : never;
-/** A message a `from: 'messages'` feed maps: the message as stored, its `version` (an edit is a new one) and whether it was deleted or recalled. */
+/** An inbound message as a sync's `read` receives it: the message as stored, its `version` (an edit is a new one) and whether it was deleted or recalled. */
 export type MessageItem<K> = Inbound<K> & { readonly version: string; readonly deleted: boolean };
 type Common = { replyTo?: string; about?: RecordRef };
-/** What a conversation sends, by its kind: an outbound rule's `build`, `ctx.send` and an envoy's reply. */
+/** What a conversation sends, by its kind: a sync `write`'s `ctx.send`, an automation's `ctx.send` and an envoy's reply. */
 export type Outgoing<K> = K extends 'email'
 	? Common & {
 			to: readonly string[];
@@ -123,31 +136,6 @@ export type Outgoing<K> = K extends 'email'
 				attachments?: readonly FileRef[];
 			}
 		: never;
-/** One chat message a custom conversation's `receive` maps a verified webhook body to; `id` deduplicates. */
-export type ReceivedChat = {
-	id: string;
-	thread: string;
-	sentAt: Instant;
-	from: { handle: string; name?: string | null };
-	text: string;
-	replyTo?: string | null;
-	group?: boolean;
-	/** Why a group message is addressed to the envoy. */
-	invocation?: 'mention' | 'reply';
-	participants?: readonly { handle: string; name?: string | null }[];
-};
-/** One email a custom conversation's `receive` maps a verified webhook body to; `id` deduplicates. */
-export type ReceivedMail = {
-	id: string;
-	thread?: string | null;
-	sentAt: Instant;
-	from: { address: string; name?: string | null };
-	to?: readonly string[];
-	subject: string;
-	text: string;
-	html?: string | null;
-};
-type Received<K> = K extends 'email' ? ReceivedMail : ReceivedChat;
 
 /**
  * Where an outbound message stands. Every provider maps its own reports to these; bolt keeps every report on the
@@ -165,7 +153,10 @@ export type DeliveryKind =
 	| 'complained' // the recipient marked it spam (only providers that report it)
 	| 'auto_replied' // an out-of-office or auto-responder (RFC 3834): recorded, never a status, never a reply
 	| 'replied'; // a human reply in the thread
-/** What an outbound rule's `events.<E>` receives: the report as the provider gave it, the message it is about, and the reply. */
+/**
+ * One report about a message a sync's `write` sent (`ctx.send`): the report as the provider gave it, the message it is
+ * about (the `$id` that `write` returned, so `read` maps it back to its row) and, for a reply, the reply.
+ */
 export type DeliveryEvent<E extends DeliveryKind = DeliveryKind, K = 'email'> = {
 	readonly kind: E;
 	readonly at: Instant;
@@ -191,11 +182,30 @@ export type DeliveryEvent<E extends DeliveryKind = DeliveryKind, K = 'email'> = 
 		? { readonly reason: string }
 		: {});
 
-// ── driver feed items ──
+// ── deliveries and driver items: what a sync's `read` receives beside its cursor ──
+/** A verified webhook delivery the inbox stored for an instance (deduplicated by its delivery id), oldest first. */
+export type WebhookDelivery = {
+	readonly kind: 'webhook';
+	/** The delivery id (`webhook-id`, Stripe's event id, Slack's `event_id`, else the body's SHA-256). */
+	readonly id: string;
+	readonly at: Instant;
+	readonly headers: { readonly [lowercase: string]: string };
+	readonly body: Json;
+};
+/** An inbound message a conversation instance received since the last read. */
+export type MessageDelivery<K> = { readonly kind: 'message'; readonly message: MessageItem<K> };
+/**
+ * What a sync over definition `D` receives as `deliveries`: for a conversation definition, the inbound messages and the
+ * delivery reports of the messages its `write` sent (each report is one arm, discriminated by `kind`); for any other,
+ * the verified webhook deliveries.
+ */
+export type DeliveryOf<D, K = ConversationOf<D>> = [K] extends [never]
+	? WebhookDelivery
+	: MessageDelivery<K> | { [E in DeliveryKind]: DeliveryEvent<E, K> }[DeliveryKind];
 /** When a calendar event starts or ends: a whole day, or an instant with the zone it was set in. */
 export type CalendarTime =
 	{ readonly date: PlainDate } | { readonly at: Instant; readonly zone: IanaZone | null };
-/** One event a `calendar` driver feed pushes; `ctx.partition` is its calendar. */
+/** One event a `calendar` driver pushes to a sync's `read` (`items`); the read's `partition` is its calendar. */
 export type CalendarEvent = {
 	readonly id: string;
 	readonly summary: string | null;
@@ -208,7 +218,8 @@ export type CalendarEvent = {
 	/** Original provider event, including attendees, recurrence and identifiers needed by authored business rules. */
 	readonly source: Json;
 };
-type DriverItem<D> = D extends 'calendar' ? CalendarEvent : never;
+/** What definition `D`'s driver pushes to a sync's `read` as `items`; `never` for a driver that pushes nothing. */
+export type DriverItemOf<D> = DriverOf<D> extends 'calendar' ? CalendarEvent : never;
 
 // ── requests ──
 /** An HTTP request through an `http` instance: `path` resolves under the definition's base URL (never another host). */
@@ -220,7 +231,10 @@ export type HttpOp<O> = {
 	body?: Json;
 	output: O & Checked<InputKind, O, Exact<O, ValidInput<O>>>;
 };
-/** An instance's live request: journalled, credential host-side; it fails with a `FacilityFailure` or `Unavailable`. */
+/**
+ * An instance's live request: journalled, credential host-side, paced by the definition's `rate` (a `429` with
+ * `Retry-After` is honoured); it fails with a `FacilityFailure` or `Unavailable`.
+ */
 export interface HttpRequester {
 	<const O extends InputKind>(op: HttpOp<O>): Eff<ValueOf<O>, FacilityFailure | Unavailable>;
 }
@@ -232,12 +246,8 @@ export interface DatabaseRequester {
 // ── a definition's derived types ──
 type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 type DriverIn<S> = S extends { driver: infer D } ? D : never;
-/** The message kind a definition's conversation carries: its own `conversation` (a custom chat), else its driver's. */
-type KindIn<S> = S extends { conversation: { kind: infer K } }
-	? K
-	: Contract<DriverIn<S>> extends { conversation: { kind: infer K } }
-		? K
-		: never;
+/** The message kind a definition's driver carries. */
+type KindIn<S> = Contract<DriverIn<S>> extends { conversation: { kind: infer K } } ? K : never;
 type RequestIn<S> =
 	Contract<DriverIn<S>> extends { request: infer R }
 		? R
@@ -282,90 +292,15 @@ export type RequestResult<D, O = InputKind, R = RequestIn<IntegrationSpecOf<D>>>
 	: R extends 'database'
 		? DatabaseResult
 		: never;
+/** A sync body's `ctx.request` through the instance it runs for: an HTTP requester, a database requester, or `never` (a conversation driver). */
+export type RequesterOf<D> = Requester<IntegrationSpecOf<D>>;
 /** An instance's decoded configuration for definition `D`: every defaulted field present, an `optional` one without a default absent or null. */
 export type ConfigurationOf<D> = ConfigurationIn<IntegrationSpecOf<D>>;
-
-// ── feed targets ──
-type InstanceFkIn<C> = {
-	[F in keyof OneRels<C> & string]: OneRels<C>[F] extends { to: 'sys_integration' } ? F : never;
-}[keyof OneRels<C> & string];
-/** The FKs of `C` to `sys_integration` pinned to definition `N` (`where: { integration: { eq: N } }`). */
-type InstanceFk<C, N> = {
-	[F in keyof OneRels<C> & string]: OneRels<C>[F] extends {
-		to: 'sys_integration';
-		where: { integration: { eq: N } };
-	}
-		? F
-		: never;
-}[keyof OneRels<C> & string];
-/** A feed target's local fields: its collection's `update` columns, which the feed never writes and only they may change. */
-export type LocalField<C> = SelectionColumns<InputSel<C, 'update'>>;
-type SelectionColumns<Sel> = Sel extends { columns: readonly (infer P)[] } ? P & string : never;
-/** The fields a feed writes into `C`: writable, less its instance FK (the engine stamps it) and its local fields. */
-export type FeedField<C> = Exclude<WritableField<C>, InstanceFkIn<C> | LocalField<C>>;
-/** One row a feed upserts into `C`: its feed fields, required as an insert requires them. */
-export type FeedRow<C> = FeedRowOf<C>;
-type FeedRowOf<C, F extends string = FeedField<C>> = Simplify<
-	{
-		readonly [P in F as OmittableOnInsert<C, P> extends true ? never : P]: Loose<ColumnValue<C, P>>;
-	} & {
-		readonly [P in F as OmittableOnInsert<C, P> extends true ? P : never]?: Loose<
-			ColumnValue<C, P>
-		>;
-	}
->;
-type KeyRow<C, K extends string> = { readonly [P in K]: Loose<ColumnValue<C, P>> };
-/** One change a feed commits: a row upserted by its key, or a key removed (the feed's `removed` decides what that does). */
-export type Change<R, K = R> = { readonly upsert: R } | { readonly delete: K };
-/** A feed's sync health: `attention` raises the instance's status (and any automation watching it). */
-export type Health = {
-	readonly state: 'ready' | 'attention';
-	readonly code?: string;
-	readonly message?: string;
-};
-/**
- * One page a `read` returns. The engine commits its changes, the cursor and the row markers in one statement. `more`
- * reads on in the same run; `retained: false` (the source lost its history) starts a fresh snapshot, and after the page
- * marked `snapshot: 'end'` the rows the snapshot did not see are reconciled through `removed`.
- */
-export type FeedPage<R, K = R> = {
-	readonly changes: readonly Change<R, K>[];
-	readonly cursor: Json;
-	readonly more: boolean;
-	readonly snapshot?: 'begin' | 'end';
-	readonly retained?: false;
-	readonly health?: Health;
-};
 
 // ── the literal ──
 type HttpAuth<C> =
 	{ bearer: C } | { header: { name: string; value: C } } | { basic: { user: C; password: C } };
-/** One feed: rows of one collection from the account. */
-export type FeedSpec = {
-	/** The collection it writes; its model key is the instance FK (pinned to this definition) and `key`. */
-	into: string;
-	/** The remote identity: the model key's fields beside the instance FK. */
-	key: readonly string[];
-	/** `read` (default): pulled on `cron`; `driver`: pushed by the driver; `messages`: this definition's conversation messages. */
-	from?: 'read' | 'driver' | 'messages';
-	cron?: string;
-	/** A text-many configuration field: one cursor per value (calendar ids); a dropped value releases its cursor and markers, and its rows stay. */
-	partitions?: string;
-	/** What a remote delete, or a row a snapshot no longer has, does: a patch of feed fields, or `'delete'` (default). */
-	removed?: object | 'delete';
-};
-/** One outbound rule: a send or command for each committed row of `from` matching `on` and `when`. */
-export type OutboundSpec = {
-	from: string;
-	/** Default `'create'`; queued in the row's own commit, once the write is effective (after approval). */
-	on?: 'create' | 'update' | readonly ('create' | 'update')[];
-	when?: object;
-	/** The instance it goes through: a connection of this definition, or an FK of `from` pinned to it. */
-	via: string;
-	/** The field whose value keys the send (one per record and value); default the record id (one per record). */
-	version?: string;
-};
-/** A definition literal's general shape. */
+/** A definition literal's data: what the manifest holds (the `test` body is not data). */
 export type IntegrationSpec = {
 	description: string;
 	driver: DriverName;
@@ -386,17 +321,21 @@ export type IntegrationSpec = {
 	};
 	/** `http` only: the base URL (a literal or a text configuration field) and how requests authenticate. */
 	http?: { baseUrl: string; auth?: HttpAuth<string> };
-	/** `http` with a conversation: the signed webhook messages arrive by, verified with a credential field. */
-	webhook?: { scheme: WebhookScheme; secret: string };
-	/** `http` only: a custom conversation (`receive` and `send` bodies) and the member handle its senders carry. */
-	conversation?: { kind: 'chat' | 'email'; handle: HandleKind };
-	feeds?: { readonly [feed: string]: FeedSpec };
-	outbound?: { readonly [rule: string]: OutboundSpec };
+	/**
+	 * `http` only: how the provider signs its webhooks, verified with a credential field. The instance page shows the
+	 * endpoint URL to paste into the provider. A verified delivery is stored (a duplicate delivery id is acknowledged and
+	 * dropped) and is a hint: the engine runs `read` of every sync over this connection at once, debounced, and passes the
+	 * stored deliveries to `read` as `deliveries`. `standard` is Standard Webhooks (`webhook-*` and Svix's `svix-*` headers).
+	 */
+	webhook?: { verify: { scheme: WebhookScheme; secret: string } };
+	/**
+	 * At most this many requests through one instance (`'10/s'`, `'600/min'`): every sync `read`, `write` and
+	 * `ctx.request` waits its turn; a `429` with `Retry-After` is honoured on top. Request drivers only.
+	 */
+	rate?: Rate;
 };
-/**
- * The configuration every instance of `def` starts with, however it was made (at run time, from a seed pack, or as a
- * `+workspace.ts` connection): its configuration fields' defaults.
- */
+/** The configuration every instance of `def` starts with, however it was made (at run time, from a seed pack, or as a
+ * `+workspace.ts` connection): its configuration fields' defaults. */
 export const configurationDefaults = (
 	def: Pick<IntegrationSpec, 'configuration'> | undefined
 ): { readonly [field: string]: Json } =>
@@ -406,52 +345,15 @@ export const configurationDefaults = (
 		)
 	);
 
-/** The `text` configuration fields, the many-valued ones when `Many`. */
-type TextField<F, Many> = {
-	[P in keyof F]: F[P] extends { kind: 'text' }
-		? (F[P] extends { many: true } ? true : false) extends Many
-			? P
-			: never
-		: never;
+/** The `text` configuration fields that are not many-valued. */
+type TextField<F> = {
+	[P in keyof F]: F[P] extends { kind: 'text' } ? (F[P] extends { many: true } ? never : P) : never;
 }[keyof F] &
 	string;
-type FeedFor<S, F> = F extends { into: infer C }
-	? {
-			into: F extends { from: 'driver' | 'messages' } | { cron: string }
-				? CollectionName
-				: 'error: a read feed declares its cron';
-			key: readonly FeedField<C>[];
-			from?: F extends { from: 'driver' }
-				? Contract<DriverIn<S>> extends { feed: string }
-					? 'driver'
-					: 'error: only a driver that pushes items takes from: driver'
-				: F extends { from: 'messages' }
-					? [KindIn<S>] extends [never]
-						? 'error: only a conversation integration takes from: messages'
-						: 'messages'
-					: 'read';
-			cron?: F extends { from: 'driver' | 'messages' }
-				? 'error: a pushed feed has no cron'
-				: F extends { cron: infer K }
-					? Cron<K>
-					: string;
-			partitions?: TextField<Part<S, 'configuration'>, true>;
-			removed?: 'delete' | { readonly [P in FeedField<C>]?: Loose<ColumnValue<C, P>> };
-		}
-	: FeedSpec;
-type OutboundFor<N, O> = O extends { from: infer C }
-	? {
-			from: CollectionName;
-			on?: 'create' | 'update' | readonly ('create' | 'update')[];
-			when?: Where<C>;
-			via: ConnectionsOf<N> | InstanceFk<C, N>;
-			version?: ReadField<C>;
-		}
-	: OutboundSpec;
 type HttpFor<S> =
 	DriverIn<S> extends 'http'
 		? {
-				baseUrl: `https://${string}` | TextField<Part<S, 'configuration'>, false>;
+				baseUrl: `https://${string}` | TextField<Part<S, 'configuration'>>;
 				auth?: S extends { oauth: unknown }
 					? 'error: an oauth integration authenticates with its token; drop auth'
 					: HttpAuth<keyof Part<S, 'credential'> & string>;
@@ -472,6 +374,19 @@ type OAuthFor<S, D = DriverIn<S>> =
 				: 'error: an http grant names its authorize and token endpoints'
 			: { client: SecretName; secret: SecretName; scopes?: readonly string[] }
 		: 'error: only an oauth driver (http, calendar) declares oauth';
+
+// ── the test body ──
+/** The `test` body's ctx: the instance's configuration and its live request. */
+export interface TestCtx<S> {
+	readonly configuration: ConfigurationIn<S>;
+	request: Requester<S>;
+}
+/** Definition `N`'s data from the generated names; the general shape until the first sync knows it. */
+type SpecOf<N> = [IntegrationSpecOf<N>] extends [never] ? IntegrationSpec : IntegrationSpecOf<N>;
+/** Checks a freshly paired instance (the host's `test` verb): fails with any failure to refuse the pairing. */
+type TestBody<N> = (ctx: TestCtx<SpecOf<N>>) => BodyReturn<void>;
+/** The literal `integration(N, …)` takes: its data and the inline `test` body, typed from the generated names. */
+type IntegrationLiteral<N> = IntegrationSpec & { test?: TestBody<N> };
 interface IntegrationFor<N, S, D = DriverIn<S>> {
 	description: string;
 	driver: DriverName;
@@ -482,202 +397,43 @@ interface IntegrationFor<N, S, D = DriverIn<S>> {
 	oauth?: OAuthFor<S>;
 	http?: HttpFor<S>;
 	webhook?: D extends 'http'
-		? S extends { conversation: unknown }
-			? { scheme: WebhookScheme; secret: keyof Part<S, 'credential'> & string }
-			: 'error: a webhook carries a custom conversation; declare conversation'
+		? { verify: { scheme: WebhookScheme; secret: keyof Part<S, 'credential'> & string } }
 		: 'error: only an http integration declares a webhook';
-	conversation?: D extends 'http'
-		? S extends { webhook: unknown }
-			? { kind: 'chat' | 'email'; handle: HandleKind }
-			: 'error: a custom conversation receives through its webhook; declare webhook'
-		: 'error: a conversation driver carries its own conversation';
-	feeds?: { [F in keyof Part<S, 'feeds'>]: FeedFor<S, Part<S, 'feeds'>[F]> };
-	outbound?: { [R in keyof Part<S, 'outbound'>]: OutboundFor<N, Part<S, 'outbound'>[R]> };
+	rate?: [RequestIn<S>] extends [never] ? 'error: only a request driver takes a rate' : Rate;
+	test?: TestBody<N>;
 }
-
-// ── the bodies ──
-type Feeds<S> = Part<S, 'feeds'>;
-type Outbounds<S> = Part<S, 'outbound'>;
-/** What integration bodies read: unmasked stored rows, as a transform reads (bodies are trusted source). */
-interface IntegrationReads extends Pick<WorkspaceReads, 'read' | 'get'> {}
-/** `i.test`'s ctx: the instance's configuration and its live request. */
-export interface TestCtx<S> {
-	readonly configuration: ConfigurationIn<S>;
-	request: Requester<S>;
-}
-/** A feed body's ctx: the instance and partition it runs for, its configuration and trusted reads; writes are only its changes. */
-export interface FeedCtx<N extends string, S>
-	extends IntegrationReads, Pick<QueryCtx, 'now' | 'today' | 'tz'> {
-	readonly instance: InstanceId<N>;
-	/** The partition value (a calendar id) for a partitioned feed, else `null`. */
-	readonly partition: string | null;
-	readonly configuration: ConfigurationIn<S>;
-}
-/** A `read` body's ctx: a feed's, with the instance's live request. */
-export interface ReadCtx<N extends string, S> extends FeedCtx<N, S> {
-	request: Requester<S>;
-}
-/** An outbound `run` and a custom `send`'s ctx: `key` is the send's immutable idempotency key, for the remote side. */
-export interface RunCtx<N extends string, S> extends IntegrationReads {
-	readonly instance: InstanceId<N>;
-	readonly key: string;
-	readonly configuration: ConfigurationIn<S>;
-	request: Requester<S>;
-}
-// `P` keeps the returned rows checkable: an inferred callback's return is never excess-checked, so a local field (or a
-// misspelt one) in an upsert would pass unseen. Each upsert names only the row's fields.
-type OnlyFields<P, R> = P extends readonly (infer E)[]
-	? readonly (E extends { readonly upsert: infer U }
-			? { readonly upsert: { readonly [K in Exclude<keyof U, keyof R>]: never } }
-			: unknown)[]
-	: unknown;
-type FeedBody<N extends string, S, F, P> = F extends {
-	into: infer C;
-	key: readonly (infer K extends string)[];
-}
-	? F extends { from: 'driver' | 'messages' }
-		? {
-				map: (
-					items: readonly (F extends { from: 'messages' }
-						? MessageItem<KindIn<S>>
-						: DriverItem<DriverIn<S>>)[],
-					ctx: FeedCtx<N, S>
-				) => BodyReturn<
-					P & readonly Change<FeedRow<C>, KeyRow<C, K>>[] & OnlyFields<P, FeedRow<C>>
-				>;
-			}
-		: {
-				read: (
-					cursor: Json | null,
-					ctx: ReadCtx<N, S>
-				) => BodyReturn<
-					FeedPage<FeedRow<C>, KeyRow<C, K>> & { readonly changes: P & OnlyFields<P, FeedRow<C>> }
-				>;
-			}
-	: never;
-type From<S, R> = Outbounds<S>[R & keyof Outbounds<S>] extends { from: infer C } ? C : never;
-/**
- * A conversation definition's rule builds the message, and its `events` patch the row; any other definition's builds a
- * command payload its `run` performs. `build` is pure and runs at delivery over the committed row; `null` skips the send.
- */
-type Outbound<N extends string, S> = [KindIn<S>] extends [never]
-	? <R extends keyof Outbounds<S> & string, const P extends Json>(
-			name: R,
-			body: {
-				build: (row: Row<From<S, R>>) => P | null;
-				/** Acknowledged by the remote's `id`; `set` patches the record with what the remote answered (its version, an etag). */
-				run: (
-					payload: NoInfer<P>,
-					ctx: RunCtx<N, S>
-				) => BodyReturn<{ readonly id: string; readonly set?: Patch<From<S, R>> }>;
-			}
-		) => void
-	: <R extends keyof Outbounds<S> & string>(
-			name: R,
-			body: {
-				build: (row: Row<From<S, R>>) => Outgoing<KindIn<S>> | null;
-				events?: { [E in DeliveryKind]?: (e: DeliveryEvent<E, KindIn<S>>) => Patch<From<S, R>> };
-			}
-		) => void;
-type Custom<S, T> = S extends { conversation: unknown }
-	? T
-	: 'error: only a custom conversation (http with conversation) receives and sends';
-type ReceiveBody<S> = (request: {
-	readonly body: Json;
-	readonly headers: { readonly [lowercase: string]: string };
-	readonly configuration: ConfigurationIn<S>;
-}) => BodyReturn<{ readonly messages: readonly Received<KindIn<S>>[] }>;
-type SendBody<N extends string, S> = (
-	message: Outgoing<KindIn<S>> & { readonly thread: string | null },
-	ctx: RunCtx<N, S>
-) => BodyReturn<{ readonly id: string }>;
-/** The attached bodies, read by the compiler (a missing feed, outbound or `run` body is `load/missing-body`). */
-type IntegrationBodies = {
-	test?: Body;
-	receive?: Body;
-	send?: Body;
-	feeds: Record<string, { read?: Body; map?: Body }>;
-	outbound: Record<
-		string,
-		{ build?: Body; run?: Body; events?: Partial<Record<DeliveryKind, Body>> }
-	>;
-};
-/** What `integration()` returns: the literal, and the bodies it attaches by name. */
+/** What `integration()` returns: the name, the literal, and its `test` body as the guest calls it. */
 export type Integration<N extends string, S> = {
 	readonly name: N;
 	readonly spec: S;
-	readonly bodies: IntegrationBodies;
-	/** Checks a freshly paired instance (the host's `test` verb). */
-	test(body: (ctx: TestCtx<S>) => BodyReturn<void>): void;
-	/** A declared feed's body: `read` for a pulled feed, `map` for a pushed or message feed. */
-	feed<F extends keyof Feeds<S> & string, P = unknown>(
-		name: F,
-		body: FeedBody<N, S, Feeds<S>[F], P>
-	): void;
-	/** A declared outbound rule's body. */
-	outbound: Outbound<N, S>;
-	/** A custom conversation's inbound: the verified webhook body → the messages it carries (committed before the 200). */
-	receive(body: Custom<S, ReceiveBody<S>>): void;
-	/** A custom conversation's outbound: envoy replies, rules and `ctx.send` through an instance. */
-	send(body: Custom<S, SendBody<N, S>>): void;
+	readonly bodies: { readonly test?: Body };
 };
 
 /**
- * `src/integration/<name>/+integration.ts`: one external system's definition. Its instances are `sys_integration` rows
- * (a `+workspace.ts` connection names one); feeds write collections from each instance and outbound rules send for records.
+ * `src/integration/<name>/+integration.ts`: one external system's connection: its driver, configuration, credential,
+ * OAuth client, HTTP base and auth, webhook verification and request `rate`, with an optional `test` body run when an
+ * instance is paired. Its instances are `sys_integration` rows (a `+workspace.ts` connection names one). What it
+ * exchanges is declared on models: `model(…, { syncs: { <s>: { with: '<name>', read?, write? } } })`.
  * @example
- * const routes = integration('google_routes', {
- * 	description: 'Drive times for matching and the ETA watch.',
+ * export default integration('crm', {
+ * 	description: 'The CRM account.',
  * 	driver: 'http',
- * 	credential: { apiKey: { kind: 'text', label: 'Routes API key' } },
- * 	http: { baseUrl: 'https://routes.googleapis.com/', auth: { header: { name: 'X-Goog-Api-Key', value: 'apiKey' } } }
+ * 	http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'apiKey' } },
+ * 	credential: { apiKey: { kind: 'text', label: 'API key' }, signingSecret: { kind: 'text', label: 'Webhook signing secret' } },
+ * 	webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
+ * 	rate: '10/s',
+ * 	test: function* (ctx) {
+ * 		yield* ctx.request({ method: 'GET', path: '/me', output: { kind: 'json' } });
+ * 	}
  * });
- * export default routes;
- * routes.test(function* (ctx) { yield* ctx.request({ method: 'GET', path: 'healthz', output: { kind: 'json' } }); });
  */
-export function integration<const N extends IntegrationName, const S extends IntegrationSpec>(
+export function integration<const N extends IntegrationName, const S extends IntegrationLiteral<N>>(
 	name: N,
-	spec: S & NoInfer<Checked<IntegrationSpec, S, Exact<S, IntegrationFor<N, S>>>>
+	spec: S & NoInfer<Checked<IntegrationLiteral<N>, S, Exact<S, IntegrationFor<N, S>>>>
 ): Integration<N, S> {
-	const bodies: IntegrationBodies = { feeds: {}, outbound: {} };
-	const once = (what: string, attached: unknown) => {
-		if (attached !== undefined) throw new Error(`integration ${name}: ${what} is attached twice`);
-	};
-	const declared = (part: 'feeds' | 'outbound', key: string) => {
-		if (!Object.hasOwn((spec as IntegrationSpec)[part] ?? {}, key))
-			throw new Error(`integration ${name}: ${part} '${key}' is not declared`);
-		once(`${part} '${key}'`, bodies[part][key]);
-	};
 	return {
 		name,
 		spec,
-		bodies,
-		test(body) {
-			once('test', bodies.test);
-			bodies.test = attached(body, 0);
-		},
-		feed(key, body) {
-			declared('feeds', key);
-			const f = body as { read?: Body; map?: Body };
-			bodies.feeds[key] =
-				f.read !== undefined
-					? { read: attached(f.read, 1) }
-					: f.map !== undefined
-						? { map: attached(f.map, 1) }
-						: {};
-		},
-		outbound: ((key: string, body: IntegrationBodies['outbound'][string]) => {
-			declared('outbound', key);
-			bodies.outbound[key] =
-				body.run === undefined ? body : { ...body, run: attached(body.run, 1) };
-		}) as Integration<N, S>['outbound'],
-		receive(body) {
-			once('receive', bodies.receive);
-			bodies.receive = attached(body as Body, -1);
-		},
-		send(body) {
-			once('send', bodies.send);
-			bodies.send = attached(body as Body, 1);
-		}
+		bodies: spec.test === undefined ? {} : { test: attached(spec.test, 0) }
 	};
 }

@@ -31,39 +31,38 @@ query execution and lifetime. Shared text, cells and actions have their own modu
 ## Async reads
 
 Use `Form` and `RecordShell` for record editing; they own loading, drafts and mutation feedback.
-For custom reads, call `query(() => effect)` or `live(() => stream)` during component initialization.
-Both return `QueryState<A, E>`: reactive `current`, `error`, `loading` and `result`, a
-`refetch(): Effect<void>` trigger, and Svelte `subscribe` for the current value. `query` composes
-`Stream.fromEffect` into `live`; compose transformations with native Effect and Stream operators.
-Tenant pages import `query`, `live`, `run`, `fork` and `attach` from `$bolt`, which re-exports
-`@norbital-ai/ui/effect`.
+For custom workspace reads, import `bolt` from `$bolt` and capture reactive arguments in `$derived`.
+`bolt.query(name, input)` returns a `Query<T>` whose `.current`, `.error` and `.loading` subscribe
+when read in a component. The same query reads once when awaited in an event handler and composes
+as an Effect with `yield*`.
 
-Read reactive inputs inside the source factory, before constructing the Effect or Stream:
+```svelte
+<script lang="ts">
+	import { bolt } from '$bolt';
+	let { selected } = $props();
+	const order = $derived(selected === null ? null : bolt.query('orders', { id: selected }));
+	const orders = $derived(bolt.query('orders', { limit: 100 }));
+</script>
 
-```ts
-const order = query(() => (selected === null ? null : bolt.get('orders', selected)));
-const orders = live(() => bolt.live(bolt.read('orders', { limit: 100 })));
+{#if order?.loading}<p>Loading…</p>{:else if order?.current}<p>{order.current.number}</p>{/if}
 ```
 
-The shared state tracks those inputs, interrupts the previous source and discards stale completions.
-Changing sources clears the previous value and failure; returning `null` pauses with no loading.
-`current` is undefined before an answer and after a failure; `error` retains the typed failure `E`.
-`result` is the native `AsyncResult` and preserves its full Cause: use its `Failure` tag to include
-defects in failure presentation. An empty completed stream has `Initial` with `loading: false`;
-a successful page with `rows: []` is an answer. Check these states before presenting an empty view.
-The first stream value ends loading, and a later failure clears the value, including on lost access.
-`refetch()` restarts the source; its answer arrives through the same state. Live reads already receive
-relevant commits from the host.
+Identical reads share a subscription, released after a 30-second grace when its last reactive reader
+leaves. Changed arguments create a new query; check its loading and error states before showing an
+empty result. Live reads receive relevant commits from the host. `aggregate` and `history` use the
+same contract. Render a public page's typed `pageServer.load` data during SSR and hydration; browser
+queries begin after mount.
 
-`{ initial: data }` seeds the first render and hydration from a `pageServer.load` answer. Sources
-are not evaluated during SSR; they start after client mount. Render available initial content even
-while `loading` is true, and never perform another browser read before hydration. The initial value
-does not carry into a different source scope.
+Host components with ordinary Effects or Streams can use `observeOnce(() => effect)` or
+`observe(() => stream)` from `@norbital-ai/ui/effect`. These component-owned helpers return
+`QueryState<A, E>` with `current`, `error`, `loading`, native `AsyncResult` and `refetch`. Read reactive
+inputs in the source factory. A `null` source pauses; changing sources discards stale completions.
+`{ initial: data }` seeds only the first source's render and hydration.
 
-Keep fetched values in the shared state and derive their presentation with `$derived`; use `$state`
-for user inputs and drafts. Do not mirror query state or add per-query watchers, subscriptions or
-generation counters. The shell mounts one runtime for the edge; its disposer interrupts every fiber
-started there. A host application provides its own mounted runtime with `mountEdge`.
+Derive presentation with `$derived`; use `$state` for user inputs and drafts. Keep the native query's
+subscription ownership and avoid copying its answer into a second state machine. The shell mounts
+one runtime for `run`, `fork` and `attach`; its disposer interrupts every owned fiber. A host
+application provides its own mounted runtime with `mountEdge`.
 
 Keep mutations separate: event handlers use `fork(effect, onFailure)`; an element-owned resource
 uses `{@attach attach((node) => effect)}` with scoped acquisition and finalizers. `run(effect)`
@@ -77,11 +76,11 @@ The controller retains its field permissions, state locks, drafts and native chi
 ## Toolbar actions
 
 The view toolbar's ⚡ menu derives its standard rows from the collection's exposure to the viewer, with no page
-configuration: callables, integration sync, `+pipeline.ts` feeds (Import… for JSON or xlsx, Download template, Export),
+configuration: callables and model syncs (remote reads, file Import, Download template and Export),
 Export CSV, "Update selected records" (declared and permitted update fields) and "Delete selected records" (declared and
 permitted delete). An undeclared or unpermitted row is absent. It watches an import run to its
 end: a spinner, then the counts as a toast, or its findings in the menu with "Accept and import" when they are only
-warnings (Bolt's `docs/pipelines.md`). A page adds ad-hoc rows (running an automation by hand) with
+warnings ([Bolt's sync guide](../../bolt/docs/syncs.md)). A page adds ad-hoc rows (running an automation by hand) with
 `toolbar.actions`, listed under Actions, each pure configuration:
 
 ```ts
@@ -143,7 +142,7 @@ line wrapping anywhere else.
 ## Custom views
 
 `CustomView` takes an optional `collection`: the collection its rows stand for (a roster grid of `roster_entry`). With
-it, the ⚡ menu offers that collection's callables and pipeline feeds, scoped by `toolbar.context`, the title defaults to
+it, the ⚡ menu offers that collection's callables and model syncs, scoped by `toolbar.context`, the title defaults to
 its label, and New opens its create (`toolbar.new: false` hides it). Search, filter and sort stay on the view's own rows
 and columns.
 

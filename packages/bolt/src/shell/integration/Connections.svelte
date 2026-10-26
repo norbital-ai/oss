@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { Effect, Schema, Stream } from 'effect';
-	import { live, query } from '@norbital-ai/ui/effect';
+	import { observe, observeOnce } from '@norbital-ai/ui/effect';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import type { ShellApi } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
@@ -32,15 +32,15 @@
 			})
 		)
 	});
-	const offers = query(() =>
+	const offers = observeOnce(() =>
 		api.integrationOffers().pipe(Effect.map((all) => all.filter((o) => o.personal.length > 0)))
 	);
-	const owned = live(() => {
+	const owned = observe(() => {
 		const source = bolt,
 			member = me;
 		return source
-			.live(
-				source.read('sys_integration', {
+			.observe(
+				source.query('sys_integration', {
 					where: { owner: { eq: member } },
 					select: { integration: true, status: true },
 					all: true

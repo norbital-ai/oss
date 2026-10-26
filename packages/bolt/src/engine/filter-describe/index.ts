@@ -25,10 +25,11 @@ import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
-import type { Pred } from '../../protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
 import type { EngineManifest } from '../manifest.ts';
+import type { FieldKind } from '../../decl/fields.ts';
 import { type EngineError } from '../errors.ts';
-import { BoltError } from '../../protocol/errors.ts';
+import { BoltError, storeSync } from '../../protocol/errors.ts';
 import {
 	choiceOf,
 	noulOf,
@@ -37,14 +38,10 @@ import {
 	type DecisionResult
 } from '../decisions/index.ts';
 import { catalogOf } from '../access/pred.ts';
-import { midnight } from '../query/eval.ts';
-import {
-	exposedField,
-	exposedRelation,
-	type Catalog,
-	type FieldInfo
-} from '../../protocol/catalog.ts';
-import * as ir from '../../protocol/ir.ts';
+import { midnight, startOfDate } from '../query/eval.ts';
+import { exposedField, exposedRelation, type Catalog, type FieldInfo } from '@norbital-ai/store';
+import * as ir from '../../protocol/reads.ts';
+import { order, where as decodeWhere } from '@norbital-ai/store';
 /** The stated conditions a description may produce. */
 const FILTER_MAX_CONDITIONS = 4;
 /** Fields asked about in the one request: the ones the description most plausibly names. */
@@ -299,14 +296,18 @@ const STOP = new Set([
 	'earliest'
 ]);
 const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
-/** Rule 16a's relative spans: day bounds on `date` fields, calendar bounds (Monday weeks, workspace timezone) on both. */
-function spans(kind: 'date' | 'instant'): FilterValue[] {
-	const range = (lo: Json, hi: Json): FilterArg => ({ range: [lo, hi] });
-	const at = (unit: string, shift: number): Json =>
-		shift === 0 ? { startOf: unit } : { startOf: unit, shift };
+/**
+ * Rule 16a's spans as literal bounds from `today`: day bounds on `date` fields, calendar bounds (Monday weeks) on both; an
+ * instant's bound is that day's midnight in the workspace zone. A read takes values, never a clock operand.
+ */
+function spans(kind: 'date' | 'instant', today: string, tz: string): FilterValue[] {
+	const end = (date: string): Json => (kind === 'date' ? date : midnight(date, tz));
+	const range = (lo: string, hi: string): FilterArg => ({ range: [end(lo), end(hi)] });
+	const at = (unit: string, shift: number) => startOfDate({ unit, shift }, today);
 	const out: FilterValue[] = [];
 	if (kind === 'date') {
-		const off = (n: number): Json => (n === 0 ? '' : `${n > 0 ? '+' : '-'}${Math.abs(n)}d`);
+		const off = (n: number) =>
+			new Date(Date.parse(`${today}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 		for (const [label, [a, b]] of [
 			['today', [0, 1]],
 			['yesterday', [-1, 0]],
@@ -314,7 +315,7 @@ function spans(kind: 'date' | 'instant'): FilterValue[] {
 			['next 7 days', [0, 8]],
 			['last 30 days', [-30, 1]]
 		] as const)
-			out.push({ label, arg: range({ today: off(a) }, { today: off(b) }) });
+			out.push({ label, arg: range(off(a), off(b)) });
 	}
 	for (const unit of ['week', 'month', 'quarter', 'year']) {
 		out.push({ label: `this ${unit}`, arg: range(at(unit, 0), at(unit, 1)) });
@@ -604,10 +605,12 @@ export const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 };
 function options(
 	f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf' | 'team'>,
-	s: Spec | undefined,
+	s: FieldKind | undefined,
+	optional: boolean,
 	lit: ReturnType<typeof literals>,
 	ws: readonly string[],
-	tz: string
+	tz: string,
+	today: string
 ):
 	| {
 			ops: Op[];
@@ -626,7 +629,7 @@ function options(
 	let ops: Op[] = [...(OPS_BY_KIND[k] ?? [])];
 	if (f.many) {
 		// any list field: has one / any / all of the element kind, or is empty (a list is never null-tested)
-		if (k === 'enum') for (const v of s?.values ?? []) add(v, { lit: v });
+		if (k === 'enum') for (const v of s?.kind === 'enum' ? s.values : []) add(v, { lit: v });
 		else if (k === 'text') for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
 		else if (NUMERIC.has(k)) for (const x of lit.numbers) add(String(x), echoed(x));
 		else if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
@@ -646,8 +649,10 @@ function options(
 		};
 	}
 	if (k === 'enum' || k === 'state') {
-		const states = s?.states ?? {};
-		for (const v of k === 'enum' ? (s?.values ?? []) : Object.keys(states)) add(v, { lit: v });
+		const states: { readonly [state: string]: { readonly to?: readonly string[] } } =
+			s?.kind === 'state' ? s.states : {};
+		for (const v of k === 'enum' ? (s?.kind === 'enum' ? s.values : []) : Object.keys(states))
+			add(v, { lit: v });
 		if (k === 'state')
 			add('a final state', {
 				list: Object.keys(states).filter((x) => (states[x]!.to ?? []).length === 0)
@@ -662,7 +667,7 @@ function options(
 		for (const x of lit.numbers) add(String(x), echoed(x));
 	} else if (k === 'date' || k === 'instant' || k === 'time') {
 		const when = k !== 'time';
-		if (when) for (const v of spans(k)) add(v.label, v.arg);
+		if (when) for (const v of spans(k, today, tz)) add(v.label, v.arg);
 		if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
 		// a day on an instant is that day in the workspace zone: [00:00, next 00:00)
 		if (k === 'instant')
@@ -681,15 +686,15 @@ function options(
 			}
 	} else if (k === 'period' && f.periodOf === 'date') {
 		// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
-		add('today', { lit: { today: '' } });
-		for (const v of spans('date')) add(v.label, v.arg);
+		add('today', { lit: today });
+		for (const v of spans('date', today, tz)) add(v.label, v.arg);
 		for (const d of lit.dates) add(d, echoed(d));
 	} else if (k === 'json') {
 	} else if (k === 'id' || k === 'currency') {
 	} else if (k === 'point' || k === 'file' || k === 'vector' || k === 'custom' || k === 'ref') {
 		ops = [];
 	} else return undefined;
-	if (s?.optional === true) ops.push(op('isNull', 'is empty'), op('notNull', 'is not empty'));
+	if (optional) ops.push(op('isNull', 'is empty'), op('notNull', 'is not empty'));
 	return ops.length === 0 && k !== 'point' ? undefined : { ops, values }; // a point is kept: a found record's location offers "within … of it"
 }
 /** The operator object an op and its argument make; `undefined` when the pair means nothing. */
@@ -829,7 +834,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	const reads = (a: Authority, c: string) => a.admin || (a.collections[c]?.read.length ?? 0) > 0;
 	const unmasked = (a: Authority, c: string, f: string) =>
 		a.admin || a.collections[c]?.masks[f] === undefined;
-	const spec = (c: string, f: string) => m.models[c]?.fields[f] as Spec | undefined;
+	const spec = (c: string, f: string) => m.models[c]?.fields[f];
 	const nameOf = (c: string, f: string) => spec(c, f)?.label ?? human(f);
 	/** A collection's searched text fields: where a phrase the person typed can be found. */
 	const texts = (c: string) =>
@@ -883,7 +888,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 							: 'Updated'
 						: (s?.label ?? human(rel === undefined ? f.name : f.name.replace(/_id$/, ''))));
 				if (rel === undefined) {
-					const o = options(f, s, lit, ws, b.tz);
+					const o = options(f, s, s?.optional === true, lit, ws, b.tz, b.today);
 					if (o === undefined) continue;
 					const sort =
 						sortFrom === undefined || f.many || UNSORTABLE.has(f.kind)
@@ -904,14 +909,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				// the record itself by its key, then its fields one hop on (one arm per target of an exclusive arc)
 				for (const arm of rel.targets.length > 1 ? rel.targets : [undefined]) {
 					const at = arm ?? rel.targets[0]!;
-					const optional =
-						(
-							m.relationships[`${target}.${f.name}`] as
-								| {
-										optional?: true;
-								  }
-								| undefined
-						)?.optional === true;
+					const optional = m.relationships[`${target}.${f.name}`]?.optional === true;
 					const field: Field = {
 						label: arm === undefined ? label : `${label} (${human(arm)})`,
 						kind: 'record',
@@ -1383,7 +1381,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			if (where === undefined || out.some((x) => x.label === label)) return;
 			if (
 				collection !== undefined &&
-				Result.isFailure(Result.try(() => ir.where(cat, collection, where)))
+				Result.isFailure(Result.try(() => storeSync(decodeWhere(cat, collection, where))))
 			)
 				return;
 			out.push({
@@ -1591,10 +1589,12 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			kind: f.kind,
 			...options(
 				{ kind: f.kind },
-				f.optional ? { optional: true } : undefined,
+				undefined,
+				f.optional === true,
 				literals(text, m.workspace.locale, today),
 				words(text),
-				m.workspace.tz
+				m.workspace.tz,
+				today
 			)!,
 			sort: f.name
 		}));
@@ -1928,17 +1928,7 @@ export const filterDescribe = Effect.gen(function* () {
 		ai = yield* Ai;
 	return makeFilterDescribe({ manifest, read: reads.run, decisions, ai });
 });
-type Spec = {
-	label?: string;
-	hidden?: true;
-	optional?: true;
-	values?: readonly string[];
-	states?: {
-		readonly [s: string]: {
-			to?: readonly string[];
-		};
-	};
-};
+
 const refuse = (message: string) => BoltError.make('invalid', 'decode', message);
 /**
  * The strict decode of a described filter and sort (rule 11a, rule 16a): `ir.where`/`ir.order`'s grammar, and every
@@ -2005,10 +1995,10 @@ export function decodeDescribed(
 		}
 	};
 	info(collection);
-	if (q.where !== undefined) walk(ir.where(cat, collection, q.where), collection);
+	if (q.where !== undefined) walk(storeSync(decodeWhere(cat, collection, q.where)), collection);
 	// a related key (`assignee.name`): each hop a relation the caller reads, then the target's field
 	if (q.orderBy !== undefined)
-		for (const k of ir.order(q.orderBy, cat, collection)) {
+		for (const k of storeSync(order(q.orderBy, cat, collection))) {
 			const steps = k.field.split('.');
 			let c = collection;
 			for (const s of steps.slice(0, -1)) {

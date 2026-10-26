@@ -12,6 +12,7 @@ import {
 	publishTemplates,
 	resolveLockfile,
 	run,
+	testTemplates,
 	unsatisfiedFirstPartyPeers,
 	verifyTemplates,
 	withoutFirstParty
@@ -24,7 +25,7 @@ const metadata = {
 	industry: 'Operations',
 	description: 'Fixture workspace',
 	visibility: 'public',
-	counts: { collections: 0, apps: 0, automations: 0 },
+	counts: { models: 0, apps: 0, automations: 0 },
 	tags: []
 };
 const policy =
@@ -43,14 +44,8 @@ const fixture = Effect.gen(function* () {
 		path.join(directory, 'package.json'),
 		JSON.stringify({
 			private: true,
-			scripts: { lint: 'bolt check', check: 'bolt check', build: 'bolt build', test: 'bolt test' },
-			dependencies: { '@norbital-ai/bolt': '0.0.1' },
-			devDependencies: {
-				prettier: '^3',
-				'prettier-plugin-svelte': '^3',
-				'svelte-check': '^4',
-				typescript: '^6'
-			}
+			scripts: { build: 'bolt build', test: 'bolt test' },
+			dependencies: { '@norbital-ai/bolt': '0.0.1' }
 		})
 	);
 	yield* fs.writeFileString(path.join(directory, 'pnpm-workspace.yaml'), policy);
@@ -71,14 +66,22 @@ describe('bolt templates', () => {
 			).toContain('No template matched');
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
+	it.live('tests only templates it can name, and names those it cannot', () =>
+		Effect.gen(function* () {
+			const { root } = yield* fixture;
+			expect(
+				(yield* testTemplates(root, ['fixture', 'no-such-template']).pipe(Effect.flip)).message
+			).toBe('No template matched no-such-template.');
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('counts named source files without helpers and refuses picker count drift', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const { root, directory } = yield* fixture;
 			for (const file of [
-				'src/data/model/+agreements.model.ts',
-				'src/data/model/+fees.model.ts',
+				'src/data/model/agreements/+model.ts',
+				'src/data/model/fees/+model.ts',
 				'src/data/model/helpers.ts',
 				'src/data/model/fees/README.md',
 				'src/app/service/+app.ts',
@@ -88,13 +91,13 @@ describe('bolt templates', () => {
 				yield* fs.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true });
 				yield* fs.writeFileString(path.join(directory, file), '');
 			}
-			expect(yield* actualCounts(directory)).toEqual({ collections: 2, apps: 1, automations: 1 });
+			expect(yield* actualCounts(directory)).toEqual({ models: 2, apps: 1, automations: 1 });
 			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain(
-				'declares 0 collections'
+				'declares 0 models'
 			);
 			yield* fs.writeFileString(
 				path.join(directory, 'norbital.template.json'),
-				JSON.stringify({ ...metadata, counts: { collections: 2, apps: 1, automations: 1 } })
+				JSON.stringify({ ...metadata, counts: { models: 2, apps: 1, automations: 1 } })
 			);
 			yield* checkTemplates(root);
 		}).pipe(Effect.provide(NodeServices.layer))
@@ -126,7 +129,7 @@ describe('bolt templates', () => {
 				);
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('refuses source imports outside the template and maintained migrations', () =>
+	it.live('refuses source imports outside the template and misplaced committed migrations', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
@@ -139,8 +142,8 @@ describe('bolt templates', () => {
 			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain('seed_bank');
 			yield* fs.remove(path.join(directory, 'src/foreign.ts'));
 			yield* fs.makeDirectory(path.join(directory, '.norbital/migrations'), { recursive: true });
-			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain(
-				'maintained migrations'
+			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toBe(
+				'fixture: committed migrations belong in migrations/, beside src/'
 			);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
@@ -185,67 +188,62 @@ describe('bolt templates', () => {
 			expect(yield* fs.readFileString(path.join(directory, 'pnpm-lock.yaml'))).toBe(committed);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	for (const bankDependent of [false, true])
-		it.live(
-			`verifies clean projections with ${bankDependent ? 'a bank-dependent suite and test:node' : 'an independent suite'}`,
-			() =>
+	it.live('verifies clean projections, each suite its own bolt test', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const path = yield* Path.Path;
+			const created = yield* fixture;
+			const root = yield* fs.realPath(created.root);
+			const directory = path.join(root, 'fixture');
+			yield* fs.writeFileString(
+				path.join(directory, 'package.json'),
+				JSON.stringify({
+					private: true,
+					scripts: { build: 'bolt build', test: 'bolt test' }
+				})
+			);
+			yield* run('git', ['init', '--initial-branch=main'], { cwd: root });
+			const native = yield* ChildProcessSpawner.ChildProcessSpawner;
+			const commands: (readonly string[])[] = [];
+			const processes = ChildProcessSpawner.make((command) =>
 				Effect.gen(function* () {
-					const fs = yield* FileSystem.FileSystem;
-					const path = yield* Path.Path;
-					const created = yield* fixture;
-					const root = yield* fs.realPath(created.root);
-					const directory = path.join(root, 'fixture');
-					yield* fs.writeFileString(
-						path.join(directory, 'package.json'),
-						JSON.stringify({
-							private: true,
-							scripts: {
-								check: 'bolt check',
-								build: 'bolt build',
-								lint: 'bolt check',
-								test: bankDependent
-									? 'bolt build --bank=../../seed_bank && bolt test && pnpm test:node'
-									: 'bolt test',
-								'test:node': 'vitest run --config vitest.node.config.ts'
-							}
-						})
-					);
-					yield* run('git', ['init', '--initial-branch=main'], { cwd: root });
-					const native = yield* ChildProcessSpawner.ChildProcessSpawner;
-					const commands: (readonly string[])[] = [];
-					const processes = ChildProcessSpawner.make((command) =>
-						Effect.gen(function* () {
-							if (command._tag !== 'StandardCommand' || command.command !== 'pnpm')
-								return yield* native.spawn(command);
-							commands.push(command.args);
-							if (command.args[0] === 'test:node' || (bankDependent && command.args[0] === 'test'))
-								return yield* Effect.die(
-									new Error('The private seed bank is absent from this projection.')
-								);
-							const cwd = command.options.cwd;
-							if (cwd === undefined) throw new Error('standalone command cwd missing');
-							expect(yield* fs.exists(path.join(cwd, '..', 'seed_bank'))).toBe(false);
-							if (command.args[0] === 'exec') {
-								const artifact = path.join(cwd, '.norbital', 'artifact');
-								yield* fs.makeDirectory(artifact, { recursive: true });
-								yield* fs.writeFileString(path.join(artifact, 'artifact.json'), '{}');
-							}
-							return yield* native.spawn(ChildProcess.make(process.execPath, ['-e', '']));
-						})
-					);
-					yield* verifyTemplates(root).pipe(
-						Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, processes)
-					);
-					// fetched with the registry, installed without it; `bolt check` is the build's own first half
-					expect(commands).toEqual([
-						['fetch', '--frozen-lockfile'],
-						['install', '--frozen-lockfile', '--offline'],
-						['exec', 'bolt', 'build'],
-						['lint'],
-						...(bankDependent ? [] : [['test']])
-					]);
-				}).pipe(Effect.provide(NodeServices.layer))
-		);
+					if (command._tag !== 'StandardCommand' || command.command !== 'pnpm')
+						return yield* native.spawn(command);
+					commands.push(command.args);
+					const cwd = command.options.cwd;
+					if (cwd === undefined) throw new Error('standalone command cwd missing');
+					expect(yield* fs.exists(path.join(cwd, '..', 'seed_bank'))).toBe(false);
+					if (command.args[0] === 'exec') {
+						const artifact = path.join(cwd, '.norbital', 'artifact');
+						yield* fs.makeDirectory(artifact, { recursive: true });
+						yield* fs.writeFileString(path.join(artifact, 'artifact.json'), '{}');
+					}
+					return yield* native.spawn(ChildProcess.make(process.execPath, ['-e', '']));
+				})
+			);
+			const tested: (readonly string[])[] = [];
+			// each suite's own `bolt test` builds what it tests
+			const tester = (projections: string, only: readonly string[]) =>
+				Effect.gen(function* () {
+					tested.push(only);
+					for (const slug of only) {
+						const artifact = path.join(projections, slug, '.norbital', 'artifact');
+						yield* fs.makeDirectory(artifact, { recursive: true });
+						yield* fs.writeFileString(path.join(artifact, 'artifact.json'), '{}');
+					}
+				}).pipe(Effect.orDie);
+			yield* verifyTemplates(root, undefined, tester).pipe(
+				Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, processes)
+			);
+			// fetched with the registry, installed without it, checked with the template's own Bolt
+			expect(commands).toEqual([
+				['fetch', '--frozen-lockfile'],
+				['install', '--frozen-lockfile', '--offline'],
+				['exec', 'bolt', 'check']
+			]);
+			expect(tested).toEqual([['fixture']]);
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 });
 const lockfile = (effect: string) =>
 	`packages:\n\n  '@norbital-ai/bolt@0.0.103':\n    resolution: {integrity: sha512-x}\n    peerDependencies:\n      '@norbital-ai/doctor': 0.0.103\n      effect: 4.0.0-rc.112\n      svelte: ^5.0.0\n\nsnapshots:\n\n  '@norbital-ai/bolt@0.0.103(@norbital-ai/doctor@0.0.103)(@tiptap/pm@3.31.3(effect@4.0.0-rc.1))(effect@${effect})(svelte@5.57.0)':\n    dependencies: {}\n`;

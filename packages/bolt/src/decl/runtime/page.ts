@@ -1,5 +1,5 @@
 import { Predicate, Schema } from 'effect';
-import { attached } from '../collection.ts';
+import { attached } from '../body.ts';
 import type { BodyReturn, PageReadContext } from '../ctx.ts';
 import type { Json } from '../values.ts';
 

@@ -1,11 +1,12 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { CollectionKey, InsertOf, Row } from '../collection/types.js';
+	import type { CollectionKey, InsertOf, RecordOf, Row } from '../collection/types.js';
 	import type { Outcome } from '../client/contract.js';
 	import type { FormProps } from '../form/form.svelte';
 	import type { RunsForProps } from '../runs/RunsFor.svelte';
 	import type { RecordSection } from '../form/section.svelte';
 	import type { RecordHistoryConfig } from './history.js';
+	import type { RecordView } from './types.js';
 	export type { RecordHistoryConfig, RecordHistorySource } from './history.js';
 
 	/** An authored tab; a `keepAlive` tab stays mounted while hidden, so a form inside it keeps its state. */
@@ -17,7 +18,7 @@
 		keepAlive?: true;
 	};
 	/** The props of `RecordShell`, typed by the collection `of`. */
-	export type RecordShellProps<C = CollectionKey> = {
+	export type RecordShellProps<C extends CollectionKey = CollectionKey> = {
 		of: C;
 		/** The stored row; absent with `mode="create"`. */
 		id?: FormProps<C>['id'];
@@ -54,7 +55,7 @@
 		 * The representation's body; absent → the representation registered for `of`, else the generated view. It receives
 		 * the record shown — the scrubbed revision while one is picked — as `useRecordView()` also does beneath.
 		 */
-		children?: Snippet<[RecordView]>;
+		children?: Snippet<[RecordView<C>]>;
 		onDone?: (outcome: Outcome) => void;
 	};
 	// the tab each record was last on, for this page's life: reopening a record after a child record closes (a trial
@@ -64,7 +65,7 @@
 
 <script lang="ts" generics="C extends CollectionKey">
 	import { Effect } from 'effect';
-	import { fork, query } from '../effect/index.js';
+	import { fork, observeOnce } from '../effect/index.js';
 	import { contentMotion } from '../form/content-motion.js';
 	// The record frame (§3.6, X-20): label, state pill, actions, the UI tab, authored tabs and Runs. One tab row: a nested
 	// shell shows its body only, and a tab a page's own strip already shows is not repeated. The record's header carries
@@ -73,8 +74,8 @@
 	import Icon from '@iconify/svelte';
 	import { getContext, onDestroy, setContext, untrack } from 'svelte';
 	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
-	import { Badge } from '../primitives/badge/index.js';
-	import { Tooltip } from '../primitives/tooltip/index.js';
+	import Badge from '../primitives/badge/badge.svelte';
+	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { Button } from '../primitives/button/index.js';
 	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import { TAB_LEVEL, Tabs, type TabItem } from '../primitives/tabs/index.js';
@@ -87,15 +88,15 @@
 	import { provideCollection } from '../collection/context.js';
 	import { provideRecordView, representations } from './context.js';
 	import { useBolt } from '../client/context.js';
-	import { type RecordView, type RestorePreview } from './types.js';
+	import { type RestorePreview } from './types.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import Value from '../cell/Value.svelte';
-	import { actOutcome } from '../actions/outcome.js';
+	import { actOutcome, notify } from '../actions/outcome.js';
 	import ApprovalPanel from '../approval/ApprovalPanel.svelte';
-	import { approvalOf, approvalStatus, lockText } from '../approval/row.js';
+	import { approvalOf, lockText } from '../approval/row.js';
+	import { matchesLock } from './lock.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
-	import { notify } from '../actions/notify.js';
 	import { uiText } from '../primitives/utils.js';
 	import { watch as changes } from 'runed';
 	import {
@@ -104,7 +105,7 @@
 		useRecordController
 	} from '../form/form-state.svelte.js';
 	import { formSpec, locked } from '../form/draft.js';
-	import { watch } from '../read/live.svelte.js';
+	import { queryState } from '../read/state.js';
 	import { checkpoints, skipText, type Checkpoint } from './history.js';
 	import { label, lowerLead, msg, singular } from '../text/messages.js';
 	import { listSelect, refLabel, refOf, unref, type Refs } from '../relations/select.js';
@@ -140,7 +141,8 @@
 	// a representation that renders <RecordShell of={same}> without a body gets the generated view, not itself again;
 	// a shell inside a framed shell (a record within a record's tab) shows its body only: a record view has one tab row
 	const INSIDE = 'ui.views.record';
-	type StoredRecord = NonNullable<FormProps<C>['record']> & Row;
+	// The native read feeds both the record view and Form's collection-specific record contract.
+	type StoredRecord = RecordOf<C> & Row & NonNullable<FormProps<C>['record']>;
 	type Scrub = { readonly past: StoredRecord | null };
 	const parent = getContext<
 		| {
@@ -195,10 +197,12 @@
 		inside === of || children !== undefined ? undefined : registry?.[of]?.().then((m) => m.default)
 	);
 
-	const record = watch(() =>
-		mode !== 'create' && id !== undefined ? bolt.live(bolt.get<StoredRecord | null>(of, id)) : null
+	// read in this component, the query is live: it follows the record's revisions until the shell unmounts
+	const record = $derived(
+		mode !== 'create' && id !== undefined ? bolt.query<StoredRecord | null>(of, { id }) : null
 	);
-	const live = $derived(record.state.kind === 'ready' ? record.state.value : null);
+	const loaded = $derived(queryState(record));
+	const live = $derived(loaded.kind === 'ready' ? loaded.value : null);
 	// ── the scrubber (owner only): the revision the body shows, read as of that revision (L-BOLT-181); null is live ──
 	let viewing = $state<number | null>(null);
 	let past = $state<StoredRecord | null>(null);
@@ -220,7 +224,7 @@
 		};
 		// a pruned create folds to null: there is nothing to show, so the live record stays
 		fork(
-			bolt.get<StoredRecord | null>(of, id, undefined, { revision: r }).pipe(
+			bolt.query<StoredRecord | null>(of, { id, revision: r }).pipe(
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (n !== asked) return;
@@ -238,7 +242,7 @@
 		owner && viewing !== null && past !== null && id !== undefined && bolt.restore !== undefined
 	);
 	let previewOf = $state<number | null>(null);
-	const restorable = query(() => {
+	const restorable = observeOnce(() => {
 		void latest;
 		return canRestore &&
 			previewOf !== null &&
@@ -287,7 +291,7 @@
 	});
 	const shownPast = $derived(owner ? past : (scrub?.past ?? null));
 	const row = $derived(shownPast ?? live);
-	const view = $derived.by<RecordView | null>(() =>
+	const view = $derived.by<RecordView<C> | null>(() =>
 		mode === 'create'
 			? { collection: of, mode: 'create', values: (values ?? {}) as Partial<InsertOf<C>> }
 			: row === null
@@ -309,23 +313,23 @@
 	const submittedId = $derived(
 		submitted?.collection === of && submitted.record === id ? submitted.requestId : null
 	);
-	const requests = query(() => {
+	const requests = observeOnce(() => {
 		void latest;
 		if (submittedId !== null)
-			return (bolt.approvals.get?.(submittedId) ?? Effect.succeed(null)).pipe(
-				Effect.map((request) => (request === null ? [] : [request]))
-			);
-		if (mode !== 'create' && record.state.kind !== 'ready') return null;
+			return bolt.approvals
+				.get(submittedId)
+				.pipe(Effect.map((request) => (request === null ? [] : [request])));
+		if (mode !== 'create' && loaded.kind !== 'ready') return null;
 		return id === undefined
 			? Effect.succeed([])
-			: (bolt.approvals.list?.({ collection: of, records: [id], all: true }) ?? Effect.succeed([]));
+			: bolt.approvals.list({ collection: of, records: [id], all: true });
 	});
-	const approvalId = $derived(submittedId ?? requests.current?.[0]?.id ?? null);
 	const openRequest = $derived(
 		(requests.current ?? []).find(
-			(request) => request.status === 'ONGOING' || request.status === 'CHANGES_REQUESTED'
+			(request) => request.status === 'Pending' || request.status === 'ChangesRequested'
 		) ?? null
 	);
+	const approvalId = $derived(submittedId ?? openRequest?.id ?? requests.current?.[0]?.id ?? null);
 	const pendingApproval = $derived(openRequest !== null);
 	// A create rolled back by rejection or withdrawal has no row any more; its request remains readable.
 	const createRequest = $derived(
@@ -350,10 +354,22 @@
 	const framed = $derived(
 		createRequest ||
 			(!(Representation && view) &&
-				!(mode !== 'create' && (record.state.kind !== 'ready' || row === null)))
+				!(mode !== 'create' && (loaded.kind !== 'ready' || row === null)))
 	);
 	const SHEET = Symbol.for('ui.sheet.header');
-	const toSheet = getContext<((s: Snippet | null) => void) | undefined>(SHEET);
+	const EYEBROW = Symbol.for('ui.sheet.eyebrow');
+	// the owner's toggle and scrubber sit in the sheet's title bar beside full screen and close; no shell below claims them
+	const CHROME = Symbol.for('ui.sheet.chrome');
+	const toChrome = getContext<((c: { tools: Snippet } | null) => void) | undefined>(CHROME);
+	const aroundSheet = getContext<((s: Snippet | null) => void) | undefined>(SHEET);
+	const aroundEyebrow = getContext<((text: string | null) => void) | undefined>(EYEBROW);
+	// a page-level record (no sheet around it) frames itself the way a sheet does: an eyebrow row, then the heading the
+	// framed shell claims beside the owner's toggles
+	const page = owner && aroundSheet === undefined && toChrome === undefined;
+	let pageHead = $state<Snippet | null>(null);
+	let pageEyebrow = $state<string | null>(null);
+	const toSheet = page ? (s: Snippet | null) => (pageHead = s) : aroundSheet;
+	const toEyebrow = page ? (text: string | null) => (pageEyebrow = text) : aroundEyebrow;
 	setContext(
 		SHEET,
 		toSheet === undefined
@@ -362,14 +378,24 @@
 					if (!framed) toSheet(s);
 				}
 	);
+	setContext(
+		EYEBROW,
+		toEyebrow === undefined
+			? undefined
+			: (text: string | null) => {
+					if (!framed) toEyebrow(text);
+				}
+	);
 	$effect(() => {
 		if (toSheet === undefined || !framed) return;
 		toSheet(head);
 		return () => toSheet(null);
 	});
-	// the owner's toggle and scrubber sit in the sheet's title bar beside full screen and close; no shell below claims them
-	const CHROME = Symbol.for('ui.sheet.chrome');
-	const toChrome = getContext<((c: { tools: Snippet } | null) => void) | undefined>(CHROME);
+	$effect(() => {
+		if (toEyebrow === undefined || !framed) return;
+		toEyebrow(heading ? singular(bolt, of) : null);
+		return () => toEyebrow(null);
+	});
 	setContext(CHROME, undefined);
 	$effect(() => {
 		if (toChrome === undefined || !owner) return;
@@ -392,19 +418,25 @@
 	});
 	const inheritedController = useRecordController();
 	let localController = $state<FormState | null>(null);
-	const sharedController = $derived(
-		inside === of &&
-			inheritedController?.current?.spec.target.collection === of &&
-			inheritedController.current.spec.target.id === id
-	);
-	const controller = $derived(
-		sharedController ? (inheritedController?.current ?? localController) : localController
-	);
+	const sharedController = $derived.by(() => {
+		const current = inheritedController?.current;
+		return inside === of &&
+			current?.spec.target.of === 'collection' &&
+			current.spec.target.collection === of &&
+			current.spec.target.id === id
+			? current
+			: null;
+	});
+	const controller = $derived(sharedController ?? localController);
 	// the approval lock (the host's `underApproval` restriction): editing is refused, and the row says who may edit
 	const underApproval = $derived(
 		controller?.capabilities?.update.reasons.includes('underApproval') === true
 	);
-	const lockReason = $derived(lockText(bolt, approvalOf(row)));
+	// a model's own-field lock is the declaration's, not a per-template callback: the page shows a lock, never Edit
+	const modelLocked = $derived(live !== null && matchesLock(live, exposure?.locked));
+	const lockReason = $derived(
+		modelLocked ? msg(bolt, 'record.locked', 'This record is locked.') : lockText(bolt, approvalOf(row))
+	);
 
 	let capabilityRequest = 0;
 	let permissionError = $state<string | null>(null);
@@ -421,12 +453,16 @@
 			return shownPast !== null;
 		}
 	});
-	changes([() => of, () => id, () => live, () => exposure], () => {
+	changes([() => of, () => id, () => live, () => exposure, () => modelLocked], () => {
 		if (sharedController) return;
 		const spec = formSpec(of, exposure, mode === 'create' ? 'create' : 'update', id);
 		if (spec === null || (mode !== 'create' && live === null)) return;
 		const current = localController;
-		if (current?.spec.target.collection !== of || current.spec.target.id !== id) {
+		if (
+			current?.spec.target.of !== 'collection' ||
+			current.spec.target.collection !== of ||
+			current.spec.target.id !== id
+		) {
 			localController = new FormState(
 				spec,
 				live,
@@ -439,12 +475,14 @@
 				{
 					pendingApproval: formText('pendingApproval'),
 					conflict: formText('conflict'),
-					unknown: formText('unknown')
+					unknown: formText('unknown'),
+					running: formText('running')
 				},
 				(field) => locked(exposure?.fields ?? {}, live)(field)
 			);
 			localController.onOutcome(done);
-			if (mode !== 'create' && (mode !== 'edit' || spec.readonly)) localController.mode = 'view';
+			if (mode !== 'create' && (mode !== 'edit' || spec.readonly || modelLocked))
+				localController.mode = 'view';
 		} else {
 			current.spec = spec;
 			if (live !== null) current.refresh(live);
@@ -512,13 +550,16 @@
 			(f) => refLabel(kinds.catalog, of, f).length > 0
 		)
 	);
-	const related = watch(() =>
+	const related = $derived(
 		mode !== 'create' && id !== undefined && labelled.length > 0
-			? bolt.live(bolt.get<Row | null>(of, id, listSelect(kinds.catalog, of, [], labelled)))
+			? bolt.query<Row | null>(of, {
+					id,
+					select: listSelect(kinds.catalog, of, [], labelled) ?? null
+				})
 			: null
 	);
 	const refs = $derived.by<Refs>(() => {
-		const r = related.state.kind === 'ready' ? related.state.value : null;
+		const r = related?.current ?? null;
 		if (r === null) return {};
 		const resolved = unref(kinds.catalog, of, labelled, [r], bolt.locale)[0];
 		return resolved === undefined
@@ -581,12 +622,12 @@
 <svelte:window onbeforeunload={beforeUnload} />
 
 {#snippet head()}
-	<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap" data-record-head>
-		<div class="mr-auto flex min-w-0 flex-col">
-			{#if heading}<span class="text-micro text-muted-foreground truncate leading-4"
-					>{singular(bolt, of)}</span
-				>{/if}
-			<div class="flex items-center gap-2">
+	<div class="flex min-w-0 flex-col" data-record-head>
+		{#if heading && toEyebrow === undefined}<span
+				class="text-micro text-muted-foreground truncate leading-4">{singular(bolt, of)}</span
+			>{/if}
+		<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
+			<div class="mr-auto flex min-w-0 items-center gap-2">
 				<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
 					{heading ||
 						(mode === 'create'
@@ -597,7 +638,7 @@
 						>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
 					>{/if}
 				{#if pendingApproval || underApproval}
-					{@const rfc = openRequest?.status === 'CHANGES_REQUESTED'}
+					{@const rfc = openRequest?.status === 'ChangesRequested'}
 					{@const full = rfc
 						? msg(bolt, 'approval.requestForChange', 'Request for change')
 						: lockReason}
@@ -618,60 +659,71 @@
 				{/if}
 				{#if trailing}{@render trailing()}{/if}
 			</div>
-			{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
-		</div>
-		{#if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && controller.canSubmit}
-			<Button size="sm" variant="outline" onclick={() => controller?.edit()}
-				>{msg(bolt, 'record.edit', 'Edit')}</Button
-			>
-		{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && underApproval}
-			<Button size="sm" variant="outline" disabled title={lockReason}
-				>{msg(bolt, 'record.edit', 'Edit')}</Button
-			>
-		{/if}
-		{#if controller?.mode === 'edit' && shownPast === null}
-			<div
-				class="inline-flex shrink-0 items-center gap-1"
-				role="group"
-				aria-label={msg(bolt, 'record.editing', 'Editing')}
-			>
-				<Button
-					size="sm"
-					variant="ghost"
-					class="px-2.5 text-xs"
-					disabled={controller.pending}
-					onclick={() => {
-						if (!controller?.dirty) return void controller?.view();
-						fork(
-							confirmAction({
-								title: formText('discardDraft'),
-								confirmLabel: formText('discard'),
-								cancelLabel: formText('cancel'),
-								destructive: true
-							}).pipe(
-								Effect.tap((confirmed) =>
-									Effect.sync(() => {
-										if (confirmed) controller?.view();
-									})
+			{#if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && modelLocked}
+				<Tooltip text={lockReason}>
+					{#snippet trigger({ props })}
+						<Button {...props} size="sm" variant="outline" disabled aria-label={lockReason}>
+							<Icon icon="lucide:lock" class="size-3.5" />
+						</Button>
+					{/snippet}
+				</Tooltip>
+			{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && controller.canSubmit}
+				<Button size="sm" variant="outline" onclick={() => controller?.edit()}
+					>{msg(bolt, 'record.edit', 'Edit')}</Button
+				>
+			{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && underApproval}
+				<Button size="sm" variant="outline" disabled title={lockReason}
+					>{msg(bolt, 'record.edit', 'Edit')}</Button
+				>
+			{/if}
+			{#if controller?.mode === 'edit' && shownPast === null}
+				<div
+					class="inline-flex shrink-0 items-center gap-1"
+					role="group"
+					aria-label={msg(bolt, 'record.editing', 'Editing')}
+				>
+					<Button
+						size="sm"
+						variant="ghost"
+						class="px-2.5 text-xs"
+						disabled={controller.pending}
+						onclick={() => {
+							if (!controller?.dirty) return void controller?.view();
+							fork(
+								confirmAction({
+									title: formText('discardDraft'),
+									confirmLabel: formText('discard'),
+									cancelLabel: formText('cancel'),
+									destructive: true
+								}).pipe(
+									Effect.tap((confirmed) =>
+										Effect.sync(() => {
+											if (confirmed) controller?.view();
+										})
+									)
 								)
-							)
-						);
-					}}>{msg(bolt, 'record.cancel', 'Cancel')}</Button
-				>
-				<Button
-					size="sm"
-					class="px-2.5 text-xs"
-					disabled={!controller.canSave || !controller.dirty}
-					onclick={() => (controller === null ? undefined : fork(controller.submit()))}
-					>{controller.pending
-						? formText('saving')
-						: controller.requestingApproval
-							? msg(bolt, 'record.requestApproval', 'Request approval')
-							: formText('save')}</Button
-				>
-			</div>
-		{/if}
-		{#if actions}{@render actions()}{/if}
+							);
+						}}>{msg(bolt, 'record.cancel', 'Cancel')}</Button
+					>
+					<Button
+						size="sm"
+						class="px-2.5 text-xs"
+						disabled={!controller.canSave || !controller.dirty}
+						onclick={() => (controller === null ? undefined : fork(controller.submit()))}
+						data-record-save
+						>{controller.pending
+							? formText('saving')
+							: controller.resubmitting
+								? msg(bolt, 'record.resubmit', 'Resubmit')
+								: controller.requestingApproval
+									? msg(bolt, 'record.requestApproval', 'Request approval')
+									: formText('save')}</Button
+					>
+				</div>
+			{/if}
+			{#if actions}{@render actions()}{/if}
+		</div>
+		{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
 	</div>
 {/snippet}
 
@@ -714,15 +766,13 @@
 	{#if requests.error}<Alert variant="destructive" role="alert"
 			>{msg(bolt, 'approval.loadFailed', 'Approval requests could not be loaded.')}</Alert
 		>{/if}
-
-	{#if approvalId !== null}<ApprovalPanel
-			requestId={approvalId}
-			revision={latest || undefined}
+	{#if (requests.current?.length ?? 0) > 0}<ApprovalPanel
+			requests={requests.current ?? []}
 			onOutcome={() => {
 				fork(requests.refetch());
 			}}
 		/>
-	{:else}<EmptyState
+	{:else if !requests.loading}<EmptyState
 			icon="shield"
 			read="empty"
 			title={msg(bolt, 'record.noApproval', 'No approval on this record')}
@@ -732,28 +782,6 @@
 				'When a change to this record needs approval, the request, its approvers and their decisions show here.'
 			)}
 		/>{/if}
-	{#if (requests.current?.length ?? 0) > 1}
-		<details class="mt-4 border-t pt-3" data-view="approval-past">
-			<summary class="cursor-pointer text-meta"
-				>{msg(bolt, 'approval.previousRequests', 'Previous requests')} ({(requests.current
-					?.length ?? 0) - 1})</summary
-			>
-
-			{#each [...(requests.current ?? [])]
-				.reverse()
-				.filter((r) => r.id !== approvalId) as past (past.id)}
-				<details class="py-2" data-request={past.id} data-status={past.status}>
-					<summary class="cursor-pointer text-sm"
-						>{approvalStatus(bolt, past.status)} · {format({ kind: 'instant' }, past.at, {
-							locale: bolt.locale,
-							zone: kinds.zone
-						})}</summary
-					>
-					<div class="mt-2"><ApprovalPanel requestId={past.id} /></div>
-				</details>
-			{/each}
-		</details>
-	{/if}
 {/snippet}
 
 {#snippet tools()}
@@ -972,16 +1000,16 @@
 					cause: e instanceof Error ? e.message : String(e)
 				})
 			)}{/await}
-	{:else if mode !== 'create' && record.state.kind === 'loading'}
+	{:else if mode !== 'create' && loaded.kind === 'loading'}
 		{@render skeleton()}
-	{:else if (mode !== 'create' && record.state.kind === 'ready' && row === null) || record.state.kind === 'noAccess'}
+	{:else if (mode !== 'create' && loaded.kind === 'ready' && row === null) || loaded.kind === 'noAccess'}
 		<EmptyState
 			icon="lock"
 			read="notFound"
 			title={msg(bolt, 'record.notFound', 'Not found or no access')}
 		/>
-	{:else if record.state.kind === 'error'}
-		{@render failure(record.state.message)}
+	{:else if loaded.kind === 'error'}
+		{@render failure(loaded.message)}
 	{:else}
 		<article
 			class={[
@@ -1007,9 +1035,17 @@
 {/snippet}
 
 {#if owner}
-	{#if toChrome === undefined && live !== null}
-		<!-- a page-level record: the actions above it -->
-		<div class="mb-3 flex justify-end" data-record-chrome>{@render tools()}</div>
+	{#if page && (pageHead !== null || live !== null)}
+		<!-- a page-level record: the sheet's two-row head, the eyebrow alone, then the heading beside the toggles -->
+		<header class="mb-3 flex flex-col" data-record-chrome>
+			{#if pageEyebrow}<span class="text-micro text-muted-foreground truncate leading-4"
+					>{pageEyebrow}</span
+				>{/if}
+			<div class="flex flex-wrap items-center gap-x-2">
+				<div class="min-w-0 flex-1">{@render pageHead?.()}</div>
+				{@render tools()}
+			</div>
+		</header>
 	{/if}
 	{#if past !== null}<div class="mb-3">{@render pastPill(past)}</div>{/if}
 	{#if onApproval}{@render approval()}{/if}

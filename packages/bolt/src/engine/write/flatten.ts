@@ -1,19 +1,19 @@
-// Decode and flatten (rules 21–23a): an act's input (or a transform's payload) becomes a flat list of `Change`s, one per
+// Decode and flatten (rules 21–23a): an act's input (or a callback's payload) becomes a flat list of `Change`s, one per
 // row, relation actions made explicit. Decode checks the collection's input allowlist at every nesting level and reports
 // every offender at once; nothing is ever deleted by omission (rule 22).
-import { Predicate, Result, Schema } from 'effect';
+import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
 import { inputSchema } from '@norbital-ai/std/kind';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { Json } from '../../decl/values.ts';
 import type { Change, EngineActor, InputPath, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { LIMITS } from '../contracts.ts';
-import type { Catalog, FieldInfo, ModelInfo } from '../../protocol/catalog.ts';
+import type { Catalog, FieldInfo, ModelInfo } from '@norbital-ai/store';
 import { offsetMs } from '../runs/time.ts';
-import { canonical } from './sql.ts';
+import { canonical } from '@norbital-ai/store';
 import { decodeInput, type InputSpec } from '../callables/decode.ts';
 
-/** An input allowlist (`SelectionBase`), or `'any'` for a transform payload: every stored field and relation action. */
+/** An input allowlist (`SelectionBase`), or `'any'` for a callback payload: every stored field and relation action. */
 export type Sel =
 	| 'any'
 	| {
@@ -182,12 +182,14 @@ export class Flattener {
 	): void {
 		const d = this.columns(model, sel, value, path);
 		if (d === null) return;
-		if (named !== undefined) d.values['id'] = named; // an upsert by id: resolution reads it, and it is never written
+		if (named !== undefined && upsert !== undefined) d.values['id'] = named; // an upsert by id: resolution reads it, and it is never written
 		// the parent key a relation action implies is not a caller-supplied ref (rule 36)
 		const refs = this.refsOf(model, d.values);
 		if (parent !== undefined) d.values[parent.fk] = parent.id;
 		const minted = this.mint();
-		const id = this.identities.get(JSON.stringify([model, path])) ?? minted;
+		const id =
+			this.identities.get(JSON.stringify([model, path])) ??
+			(upsert === undefined && named !== undefined ? named : minted);
 		const change: Change =
 			upsert === undefined
 				? { collection: model, id, path, op: 'create', values: d.values }
@@ -255,7 +257,7 @@ export class Flattener {
 	/**
 	 * A relation-action upsert (rule 28): the child row names its record by `id`: a row with an id updates that child (or,
 	 * `{ values, onConflictDoUpdate: false }`, leaves it), a row without one is created. A bare values object (the
-	 * transform payload's shape) updates.
+	 * callback payload's shape) updates.
 	 */
 	private upsert(model: string, sel: Sel, v: Json, path: InputPath, parent: Item['parent']): void {
 		const wrapped = Predicate.isObject(v) && 'values' in v && 'onConflictDoUpdate' in v;
@@ -311,7 +313,7 @@ export class Flattener {
 					this.bad(at, `'${action}' is not accepted here`);
 					continue;
 				}
-				if (!Array.isArray(list)) {
+				if (!EffectArray.isArray<typeof list>(list)) {
 					this.bad(at, 'expected a list');
 					continue;
 				}
@@ -373,7 +375,7 @@ export function decodeValue(
 		case 'text':
 		case 'currency':
 			return f.many
-				? Array.isArray(v) && v.every((x) => typeof x === 'string')
+				? EffectArray.isArray<typeof v>(v) && v.every((x) => typeof x === 'string')
 					? null
 					: 'expected a list of text'
 				: str
@@ -382,7 +384,7 @@ export function decodeValue(
 		case 'enum': {
 			if (spec?.kind !== 'enum') return 'expected the declared enum';
 			const ok = (x: Json) => typeof x === 'string' && spec.values.includes(x);
-			return (f.many ? Array.isArray(v) && v.every(ok) : ok(v))
+			return (f.many ? EffectArray.isArray<typeof v>(v) && v.every(ok) : ok(v))
 				? null
 				: `expected one of ${spec.values.join(', ')}`;
 		}
@@ -442,7 +444,7 @@ export function decodeValue(
 		}
 		// rule 16: an authored vector is exactly `dim` finite numbers, refused here rather than by pgvector at commit
 		case 'vector':
-			return Array.isArray(v) &&
+			return EffectArray.isArray<typeof v>(v) &&
 				v.length === (f.dim ?? v.length) &&
 				v.every((x) => typeof x === 'number' && Number.isFinite(x))
 				? null

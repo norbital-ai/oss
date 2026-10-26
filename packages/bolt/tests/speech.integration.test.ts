@@ -27,7 +27,6 @@ const manifest = Result.getOrThrow(
 			calls: { read: { fields: 'all' }, create: { input: { columns: ['title', 'audio'] } } }
 		},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		connections: {},
 		envoys: {},

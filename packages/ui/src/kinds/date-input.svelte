@@ -87,6 +87,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 	import { datePrecision, snapTime, unitStart } from './precision.js';
 	import Show from './show.svelte';
 	import UnitPicker from './unit-picker.svelte';
+	import { fieldPopoverAlignment } from './popover-alignment.svelte.js';
 
 	let {
 		value,
@@ -104,6 +105,13 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 	const disabled = $derived(ownDisabled ?? controls.disabled);
 	const locale = useKinds().locale;
 	const t = uiText();
+	let fieldAnchor = $state<HTMLElement | null>(null);
+	let calendarContent = $state<HTMLElement | null>(null);
+	const calendarAlignment = fieldPopoverAlignment(
+		() => fieldAnchor,
+		() => calendarContent,
+		() => (narrowViewport.current ? 0 : 8)
+	);
 	const kind = $derived(of === 'instant' ? 'instant' : 'date');
 	const displayKind = $derived<import('./kind.js').Kind>(
 		of === 'month'
@@ -238,6 +246,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		weekdayFormat="short"
 	>
 		<DatePicker.Input
+			bind:ref={fieldAnchor}
 			{id}
 			onfocusout={flush}
 			class={cn(SEGMENTS, 'pr-1')}
@@ -260,6 +269,9 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		</DatePicker.Input>
 		<DatePicker.Portal>
 			<DatePicker.Content
+				bind:ref={calendarContent}
+				customAnchor={fieldAnchor}
+				align={calendarAlignment.current}
 				sideOffset={4}
 				collisionPadding={narrowViewport.current ? 0 : 8}
 				class="z-50 rounded-md border bg-popover p-3 max-sm:p-0 text-popover-foreground shadow-md"

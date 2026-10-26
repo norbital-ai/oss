@@ -3,7 +3,7 @@
 	creates the member and accepts in one act; a signed-in member of the invited address accepts here.
 -->
 <script lang="ts">
-	import { query, fork } from '@norbital-ai/ui/effect';
+	import { observeOnce, fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import { Button, Spinner } from '@norbital-ai/ui';
@@ -25,7 +25,7 @@
 		workspace?: string | undefined;
 	} = $props();
 
-	const view = query(() => api.invitation(id));
+	const view = observeOnce(() => api.invitation(id));
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 

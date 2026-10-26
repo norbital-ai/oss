@@ -19,22 +19,22 @@ import {
 	Predicate,
 	Queue,
 	Result,
-	Schedule,
 	Schema,
 	Scope,
 	Stream
 } from 'effect';
-import { localOf } from '@norbital-ai/std/zone';
+import { bindingsAt } from '../query/reader.ts';
 import { Live, Manifest, Reads, type LiveView } from '../services.ts';
-import { offsetMs } from '../runs/time.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Frame, LiveErrorCode, PatchOp } from '../../protocol/wire.ts';
 import type { Authority, Bindings, Captured, RowData } from '../contracts.ts';
-import type { Order, Pred, ReadIR, SelectIR } from '../../protocol/ir-types.ts';
+import type { Pred, SelectIR } from '@norbital-ai/store';
+import type { ReadIR } from '../../protocol/reads.ts';
 import { LIMITS } from '../contracts.ts';
-import { BoltError } from '../../protocol/errors.ts';
+import { BoltError, storeSync } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
-import { outboundFrom } from '../integrations/outbound.ts';
+import { syncsOf } from '../sync/index.ts';
+import { ReadDeps, readTargets, selectTargets, sortTargets } from '../query/engine.ts';
 import { approvable } from '../approvals/lock.ts';
 import {
 	conversationRow,
@@ -44,12 +44,7 @@ import {
 	transcriptRow,
 	Message
 } from '../agent/schema.ts';
-import {
-	collectionOf,
-	defaultFields,
-	type Catalog,
-	type FieldInfo
-} from '../../protocol/catalog.ts';
+import { collectionOf, defaultFields, type FieldInfo } from '@norbital-ai/store';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 
 const MiB = 1024 * 1024;
@@ -79,6 +74,7 @@ type View = LiveView & {
 	value: Json | undefined;
 	arrivalsAfter: number | undefined;
 	conservative?: true;
+	dependencies: ReadonlySet<string>;
 };
 type Conn = {
 	id: string;
@@ -105,7 +101,6 @@ type Resolved = { c: Captured; row: Row | null } | { c: Captured; get: ReadIR } 
 type Answer = { ok: Json } | { err: unknown };
 
 const bytesOf = (text: string) => new TextEncoder().encode(text).byteLength;
-const CLOCK = /"_tag":"(Now|Today|StartOf)"/; // hook:query (startOf)
 /** Relation, period and point predicates need rows or column forms the RETURNING image does not carry. */
 function decidable(p: Pred): boolean {
 	switch (p.t) {
@@ -120,6 +115,8 @@ function decidable(p: Pred): boolean {
 		case 'agg':
 		case 'geo':
 		case 'period':
+		case 'path':
+		case 'each':
 		case 'search':
 		case 'similar':
 			return false; // hook:query (agg)
@@ -132,25 +129,6 @@ function decidable(p: Pred): boolean {
 			);
 	}
 }
-/** Collections a related sort key reads (`account.name` → accounts): the image cannot place rows by their values. */
-function sortTargets(
-	cat: Catalog,
-	collection: string,
-	order: Order | undefined,
-	out = new Set<string>()
-): Set<string> {
-	for (const { field } of order ?? []) {
-		let m = collection;
-		for (const s of field.split('.').slice(0, -1))
-			out.add((m = cat.models.get(m)?.one.get(s)?.targets[0] ?? m));
-	}
-	return out;
-}
-const targets = (cat: Catalog, s: SelectIR, out = new Set<string>()): Set<string> => {
-	for (const r of Object.values(s.relations))
-		targets(cat, r.select, sortTargets(cat, r.target, r.order, out.add(r.target)));
-	return out;
-};
 /** Keys in jsonb's order (length, then bytes), so a built row prints as the database's does. */
 const jb = (o: { [k: string]: Json }): Row =>
 	Object.fromEntries(
@@ -220,15 +198,9 @@ export const LiveHubLive = Layer.effect(
 		const manifest = yield* Manifest;
 		const reader = yield* Reads;
 		const generation = yield* Scope.Scope;
-		const bindings = Effect.gen(function* () {
-			const now = new Date(yield* Clock.currentTimeMillis).toISOString();
-			return {
-				now,
-				today: localOf(Date.parse(now), manifest.workspace.tz).date,
-				tz: manifest.workspace.tz,
-				params: {}
-			};
-		});
+		const bindings = Clock.currentTimeMillis.pipe(
+			Effect.map((at) => bindingsAt(at, manifest.workspace.tz))
+		);
 		const cat = catalogOf(manifest);
 		const lane = yield* Queue.unbounded<
 			| { readonly _tag: 'Flush' }
@@ -256,11 +228,14 @@ export const LiveHubLive = Layer.effect(
 			Queue.offerUnsafe(lane, { _tag: 'Flush' });
 		};
 
-		/** Rule 64: a clock view states `every`; a collection query states `every` or `on`; a cursor page or `similar` is not liveable. */
+		/** Cursor pages and prospective reads have no live registration. Index searches re-answer on model writes. */
 		function check(view: LiveView): void {
+			if (view.batch !== undefined) {
+				for (const read of view.batch.reads) check({ read });
+				return;
+			}
 			const r = view.read;
 			if (
-				r.kind === 'similar' ||
 				r.kind === 'after' ||
 				(r.kind === 'read' && r.page._tag === 'Limit' && r.page.after !== undefined)
 			)
@@ -269,19 +244,6 @@ export const LiveHubLive = Layer.effect(
 					'decode',
 					`a ${r.kind === 'read' ? 'cursor page' : r.kind} read is not liveable`
 				);
-			if (
-				view.every === undefined &&
-				(CLOCK.test(JSON.stringify(r)) || (r.kind === 'query' && view.on === undefined))
-			)
-				throw BoltError.make(
-					'invalid',
-					'decode',
-					r.kind === 'query'
-						? 'a live collection query states every or on'
-						: 'a live read of now or today states every'
-				);
-			if (view.every !== undefined && offsetMs(`+${view.every}`) < 1_000)
-				throw BoltError.make('invalid', 'decode', 'every is at least 1s');
 		}
 
 		/** The RETURNING image with each exclusive arc also under its field name as a `RecordRef`, as the evaluator and the wire read it. */
@@ -324,11 +286,13 @@ export const LiveHubLive = Layer.effect(
 			b: Bindings
 		): 'skip' | 'hit' | 'unknown' {
 			const r = view.read;
+			if (view.batch !== undefined) return view.dependencies.has(c.collection) ? 'unknown' : 'skip';
 			// a commit to a related sort key's target (a renamed account) may reorder rows it does not carry: re-read
 			if (r.kind === 'read' && sortTargets(cat, r.collection, r.order).has(c.collection))
 				return 'unknown';
 			if (c.collection !== r.collection)
-				return (r.kind === 'read' || r.kind === 'get') && targets(cat, r.select).has(c.collection)
+				return (r.kind === 'read' || r.kind === 'get') &&
+					selectTargets(cat, r.select).has(c.collection)
 					? 'unknown'
 					: 'skip';
 			if (r.kind === 'get' || r.kind === 'history') return c.id === r.id ? 'hit' : 'skip';
@@ -356,11 +320,11 @@ export const LiveHubLive = Layer.effect(
 		): Row | undefined {
 			if (
 				Object.keys(select.relations).length > 0 ||
-				outboundFrom(manifest).has(collection) ||
+				[...syncsOf(manifest).values()].some((sync) => sync.model === collection && sync.write) ||
 				approvable(manifest, cat).has(collection)
 			)
-				return undefined; // `$outbound` and `$approval` are read, never in an image
-			const c = collectionOf(cat, collection);
+				return undefined; // `$sync` and `$approval` are read, never in an image
+			const c = storeSync(collectionOf(cat, collection));
 			const out: { [k: string]: Json } = { id: row['id']! };
 			for (const name of select.fields ?? defaultFields(c, one)) {
 				if (name === 'id') continue;
@@ -401,7 +365,8 @@ export const LiveHubLive = Layer.effect(
 							collection: r.collection,
 							id: c.id,
 							select: {
-								fields: r.select.fields ?? defaultFields(collectionOf(cat, r.collection)),
+								fields:
+									r.select.fields ?? defaultFields(storeSync(collectionOf(cat, r.collection))),
 								relations: r.select.relations
 							}
 						}
@@ -412,7 +377,7 @@ export const LiveHubLive = Layer.effect(
 		 * it cannot be exact: a key the rows do not carry, or two different text values, whose order is the database collation's. */
 		function place(r: ReadIR, rows: readonly Row[], row: Row): number | null {
 			if (r.kind !== 'read') return null;
-			const fields = collectionOf(cat, r.collection).model.fields;
+			const fields = storeSync(collectionOf(cat, r.collection)).model.fields;
 			const keys = [...(r.order ?? []), { field: 'id', dir: 'asc' as const }];
 			const before = (x: Row, y: Row): boolean | null => {
 				for (const k of keys) {
@@ -438,7 +403,7 @@ export const LiveHubLive = Layer.effect(
 		/** Whether the change leaves the row's order keys as they were, so it stays where it is. */
 		function kept(r: ReadIR, a: Authority, c: Captured, old: Row, row: Row): boolean {
 			if (r.kind !== 'read') return false;
-			const fields = collectionOf(cat, r.collection).model.fields;
+			const fields = storeSync(collectionOf(cat, r.collection)).model.fields;
 			return (r.order ?? []).every(({ field }) => {
 				// a related key (`account.name`) holds while its relation does; a commit to the target re-reads (`decide`)
 				const head = field.split('.')[0]!,
@@ -486,9 +451,13 @@ export const LiveHubLive = Layer.effect(
 			aggregate: base,
 			query: {
 				...base,
-				decide: (a, view, captured) => (view.on?.includes(captured.collection) ? 'hit' : 'skip')
+				decide: (a, view, captured) => (view.dependencies.has(captured.collection) ? 'hit' : 'skip')
 			},
-			similar: { ...base, decide: () => 'unknown' },
+			similar: {
+				...base,
+				decide: (a, view, captured) =>
+					captured.collection === view.read.collection ? 'unknown' : 'skip'
+			},
 			after: { ...base, decide: () => 'unknown' },
 			transcript: {
 				...base,
@@ -701,17 +670,46 @@ export const LiveHubLive = Layer.effect(
 			);
 		});
 		const answer = Effect.fn('Live.answer')(function* (conn: Conn, views: readonly View[]) {
+			const b = yield* bindings;
+			const ordinary = views.filter(
+				(view) => view.batch === undefined && view.read.kind !== 'query'
+			);
 			const values = yield* readAll(
 				conn,
-				views.map((view) => view.read),
-				yield* bindings
+				ordinary.map((view) => view.read),
+				b
 			);
-			for (const [i, view] of views.entries()) {
+			for (const [i, view] of ordinary.entries()) {
 				if (!conn.views.has(view.id)) continue;
 				const result = values[i];
 				if (result === undefined) continue;
 				if ('ok' in result) yield* put(conn, view, result.ok);
 				else failed(conn, view, result.err);
+			}
+			for (const view of views.filter(
+				(view) => view.batch !== undefined || view.read.kind === 'query'
+			)) {
+				const batch = view.batch?.reads ?? [view.read];
+				const dependencies = new Set(
+					batch.flatMap((read) => [...readTargets(cat, read, conn.authority)])
+				);
+				const results = yield* readAll(conn, batch, b).pipe(
+					Effect.provideService(ReadDeps, dependencies)
+				);
+				if (!conn.views.has(view.id)) continue;
+				const error = results.find((result) => 'err' in result);
+				if (error !== undefined && 'err' in error) failed(conn, view, error.err);
+				else {
+					view.dependencies = dependencies;
+					const values = results.map((result) => ('ok' in result ? result.ok : null));
+					const value =
+						view.batch === undefined
+							? values[0]
+							: Object.fromEntries(
+									view.batch.keys.map((key, index) => [key, values[index] ?? null])
+								);
+					if (value !== undefined) yield* put(conn, view, value);
+				}
 			}
 		});
 		const drop = Effect.fn('Live.dropView')(function* (conn: Conn, id: string) {
@@ -719,7 +717,6 @@ export const LiveHubLive = Layer.effect(
 			if (view === undefined) return;
 			retained -= view.bytes;
 			conn.views.delete(id);
-			yield* FiberMap.remove(conn.fibers, `every:${id}`);
 			yield* FiberMap.remove(conn.fibers, `debounce:${id}`);
 		});
 		const disconnect = Effect.fn('Live.disconnect')(function* (id: string) {
@@ -758,6 +755,8 @@ export const LiveHubLive = Layer.effect(
 									? metadata.get(read.collection)
 									: undefined;
 							let unsure =
+								((read.kind === 'query' || view.batch !== undefined) &&
+									[...metadata.keys()].some((model) => view.dependencies.has(model))) ||
 								(read.kind === 'inbox' && metadata.has(read.collection)) ||
 								(read.kind === 'inbox' &&
 									read.requests === true &&
@@ -782,7 +781,7 @@ export const LiveHubLive = Layer.effect(
 							}
 							if (!unsure && hits.length === 0) continue;
 							hit++;
-							if (view.read.kind === 'query') {
+							if (view.read.kind === 'query' || view.batch !== undefined) {
 								// a collection query re-runs debounced, shared by nothing else on this connection
 								yield* FiberMap.run(
 									conn.fibers,
@@ -953,21 +952,15 @@ export const LiveHubLive = Layer.effect(
 						)
 					);
 				yield* drop(conn, id);
-				const state: View = { ...view, id, bytes: 0, value: undefined, arrivalsAfter: undefined };
+				const state: View = {
+					...view,
+					id,
+					bytes: 0,
+					value: undefined,
+					arrivalsAfter: undefined,
+					dependencies: new Set()
+				};
 				conn.views.set(id, state);
-				if (view.every !== undefined)
-					yield* FiberMap.run(
-						conn.fibers,
-						`every:${id}`,
-						Effect.sleep(offsetMs(`+${view.every}`)).pipe(
-							Effect.andThen(
-								answer(conn, [state]).pipe(
-									Effect.repeat(Schedule.spaced(offsetMs(`+${view.every}`)))
-								)
-							),
-							Effect.asVoid
-						)
-					);
 				yield* answer(conn, [state]);
 				state.arrivalsAfter = v;
 			}),

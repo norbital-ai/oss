@@ -1,5 +1,10 @@
 import { Effect, Option, Schema } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import {
+	HttpClient,
+	HttpClientRequest,
+	HttpClientResponse,
+	type Headers
+} from 'effect/unstable/http';
 import type { Json } from '@norbital-ai/bolt/engine';
 import { answerFailure, ProviderRefused, ProviderUnavailable } from './errors.ts';
 
@@ -54,33 +59,73 @@ const decodeError = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody))
 
 /** Decode each external JSON answer exactly once; retain provider evidence in typed refusals. */
 export const providerJson = <A>(
-	who: string,
+	who: string | { readonly method: string; readonly path: string },
 	schema: Schema.Decoder<A>,
 	request: HttpClientRequest.HttpClientRequest
-) =>
-	HttpClient.execute(request).pipe(
-		Effect.mapError(() => new ProviderUnavailable({ message: `${who}: request failed` })),
-		Effect.flatMap((response) =>
-			Effect.gen(function* () {
-				if (response.status >= 400) {
-					const text = yield* response.text.pipe(Effect.orElseSucceed(() => ''));
-					const error = decodeError(text);
-					const reason = Option.isSome(error)
-						? (error.value.message ?? error.value.text ?? text)
-						: text;
-					return yield* Effect.fail(
-						answerFailure(`${who} ${response.status}: ${reason}`, response.status)
-					);
-				}
-				return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-					Effect.mapError(
-						() =>
-							new ProviderUnavailable({
-								message: `${who}: response failed validation`,
-								status: response.status
-							})
+) => {
+	const api = typeof who !== 'string',
+		label = typeof who === 'string' ? who : `${who.method} ${who.path}`;
+	return Effect.gen(function* () {
+		const response = yield* HttpClient.execute(request).pipe(
+			Effect.mapError(
+				(error) =>
+					new ProviderUnavailable({
+						message: api ? `${label} failed: ${error.message}` : `${label}: request failed`
+					})
+			)
+		);
+		if (response.status >= 400) {
+			const text = yield* response.text.pipe(Effect.orElseSucceed(() => ''));
+			const error = api ? Option.none() : decodeError(text);
+			const reason = Option.isSome(error)
+				? (error.value.message ?? error.value.text ?? text)
+				: text;
+			const retryAfter = api ? Number(response.headers['retry-after']) : Number.NaN;
+			return yield* answerFailure(
+				api
+					? `${label} answered ${response.status}: ${text.slice(0, 500)}`
+					: `${label} ${response.status}: ${reason}`,
+				response.status,
+				undefined,
+				Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined
+			);
+		}
+		return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
+			Effect.mapError(
+				(error) =>
+					new ProviderUnavailable(
+						api
+							? {
+									message:
+										error._tag === 'HttpClientError'
+											? `${label} failed: ${error.message}`
+											: `${label} answered something that is not its result`
+								}
+							: { message: `${label}: response failed validation`, status: response.status }
 					)
-				);
-			})
-		)
-	);
+			)
+		);
+	});
+};
+
+/** Construct an authenticated JSON API request; response handling stays in the shared executor. */
+export const jsonApi =
+	(base: string, auth: Headers.Input) =>
+	<A>(
+		schema: Schema.Decoder<A>,
+		method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+		path: string,
+		body?: Json
+	): Effect.Effect<A, ReturnType<typeof answerFailure>, HttpClient.HttpClient> => {
+		const request = HttpClientRequest.make(method)(`${base.replace(/\/+$/, '')}${path}`, {
+			headers: auth,
+			acceptJson: true
+		});
+		return Effect.suspend(() =>
+			providerJson(
+				{ method, path },
+				schema,
+				body === undefined ? request : request.pipe(HttpClientRequest.bodyJsonUnsafe(body))
+			)
+		);
+	};

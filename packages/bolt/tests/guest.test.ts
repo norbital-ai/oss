@@ -19,13 +19,15 @@ import {
 import { isTransient } from '../src/engine/errors.ts';
 import type { IsolateGlobals } from '../src/engine/guest/globals.ts';
 import { PRELUDE } from '../src/engine/guest/prelude.ts';
-import { type GuestOptions, type GuestProgram } from '../src/engine/guest/runner.ts';
+import { GuestParking, type GuestOptions, type GuestProgram } from '../src/engine/guest/runner.ts';
 import {
 	Guest,
 	type Bridge,
 	type CrossCall,
 	type InvocationEvents
 } from '../src/engine/services.ts';
+import { GuestIsolates } from '../src/engine/ports.ts';
+import { guestIsolates, type GuestIsolatesOptions } from '../src/node/guest-isolates.ts';
 import { guestLayer, program } from './support/guest-fixture.ts';
 const node = NodeServices.layer;
 
@@ -50,18 +52,21 @@ const invocation = (
 		seed: 'seed-1'
 	},
 	budget: {
-		cpuMs: LIMITS.guestCpuMs,
 		crossings: LIMITS.crossings.sync,
 		readBytes: LIMITS.readBytes,
 		...budget
 	}
 });
-const lowerRead: GuestOptions['lowerRead'] = (member, args) => ({
-	kind: 'get',
-	collection: String(args[0]),
-	id: String(args[1] ?? member),
-	select: { fields: null, relations: {} }
-});
+const IdQuery = Schema.is(Schema.Struct({ id: Schema.String }));
+const lowerRead: GuestOptions['lowerRead'] = (member, args) => {
+	const query = args[1];
+	return {
+		kind: 'get',
+		collection: String(args[0]),
+		id: IdQuery(query) ? query.id : String(query ?? member),
+		select: { fields: null, relations: {} }
+	};
+};
 const recorder = (
 	answer: (call: CrossCall) => CrossAnswer | Effect.Effect<CrossAnswer> = () => ({
 		ok: true,
@@ -94,19 +99,24 @@ const sourceProgram = (source: string) => {
 	}
 	return built;
 };
+/** The Node host's guest isolates under `options` (a CPU budget, a meter). */
+const hostIsolates = (options: GuestIsolatesOptions) =>
+	Layer.unwrap(Effect.map(guestIsolates(options), (port) => GuestIsolates.fromAbi(port)));
 const runProgram = (
 	guest: GuestProgram,
 	inv = invocation(),
 	bridge = recorder().bridge,
 	options: GuestOptions = {},
-	events?: InvocationEvents
+	events?: InvocationEvents,
+	isolates?: Layer.Layer<GuestIsolates>
 ) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			guestLayer(
 				guest,
 				{ lowerRead, console: () => {}, ...options },
-				events === undefined ? undefined : () => Effect.succeed(events)
+				events === undefined ? undefined : () => Effect.succeed(events),
+				isolates
 			)
 		);
 		return yield* Context.get(context, Guest).invoke(inv, bridge);
@@ -116,9 +126,12 @@ const runIn = (
 	inv = invocation(),
 	bridge = recorder().bridge,
 	options: GuestOptions = {},
-	events?: InvocationEvents
+	events?: InvocationEvents,
+	isolates?: Layer.Layer<GuestIsolates>
 ) =>
-	Effect.flatMap(sourceProgram(source), (guest) => runProgram(guest, inv, bridge, options, events));
+	Effect.flatMap(sourceProgram(source), (guest) =>
+		runProgram(guest, inv, bridge, options, events, isolates)
+	);
 const ok = (o: GuestOutcome) => {
 	if (o.kind !== 'ok')
 		throw new Error(
@@ -171,7 +184,7 @@ describe('next guest runner', () => {
 			Effect.gen(function* () {
 				const page =
 					yield* program(`export default { page: { "portal/read": { body: function* (_, ctx) {
-				const answer = yield* ctx.read('orders', { limit: 1 });
+				const answer = yield* ctx.query('orders', { limit: 1 });
 				return { answer, actor: ctx.actor, today: ctx.today, keys: Object.keys(ctx).sort() };
 			} } } };`);
 				const context = yield* Layer.build(
@@ -195,13 +208,10 @@ describe('next guest runner', () => {
 					keys: [
 						'actor',
 						'aggregate',
-						'get',
 						'history',
 						'invocationId',
 						'now',
 						'query',
-						'read',
-						'similar',
 						'today',
 						'todayIn',
 						'tz'
@@ -225,7 +235,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const context = yield* Layer.build(guestLayer({ source: 'export default {};' }));
 			const guest = Context.get(context, Guest);
-			for (const member of ['act', 'db.read', 'schedule', 'files.get', 'ai.embed', 'request']) {
+			for (const member of ['act', 'db.query', 'schedule', 'files.get', 'ai.embed', 'request']) {
 				const page: GuestProgram = {
 					source: `export default { page: { "portal/read": { body: () => globalThis[Symbol.for('norbital.bolt.call')](${JSON.stringify(member)}, []) } } };`
 				};
@@ -240,24 +250,15 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('keeps one cumulative crossing budget and CPU report for a supplied page program', () =>
+	it.live('keeps one cumulative crossing budget for a supplied page program', () =>
 		Effect.gen(function* () {
 			const page =
 				yield* program(`export default { page: { "portal/read": { body: function* (_, ctx) {
-				yield* ctx.read('orders', { limit: 1 });
-				return yield* ctx.read('orders', { limit: 1 });
+				yield* ctx.query('orders', { limit: 1 });
+				return yield* ctx.query('orders', { limit: 1 });
 			} } } };`);
-			const reports: { kind: InvocationKind; crossings: number; cpuMs: number }[] = [];
 			const context = yield* Layer.build(
-				guestLayer(
-					{ source: 'export default {};' },
-					{
-						lowerRead,
-						cpu: (inv, cpuMs, counts) => {
-							reports.push({ kind: inv.kind, crossings: counts.crossings, cpuMs });
-						}
-					}
-				)
+				guestLayer({ source: 'export default {};' }, { lowerRead })
 			);
 			const { crossings, bridge } = recorder();
 			const outcome = yield* Context.get(context, Guest).invokeProgram(
@@ -267,13 +268,10 @@ describe('next guest runner', () => {
 			);
 			expect(failure(outcome)).toMatchObject({ code: 'crossingBudget' });
 			expect(crossings).toHaveLength(1);
-			expect(reports).toHaveLength(1);
-			expect(reports[0]).toMatchObject({ kind: 'page', crossings: 1 });
-			expect(reports[0]?.cpuMs).toBe(outcome.cpuMs);
 		})
 	);
 
-	it.live('runs a body and returns its JSON output with its CPU', () =>
+	it.live('runs a body and returns its JSON output', () =>
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
@@ -282,29 +280,150 @@ describe('next guest runner', () => {
 				invocation({ n: 21 })
 			);
 			expect(ok(o)).toEqual({ twice: 42, today: '2026-01-01', inv: 'inv-1', tokyo: '2026-01-02' });
-			expect(o.cpuMs).toBeGreaterThan(0);
 		})
 	);
 
 	it.live('finds each kind of body in the default export', () =>
 		Effect.gen(function* () {
 			const source = `export default {
-			collection: { orders: { bodies: { queries: { open: function* () { return ['collection','orders','bodies','queries','open']; } }, transform: function* () { return ['collection','orders','bodies','transform']; } } } },
+			collection: { orders: { bodies: {
+				queries: { open: function* () { return ['collection','orders','bodies','queries','open']; } },
+				create: function* () { return ['collection','orders','bodies','create']; },
+				update: function* () { return ['collection','orders','bodies','update']; },
+				delete: function* () { return ['collection','orders','bodies','delete']; },
+				notify: function* () { return ['collection','orders','bodies','notify']; },
+				indexes: { hue: { vector: () => [1,2,3], probe: () => ({ vector: [1,2,3] }), rerank: (_, row) => row.score } },
+				syncs: { crm: {
+					read: function* () { return ['collection','orders','bodies','syncs','crm','read']; },
+					write: function* () { return ['collection','orders','bodies','syncs','crm','write']; },
+					parse: { 'application/json': function* () { return ['collection','orders','bodies','syncs','crm','parse','application/json']; } }
+				} }
+			} } },
 			custom_field: { iban: { check: (input) => 'custom_field.iban.check:' + input } },
-			pipeline: { orders: { spec: { import: { map: () => ['pipeline','orders','spec','import','map'] } } } }
+			policy: { review: { grants: { orders: { create: { approval: (_, flow) => flow.step('Review', { teams: ['finance'] }) } } } } }
 		};`;
 			for (const [kind, target, input, expected] of [
 				['query', 'orders.open', null, ['collection', 'orders', 'bodies', 'queries', 'open']],
-				['transform', 'orders', null, ['collection', 'orders', 'bodies', 'transform']],
+				['create', 'orders', [], ['collection', 'orders', 'bodies', 'create']],
+				['update', 'orders', [], ['collection', 'orders', 'bodies', 'update']],
+				['delete', 'orders', [], ['collection', 'orders', 'bodies', 'delete']],
+				['notify', 'orders', {}, ['collection', 'orders', 'bodies', 'notify']],
+				['vector', 'orders.hue', [{}], [[1, 2, 3]]],
+				['probe', 'orders.hue', {}, { vector: [1, 2, 3] }],
+				['rerank', 'orders.hue', [{}, [{ score: 3 }, { score: 1 }]], [3, 1]],
+				['syncRead', 'orders.crm', {}, ['collection', 'orders', 'bodies', 'syncs', 'crm', 'read']],
+				[
+					'syncWrite',
+					'orders.crm',
+					{},
+					['collection', 'orders', 'bodies', 'syncs', 'crm', 'write']
+				],
+				[
+					'parse',
+					'orders.crm.application/json',
+					{},
+					['collection', 'orders', 'bodies', 'syncs', 'crm', 'parse', 'application/json']
+				],
 				['validation', 'iban', ['probe'], ['custom_field.iban.check:probe']],
 				[
-					'pipeline',
-					'pipeline.orders.spec.import.map',
-					null,
-					['pipeline', 'orders', 'spec', 'import', 'map']
+					'approval',
+					'review.orders.create',
+					{},
+					{
+						kind: 'steps',
+						steps: [{ name: 'Review', teams: ['finance'], users: [] }],
+						superseded_by: []
+					}
 				]
 			] as const)
 				expect(ok(yield* runIn(source, invocation(input, {}, kind, target)))).toEqual(expected);
+		})
+	);
+
+	it.live('only a marked file export writer receives bytes and image facilities', () =>
+		Effect.gen(function* () {
+			const source = `export default { collection: { documents: { bodies: { syncs: { sheet: {
+				read: function* (_, ctx) { return { files: typeof ctx.files }; },
+				write: function* (_, ctx) {
+					if (ctx.files === undefined) return { files: 'undefined' };
+					const bytes = yield* ctx.files.get({ id: 'signature' });
+					const image = yield* ctx.files.image({ id: 'signature' }, { jpeg: { maxEdge: 512 } });
+					return { methods: Object.keys(ctx.files), bytes: Array.from(bytes), image };
+				}
+			} } } } } };`;
+			const recorded = recorder((call) =>
+				call._tag === 'files.get'
+					? { ok: true, value: { $bin: 0 }, bins: [new Uint8Array([9, 8, 7])] }
+					: { ok: true, value: { id: 'jpeg', name: 'signature.jpg', mime: 'image/jpeg' } }
+			);
+			const remote = invocation({}, {}, 'syncWrite', 'documents.sheet');
+			expect(ok(yield* runIn(source, remote, recorded.bridge))).toEqual({ files: 'undefined' });
+			const marked: Invocation = { ...remote, ctx: { ...remote.ctx, fileExport: true } };
+			expect(ok(yield* runIn(source, marked, recorded.bridge))).toEqual({
+				methods: ['get', 'image'],
+				bytes: [9, 8, 7],
+				image: { id: 'jpeg', name: 'signature.jpg', mime: 'image/jpeg' }
+			});
+			expect(recorded.crossings.flat().map((call) => call._tag)).toEqual([
+				'files.get',
+				'files.image'
+			]);
+			expect(ok(yield* runIn(source, { ...marked, kind: 'syncRead' }, recorded.bridge))).toEqual({
+				files: 'undefined'
+			});
+		})
+	);
+
+	it.live('write callbacks receive workspace reads and stop before a third read crosses', () =>
+		Effect.gen(function* () {
+			const source = `export default { collection: { orders: { bodies: {
+				create: function* (rows, ctx) {
+					for (let i = 0; i < 3; i++) yield* ctx.db.query('orders', { id: 'x' });
+					return rows;
+				},
+				update: function* (changes, ctx) {
+					return { rows: changes.map(({ before, set }) => ({ ...set, previous: before.title })), keys: Object.keys(ctx).sort(), db: Object.keys(ctx.db).sort() };
+				}
+			} } } };`;
+			const { crossings, bridge } = recorder();
+			expect(
+				failure(
+					yield* runIn(
+						source,
+						invocation([], { crossings: LIMITS.crossings.write }, 'create', 'orders'),
+						bridge
+					)
+				)
+			).toMatchObject({ code: 'crossingBudget' });
+			expect(crossings).toHaveLength(2);
+			expect(
+				ok(
+					yield* runIn(
+						source,
+						invocation(
+							[{ before: { title: 'Before' }, set: { title: 'After' } }],
+							{},
+							'update',
+							'orders'
+						)
+					)
+				)
+			).toEqual({
+				rows: [{ title: 'After', previous: 'Before' }],
+				keys: [
+					'actor',
+					'admin',
+					'db',
+					'invocationId',
+					'now',
+					'policies',
+					'refuse',
+					'today',
+					'todayIn',
+					'tz'
+				],
+				db: ['after', 'aggregate', 'query']
+			});
 		})
 	);
 
@@ -341,7 +460,7 @@ describe('next guest runner', () => {
 							`function* (_, ctx) { return yield* ctx.act('jobs.update', {}, { observed: ${JSON.stringify(observed)} }); }`
 						)
 					);
-					expect(failure(rejected)).toMatchObject({ code: 'guestError' });
+					expect(failure(rejected)).toMatchObject({ code: 'invalidInput' });
 				}
 				expect(crossings).toHaveLength(1);
 			})
@@ -365,8 +484,8 @@ describe('next guest runner', () => {
 			}));
 			const o = yield* runIn(
 				automation(`function* (_, ctx) {
-			const [a, b, c] = yield* Effect.all([ctx.get('t', 'x'), ctx.get('t', 'y'), ctx.read('t', 'z')], { concurrency: 'unbounded' });
-			const d = yield* ctx.get('t', 'w');
+			const [a, b, c] = yield* Effect.all([ctx.query('t', { id: 'x' }), ctx.query('t', { id: 'y' }), ctx.query('t', { id: 'z' })], { concurrency: 'unbounded' });
+			const d = yield* ctx.query('t', { id: 'w' });
 			return [a, b, c, d];
 		}`),
 				invocation(),
@@ -386,7 +505,7 @@ describe('next guest runner', () => {
 			ok(
 				yield* runIn(
 					automation(`function* (_, ctx) {
-			yield* Effect.all([ctx.act('t.create', { a: 1 }, { key: 'k' }), ctx.schedule('b', {}, { key: 'q' }), ctx.notify({ to: { team: 'x' }, title: 'hi' }),
+			yield* Effect.all([ctx.act('t.create', { a: 1 }, { key: 'k' }), ctx.schedule('b', {}, { key: 'q' }), ctx.notify({ to: [{ team: 'x' }], title: 'hi' }),
 				ctx.send('mail', { to: 'a' }), ctx.request('crm', { method: 'POST', path: '/x', output: { kind: 'json' } }), ctx.web.read('https://a.test')], { concurrency: 'unbounded' });
 		}`),
 					invocation(),
@@ -411,7 +530,7 @@ describe('next guest runner', () => {
 						options: { key: 'k' }
 					},
 					{ _tag: 'schedule', automation: 'b', input: {}, key: 'q' },
-					{ _tag: 'notify', notices: { to: { team: 'x' }, title: 'hi' } },
+					{ _tag: 'notify', notices: { to: [{ team: 'x' }], title: 'hi' } },
 					{ _tag: 'send', to: 'mail', message: { to: 'a' } }
 				]
 			]);
@@ -435,7 +554,11 @@ describe('next guest runner', () => {
 							return { ok: true as const, value: call.args[0] ?? null };
 						}
 						if (call._tag === 'act') {
-							if (call.callable._tag === 'Action' && call.callable.action === 'second')
+							if (
+								call.callable._tag === 'Verb' &&
+								call.callable.collection === 'b' &&
+								call.callable.verb === 'update'
+							)
 								yield* Deferred.succeed(grouped, undefined);
 							return { ok: true as const, value: { kind: 'committed', output: null, records: [] } };
 						}
@@ -447,7 +570,7 @@ describe('next guest runner', () => {
 			const slow = ctx.web.read('https://slow.test');
 			const fast = Effect.gen(function* () {
 				yield* ctx.web.read('https://fast.test');
-				const [row] = yield* Effect.all([ctx.get('t', 'x'), ctx.act('t.first', {}), ctx.act('t.second', {})], { concurrency: 'unbounded' });
+				const [row] = yield* Effect.all([ctx.query('t', { id: 'x' }), ctx.act('a.create', {}), ctx.act('b.update', { target: '0199a000-0000-7000-8000-000000000001', set: {} })], { concurrency: 'unbounded' });
 				return row;
 			});
 			return yield* Effect.all([slow, fast], { concurrency: 'unbounded' });
@@ -461,8 +584,8 @@ describe('next guest runner', () => {
 					expect(crossings.map((batch) => batch.length)).toEqual([1, 1, 3]);
 					expect(crossings[2]).toMatchObject([
 						{ _tag: 'read', read: { collection: 't', id: 'x' } },
-						{ _tag: 'act', callable: { _tag: 'Action', collection: 't', action: 'first' } },
-						{ _tag: 'act', callable: { _tag: 'Action', collection: 't', action: 'second' } }
+						{ _tag: 'act', callable: { _tag: 'Verb', collection: 'a', verb: 'create' } },
+						{ _tag: 'act', callable: { _tag: 'Verb', collection: 'b', verb: 'update' } }
 					]);
 					yield* Deferred.succeed(slow, undefined);
 					expect(ok(yield* Fiber.join(running))).toEqual(['https://slow.test', 'read']);
@@ -506,7 +629,7 @@ describe('next guest runner', () => {
 			const { bridge } = recorder(() => poisoned);
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { return yield* Effect.catchCause(Effect.as(ctx.get("t", "x"), "resolved"), (cause) => Effect.succeed(Cause.squash(cause).code)); }'
+					'function* (_, ctx) { return yield* Effect.catchCause(Effect.as(ctx.query("t", { id: "x" }), "resolved"), (cause) => Effect.succeed(Cause.squash(cause).code)); }'
 				),
 				invocation(),
 				bridge
@@ -546,7 +669,7 @@ describe('next guest runner', () => {
 			);
 		})
 	);
-	it.live('recovers ActRefused and retains ctx.refuse with its field', () =>
+	it.live('recovers ActRefused and retains a query refusal with its field', () =>
 		Effect.gen(function* () {
 			const refused = { kind: 'refused', code: 'refused', message: 'no' };
 			const { bridge } = recorder(() => ({ ok: true, value: refused }));
@@ -561,9 +684,9 @@ describe('next guest runner', () => {
 					)
 				)
 			).toEqual(['no', 'refused']);
-			const action =
-				'export default { collection: { t: { bodies: { actions: { go: function* (_, ctx) { return yield* ctx.refuse("too late", { field: "day" }); } } } } } };';
-			expect(yield* runIn(action, invocation(null, {}, 'action', 't.go'))).toMatchObject({
+			const refusingQuery =
+				'export default { collection: { t: { bodies: { queries: { go: function* (_, ctx) { return yield* ctx.refuse("too late", { field: "day" }); } } } } } };';
+			expect(yield* runIn(refusingQuery, invocation(null, {}, 'query', 't.go'))).toMatchObject({
 				kind: 'refused',
 				message: 'too late',
 				field: 'day'
@@ -580,13 +703,19 @@ describe('next guest runner', () => {
 					records: [{ collection: 't', id: 'row', fields: [] }]
 				};
 				const { bridge } = recorder(() => ({ ok: true, value: conflict }));
+				// the native family rides the failed run: the readable conflict message plus the rows that moved
 				expect(
 					yield* runIn(
 						automation('function* (_, ctx) { return yield* ctx.act("t.update", {}); }'),
 						invocation(),
 						bridge
 					)
-				).toMatchObject({ kind: 'refused', message: JSON.stringify(conflict) });
+				).toMatchObject({
+					kind: 'refused',
+					code: 'conflict',
+					message: 'another write changed these records since they were read',
+					records: conflict.records
+				});
 				expect(
 					ok(
 						yield* runIn(
@@ -632,7 +761,9 @@ describe('next guest runner', () => {
 	it.live('fails a body that awaits nothing a crossing can settle', () =>
 		Effect.gen(function* () {
 			const o = yield* runIn(
-				automation('function* (_, ctx) { yield* ctx.get("t", "x"); yield* Effect.never; }')
+				automation(
+					'function* (_, ctx) { yield* ctx.query("t", { id: "x" }); yield* Effect.never; }'
+				)
 			);
 			expect(failure(o)).toMatchObject({
 				code: 'stalled',
@@ -647,7 +778,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) {\n  yield* Effect.all([ctx.get("t", "a"), ctx.get("t", "b")], { concurrency: "unbounded" });\n  yield* Effect.all([ctx.get("t", "c"), ctx.get("t", "d")], { concurrency: "unbounded" });\n}'
+					'function* (_, ctx) {\n  yield* Effect.all([ctx.query("t", { id: "a" }), ctx.query("t", { id: "b" })], { concurrency: "unbounded" });\n  yield* Effect.all([ctx.query("t", { id: "c" }), ctx.query("t", { id: "d" })], { concurrency: "unbounded" });\n}'
 				),
 				invocation(null, { crossings: 3 })
 			);
@@ -663,7 +794,7 @@ describe('next guest runner', () => {
 			const { bridge } = recorder(() => ({ ok: true, value: 1, journal: true }));
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.get("t", "x");\n  return 1;\n}'
+					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query("t", { id: "x" });\n  return 1;\n}'
 				),
 				invocation(null, { crossings: 40 }),
 				bridge
@@ -684,7 +815,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.get("t", "x");\n}'
+					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query("t", { id: "x" });\n}'
 				),
 				invocation(null, { crossings: 40 })
 			);
@@ -699,7 +830,9 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const { bridge } = recorder(() => ({ ok: true, value: 'x'.repeat(600) }));
 			const o = yield* runIn(
-				automation('function* (_, ctx) { yield* ctx.get("t", "a"); yield* ctx.get("t", "b"); }'),
+				automation(
+					'function* (_, ctx) { yield* ctx.query("t", { id: "a" }); yield* ctx.query("t", { id: "b" }); }'
+				),
 				invocation(null, { readBytes: 1_000 }),
 				bridge
 			);
@@ -716,7 +849,7 @@ describe('next guest runner', () => {
 			expect(
 				failure(
 					yield* runIn(
-						automation('function* (_, ctx) { return yield* ctx.get("t", "a"); }'),
+						automation('function* (_, ctx) { return yield* ctx.query("t", { id: "a" }); }'),
 						invocation(),
 						bridge
 					)
@@ -737,7 +870,7 @@ describe('next guest runner', () => {
 			}));
 			const outcome = yield* runIn(
 				automation(
-					'function* (_, ctx) { return yield* Effect.all([ctx.get("t", "a"), ctx.get("t", "b")], { concurrency: "unbounded" }); }'
+					'function* (_, ctx) { return yield* Effect.all([ctx.query("t", { id: "a" }), ctx.query("t", { id: "b" })], { concurrency: "unbounded" }); }'
 				),
 				invocation(),
 				bridge
@@ -755,52 +888,41 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const spin =
 				'const spin = (ms) => { const end = Date.now() + ms; while (Date.now() < end); };';
+			let metered = 0n;
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(150); yield* ctx.get("t", "x"); } return "done"; }',
+					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(150); yield* ctx.query("t", { id: "x" }); } return "done"; }',
 					spin
 				),
-				invocation(null, { cpuMs: 300 })
+				invocation(),
+				recorder().bridge,
+				{},
+				undefined,
+				hostIsolates({ cpuMs: 300, meter: (_session, nanos) => void (metered += nanos) })
 			);
 			expect(failure(o)).toMatchObject({ code: 'cpuBudget' });
-			expect(o.cpuMs).toBeGreaterThanOrEqual(300);
+			expect(metered).toBeGreaterThanOrEqual(300_000_000n);
 		})
 	);
 
 	it.live('does not count I/O waits, and has no invocation wall clock (rule 71)', () =>
 		Effect.gen(function* () {
+			let metered = 0n;
 			const { bridge } = recorder(() =>
 				Effect.as(Effect.sleep('400 millis'), { ok: true, value: 1 })
 			);
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) yield* ctx.get("t", "x"); return "done"; }'
-				),
-				invocation(null, { cpuMs: 300 }),
-				bridge
-			);
-			expect(ok(o)).toBe('done');
-			expect(o.cpuMs).toBeLessThan(300);
-		})
-	);
-
-	it.live('reports crossings and statements with the CPU (L-COL-109)', () =>
-		Effect.gen(function* () {
-			const seen: { crossings: number; statements: number }[] = [];
-			const o = yield* runIn(
-				automation(
-					'function* (_, ctx) { yield* ctx.get("t", "x"); yield* Effect.all([ctx.get("t", "y"), ctx.web.read("https://a.test")], { concurrency: "unbounded" }); return "done"; }'
+					'function* (_, ctx) { for (let i = 0; i < 3; i++) yield* ctx.query("t", { id: "x" }); return "done"; }'
 				),
 				invocation(),
-				recorder().bridge,
-				{
-					cpu: (_i, _ms, counts) => {
-						seen.push({ ...counts });
-					}
-				}
+				bridge,
+				{},
+				undefined,
+				hostIsolates({ cpuMs: 300, meter: (_session, nanos) => void (metered += nanos) })
 			);
 			expect(ok(o)).toBe('done');
-			expect(seen).toEqual([{ crossings: 3, statements: 2 }]);
+			expect(metered).toBeLessThan(300_000_000n);
 		})
 	);
 
@@ -808,7 +930,6 @@ describe('next guest runner', () => {
 		'answers a keyed read by key as one crossing and one statement, its members crossing together (rule 12)',
 		() =>
 			Effect.gen(function* () {
-				const seen: { crossings: number; statements: number }[] = [];
 				const { crossings, bridge } = recorder((c) => ({
 					ok: true,
 					value:
@@ -818,19 +939,13 @@ describe('next guest runner', () => {
 				}));
 				const o = yield* runIn(
 					automation(
-						`function* (_, ctx) { return yield* ctx.read({ a: { collection: 't', id: 'x' }, b: { collection: 'u', id: 'y' }, c: { collection: 'v', id: 'z' } }); }`
+						`function* (_, ctx) { return yield* ctx.query({ a: { from: 't', id: 'x' }, b: { from: 'u', id: 'y' }, c: { from: 'v', id: 'z' } }); }`
 					),
 					invocation(null, { crossings: 1 }),
-					bridge,
-					{
-						cpu: (_i, _ms, counts) => {
-							seen.push({ ...counts });
-						}
-					}
+					bridge
 				);
 				expect(ok(o)).toEqual({ a: 't:x:a', b: 'u:y:b', c: 'v:z:c' });
 				expect(crossings.map((c) => c.length)).toEqual([3]);
-				expect(seen).toEqual([{ crossings: 1, statements: 1 }]);
 			})
 	);
 
@@ -867,7 +982,7 @@ describe('next guest runner', () => {
 				const { crossings, bridge } = recorder();
 				const out = yield* runIn(
 					automation(
-						`function* (_, ctx) { return yield* Effect.catchCause(ctx.read({ a: { collection: 't' }, b: { collection: 'u', ref: 'a' }, c: { collection: 'v', ref: 'c' } }), (cause) => Effect.succeed(Cause.squash(cause).message)); }`
+						`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ a: { from: 't' }, b: { from: 'u', ref: 'a' }, c: { from: 'v', ref: 'c' } }), (cause) => Effect.succeed(Cause.squash(cause).message)); }`
 					),
 					invocation(),
 					bridge,
@@ -905,7 +1020,6 @@ describe('next guest runner', () => {
 	);
 	it.live('lowers act.many to one acts call: one crossing, one statement', () =>
 		Effect.gen(function* () {
-			const seen: { crossings: number; statements: number }[] = [];
 			const { crossings, bridge } = recorder((c) => ({
 				ok: true,
 				value:
@@ -926,12 +1040,7 @@ describe('next guest runner', () => {
 					`function* (_, ctx) { return (yield* ctx.act.many([{ callable: 'a.create', input: { x: 1 } }, { callable: 'b.update', input: [] }])).output; }`
 				),
 				invocation(),
-				bridge,
-				{
-					cpu: (_i, _ms, counts) => {
-						seen.push({ ...counts });
-					}
-				}
+				bridge
 			);
 			expect(ok(o)).toEqual(['a.create', 'b.update']);
 			expect(crossings).toEqual([
@@ -945,7 +1054,6 @@ describe('next guest runner', () => {
 					}
 				]
 			]);
-			expect(seen).toEqual([{ crossings: 1, statements: 1 }]);
 		})
 	);
 
@@ -970,7 +1078,7 @@ describe('next guest runner', () => {
 					ok(
 						yield* runIn(
 							automation(
-								`function* (_, ctx) { return yield* Effect.catchCause(ctx.read({ a: { collection: 't', id: 'x' }, b: { collection: 'u', id: 'y' } }), (cause) => { const e = Cause.squash(cause); return Effect.succeed(e.code + ' ' + e.message); }); }`
+								`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ a: { from: 't', id: 'x' }, b: { from: 'u', id: 'y' } }), (cause) => { const e = Cause.squash(cause); return Effect.succeed(e.code + ' ' + e.message); }); }`
 							),
 							invocation(),
 							bridge
@@ -981,11 +1089,11 @@ describe('next guest runner', () => {
 					ok(
 						yield* runIn(
 							automation(
-								`function* (_, ctx) { return yield* Effect.catchCause(ctx.read({ a: { id: 'x' } }), (cause) => Effect.succeed(Cause.squash(cause).message)); }`
+								`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ a: { id: 'x' } }), (cause) => Effect.succeed(Cause.squash(cause).message)); }`
 							)
 						)
 					)
-				).toMatch(/^member 'a': a keyed read member names its collection/);
+				).toMatch(/^member 'a': a keyed read member names its model in from/);
 				const big = recorder((c) => ({
 					ok: true,
 					value:
@@ -997,7 +1105,7 @@ describe('next guest runner', () => {
 					failure(
 						yield* runIn(
 							automation(
-								`function* (_, ctx) { return yield* ctx.read({ a: { collection: 't', id: 'x' }, roster: { collection: 'u', id: 'y' } }); }`
+								`function* (_, ctx) { return yield* ctx.query({ a: { from: 't', id: 'x' }, roster: { from: 'u', id: 'y' } }); }`
 							),
 							invocation(),
 							big.bridge
@@ -1041,12 +1149,96 @@ describe('next guest runner', () => {
 					automation(
 						'function* (_, ctx) { return [yield* ctx.ai.transcribe({ id: "f" }), yield* ctx.ai.speak("hi", { for: "a" })]; }'
 					),
-					invocation(null, { cpuMs: 100 }),
+					invocation(),
 					bridge,
-					{ callWallMs: 50 }
+					{ callWallMs: 50 },
+					undefined,
+					hostIsolates({ cpuMs: 100 })
 				);
 				expect(ok(o)).toEqual(['transcribe', 'speak']);
 				expect(crossings.flat()).toMatchObject([{ _tag: 'ai.transcribe' }, { _tag: 'ai.speak' }]);
+			})
+	);
+
+	it.live('gives an inference no per-call wall: its own stall window ends it', () =>
+		Effect.gen(function* () {
+			const { bridge } = recorder(() =>
+				Effect.as(Effect.sleep('200 millis'), { ok: true, value: 'found' })
+			);
+			const o = yield* runIn(
+				automation('function* (_, ctx) { return yield* ctx.ai.sys_2.infer({ prompt: "q" }); }'),
+				invocation(),
+				bridge,
+				{ callWallMs: 50 }
+			);
+			expect(ok(o)).toBe('found');
+		})
+	);
+
+	it.live(
+		'parks a long wait: its isolate goes, and a fresh one replays the body from its start (compute model §3)',
+		() =>
+			Effect.gen(function* () {
+				const sessions = new Set<string>();
+				const counted = Layer.unwrap(
+					Effect.map(guestIsolates({}), (port) =>
+						GuestIsolates.fromAbi({
+							...port,
+							open: (source, options, signal) =>
+								port.open(source, options, signal).then((session) => {
+									sessions.add(session);
+									return session;
+								}),
+							close: (session) => {
+								sessions.delete(session);
+								return port.close(session);
+							}
+						})
+					)
+				);
+				let answered: CrossAnswer | undefined,
+					whileWaiting = -1,
+					resumes = 0;
+				// the inference answers once, after 200 ms; a replay finds it journalled
+				const { crossings, bridge } = recorder((call) =>
+					call._tag !== 'ai.sys_2.infer'
+						? { ok: true, value: 1 }
+						: answered !== undefined
+							? { ...answered, journal: true }
+							: Effect.gen(function* () {
+									yield* Effect.sleep('150 millis');
+									whileWaiting = sessions.size;
+									yield* Effect.sleep('50 millis');
+									answered = { ok: true, value: 'found' };
+									return answered;
+								})
+				);
+				const o = yield* runIn(
+					automation(
+						'function* (_, ctx) { const a = yield* ctx.query("t", { id: "a" }); const r = yield* ctx.ai.sys_2.infer({ prompt: "q" }); return [a, r]; }'
+					),
+					invocation(null, { crossings: LIMITS.crossings.automation }),
+					bridge,
+					{},
+					undefined,
+					counted
+				).pipe(
+					Effect.provideService(GuestParking, {
+						afterMs: 50,
+						resume: Effect.sync(() => {
+							resumes++;
+						})
+					})
+				);
+				expect(ok(o)).toEqual([1, 'found']);
+				expect(whileWaiting).toBe(0);
+				expect(resumes).toBe(1);
+				expect(crossings.flat().map((call) => call._tag)).toEqual([
+					'read',
+					'ai.sys_2.infer',
+					'read',
+					'ai.sys_2.infer'
+				]);
 			})
 	);
 
@@ -1274,7 +1466,7 @@ describe('next guest globals (rule 6)', () => {
 	it.live('ignores tenant snapshot properties and evaluates source in a fresh isolated heap', () =>
 		Effect.gen(function* () {
 			const source = automation(
-				`function* (_, ctx) { return [++globalThis.count, crypto.randomUUID(), yield* ctx.get('t', 'x')]; }`,
+				`function* (_, ctx) { return [++globalThis.count, crypto.randomUUID(), yield* ctx.query('t', { id: 'x' })]; }`,
 				'globalThis.count = 0;'
 			);
 			const built = yield* sourceProgram(source);
@@ -1319,22 +1511,22 @@ export default { automation: { a: { body: () => formatter.resolvedOptions().loca
 					);
 					writeFileSync(
 						join(root, 'src/automation/+a.automation.ts'),
-						`/*! @license source evaluation regression */
+						`/*! @license source evaluation edge case */
 import { automation } from '@norbital-ai/bolt';
-const a = automation({ description: 'Source evaluation', on: { cron: '0 0 * * *' } });
+const description = 'Source evaluation';
 function* sourceBody(input) {
  class SourceMarker {}
  if (input.fail) throw new Error('mapped source failure');
  return { value: input.value, bodyName: sourceBody.name, className: SourceMarker.name };
 }
-a.run(sourceBody); export default a;`
+export default automation('a', { description, on: { cron: '0 0 * * *' }, run: sourceBody });`
 					);
 					const built = yield* check(root).pipe(Effect.provide(node));
 					expect(built.errors).toEqual([]);
 					const program = built.guest;
 					if (program === undefined) throw new Error('the compiler produced no guest');
 					expect(program.source).toMatch(/;export\{/);
-					expect(program.source).toContain('@license source evaluation regression');
+					expect(program.source).toContain('@license source evaluation edge case');
 					const run = (input: Json = { value: 42 }) => runProgram(program, invocation(input));
 					const evaluated = ok(yield* run());
 					expect(evaluated).toEqual({

@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 import { SerializationReplay } from '../errors.ts';
+import { SqlSessionDb } from '../db/tenant-db.ts';
 
 /** Replans once; exhaustion settles the original database decision. */
 export function replayOnce<A, E, R>(
@@ -8,6 +9,8 @@ export function replayOnce<A, E, R>(
 	) => Effect.Effect<A, E | SerializationReplay, R>
 ): Effect.Effect<A, E | SerializationReplay, R> {
 	return Effect.gen(function* (): Effect.fn.Return<A, E | SerializationReplay, R> {
+		if ((yield* SqlSessionDb) !== undefined)
+			return yield* work(() => Effect.fail(new SerializationReplay()));
 		let settle: Effect.Effect<A, E, R> | undefined;
 		const attempt = Effect.suspend(() =>
 			work((value) => {

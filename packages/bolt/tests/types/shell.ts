@@ -1,6 +1,6 @@
 // Type corpus for the shell's view props (§3.2 role 5): an embedded renderer is handed a view without the record's row.
 import type { CustomFieldView } from '../../src/shell/runtime.ts';
-import type { CustomFieldView as KitView } from '../../../ui/src/kinds/context.ts';
+import type { KindView as KitView } from '../../../ui/src/kinds/context.ts';
 
 export const shown: CustomFieldView = { mode: 'show', name: 'band', value: null };
 export const edited: CustomFieldView = {

@@ -4,17 +4,15 @@
 // itself is `null`, and the caller shows its own placeholder.
 import { parseJsonResult } from './json.ts';
 import { Decimal } from './decimal.ts';
+import { Predicate } from 'effect';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-const isObject = (v: unknown): v is { readonly [k: string]: unknown } =>
-	typeof v === 'object' && v !== null && !Array.isArray(v);
-
 /** The locale-free text of one value: an instant as `YYYY-MM-DD HH:mm` UTC (a UTC midnight as its day), a `Decimal` as its exact text, a relation as its own `label`; anything structured is no title. */
 function text(v: unknown): string | null {
 	if (v === null || v === undefined) return null;
-	if (isObject(v)) {
+	if (Predicate.isObject(v)) {
 		if (v instanceof Decimal) return text(String(v));
 		return typeof v['label'] === 'string' ? text(v['label']) : null;
 	}
@@ -37,7 +35,7 @@ const isJsonContainer = (s: string) => {
 
 /** A dotted path's value: `customer.name` reads a relation read `with` its target. */
 const at = (row: unknown, path: string): unknown =>
-	path.split('.').reduce<unknown>((v, k) => (isObject(v) ? v[k] : undefined), row);
+	path.split('.').reduce<unknown>((v, k) => (Predicate.isObject(v) ? v[k] : undefined), row);
 
 /**
  * A record's title from its model's `label` paths: each value shown per kind (through `show` when given), empty terms dropped,

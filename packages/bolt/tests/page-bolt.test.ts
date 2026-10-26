@@ -1,5 +1,6 @@
 // Browser reads and operations have one Effect contract; live answers have one Stream contract.
-import { Cause, Effect, Deferred, Exit, Fiber, Queue, Schema, Stream } from 'effect';
+import { Cause, Effect, Deferred, Exit, Fiber, Layer, ManagedRuntime, Queue, Stream } from 'effect';
+import { mountEdge } from '@norbital-ai/ui/effect';
 import { describe, expect, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { createBolt, patched } from '../src/page/bolt.ts';
@@ -10,9 +11,12 @@ import {
 	ActUnknown,
 	ReadFailed,
 	Refusal,
-	TransportFailed
+	TransportFailed,
+	Unavailable
 } from '../src/decl/errors.ts';
+import type { ApprovalView } from '../src/engine/approvals/approvals.ts';
 import { PATHS, type Frame } from '../src/protocol/wire.ts';
+import type {} from './types/registry.ts';
 
 const client = (answer: (url: string, body: unknown) => Response) =>
 	Effect.gen(function* () {
@@ -45,14 +49,21 @@ describe('reads', () => {
 			const { bolt, sent } = yield* client(() =>
 				Response.json({ answers: [{ rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null }] })
 			);
-			const read = bolt.read<{ rows: { amount: Decimal }[] }>('jobs', { limit: 1 });
-			expect(read.read).toEqual({ m: 'read', a: ['jobs', { limit: 1 }] });
-			expect('then' in read).toBe(false);
+			const read = bolt.query<{ rows: { amount: Decimal }[] }>('jobs', { limit: 1 });
+			expect(read.read).toEqual({ m: 'query', a: ['jobs', { limit: 1 }] });
+			expect('then' in read).toBe(true);
 			expect(sent).toHaveLength(0);
 			const answer = yield* read;
 			expect(answer.rows[0]?.amount).toBeInstanceOf(Decimal);
 			expect(answer.rows[0]?.amount.plus('1').toString()).toBe('2.50');
 			expect(sent).toHaveLength(1);
+			yield* Effect.acquireRelease(
+				Effect.sync(() => mountEdge(ManagedRuntime.make(Layer.empty))),
+				(dispose) => Effect.promise(dispose)
+			);
+			const awaited = yield* Effect.promise(async () => await read);
+			expect(awaited.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(sent).toHaveLength(2);
 		})
 	);
 	it.effect('a refused read is ReadFailed; a missing transport is TransportFailed', () =>
@@ -60,7 +71,7 @@ describe('reads', () => {
 			const { bolt } = yield* client(() =>
 				Response.json({ error: { code: 'forbidden', message: 'No access' } }, { status: 403 })
 			);
-			const failure = yield* Effect.flip(bolt.read('jobs', { limit: 1 }));
+			const failure = yield* Effect.flip(bolt.query('jobs', { limit: 1 }));
 			expect(failure).toBeInstanceOf(ReadFailed);
 			expect(failure).toMatchObject({ code: 'forbidden', message: 'No access' });
 			const offline = yield* createBolt({
@@ -71,7 +82,9 @@ describe('reads', () => {
 					throw new TypeError('offline');
 				}
 			});
-			expect(yield* Effect.flip(offline.get('jobs', 'j1'))).toBeInstanceOf(TransportFailed);
+			expect(yield* Effect.flip(offline.query('jobs', { id: 'j1' }))).toBeInstanceOf(
+				TransportFailed
+			);
 		})
 	);
 	it.effect('live revives answers and a refusal ends the Stream', () =>
@@ -104,7 +117,7 @@ describe('reads', () => {
 					return source;
 				}
 			});
-			const view = bolt.live<{ rows: { amount: Decimal }[] }>(bolt.read('jobs', { all: true }));
+			const view = bolt.observe<{ rows: { amount: Decimal }[] }>(bolt.query('jobs', { all: true }));
 			const seen: { rows: { amount: Decimal }[] }[] = [];
 			const fiber = yield* Stream.runForEach(view, (answer) =>
 				Effect.sync(() => {
@@ -130,6 +143,94 @@ describe('reads', () => {
 			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toEqual(
 				new ReadFailed({ code: 'tooLarge', message: 'too big' })
 			);
+		})
+	);
+});
+
+describe('document conversion', () => {
+	it.effect('conversion is lazy, sends one declared request and decodes its stored file', () =>
+		Effect.gen(function* () {
+			const file = {
+				id: '0199a000-0000-7000-8000-000000000002',
+				name: 'report.pdf',
+				mime: 'application/pdf',
+				size: 12
+			};
+			const { bolt, sent } = yield* client(
+				outcome({ kind: 'committed', output: file, records: [] })
+			);
+			const converted = bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' });
+			expect(sent).toHaveLength(0);
+			expect(yield* converted).toEqual(file);
+			expect(sent).toEqual([
+				{
+					callable: 'convert.document',
+					input: {
+						source: { markdown: '# Report' },
+						request: { to: 'pdf', name: 'report.pdf' }
+					},
+					issuedAt: expect.any(String)
+				}
+			]);
+		})
+	);
+	it.effect('conversion preserves host unavailability and authored refusals', () =>
+		Effect.gen(function* () {
+			const { bolt, sent } = yield* client(() =>
+				Response.json(
+					{ error: { code: 'unavailable', message: 'No document converter is bound.' } },
+					{ status: 503 }
+				)
+			);
+			expect(
+				yield* Effect.flip(
+					bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' })
+				)
+			).toEqual(
+				new Unavailable({
+					facility: 'convert.document',
+					reason: 'No document converter is bound.'
+				})
+			);
+			expect(sent).toHaveLength(1);
+			const refused = (yield* client(
+				outcome({ kind: 'refused', code: 'refused', message: 'Closed', field: 'name' })
+			)).bolt;
+			const failure = yield* Effect.flip(
+				refused.convert({ html: '<p>Report</p>' }, { to: 'pdf', name: 'report.pdf' })
+			);
+			expect(failure).toBeInstanceOf(ActRefused);
+			expect(failure).toMatchObject({ code: 'refused', message: 'Closed', field: 'name' });
+		})
+	);
+	it.effect('conversion rejects malformed file answers and noncommitted outcomes', () =>
+		Effect.gen(function* () {
+			for (const answer of [
+				{
+					kind: 'committed',
+					output: { id: 'f1', name: 'report.pdf', mime: 'application/pdf', size: 1 },
+					records: []
+				},
+				{
+					kind: 'committed',
+					output: {
+						id: '0199a000-0000-7000-8000-000000000002',
+						name: 'report.pdf',
+						mime: 'application/pdf',
+						size: { $dec: '1' }
+					},
+					records: []
+				},
+				{ kind: 'conflict', records: [{ collection: 'jobs', id: 'j1', fields: ['title'] }] },
+				{ kind: 'unknown', invocation: 'k1' }
+			]) {
+				const { bolt } = yield* client(outcome(answer));
+				expect(
+					yield* Effect.flip(
+						bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' })
+					)
+				).toEqual(new TransportFailed({ status: 0 }));
+			}
 		})
 	);
 });
@@ -204,36 +305,51 @@ describe('acts, starts, uploads and the session', () => {
 	);
 	it.effect('approvals and uploads revive every answer; an upload refusal retains its code', () =>
 		Effect.gen(function* () {
+			const approval: ApprovalView = {
+				id: 'r1',
+				collection: 'jobs',
+				record: 'j1',
+				action: 'create',
+				at: '2026-10-13T00:00:00Z',
+				status: 'Pending',
+				step: 0,
+				steps: [{ name: 'Review', teams: ['finance'], users: [] }],
+				superseded_by: [],
+				teamNames: { finance: 'Finance' },
+				userNames: {},
+				requestor: { ref: 'member:u1', name: 'Ada' },
+				log: [
+					{
+						move: 'request',
+						by: { ref: 'member:u1', name: 'Ada' },
+						at: '2026-10-13T00:00:00Z',
+						from: null,
+						to: 'Pending',
+						step: 0,
+						reason: 'Review the new job.',
+						changed: undefined,
+						rolledBack: undefined,
+						skipped: undefined
+					}
+				],
+				records: [{ collection: 'jobs', id: 'j1', op: 'create' }],
+				moves: [{ decision: 'approve', reason: 'optional' }],
+				mine: true,
+				participant: true
+			};
+			const file = {
+				id: '0199a000-0000-7000-8000-000000000001',
+				name: 'a.pdf',
+				mime: 'application/pdf',
+				size: 1
+			};
 			const { bolt } = yield* client((url) =>
-				url.startsWith(PATHS.approval)
-					? Response.json({
-							value: [
-								{
-									id: 'r1',
-									log: [
-										{
-											move: 'comment',
-											by: { ref: 'member:u1', name: 'Ada' },
-											at: '2026-10-13T00:00:00Z',
-											from: 'ONGOING',
-											to: 'ONGOING',
-											step: 0,
-											reason: { $dec: '3.10' }
-										}
-									]
-								}
-							]
-						})
-					: Response.json({ id: 'f1', name: 'a.pdf', mime: 'application/pdf', size: { $dec: '1' } })
+				url.startsWith(PATHS.approval) ? Response.json({ value: [approval] }) : Response.json(file)
 			);
 			const [view] = yield* bolt.approvals.list({ collection: 'jobs' });
-			// the approval wire revives typed values like every other answer
-			expect(view?.log[0]?.reason).toBeInstanceOf(Decimal);
-			const ref = yield* bolt.upload(new Blob(['x']), 'jobs.file');
-			const metadata = yield* Schema.decodeUnknownEffect(Schema.Struct({ size: Schema.Unknown }))(
-				ref
-			);
-			expect(metadata.size).toBeInstanceOf(Decimal);
+			expect(view?.log[0]?.reason).toBe('Review the new job.');
+			expect(view?.moves).toEqual([{ decision: 'approve', reason: 'optional' }]);
+			expect(yield* bolt.upload(new Blob(['x']), 'jobs.file')).toEqual(file);
 			const refusing = (yield* client(() =>
 				Response.json({ error: { code: 'tooLarge', message: 'Too large.' } }, { status: 413 })
 			)).bolt;

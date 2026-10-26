@@ -1,17 +1,20 @@
 import type { ImportStart } from '../../src/protocol/schema.ts';
 // Type corpus for the engine service contracts (K2): each pinned member's parameters and answer, exactly. Never run,
 // only checked (`tsgo -p tests/tsconfig.json`): a Shape that drifts from its pin is a type error on its line.
-import type { Effect, Option, Result, Scope, Stream } from 'effect';
+import type { Effect, Option, Result, Stream } from 'effect';
 import type { Json } from '../../src/decl/values.ts';
 import type { FacilityFailure, Unavailable } from '../../src/decl/errors.ts';
 import type { Frame } from '../../src/protocol/schema.ts';
-import type { Pred, ReadIR } from '../../src/protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
+import type { ReadIR } from '../../src/protocol/reads.ts';
 import type {
 	AiRequest,
 	AiResponse,
 	Authority,
 	Bindings,
 	Captured,
+	CronEntry,
+	CronFired,
 	CrossAnswer,
 	DriverEvent,
 	GuestOutcome,
@@ -32,6 +35,7 @@ import type { DeadlineTimer, DeadlineEntry } from '../../src/engine/runs/deadlin
 import type { OpenAiChat } from '../../src/engine/agent/openai-chat.ts';
 import type { AiEvent } from '../../src/engine/ports.ts';
 import type { PortFailure } from '../../src/engine/port.ts';
+import type { Syncs, SyncsShape } from '../../src/engine/sync/index.ts';
 import type {
 	ActMode,
 	ActRequest,
@@ -59,14 +63,10 @@ import type {
 	Facilities,
 	FacilitiesShape,
 	FacilityCall,
-	Feeds,
-	FeedsShape,
 	Guest,
 	GuestShape,
 	Identity,
 	IdentityShape,
-	Isolates,
-	IsolatesShape,
 	Links,
 	LinksShape,
 	Live,
@@ -78,8 +78,6 @@ import type {
 	OutboundShape,
 	OwnPredSql,
 	ParseCallable,
-	Pipelines,
-	PipelinesShape,
 	Reads,
 	ReadsShape,
 	RetrySpec,
@@ -103,7 +101,7 @@ import type {
 } from '../../src/engine/services.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+declare const is: <T extends true>() => T;
 type Args<F> = F extends (...args: infer A) => unknown ? A : never;
 type Answer<F> = F extends (...args: never[]) => infer R ? R : never;
 
@@ -112,7 +110,6 @@ is<Eq<ShapeOf<typeof Reads>, ReadsShape>>();
 is<Eq<ShapeOf<typeof Writes>, WritesShape>>();
 is<Eq<ShapeOf<typeof Callables>, CallablesShape>>();
 is<Eq<ShapeOf<typeof Approvals>, ApprovalsShape>>();
-is<Eq<ShapeOf<typeof Pipelines>, PipelinesShape>>();
 is<Eq<ShapeOf<typeof Decisions>, DecisionsShape>>();
 is<Eq<ShapeOf<typeof Identity>, IdentityShape>>();
 is<Eq<ShapeOf<typeof Live>, LiveShape>>();
@@ -125,22 +122,31 @@ is<Eq<ShapeOf<typeof Envoys>, EnvoysShape>>();
 is<Eq<ShapeOf<typeof Turns>, TurnsShape>>();
 is<Eq<ShapeOf<typeof Agents>, AgentsShape>>();
 is<Eq<ShapeOf<typeof Links>, LinksShape>>();
-is<Eq<ShapeOf<typeof Feeds>, FeedsShape>>();
+is<Eq<ShapeOf<typeof Syncs>, SyncsShape>>();
 is<Eq<ShapeOf<typeof Outbound>, OutboundShape>>();
 is<Eq<ShapeOf<typeof Facilities>, FacilitiesShape>>();
-is<Eq<ShapeOf<typeof Isolates>, IsolatesShape>>();
 is<Eq<ShapeOf<typeof Guest>, GuestShape>>();
 is<Eq<ShapeOf<typeof Telemetry>, TelemetryShape>>();
 is<Eq<ShapeOf<typeof Manifest>, EngineManifest>>();
 
 // ── reads ──
-is<Eq<Args<ReadsShape['run']>, [batch: readonly ReadIR[], reader: Reader, bindings: Bindings]>>();
+is<
+	Eq<
+		Args<ReadsShape['run']>,
+		[
+			batch: readonly ReadIR[],
+			reader: Reader,
+			bindings: Bindings,
+			from?: 'Client' | 'Server' | undefined
+		]
+	>
+>();
 is<Eq<Answer<ReadsShape['run']>, Effect.Effect<readonly Json[], EngineError>>>();
 
 // ── writes: one request, its mode a tagged union decided once, no hook-only fields ──
 is<Eq<Args<WritesShape['act']>, [request: ActRequest]>>();
 is<Eq<Answer<WritesShape['act']>, Effect.Effect<ActResult, EngineError>>>();
-is<Eq<ActMode['_tag'], 'Direct' | 'Feed' | 'Record'>>();
+is<Eq<ActMode['_tag'], 'Direct' | 'Sync' | 'Record'>>();
 is<
 	Eq<
 		keyof ActRequest,
@@ -158,24 +164,31 @@ is<
 		| 'onConflict'
 		| 'rate'
 		| 'restored'
+		| 'readGuards'
 	>
 >();
 is<
 	Eq<
 		ActResult,
-		{ readonly outcome: Outcome; readonly captured: readonly Captured[]; readonly v: number }
+		{
+			readonly readGuardsConsumed?: true;
+			readonly outcome: Outcome;
+			readonly captured: readonly Captured[];
+			readonly v: number;
+		}
 	>
 >();
 
 // ── callables ──
-is<Eq<Callable['_tag'], 'Verb' | 'Action' | 'Automation' | 'Pipeline' | 'Feed'>>();
+is<Eq<Callable['_tag'], 'Verb' | 'Automation' | 'Sync'>>();
+is<Eq<'action' extends keyof CallablesShape ? true : false, false>>();
 is<
 	Eq<
 		Extract<Callable, { _tag: 'Verb' }>,
 		{ readonly _tag: 'Verb'; readonly collection: string; readonly verb: Verb }
 	>
 >();
-is<Eq<Answer<CallablesShape['action']>, Effect.Effect<CallResult, EngineError>>>();
+is<Eq<Answer<CallablesShape['acts']>, Effect.Effect<CallResult, EngineError>>>();
 is<Eq<Answer<CallablesShape['query']>, Effect.Effect<Json, EngineError>>>();
 is<
 	Eq<
@@ -220,9 +233,11 @@ is<
 >();
 is<Eq<Answer<RunHandlersShape['handler']>, Effect.Effect<Option.Option<RunHandler>>>>();
 is<Eq<RunsShape['tick'], Effect.Effect<void, EngineError>>>();
+is<Eq<RunsShape['crons'], Effect.Effect<readonly CronEntry[]>>>();
+is<Eq<RunsShape['fire'], (id: string, slot: string) => Effect.Effect<CronFired, EngineError>>>();
 is<Eq<DeadlinesShape['announce'], (notLaterThan: string) => Effect.Effect<void>>>();
 
-// ── links, feeds, outbound ──
+// ── links, syncs, outbound ──
 is<Eq<keyof LinksShape, 'open' | 'close' | 'changed' | 'typing' | 'status' | 'send' | 'request'>>();
 is<Eq<Answer<LinksShape['typing']>, Effect.Effect<void, FacilityFailure | Unavailable>>>();
 is<Eq<keyof OutboundShape, 'deliver' | 'delivered' | 'replied' | 'activate' | 'handlers'>>();
@@ -233,7 +248,8 @@ is<
 	>
 >();
 is<Eq<Answer<OutboundShape['delivered']>, Effect.Effect<Option.Option<Outcome>, EngineError>>>();
-is<Eq<Args<FeedsShape['invalidate']>, [instance: string, feed: string, partition: string]>>();
+is<Eq<Args<SyncsShape['invalidate']>, [instance: string, sync: string, partition: string]>>();
+is<Eq<keyof ApprovalsShape, 'decide' | 'view' | 'list'>>();
 is<
 	Eq<
 		Args<ConversationsShape['receive']>,
@@ -267,7 +283,11 @@ is<
 		| 'send'
 		| 'request'
 		| 'progress'
-		| 'prepareCreate'
+		| 'transactionBegin'
+		| 'transactionRead'
+		| 'transactionAct'
+		| 'transactionFinish'
+		| 'transactionAbort'
 	>
 >();
 is<
@@ -279,10 +299,9 @@ is<
 	>
 >();
 is<Eq<Extract<CrossCall, { _tag: 'act' }>['callable'], Callable>>();
-is<Eq<Answer<IsolatesShape['prepare']>, Effect.Effect<void, BoltError, Scope.Scope>>>();
 
 // ── facilities, decisions ──
-is<Eq<keyof FacilitiesShape, 'dispatch' | 'fileLoader' | 'localFiles' | 'loggedTransport'>>();
+is<Eq<keyof FacilitiesShape, 'dispatch' | 'fileLoader' | 'loggedTransport'>>();
 is<Eq<Answer<FacilitiesShape['dispatch']>, Effect.Effect<CrossAnswer>>>();
 is<
 	Eq<Answer<DecisionsShape['decide']>, Effect.Effect<DecisionResult, FacilityFailure | Unavailable>>

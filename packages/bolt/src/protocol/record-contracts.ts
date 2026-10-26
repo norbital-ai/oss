@@ -11,7 +11,7 @@ export type {
 const Reason = Schema.Literals([
 	'noGrant',
 	'stateLocked',
-	'integrationOwned',
+	'syncOwned',
 	'ownedParent',
 	'ownedParentLocked',
 	'underApproval'
@@ -21,7 +21,7 @@ const Operation = Schema.Struct({
 	proposal: Schema.Boolean,
 	reasons: Schema.Array(Reason)
 });
-/** Current-row advice only; write admission still checks post-images, transforms and database constraints. */
+/** Current-row advice only; write admission still checks post-images, write callbacks and database constraints. */
 export const RecordCapabilitiesSchema: Schema.Codec<RecordCapabilities> = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,

@@ -1,10 +1,12 @@
-// Kit regression: the generated verb catalogue owns erase, and member setup is never a counted statement.
+// Kit edge cases: the generated verb catalogue owns erase, and member setup is never a counted statement.
 import { expect, it } from '@effect/vitest';
-import { Effect, Result } from 'effect';
+import { Effect, Layer, Result } from 'effect';
+import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { VERBS } from '../src/engine/callables/index.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { ActRefused } from '../src/decl/errors.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
+import { auditFromAbi } from '../src/engine/audit.ts';
 const manifest = Result.getOrThrow(
 	decodeManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
@@ -18,7 +20,6 @@ const manifest = Result.getOrThrow(
 		policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
 		automations: {},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		connections: {},
 		envoys: {},
@@ -76,5 +77,13 @@ it.effect(
 			);
 			expect(t.count.reads).toBe(4);
 			expect(t.count.writes).toBe(0);
-		}).pipe(Effect.provide(TestWorkspace.layer({ manifest })))
+		}).pipe(
+			Effect.provide(
+				TestWorkspace.layer({
+					manifest,
+					// This fixture measures member setup without a background audit-recovery worker.
+					ports: auditFromAbi(undefined).pipe(Layer.provide(NodeCrypto.layer))
+				})
+			)
+		)
 );

@@ -52,7 +52,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {
 		hotline: {
 			description:
@@ -112,7 +111,10 @@ function scriptedAi() {
 		ask: respondSystem1,
 		maxChoices: undefined,
 		models: ['default'],
-		catalog: Port.unavailable('ai.catalog'),
+		catalog: Effect.succeed({
+			models: [{ id: 'default', label: 'Default' }],
+			default: 'default'
+		}),
 		embed: () => Port.unavailable('ai.embed'),
 		infer: (request) =>
 			Stream.fromEffect(
@@ -128,7 +130,7 @@ function scriptedAi() {
 						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 					const said = text(last.content);
 					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said))
-						return call('read', { collection: 'payslips', select: { period: true, net: true } });
+						return call('query', { collection: 'payslips', select: { period: true, net: true } });
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {
@@ -245,7 +247,7 @@ describe("an entity hotline ({ actor: 'instance' }, dm: 'envoy')", () => {
 					expect(
 						(yield* Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(
 							(yield* qReply(route, t.as(t.admin).authority, {
-								reads: [{ m: 'get', a: ['payslips', slip.ada_a] }]
+								reads: [{ m: 'query', a: ['payslips', { id: slip.ada_a }] }]
 							})).answers[0]
 						)).status
 					).toBe('draft');

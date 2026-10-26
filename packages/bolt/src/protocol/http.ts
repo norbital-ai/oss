@@ -15,6 +15,7 @@ import {
 import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
 import type { Json } from '../decl/values.ts';
+import type { QuerySpec } from '../decl/model.ts';
 import type { Authority, Bindings, Outcome, RowData } from '../engine/contracts.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import {
@@ -33,6 +34,7 @@ import { AgentBackground, agentCallables, conversationFor } from '../engine/agen
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
+import { convertDocument } from '../engine/facilities.ts';
 import { lowerRead } from '../engine/query/engine.ts';
 import { lowerKeyedMember } from '../engine/query/keyed.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
@@ -53,7 +55,7 @@ import {
 	Agents,
 	type AgentCallables
 } from '../engine/services.ts';
-import type { ReadIR } from './ir-types.ts';
+import type { ReadIR } from './reads.ts';
 import {
 	ActBody,
 	LiveBody,
@@ -267,7 +269,11 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			const verdict = yield* limits.charge(common, now);
 			if (!verdict.ok) return { verdict, charges: persistent(common) };
 			const body = yield* requestBody(request, ActBody);
-			const named = chargesFor(authority, [body.callable], who).filter(
+			const named = chargesFor(
+				authority,
+				[body.callable === 'convert.document' ? 'convert' : body.callable],
+				who
+			).filter(
 				(charge) =>
 					!common.some((prior) => prior.rule === charge.rule && prior.bucket === charge.bucket)
 			);
@@ -316,13 +322,27 @@ export const requestReadRate = Effect.fn('protocol.requestReadRate')(function* (
 	readAdmissions.set(request, admission);
 	return yield* admission;
 });
-const liveViewAdmitted = (authority: Authority, read: WireRead | undefined): boolean =>
-	readAdmitted(
-		authority,
-		read !== undefined && typeof read.a[0] === 'string'
-			? { kind: read.m, collection: read.a[0] }
-			: undefined
-	);
+/** Visitor wire reads are the same granted model pages and records as their server-loader IR. */
+export const wireReadAdmitted = (authority: Authority, read: WireRead | undefined): boolean => {
+	if (authority.actor.kind !== 'visitor') return true;
+	if (read?.m !== 'query') return false;
+	const admits = (model: Json | undefined, args: Json | undefined): boolean =>
+		typeof model === 'string' &&
+		!model.includes('.') &&
+		!(
+			Schema.is(JsonObject)(args) &&
+			args['search'] !== undefined &&
+			typeof args['search'] !== 'string'
+		) &&
+		readAdmitted(authority, { kind: 'read', collection: model });
+	const [name, args] = read.a;
+	return Schema.is(JsonObject)(name)
+		? Object.values(name).every(
+				(member) => Schema.is(JsonObject)(member) && admits(member['from'], member)
+			)
+		: admits(name, args);
+};
+const liveViewAdmitted = wireReadAdmitted;
 
 export type ActCall = {
 	readonly callable: string;
@@ -383,7 +403,8 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 	if (
 		[
 			'start',
-			'approvals.process',
+			'approvals.decide',
+			'convert.document',
 			'filter.describe',
 			'filter.options',
 			'sys_notification.markRead',
@@ -414,8 +435,8 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 						message: 'A run id is a uuidv7 minted within 24 hours.',
 						field: 'id'
 					};
-		} else if (decoded.callable === 'approvals.process') {
-			const decision = yield* (yield* Approvals).process({
+		} else if (decoded.callable === 'approvals.decide') {
+			const decision = yield* (yield* Approvals).decide({
 				...decoded.input,
 				authority,
 				now: b.now
@@ -424,6 +445,26 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				decision.kind === 'decided'
 					? committed({ requestId: decision.requestId, status: decision.status })
 					: decision;
+		} else if (decoded.callable === 'convert.document') {
+			if (authority.actor.kind !== 'member')
+				return yield* Effect.fail(
+					BoltError.make('forbidden', 'admission', 'Only members may convert documents.')
+				);
+			const file = yield* convertDocument(decoded.input.source, {
+				...decoded.input.request,
+				for: 'bolt.$export',
+				by: authority.actor.id
+			}).pipe(
+				Effect.mapError((error) =>
+					BoltError.make(
+						error._tag === 'Unavailable' ? 'unavailable' : 'invalid',
+						'facility',
+						error.message,
+						error
+					)
+				)
+			);
+			outcome = committed(file);
 		} else if (decoded.callable === 'sys_notification.markRead') {
 			if (authority.actor.kind !== 'member' || authority.actor.external)
 				return yield* Effect.fail(
@@ -549,13 +590,6 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 			verb: callable.verb,
 			mode: { _tag: 'Direct' }
 		});
-	if (callable._tag === 'Action')
-		return yield* (yield* Callables).action({
-			...context,
-			collection: callable.collection,
-			action: callable.action,
-			from: 'Client'
-		});
 	return yield* Effect.fail(
 		BoltError.make('unknownCallable', 'decode', `there is no callable '${call.callable}'`)
 	);
@@ -618,7 +652,7 @@ const lowerQRead = Effect.fn('protocol.lowerQRead')(function* (
 	scope: number
 ): Effect.fn.Return<LoweredQRead, EngineError, Manifest | TenantDb> {
 	const set = read.a[0];
-	if (read.m !== 'read' || !Schema.is(JsonObject)(set))
+	if (read.m !== 'query' || !Schema.is(JsonObject)(set))
 		return { keys: null, reads: [yield* lower(authority, read)] };
 	if (read.a.length !== 1)
 		return yield* Effect.fail(invalid('a keyed read takes one set argument'));
@@ -628,7 +662,7 @@ const lowerQRead = Effect.fn('protocol.lowerQRead')(function* (
 		Effect.try({
 			try: () => {
 				const ir = lowerKeyedMember(
-					'read',
+					'query',
 					key,
 					spec,
 					(method, args) => lowerRead(m, method, args),
@@ -728,15 +762,15 @@ export const BoltRoutes = {
 					},
 					{ status: 409 }
 				);
-			const { outcome, v } = yield* dispatchAct(
+			const reply = yield* dispatchAct(
 				{ ...body, key, retry: header(request, HEADERS.retry) === '1' },
 				authority,
 				request
+			).pipe(
+				Effect.map(({ outcome, v }) => ({ outcome: redact(outcome, authority.actor), v })),
+				Effect.provide(yield* Effect.context<Effect.Services<ReturnType<typeof dispatchAct>>>())
 			);
-			return HttpServerResponse.jsonUnsafe(
-				{ outcome: redact(outcome, authority.actor), v },
-				{ status: statusOf(outcome) }
-			);
+			return HttpServerResponse.jsonUnsafe(reply, { status: statusOf(reply.outcome) });
 		})
 	},
 	[`GET ${PATHS.live}` as const]: {
@@ -825,10 +859,18 @@ export const BoltRoutes = {
 							return yield* Effect.fail(
 								BoltError.make('forbidden', 'admission', 'Visitors may not do this.')
 							);
+						const lowered = yield* lowerQRead(authority, view.read, 0);
+						const read: ReadIR = lowered.reads[0] ?? {
+							kind: 'query',
+							collection: '',
+							query: '',
+							input: null
+						};
 						yield* live.register(body.conn, view.view, {
-							read: yield* lower(authority, view.read),
-							...(view.every === undefined ? {} : { every: view.every }),
-							...(view.on === undefined ? {} : { on: view.on })
+							read,
+							...(lowered.keys === null
+								? {}
+								: { batch: { keys: lowered.keys, reads: lowered.reads } })
 						});
 						return Option.none<{ view: string; code: string; message: string }>();
 					}).pipe(
@@ -1074,7 +1116,19 @@ export const needsGuest = Effect.fn('protocol.needsGuest')(
 			route.guest === 'reads'
 				? (yield* requestBody(request, QBody)).reads
 				: ((yield* requestBody(request, LiveBody)).add?.map((view) => view.read) ?? []);
-		return reads.some((read) => read.m === 'query' || read.m === 'similar');
+		const queryNeedsGuest = (model: Json | undefined, args: Json | undefined): boolean =>
+			typeof model !== 'string' ||
+			model.includes('.') ||
+			(Schema.is(JsonObject)(args) && Schema.is(JsonObject)(args['search']));
+		return reads.some((read) => {
+			if (read.m !== 'query') return false;
+			const [model, args] = read.a;
+			return Schema.is(JsonObject)(model)
+				? Object.values(model).some(
+						(member) => !Schema.is(JsonObject)(member) || queryNeedsGuest(member['from'], member)
+					)
+				: queryNeedsGuest(model, args);
+		});
 	},
 	Effect.catch(() => Effect.succeed(true))
 );
@@ -1101,14 +1155,14 @@ export const boltRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 function openapi(m: EngineManifest, authority: Authority, version: string): Json {
 	const may = (collection: string, verb: 'read' | 'create' | 'update' | 'delete') =>
 		authority.admin || (authority.collections[collection]?.[verb].length ?? 0) > 0;
-	const named = (collection: string, part: 'queries' | 'actions') =>
-		Object.entries(m.collections[collection]?.[part] ?? {})
+	const namedQueries = (collection: string) => {
+		const specs: Readonly<Record<string, QuerySpec>> = m.collections[collection]?.queries ?? {};
+		return Object.keys(specs)
 			.filter(
-				([name, spec]) =>
-					spec.internal !== true &&
-					(authority.admin || authority.collections[collection]?.[part].includes(name))
+				(name) => authority.admin || authority.collections[collection]?.queries.includes(name)
 			)
-			.map(([name]) => `${collection}.${name}`);
+			.map((name) => `${collection}.${name}`);
+	};
 	const collections = Object.keys(m.collections);
 	const callables = [
 		...collections.flatMap((collection) =>
@@ -1116,7 +1170,6 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 				.filter((verb) => m.collections[collection]?.[verb] !== undefined && may(collection, verb))
 				.map((verb) => `${collection}.${verb}`)
 		),
-		...collections.flatMap((collection) => named(collection, 'actions')),
 		...((authority.admin ? Object.keys(m.automations) : authority.automations).length > 0
 			? ['start']
 			: [])
@@ -1124,7 +1177,7 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 	const body = (schema: Json) => ({ required: true, content: { 'application/json': { schema } } });
 	const responses = {
 		200: { description: 'answered' },
-		202: { description: 'pendingApproval' },
+		202: { description: 'pendingApproval, or running: the act continues as the named run' },
 		401: { description: 'unauthenticated' },
 		422: { description: 'refused' }
 	};
@@ -1147,14 +1200,14 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 									type: 'object',
 									required: ['m', 'a'],
 									properties: {
-										m: { enum: ['read', 'get', 'aggregate', 'similar', 'history', 'query'] },
+										m: { enum: ['query', 'aggregate', 'history'] },
 										a: {
 											type: 'array',
 											prefixItems: [
 												{
 													enum: [
 														...collections.filter((collection) => may(collection, 'read')),
-														...collections.flatMap((collection) => named(collection, 'queries'))
+														...collections.flatMap((collection) => namedQueries(collection))
 													]
 												}
 											]

@@ -1,26 +1,30 @@
-// The write area's SQL plumbing (A5): the `WITH` chain builder behind rule 20's one
-// statement, the own-row predicate compiler of roll-up `where`s, and the SQLSTATE map (G3).
+// The write area's SQL plumbing (A5): the `WITH` chain builder behind rule 20's one statement, its idempotency gate and
+// outcome, notices and rate charges, the SQLSTATE map (G3), invocation-minted ids and the transform's fingerprints.
 import type { Json } from '../../decl/values.ts';
 import type { TeamEntries } from '../../decl/access/team.ts';
 import { teamEntries } from '../manifest.ts';
-import { createHash } from 'node:crypto';
-import { Effect, Predicate, Result, Schema } from 'effect';
-import type { Outcome, RowData, Sql } from '../contracts.ts';
-
-import type { Arg, Pred } from '../../protocol/ir-types.ts';
-import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { Effect, Result, Schema } from 'effect';
+import { LIMITS, type Outcome, type RowData, type Sql } from '../contracts.ts';
+import { canonical, sha256, type ConstraintMeta } from '@norbital-ai/store';
+import {
+	TenantDb,
+	type RawDb,
+	type SqlReadCaptureService,
+	type TenantDbShape
+} from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
+import { copiedSql, dbError, inline } from '../db/wire.ts';
+import { composable } from '../query/reader.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { inline } from '../db/postgres.ts';
-import { composable } from '../query/sql.ts';
-import type { ConstraintMeta } from '../schema/ddl.ts';
 import { refusalOf } from '../schema/refusal.ts';
-import { q, type FieldInfo } from '../../protocol/catalog.ts';
 
 /** The idempotency gate's condition (rule 20): every data-modifying piece reads its rows through it. */
 export const GATED = 'EXISTS (SELECT 1 FROM idem)';
 
-/** One transactional in-app notice per active staff recipient, plus an optional external delivery descriptor. */
+/**
+ * One in-app notice per active staff recipient, plus one external delivery row per `via` connection. `rows` are
+ * `noticeRows`' (engine/notifications/notify.ts): `to` is the expanded recipient list, `attachments` the notice's files.
+ */
 export const noticeInsert = (
 	c: Chain,
 	name: string,
@@ -40,28 +44,28 @@ export const noticeInsert = (
 		c.cte(
 			`${name}_source`,
 			`SELECT * FROM jsonb_to_recordset(${c.p(rows)}::jsonb)
-		AS v(id text, "to" jsonb, title text, body text, link jsonb, once text)`
+		AS v(id text, "to" jsonb, via jsonb, title text, body text, link jsonb, once text, attachments jsonb)`
 		),
 		c.cte(
 			`${name}_to`,
 			`SELECT v.id || ':' || mem.id AS id, v.id AS notice,
-		jsonb_build_object('channel', 'inbox', 'recipients', CASE WHEN v."to" ? 'recipients' THEN v."to"->'recipients' WHEN jsonb_typeof(v."to") = 'array' THEN v."to" ELSE jsonb_build_array(v."to") END) AS "to", mem.id AS member,
-		v.title, v.body, v.link, v.once || ':' || mem.id AS once
+		jsonb_build_object('channel', 'inbox', 'recipients', v."to") AS "to", mem.id AS member,
+		v.title, v.body, v.link, v.once || ':' || mem.id AS once, v.attachments
 	FROM ${name}_source v LEFT JOIN LATERAL (SELECT u.id FROM sys_user u
-		WHERE u.active AND u.kind = 'staff' AND EXISTS (SELECT 1 FROM jsonb_array_elements(
-			CASE WHEN v."to" ? 'recipients' THEN v."to"->'recipients' WHEN jsonb_typeof(v."to") = 'array' THEN v."to" ELSE jsonb_build_array(v."to") END) r
+		WHERE u.active AND u.kind = 'staff' AND EXISTS (SELECT 1 FROM jsonb_array_elements(v."to") r
 			WHERE r->>'user' = u.id OR (r->>'team' = u.team AND ${policies}::jsonb ? u.team)
 				OR EXISTS (SELECT 1 FROM jsonb_each(${policies}::jsonb) s
 					WHERE s.key = u.team AND s.value ? (r->>'policy'))
 				OR (u.signup AND ${c.p(signup)}::jsonb ? (r->>'policy')))) mem ON true
-	UNION ALL SELECT v.id, v.id, v."to", NULL::text, v.title, v.body, v.link, v.once FROM ${name}_source v
-	WHERE coalesce(v."to"->>'channel', 'inbox') <> 'inbox'`
+	UNION ALL SELECT v.id || ':' || ch, v.id, jsonb_build_object('channel', ch, 'recipients', v."to"), NULL::text,
+		v.title, v.body, v.link, v.once || ':' || ch, v.attachments
+	FROM ${name}_source v CROSS JOIN LATERAL jsonb_array_elements_text(v.via) ch`
 		),
 		c.cte(
 			name,
-			`INSERT INTO sys_notification (id, recipient, member, title, body, link, once, at)
-	SELECT id, "to", member, title, body, link, once, ${c.p(now)}::timestamptz FROM ${name}_to
-	WHERE (member IS NOT NULL OR coalesce("to"->>'channel', 'inbox') <> 'inbox') AND (${when}) ON CONFLICT (once) DO NOTHING
+			`INSERT INTO sys_notification (id, recipient, member, title, body, link, once, attachments, at)
+	SELECT id, "to", member, title, body, link, once, attachments, ${c.p(now)}::timestamptz FROM ${name}_to
+	WHERE (member IS NOT NULL OR "to"->>'channel' <> 'inbox') AND (${when}) ON CONFLICT (once) DO NOTHING
 	RETURNING id, member, to_jsonb(sys_notification) AS image`
 		)
 	);
@@ -125,7 +129,8 @@ export function gate(c: Chain, key: string, digest: string, issuedAt: string): v
 		'idem',
 		`INSERT INTO bolt_idem (key, digest, issued_at) VALUES (${c.p(key)}, ${c.p(digest)}, ${c.p(issuedAt)}::timestamptz)
 	ON CONFLICT (key) DO UPDATE SET digest = excluded.digest, issued_at = excluded.issued_at
-	WHERE bolt_idem.issued_at < excluded.issued_at - interval '24 hours' RETURNING key`
+	WHERE bolt_idem.issued_at < excluded.issued_at - interval '24 hours'
+	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL) RETURNING key`
 	);
 }
 /** The statement's answer: the new outcome, or the stored one when the digest matches, else `keyReuse` (rule 31). */
@@ -166,165 +171,6 @@ export function rate(
 		`NOT EXISTS (SELECT 1 FROM rate JOIN jsonb_to_recordset(${limits}::jsonb) AS l(rule text, bucket text, lim int) USING (rule, bucket) WHERE rate.n > l.lim)`,
 		'rateLimited'
 	);
-}
-
-/** Own-row predicates share the read IR; DDL requests two-valued, typed literal SQL. */
-export function ownPredSql(
-	p: Pred,
-	row: string,
-	c: Chain,
-	twoValued = false,
-	fields?: ReadonlyMap<string, FieldInfo>
-): string {
-	const ddl = fields !== undefined;
-	const col = (field: string) => {
-		const name = fields?.get(field)?.column ?? field;
-		return row === '' ? q(name) : row.endsWith('.') ? `${row}${q(name)}` : `(${row}).${q(name)}`;
-	};
-	const literal = (value: Json, type?: string): string => {
-		if (!ddl) return c.p(databaseValue(value));
-		if (value === null) return 'null';
-		if (typeof value === 'boolean') return String(value);
-		return `'${String(typeof value === 'object' ? JSON.stringify(value) : value).replaceAll("'", "''")}'::${type ?? 'text'}`;
-	};
-	const val = (arg: Arg, field: string, type = fields?.get(field)?.pg): string => {
-		if (arg._tag === 'Field') return col(arg.field);
-		if (arg._tag === 'Lit') return literal(databaseValue(arg.value), type);
-		throw BoltError.make(
-			'invalidWhere',
-			'derive',
-			"a same-row where takes literals and the row's own fields only"
-		);
-	};
-	const leaf = (sql: string) => (twoValued ? `coalesce(${sql}, false)` : ddl ? sql : `(${sql})`);
-	const child = (pred: Pred) => ownPredSql(pred, row, c, twoValued, fields);
-	const OPS = {
-		eq: '=',
-		ne: ddl ? 'is distinct from' : '<>',
-		lt: '<',
-		lte: '<=',
-		gt: '>',
-		gte: '>='
-	} as const;
-	switch (p.t) {
-		case 'const':
-			return String(p.value);
-		case 'and':
-		case 'or':
-			return p.of.length === 0
-				? String(p.t === 'and')
-				: `(${p.of.map(child).join(` ${ddl ? p.t : p.t.toUpperCase()} `)})`;
-		case 'not': {
-			const body = child(p.of);
-			return ddl
-				? `(not ${p.of.t === 'and' || p.of.t === 'or' || p.of.t === 'not' ? body : `(${body})`})`
-				: `(NOT ${body})`;
-		}
-		case 'null':
-			return ddl
-				? `${col(p.field)} is ${p.is ? '' : 'not '}null`
-				: `(${col(p.field)} IS ${p.is ? '' : 'NOT '}NULL)`;
-		case 'cmp': {
-			const sql = `${col(p.field)} ${OPS[p.op]} ${val(p.arg, p.field)}`;
-			return ddl && p.op === 'ne' ? sql : leaf(sql);
-		}
-		case 'in': {
-			if (!Array.isArray(p.args))
-				throw BoltError.make('invalidWhere', 'derive', 'a same-row where takes literal lists only');
-			if (ddl) {
-				const type = fields.get(p.field)?.pg ?? 'text';
-				if (!twoValued)
-					return `${col(p.field)}${p.negated ? ' not' : ''} in (${p.args.map((value) => literal(databaseValue(value), type)).join(', ')})`;
-				const hit = leaf(
-					`${col(p.field)} = any(array[${p.args.map((value) => literal(databaseValue(value), type)).join(', ')}]::${type}[])`
-				);
-				return p.negated ? `not ${hit}` : hit;
-			}
-			return leaf(
-				`${col(p.field)}::text ${p.negated ? 'NOT ' : ''}IN (SELECT jsonb_array_elements_text(${c.p(p.args.map((value) => databaseValue(value)))}::jsonb))`
-			);
-		}
-		case 'like':
-			return leaf(
-				`${col(p.field)} ${ddl ? 'like' : 'LIKE'} ${ddl ? `'${p.pattern.replaceAll("'", "''")}'` : c.p(p.pattern)}`
-			);
-		case 'list': {
-			if (p.op === 'isEmpty')
-				return leaf(`cardinality(${col(p.field)}) ${p.arg === true ? '= 0' : '> 0'}`);
-			const values = Array.isArray(p.arg) ? p.arg : [p.arg];
-			const array = ddl
-				? `array[${values.map((value) => literal(value, 'text')).join(', ')}]::text[]`
-				: `ARRAY(SELECT jsonb_array_elements_text(${c.p(values)}::jsonb))`;
-			return leaf(`${col(p.field)} ${p.op === 'hasAny' ? '&&' : '@>'} ${array}`);
-		}
-		case 'period': {
-			const field = fields?.get(p.field),
-				date = field?.periodOf === 'date';
-			if (ddl && p.op !== 'contains' && p.arg._tag === 'Lit' && Predicate.isObject(p.arg.value)) {
-				const value = p.arg.value,
-					type = date ? 'date' : 'timestamptz';
-				const range = `${date ? 'daterange' : 'tstzrange'}(${literal(value[date ? 'from' : 'start'] ?? null, type)}, ${literal(value[date ? 'to' : 'end'] ?? null, type)}, '${date ? '[]' : '[)'}')`;
-				return leaf(`${col(p.field)} ${p.op === 'overlaps' ? '&&' : '<@'} ${range}`);
-			}
-			return leaf(
-				`${col(p.field)} ${p.op === 'contains' ? '@>' : p.op === 'overlaps' ? '&&' : '<@'} ${val(p.arg, p.field, p.op === 'contains' ? (date ? 'date' : 'timestamptz') : field?.pg)}`
-			);
-		}
-		case 'json':
-			return leaf(
-				'contains' in p
-					? `${col(p.field)} @> ${literal(p.contains, 'jsonb')}`
-					: `(${col(p.field)} = '[]'::jsonb) = ${p.isEmpty}`
-			);
-		case 'one':
-		case 'many':
-		case 'count':
-		case 'agg':
-			throw BoltError.make(
-				'invalidWhere',
-				'derive',
-				`a same-row where cannot reach the relation '${p.rel}'`
-			);
-		default:
-			throw BoltError.make('invalidWhere', 'derive', `a same-row where cannot use '${p.t}'`);
-	}
-}
-
-/**
- * Wire decimals (`$dec`) → their text, which Postgres casts per column; dates and instants are ISO strings. With the column's field, a
- * period becomes its range literal (X-11): a date period `{ from, to }` is inclusive `[from,to]` (Postgres stores
- * `[from,to+1)`), an instant period `{ start, end }` closed-open; a null end is open; a point `(lng,lat)`.
- */
-export function databaseValue(v: Json, f?: Pick<FieldInfo, 'kind' | 'periodOf'>): Json {
-	if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-		const o = v as { readonly [k: string]: Json },
-			keys = Object.keys(o);
-		if (keys.length === 1 && keys[0] === '$dec') return o[keys[0]]!;
-		// a point `{ lat, lng }` is a Postgres `point` literal (x = lng, y = lat)
-		if (f?.kind === 'point') return `(${String(o['lng'])},${String(o['lat'])})`;
-		if (f?.kind === 'period') {
-			const [lo, hi] = f.periodOf === 'date' ? [o['from'], o['to']] : [o['start'], o['end']];
-			return `[${String(databaseValue(lo ?? null))},${hi == null ? '' : String(databaseValue(hi))}${f.periodOf === 'date' ? ']' : ')'}`;
-		}
-	}
-	return v;
-}
-
-/**
- * One field's stored columns (`databaseValue`ged): an exclusive arc's `RecordRef` spreads over its arm columns `<fk>__<arm>`,
- * the named arm holding the id and every other arm null (the arc CHECK allows at most one); `null` clears them all.
- */
-export function cells(
-	k: string,
-	v: Json,
-	f?: Pick<FieldInfo, 'kind' | 'periodOf' | 'arms' | 'column'>
-): [string, Json][] {
-	if (f?.arms === undefined) return [[k, databaseValue(v, f)]];
-	const ref = v as { collection?: Json; id?: Json } | null;
-	return f.arms.map((arm) => [
-		`${f.column}__${arm}`,
-		ref?.collection === arm ? (ref.id ?? null) : null
-	]);
 }
 
 // ── SQLSTATE → outcome (rule 20 "Postgres-decided outcomes"): the schema area's map, plus `bolt_assert`'s codes ──
@@ -404,20 +250,7 @@ const conflictRecords = (detail: string): { collection: string; id: string; fiel
 		onFailure: () => []
 	});
 
-// ── hashing and ids (rules 24, 31) ──
-/** Canonical JSON drops absent members, preserving the same value as the wire. */
-export const canonical = (v: unknown): string =>
-	JSON.stringify(v, (_k, x: unknown) =>
-		x !== null && typeof x === 'object' && !Array.isArray(x)
-			? Object.fromEntries(
-					Object.entries(x)
-						.filter(([, value]) => value !== undefined)
-						.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-				)
-			: x
-	);
-export const sha256Hex = (input: string | Uint8Array): string =>
-	createHash('sha256').update(input).digest('hex');
+// ── ids (rules 24, 31) ──
 export const hex = (b: Uint8Array): string =>
 	[...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 /**
@@ -425,7 +258,7 @@ export const hex = (b: Uint8Array): string =>
  * `now` and whose random bits are the invocation's hash with `n` folded in, so a replay mints the same ids.
  */
 export function minter(invocationId: string, now: string): () => string {
-	const seed = new Uint8Array(createHash('sha256').update(`mint:${invocationId}`).digest());
+	const seed = sha256(`mint:${invocationId}`);
 	const ms = Date.parse(now);
 	let n = 0;
 	return () => {
@@ -446,8 +279,148 @@ export function minter(invocationId: string, now: string): () => string {
 // ── rule 26: optimistic transform reads ──
 /** A read statement and the digest of its rows as they were read. */
 export type Fingerprint = { sql: Sql; digest: string };
-const digestOf = (text: string): string =>
+/** Native read dependencies retained until a fresh act commits them. */
+export type ReadGuards = {
+	readonly sourceEpoch: string;
+	readonly fingerprints: readonly Fingerprint[];
+	readonly tables: readonly string[];
+	readonly inconsistent?: true;
+};
+export const digestOf = (text: string): string =>
 	`(SELECT md5(coalesce(string_agg(to_jsonb(s)::text, E'\\n'), '')) FROM (${text}) s)`;
+
+const FingerprintRow = Schema.Union([
+	Schema.Struct({ fp: Schema.Literal(false), r: Schema.Record(Schema.String, Schema.Json) }),
+	Schema.Struct({ fp: Schema.Literal(true), r: Schema.String })
+]);
+/** Rows and membership are fingerprinted in their native statement's snapshot, before any decoding crossing. */
+const readFingerprints = Effect.fn('Bolt.readFingerprints')(function* (
+	statements: readonly Sql[],
+	execute: RawDb['read']
+) {
+	const originals = yield* Effect.try({
+		try: () => Array.from(statements, copiedSql),
+		catch: dbError
+	});
+	const answers = yield* execute(
+		originals.map((s) =>
+			composable({
+				text: `SELECT false AS fp, to_jsonb(x) AS r FROM (${s.text}) x
+UNION ALL SELECT true, to_jsonb(${digestOf(s.text)})`,
+				params: s.params
+			})
+		)
+	);
+	if (answers.length !== originals.length)
+		return yield* DbError.make(
+			'08P01',
+			'a fingerprinted read returned the wrong number of answers'
+		);
+	const fingerprints: Fingerprint[] = [];
+	const rows = yield* Effect.forEach(originals, (sql, i) =>
+		Effect.gen(function* () {
+			const answer = answers[i];
+			if (answer === undefined)
+				return yield* DbError.make('08P01', 'a fingerprinted read returned no answer');
+			const envelope = yield* Schema.decodeUnknownEffect(Schema.Array(FingerprintRow))(
+				answer.rows
+			).pipe(Effect.mapError((cause) => DbError.make('08P01', cause.message)));
+			const values: RowData[] = [];
+			let digest: string | undefined;
+			for (const row of envelope) {
+				if (row.fp) digest = row.r;
+				else values.push(row.r);
+			}
+			if (digest === undefined)
+				return yield* DbError.make('08P01', 'a fingerprinted read returned no digest');
+			fingerprints.push({ sql, digest });
+			return { rows: values, affected: values.length };
+		})
+	);
+	return { rows, fingerprints };
+});
+
+/** Captures stay private until the entire crossing succeeds; newer reads survive an older act's consumption. */
+export function makeReadGuards(sourceEpoch: string) {
+	type Entry = { fingerprint: Fingerprint; tables: readonly string[]; generation: number };
+	let published = new Map<string, Entry>();
+	let generation = 0;
+	let inconsistent = false;
+	return {
+		begin(tables: ReadonlySet<string>): { capture: SqlReadCaptureService; finish: () => void } {
+			const pending = new Map<string, Fingerprint>();
+			let changed = false;
+			return {
+				capture: {
+					read: Effect.fn('Bolt.captureReadGuards')(function* (
+						statements: readonly Sql[],
+						execute: RawDb['read']
+					) {
+						const captured = yield* readFingerprints(statements, execute);
+						for (const fingerprint of captured.fingerprints) {
+							const key = canonical(fingerprint.sql);
+							const first = pending.get(key) ?? published.get(key)?.fingerprint;
+							if (first !== undefined && first.digest !== fingerprint.digest) changed = true;
+							if (!pending.has(key)) pending.set(key, first ?? fingerprint);
+						}
+						return captured.rows;
+					})
+				},
+				finish() {
+					const next = new Map(published);
+					const nextGeneration = generation + 1;
+					const dependencies = [...tables].sort();
+					for (const [key, fingerprint] of pending) {
+						const first = published.get(key);
+						if (first !== undefined && first.fingerprint.digest !== fingerprint.digest)
+							changed = true;
+						next.set(key, {
+							fingerprint: first?.fingerprint ?? fingerprint,
+							tables: [...new Set([...(first?.tables ?? []), ...dependencies])].sort(),
+							generation: nextGeneration
+						});
+					}
+					if (inconsistent || changed) {
+						inconsistent = true;
+						generation = nextGeneration;
+						throw BoltError.make(
+							'conflict',
+							'admission',
+							'a repeated native read changed during this automation attempt; start a fresh attempt'
+						);
+					}
+					const heldTables = new Set([...next.values()].flatMap((entry) => entry.tables));
+					const encoder = new TextEncoder();
+					const bytes =
+						[...next.keys()].reduce((size, key) => size + encoder.encode(key).byteLength, 0) +
+						encoder.encode(canonical([...heldTables].sort())).byteLength;
+					if (next.size > LIMITS.readGuards.count || bytes > LIMITS.readGuards.bytes)
+						throw BoltError.make(
+							'readBudgetExceeded',
+							'admission',
+							`retained native reads exceed ${LIMITS.readGuards.count} statements or ${LIMITS.readGuards.bytes} bytes`
+						);
+					published = next;
+					generation = nextGeneration;
+				}
+			};
+		},
+		snapshot(): { generation: number; guards: ReadGuards } {
+			const entries = [...published.values()];
+			const guards: ReadGuards = {
+				sourceEpoch,
+				fingerprints: entries.map((entry) => entry.fingerprint),
+				tables: [...new Set(entries.flatMap((entry) => entry.tables))].sort()
+			};
+			return inconsistent
+				? { generation, guards: { ...guards, inconsistent: true } }
+				: { generation, guards };
+		},
+		consume(consumed: number): void {
+			for (const [key, entry] of published) if (entry.generation <= consumed) published.delete(key);
+		}
+	};
+}
 /**
  * Wraps a `TenantDb` so every read statement is fingerprinted in the same statement: its rows, then its digest as a
  * last row, in one snapshot. The commit re-computes each digest under its table lock and asserts it.
@@ -462,23 +435,9 @@ export function fingerprinting(db: TenantDbShape): {
 		db: TenantDb.typed({
 			...db,
 			read: Effect.fn('Bolt.fingerprinting')(function* (statements: readonly Sql[]) {
-				const res = yield* db.read(
-					statements.map((s) =>
-						composable({
-							text: `SELECT false AS fp, to_jsonb(x) AS r FROM (${s.text}) x
-UNION ALL SELECT true, to_jsonb(${digestOf(s.text)})`,
-							params: s.params
-						})
-					)
-				);
-				return res.map((r, i) => {
-					const rows = r.rows.filter((x) => x['fp'] !== true).map((x) => x['r'] as RowData);
-					taken.push({
-						sql: statements[i]!,
-						digest: String(r.rows.find((x) => x['fp'] === true)!['r'])
-					});
-					return { rows, affected: rows.length };
-				});
+				const captured = yield* readFingerprints(statements, db.read);
+				taken.push(...captured.fingerprints);
+				return captured.rows;
 			})
 		})
 	};

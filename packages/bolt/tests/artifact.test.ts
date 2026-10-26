@@ -10,7 +10,11 @@ import {
 	publicPageKeys,
 	type ArtifactJson
 } from '../src/engine/artifact/read.ts';
-import { sha256Hex } from '../src/engine/write/sql.ts';
+import { Port } from '../src/engine/port.ts';
+import { sha256Hex } from '@norbital-ai/store';
+import { artifactPort } from '../src/node/artifact.ts';
+import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { Pristine } from '../src/node/db/pglite.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { fingerprint, schemaSlice } from '../src/engine/schema/plan.ts';
 
@@ -20,7 +24,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	collections: {},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -96,6 +99,7 @@ const publicFixture = Effect.fnUntraced(function* () {
 	yield* fs.makeDirectory(path.join(dir, 'server', 'app', 'site'), { recursive: true });
 	yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 	yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+	yield* prepareMigrations(dir, publicManifest, 'generate').pipe(Effect.provide(Pristine.layer));
 	yield* fs.writeFileString(path.join(dir, 'client', 'assets', 'site.js'), '/* public client */');
 	yield* fs.writeFileString(path.join(dir, 'client', 'assets', 'site.css'), 'h1{color:orange}');
 	yield* fs.writeFileString(
@@ -109,8 +113,6 @@ const publicFixture = Effect.fnUntraced(function* () {
 		handle: 'norbital_public',
 		name: 'Public fixture',
 		schema: fingerprint(schemaSlice(publicManifest)),
-		transforms: [],
-		projections: [],
 		client: { entry: '', css: [] },
 		pages: {
 			'app/site/home': {
@@ -157,6 +159,28 @@ it.live('verifies private public-page programs and refuses server-tree tampering
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
+it.live('a release its host admitted is checked again only for what runs in the cell', () =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const path = yield* Path.Path;
+		const fixture = yield* publicFixture();
+		yield* fs.writeFileString(
+			path.join(fixture.dir, 'client', 'assets', 'site.js'),
+			'/* changed */'
+		);
+		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+			code: 'artifactDigest'
+		});
+		expect(
+			(yield* readArtifact(fixture.dir, undefined, 'executed')).pages['app/site/home']?.entry
+		).toBe('assets/site.js');
+		yield* fs.writeFileString(path.join(fixture.dir, 'guest.mjs'), '// changed');
+		expect(yield* readArtifact(fixture.dir, undefined, 'executed').pipe(Effect.flip)).toMatchObject(
+			{ code: 'artifactDigest' }
+		);
+	}).pipe(Effect.provide(NodeServices.layer))
+);
+
 it.live('requires exact public routes and validates each program digest independently', () =>
 	Effect.gen(function* () {
 		const fixture = yield* publicFixture();
@@ -180,40 +204,40 @@ it.live('requires exact public routes and validates each program digest independ
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
-it.live('refuses public page paths and symlinks that escape the verified artifact trees', () =>
-	Effect.gen(function* () {
-		const fs = yield* FileSystem.FileSystem;
-		const path = yield* Path.Path;
-		const fixture = yield* publicFixture();
-		yield* fixture.save({
-			...fixture.body,
-			pages: {
-				'app/site/home': {
-					entry: '../guest.mjs',
-					css: [],
-					server: { file: 'server/app/site/home.mjs', sha256: sha256Hex(fixture.pageSource) }
+it.live(
+	'refuses public page paths that escape the artifact; its host port refuses a symlink out of it',
+	() =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const path = yield* Path.Path;
+			const fixture = yield* publicFixture();
+			yield* fixture.save({
+				...fixture.body,
+				pages: {
+					'app/site/home': {
+						entry: '../guest.mjs',
+						css: [],
+						server: { file: 'server/app/site/home.mjs', sha256: sha256Hex(fixture.pageSource) }
+					}
 				}
-			}
-		});
-		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-			code: 'artifactDigest'
-		});
-		const outside = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-public-outside-' });
-		yield* fs.writeFileString(path.join(outside, 'page.mjs'), fixture.pageSource);
-		yield* fs.remove(path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs'));
-		yield* fs.symlink(
-			path.join(outside, 'page.mjs'),
-			path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs')
-		);
-		yield* fixture.save({
-			...fixture.body,
-			hashes: { ...fixture.body.hashes, server: yield* treeHash(path.join(fixture.dir, 'server')) }
-		});
-		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-			code: 'artifactDigest',
-			message: expect.stringContaining('outside its server tree')
-		});
-	}).pipe(Effect.provide(NodeServices.layer))
+			});
+			expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+				code: 'artifactDigest'
+			});
+			const outside = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-public-outside-' });
+			yield* fs.writeFileString(path.join(outside, 'page.mjs'), fixture.pageSource);
+			yield* fs.remove(path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs'));
+			yield* fs.symlink(
+				path.join(outside, 'page.mjs'),
+				path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs')
+			);
+			const release = artifactPort(fixture.dir);
+			expect(
+				yield* Effect.flip(
+					Port.attempt('artifact', (signal) => release.read('server/app/site/home.mjs', signal))
+				)
+			).toMatchObject({ kind: 'invalid', message: expect.stringContaining('has no path') });
+		}).pipe(Effect.provide(NodeServices.layer))
 );
 it.live('artifact digests depend on bytes and sorted paths, never mtimes', () =>
 	Effect.gen(function* () {
@@ -245,14 +269,13 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 		const source = 'export default {};';
 		yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 		yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+		yield* prepareMigrations(dir, manifest, 'generate').pipe(Effect.provide(Pristine.layer));
 		const body: Omit<ArtifactJson, 'hash'> = {
 			format: 1,
 			contract: CONTRACT,
 			handle: 'norbital_fixture',
 			name: 'Fixture',
 			schema: fingerprint(schemaSlice(manifest)),
-			transforms: [],
-			projections: [],
 			client: { entry: '', css: [] },
 			pages: {},
 			hashes: {
@@ -286,6 +309,7 @@ it.live(
 				source = 'export default {};';
 			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+			yield* prepareMigrations(dir, manifest, 'generate').pipe(Effect.provide(Pristine.layer));
 			const write = (contract: string) =>
 				Effect.gen(function* () {
 					const body: Omit<ArtifactJson, 'hash'> = {
@@ -295,8 +319,6 @@ it.live(
 						name: 'Pinned',
 						// an older engine's system layer fingerprints the same manifest differently
 						schema: sha256Hex('an older system layer'),
-						transforms: [],
-						projections: [],
 						client: { entry: '', css: [] },
 						pages: {},
 						hashes: {
@@ -331,6 +353,7 @@ it.live(
 				bytes = new Uint8Array([0, 1, 2, 3]);
 			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
+			yield* prepareMigrations(dir, manifest, 'generate').pipe(Effect.provide(Pristine.layer));
 			yield* fs.writeFile(path.join(dir, 'guest.snapshot'), bytes);
 			const body: Omit<ArtifactJson, 'hash'> = {
 				format: 1,
@@ -338,8 +361,6 @@ it.live(
 				handle: 'untrusted',
 				name: 'Untrusted snapshot',
 				schema: fingerprint(schemaSlice(manifest)),
-				transforms: [],
-				projections: [],
 				client: { entry: '', css: [] },
 				pages: {},
 				hashes: {

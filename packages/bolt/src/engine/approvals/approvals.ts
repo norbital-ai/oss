@@ -1,84 +1,78 @@
-// Approval requests (rules 44–46), the provisional-commit model: a routed write is committed at once and held by its
-// request; each move of the state machine (machine.ts) is one guarded statement with every effect it has — the log
-// entry, the readable `approval_request` face, the notices, and on rejection or withdrawal the rollback of every held
-// record to its checkpoint.
+// Approval requests (rules 44–46, spec §8), the provisional-commit model: a routed write is committed at once and held by
+// its request; each move of the state machine (machine.ts) is one guarded statement with every effect it has — the log
+// entry, the readable `approval_request` face, the queued notify event (H1) and on rejection the rollback of every held
+// record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`).
 import { Clock, Effect, Layer, Option, Result, Schema } from 'effect';
-import { localOf } from '@norbital-ai/std/zone';
+import { audited, auditActor } from '../audit-operation.ts';
+import { Audit } from '../audit.ts';
+import { encodeWire } from '@norbital-ai/std/wire';
+import { bindingsAt } from '../query/reader.ts';
+import type { ApprovalStep } from '../../decl/access/policy.ts';
+import type { Json } from '../../decl/values.ts';
 import {
 	Approvals,
-	Guest,
-	Links,
+	Activation,
 	Live,
 	Manifest,
-	Wake,
+	type ApprovalFilter,
 	type ApprovalsShape,
-	type GuestShape,
-	type Readable,
-	type ApprovalFilter
+	type Readable
 } from '../services.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
-import type { NotificationEvent } from '../../decl/collection.ts';
-import type { Authority, Bindings, NoticeRow, Outcome, RowData } from '../contracts.ts';
+import type { Authority, Bindings, EngineActor, Lock, Outcome, QueuedRun } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { catalogOf } from '../access/pred.ts';
-import { q } from '../../protocol/catalog.ts';
-import { constraintsOf, type ApprovalHook } from '../write/act.ts';
-import { actorRef, compileCommit, CommitAnswer, committed } from '../write/commit.ts';
-import { Chain, GATED, minter, noticeInsert, canonical, decided } from '../write/sql.ts';
-import { collectionNotices } from '../notifications/rules.ts';
-import { outboundFrom, outboundPiece } from '../integrations/outbound.ts';
-import { participant, rolesOf, routeSnapshot as snapshot, type Request } from './route.ts';
+import { canonical, q } from '@norbital-ai/store';
+import { BoltError } from '../../protocol/errors.ts';
+import {
+	constraintsOf,
+	type ApprovalHook,
+	type HeldRecord,
+	type StepsSnapshot
+} from '../write/act.ts';
+import {
+	actorRef,
+	affectedTables,
+	compileCommit,
+	CommitAnswer,
+	committed
+} from '../write/commit.ts';
+import { Chain, GATED, minter, decided } from '../write/sql.ts';
+import { enqueue } from '../runs/queue.ts';
+import { syncOutboxPiece } from '../sync/write.ts';
+import { notifyRun, type NotifyWire } from '../notifications/notify.ts';
+import { participant, rolesOf, sameFlow, unknownTeam, type Request } from './route.ts';
+import { StoredSnapshot } from './snapshot.ts';
+import { readGuardBaseline } from './read-guards.ts';
+import { decodeRows } from '../db/rows.ts';
 import { checkpoint } from './lock.ts';
 import {
-	movesFor,
+	decisionsFor,
+	moveOf,
 	OPEN,
-	SOURCE_CHANGED,
 	transition,
+	type ApprovalDecision,
 	type ApprovalMove,
-	type ApprovalState
+	type ApprovalState,
+	type Step
 } from './machine.ts';
 import { rollbackPlan, type RolledBack, type Skipped } from './rollback.ts';
 import { Authorities } from '../identity/actor.ts';
 
-/** The readable face's status of each state (`approval_request.status`, the view's `status`). */
-export const STATUS = {
+/** The readable face's status of each state (`approval_request.status`). */
+const STATUS = {
 	Pending: 'ONGOING',
 	ChangesRequested: 'CHANGES_REQUESTED',
 	Approved: 'APPROVED',
 	Rejected: 'REJECTED',
-	Withdrawn: 'WITHDRAWN',
 	Superseded: 'SUPERSEDED'
 } as const satisfies { [S in ApprovalState]: string };
-/** `approvals.process`'s `status` names the move. */
-const MOVES = {
-	APPROVED: 'approve',
-	REJECTED: 'reject',
-	REQUEST_FOR_CHANGE: 'requestChanges',
-	RESUBMITTED: 'resubmit',
-	WITHDRAWN: 'withdraw',
-	SUPERSEDED: 'supersede',
-	COMMENT: 'comment',
-	CLOSED: 'close'
-} as const satisfies { [status: string]: ApprovalMove };
-export type DecisionStatus = keyof typeof MOVES;
-/** The `status` naming each move. */
-export const STATUS_OF = {
-	approve: 'APPROVED',
-	reject: 'REJECTED',
-	requestChanges: 'REQUEST_FOR_CHANGE',
-	resubmit: 'RESUBMITTED',
-	withdraw: 'WITHDRAWN',
-	supersede: 'SUPERSEDED',
-	comment: 'COMMENT',
-	close: 'CLOSED'
-} as const satisfies { [M in ApprovalMove]: DecisionStatus };
 const State = Schema.Literals([
 	'Pending',
 	'ChangesRequested',
 	'Approved',
 	'Rejected',
-	'Withdrawn',
 	'Superseded'
 ]);
 
@@ -95,10 +89,7 @@ const LogEntry = Schema.Struct({
 		'reject',
 		'requestChanges',
 		'resubmit',
-		'withdraw',
-		'supersede',
-		'comment',
-		'close'
+		'supersede'
 	]),
 	by: Schema.String,
 	at: Schema.String,
@@ -106,6 +97,8 @@ const LogEntry = Schema.Struct({
 	to: State,
 	step: Schema.Number,
 	reason: Schema.NullOr(Schema.String),
+	/** A resubmission's changed fields: the root record's by name, any other held row's as `<collection>.<field>`. */
+	changed: Schema.optionalKey(Schema.Array(Schema.String)),
 	rolledBack: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
@@ -133,19 +126,20 @@ const StoredRow = Schema.Struct({
 	step: Schema.Number,
 	requestor: Schema.String,
 	requestor_user: Schema.NullOr(Schema.String),
-	route: Schema.Json,
+	route: StoredSnapshot,
 	collection: Schema.String,
 	record: Schema.String,
-	action: Schema.String,
+	action: Schema.Literals(['create', 'update', 'delete']),
 	records: Schema.Array(Entry),
 	log: Schema.Array(LogEntry),
 	at_text: Schema.String
 });
 type Stored = Request & {
+	route: StoredSnapshot;
 	id: string;
 	collection: string;
 	record: string;
-	action: string;
+	action: 'create' | 'update' | 'delete';
 	user: string | null;
 	records: readonly (typeof Entry.Type)[];
 	log: readonly LogEntry[];
@@ -153,57 +147,58 @@ type Stored = Request & {
 };
 type Refusal = Extract<Outcome, { kind: 'refused' }>;
 export type Decision =
-	| { kind: 'decided'; requestId: string; status: string }
+	| { kind: 'decided'; requestId: string; status: ApprovalState }
 	| Refusal
 	| Extract<Outcome, { kind: 'conflict' }>;
 type Who = { ref: string; name: string | null };
-/** The approval view (§3.8 "Where it shows"): the request, every interaction, the held records and the viewer's moves. */
+/** The approval view (§3.8, spec §7): the request, its named steps, every interaction, the held records and the viewer's decisions. */
 export type ApprovalView = {
 	id: string;
 	collection: string;
 	record: string;
-	action: string;
+	action: 'create' | 'update' | 'delete';
 	at: string;
-	status: string;
+	status: ApprovalState;
 	step: number;
-	steps: readonly (readonly string[])[];
+	steps: readonly ApprovalStep[];
 	superseded_by: readonly string[];
-	/** Current source labels for captured route handles; labels never affect decision eligibility. */
+	/** Current source labels for the snapshot's team handles; labels never affect decision eligibility. */
 	teamNames: Readonly<Record<string, string>>;
+	/** The names of the snapshot's `users` approvers. */
+	userNames: Readonly<Record<string, string>>;
 	requestor: Who;
-	/** Every transition and comment, oldest first. */
+	/** Every transition, oldest first: the timeline's back-and-forth. */
 	log: readonly {
 		move: LogEntry['move'];
 		by: Who;
 		at: string;
-		from: string | null;
-		to: string;
+		from: ApprovalState | null;
+		to: ApprovalState;
 		step: number;
 		reason: string | null;
+		changed: LogEntry['changed'];
 		rolledBack: LogEntry['rolledBack'];
 		skipped: LogEntry['skipped'];
 	}[];
 	/** The records the provisional change holds (the checkpoint): root first. */
 	records: readonly { collection: string; id: string; op: 'create' | 'update' | 'delete' }[];
-	/** The moves the viewer may take now — the state machine's own answer, so buttons match the engine. */
-	moves: readonly { status: DecisionStatus; reason: 'required' | 'optional' }[];
+	/** The decisions the viewer may take now — the state machine's own answer, so buttons match the engine. */
+	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 	mine: boolean;
 	participant: boolean;
 };
 export type DecideInput = {
 	requestId: string;
-	status: DecisionStatus;
+	decision: ApprovalDecision;
 	reason?: string;
 	authority: Authority;
 	now: string;
 };
 type ApprovalsOptions = {
+	sourceEpoch?: string;
 	bindings(at?: string): Effect.Effect<Bindings>;
-	guest?: GuestShape | undefined;
-	/** Publishes a decision's captured rows and notices, and wakes the queue (the act path's own `committed`). */
-	committed?(
-		answer: Pick<CommitAnswer, 'captured' | 'next_due' | 'changed_instances'>
-	): Effect.Effect<void>;
+	/** Publishes a decision's captured rows, and wakes the queue (the act path's own `committed`). */
+	committed?(answer: CommitAnswer): Effect.Effect<void>;
 	/** Re-reads the request's views and the `$approval` of the records it holds. */
 	changed?(
 		requestId: string,
@@ -221,54 +216,32 @@ const conflict = (id: string): Decision => ({
 	kind: 'conflict',
 	records: [{ collection: 'approval_request', id, fields: ['status'] }]
 });
-const teamIds = (ts: readonly string[] | undefined) => ts ?? [];
-
-/** The events each move raises, with the step whose approvers `step_approvers` names. */
-function eventsOf(
-	move: ApprovalMove,
-	from: { step: number },
-	next: { state: ApprovalState; step: number }
-): (readonly [NotificationEvent, number])[] {
-	switch (move) {
-		case 'approve':
-			return next.state === 'Approved'
-				? [
-						['approvalStepApproved', from.step],
-						['approvalCompleted', from.step]
-					]
-				: [
-						['approvalStepApproved', from.step],
-						['approvalStepRequested', next.step]
-					];
-		case 'reject':
-			return [['rejected', from.step]];
-		case 'requestChanges':
-			return [['approvalChangesRequested', from.step]];
-		case 'resubmit':
-			return [
-				['approvalResubmitted', 0],
-				['approvalStepRequested', 0]
-			];
-		case 'withdraw':
-		case 'close':
-			return [['approvalWithdrawn', from.step]];
-		case 'supersede':
-			return [['approvalSuperseded', from.step]];
-		case 'comment':
-			return [['approvalCommented', from.step]];
-	}
-}
+/** The `approval_request` columns a state of `route` shows: its steps' names, the current step's approvers, the superseders. */
+const face = (route: StepsSnapshot, next: Step) => {
+	const open = OPEN.includes(next.state),
+		step = route.steps[next.step];
+	return {
+		steps: route.steps.length,
+		names: route.steps.map((s) => s.name),
+		teams: open ? (step?.teams ?? []) : [],
+		users: open ? (step?.users ?? []) : [],
+		superseders: open ? route.superseded_by : []
+	};
+};
+const own = (actor: EngineActor) => (actor.kind === 'member' ? actor.id : null);
 
 function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsOptions) {
 	const cat = catalogOf(m);
 	const sourceAuthorities = new Authorities(m, 'approval');
+	const table = (collection: string) => cat.collections.get(collection)?.model.name ?? collection;
+	const notifies = (collection: string) => m.collections[collection]?.notify === true;
 	const toStored = (r: typeof StoredRow.Type): Stored => ({
 		id: r.id,
 		state: r.state,
 		step: r.step,
 		requestor: r.requestor,
 		user: r.requestor_user,
-		route: snapshot(r.route),
+		route: r.route,
 		collection: r.collection,
 		record: r.record,
 		action: r.action,
@@ -282,83 +255,99 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		const rows = yield* db.rows(StoredRow, { text: `${select} WHERE id::text = $1`, params: [id] });
 		return rows[0] === undefined ? null : toStored(rows[0]);
 	});
-	/** The root collection's held rows as they are now (a removed one as its id), for `{ user }` recipients. */
+	/** The root collection's held rows as they are now (a removed one as its id): the notify event's records. */
 	const current = Effect.fn('Approvals.current')(function* (a: Stored) {
 		const ids = a.records.filter((r) => r.collection === a.collection).map((r) => r.id);
-		const table = cat.collections.get(a.collection)?.model.name;
-		if (table === undefined || ids.length === 0)
-			return [{ id: a.record, values: { id: a.record } }];
+		if (cat.collections.get(a.collection) === undefined || ids.length === 0)
+			return [{ id: a.record }];
 		const rows = yield* db.rows(Schema.Struct({ j: Schema.Record(Schema.String, Schema.Json) }), {
-			text: `SELECT to_jsonb(t) AS j FROM ${q(table)} t WHERE t.id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+			text: `SELECT to_jsonb(t) AS j FROM ${q(table(a.collection))} t WHERE t.id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
 			params: [JSON.stringify(ids)]
 		});
 		const found = new Map(rows.map((r) => [String(r.j['id']), r.j]));
-		return ids.map((id) => ({ id, values: found.get(id) ?? { id } }));
+		return ids.map((id): Json => found.get(id) ?? { id });
 	});
-	const notices = Effect.fn('Approvals.notices')(function* (
-		a: Pick<Stored, 'id' | 'collection' | 'record' | 'action' | 'user' | 'route' | 'log'>,
-		events: readonly (readonly [NotificationEvent, number])[],
-		records: readonly { id: string; values: RowData }[],
-		auth: Authority,
+	/** H1: the `bolt.notify` run of one move, when the request's model declares `notify`. */
+	const notified = (
+		a: Pick<Stored, 'id' | 'collection' | 'user'>,
+		route: StepsSnapshot,
+		move: ApprovalMove | 'request',
+		next: Step,
+		records: readonly Json[],
 		now: string
-	) {
-		const b = yield* options.bindings(now);
-		const notes: (NoticeRow & { id: string })[] = [];
-		for (const [event, step] of events)
-			notes.push(
-				...(yield* collectionNotices(options.guest, m, {
-					collection: a.collection,
-					event,
-					records: records.map((r) => ({ ...r, action: a.action })),
-					requestor: a.user,
-					approvers: a.route.steps[step] ?? [],
-					actor: auth.actor,
-					bindings: b,
-					// one notice per rule per transition (the log entry's index), so a resubmitted step notifies again
-					id: (rule) => `${a.id}:${a.log.length}:${event}:${rule}`,
-					link: { collection: a.collection, id: a.record }
-				}))
-			);
-		return notes;
-	});
+	): QueuedRun[] => {
+		if (!notifies(a.collection)) return [];
+		const step = route.steps[next.step];
+		const event: NotifyWire = {
+			kind: 'approval',
+			move,
+			step: next.step,
+			steps: route.steps,
+			done: !OPEN.includes(next.state),
+			request: a.id,
+			records,
+			requester: a.user,
+			approvers: { teams: step?.teams ?? [], users: step?.users ?? [] }
+		};
+		return [notifyRun({ collection: a.collection, event }, now)];
+	};
+	/**
+	 * Once the change stands (approved, superseded): the held records' current images — this statement's own writes
+	 * first — reach the sync outbox they skipped while held (H3); a deleted held record sends its checkpoint image as a delete.
+	 */
+	const standing = (c: Chain, a: Pick<Stored, 'records'>, actor: EngineActor, now: string) => {
+		const held = a.records.filter((record) => cat.collections.has(record.collection));
+		if (held.length === 0) return;
+		const written = new Set(held.map((record) => record.collection));
+		const source = c.cte(
+			'ap_out',
+			[...written]
+				.map((collection) => {
+					const records = held
+						.filter((record) => record.collection === collection)
+						.map(({ id, before }) => ({ id, before }));
+					const col = c.p(collection);
+					return `SELECT ${col}::text AS c, r.id, coalesce(t.revision,
+				(SELECT max(h.revision) FROM bolt_history h WHERE h.collection = ${col} AND h.record::text = r.id), r.before + 1) AS revision,
+				CASE WHEN t.id IS NULL THEN 'delete' WHEN r.before IS NULL THEN 'create' ELSE 'update' END::text AS op,
+				'direct'::text AS cause, false AS erased,
+				CASE WHEN t.id IS NOT NULL THEN NULL::jsonb ELSE (SELECT coalesce(jsonb_object_agg(p.key,p.value),'{}'::jsonb)
+				 FROM (SELECT DISTINCT ON(e.key) e.key,e.value FROM bolt_history h CROSS JOIN LATERAL jsonb_each(h.changes) e
+				 WHERE h.collection = ${col} AND h.record::text = r.id AND h.revision <= r.before ORDER BY e.key,h.revision DESC) p) END AS o,
+				CASE WHEN t.id IS NULL THEN NULL::jsonb ELSE to_jsonb(t) END AS n
+			FROM jsonb_to_recordset(${c.p(records)}::jsonb) AS r(id text, before int)
+			LEFT JOIN ${q(table(collection))} t ON t.id::text = r.id
+			WHERE (t.id IS NOT NULL OR r.before IS NOT NULL)
+			AND NOT EXISTS (SELECT 1 FROM allp p WHERE p.c = ${col} AND p.id = r.id)`;
+				})
+				.concat(
+					`SELECT p.c,p.id,p.revision,p.op,p.cause,p.erased,p.o,p.n FROM allp p
+			WHERE p.cause IN ('direct','cascade') AND NOT p.erased
+			AND ${c.p(held.map(({ collection, id }) => ({ collection, id })))}::jsonb @> jsonb_build_array(jsonb_build_object('collection',p.c,'id',p.id))`
+				)
+				.join(' UNION ALL ')
+		);
+		syncOutboxPiece(m, c, now, written, actor, source);
+	};
 
 	const hook: ApprovalHook = {
 		route: Effect.fn('Approvals.route')(function* (act) {
-			const routes = act.routes.map((route) => ({
-				steps: route.steps,
-				superseded_by: route.superseded_by ?? []
-			}));
-			const route = routes[0];
-			if (route === undefined) return refused('forbidden', 'No approval route admits this change.');
-			if (routes.some((r) => canonical(r) !== canonical(route)))
-				return refused(
-					'approvalSplit',
-					'These records need different approvals; submit them separately.'
+			const route = act.snapshot;
+			const unknown = unknownTeam(m, route);
+			if (unknown !== undefined)
+				return yield* Effect.fail(
+					BoltError.make(
+						'invalidSpec',
+						'admission',
+						`The approval flow names the team '${unknown}', which this workspace does not declare.`
+					)
 				);
 			const b = act.bindings,
 				auth = act.authority;
 			// retry-stable (L-BOLT-201): minted from the invocation and its key
 			const requestId = minter(`approval:${act.seed}:${act.collection}:${act.record}`, b.now)();
-			const a = {
-				id: requestId,
-				collection: act.collection,
-				record: act.record,
-				action: act.action,
-				user: auth.actor.kind === 'member' ? auth.actor.id : null,
-				route,
-				log: []
-			};
-			const requestor = actorRef(auth.actor);
-			const notes = yield* notices(
-				a,
-				[
-					['approvalStarted', 0],
-					['approvalStepRequested', 0]
-				],
-				act.records,
-				auth,
-				b.now
-			);
+			const requestor = actorRef(auth.actor),
+				user = own(auth.actor);
 			const entry: LogEntry = {
 				move: 'request',
 				by: requestor,
@@ -368,7 +357,15 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				step: 0,
 				reason: null
 			};
-			const table = cat.collections.get(act.collection)?.model.name ?? act.collection;
+			const shown = face(route, { state: 'Pending', step: 0 });
+			const runs = notified(
+				{ id: requestId, collection: act.collection, user },
+				route,
+				'request',
+				{ state: 'Pending', step: 0 },
+				act.records.map((r: HeldRecord): Json => ({ ...r.values, id: r.id })),
+				b.now
+			);
 			return {
 				requestId,
 				route,
@@ -378,9 +375,9 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					c.cte(
 						'ap_state',
 						`INSERT INTO bolt_approvals (id, state, step, collection, record, action, requestor, requestor_user, route, records, log, at)
-	SELECT ${c.p(requestId)}::uuid, 'Pending', 0, ${col}, ${rec}, ${c.p(act.action)}, ${c.p(requestor)}, ${c.p(a.user)}, ${c.p(route)}::jsonb,
+	SELECT ${c.p(requestId)}::uuid, 'Pending', 0, ${col}, ${rec}, ${c.p(act.action)}, ${c.p(requestor)}, ${c.p(user)}, ${c.p(route)}::jsonb,
 		(SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM (
-			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table)} WHERE id::text = ${rec}))
+			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table(act.collection))} WHERE id::text = ${rec}))
 				AS e WHERE NOT EXISTS (SELECT 1 FROM allp WHERE c = ${col} AND id = ${rec} AND cause IN ('direct', 'cascade'))
 			UNION ALL SELECT ${checkpoint('x')} FROM (SELECT DISTINCT ON (c, id) * FROM allp WHERE cause IN ('direct', 'cascade') AND NOT erased) x) s),
 		jsonb_build_array(${c.p(entry)}::jsonb), ${c.p(b.now)}::timestamptz
@@ -388,34 +385,112 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					);
 					c.cte(
 						'ap_request',
-						`INSERT INTO approval_request (id, collection_name, record_id, action, status, step, steps, approver_teams, superseder_teams, created_at)
-	SELECT id, ${col}, ${rec}, ${c.p(act.action)}, 'ONGOING', 0, ${route.steps.length}, ${c.p(teamIds(route.steps[0]))}::jsonb,
-		${c.p(teamIds(route.superseded_by))}::jsonb, ${c.p(b.now)}::timestamptz FROM ap_state`
+						`INSERT INTO approval_request (id, collection_name, record_id, action, status, step, steps, step_names, approver_teams,
+		approver_users, superseder_teams, created_at)
+	SELECT id, ${col}, ${rec}, ${c.p(act.action)}, 'ONGOING', 0, ${shown.steps}, ${c.p(shown.names)}::jsonb, ${c.p(shown.teams)}::jsonb,
+		${c.p(shown.users)}::jsonb, ${c.p(shown.superseders)}::jsonb, ${c.p(b.now)}::timestamptz FROM ap_state`
 					);
 					c.cte(
 						'ap_requestor',
-						`INSERT INTO requestor (id, approval_request_id, user_id) SELECT id::text || ':' || ${c.p(requestor)}, id, ${c.p(a.user ?? requestor)} FROM ap_state`
+						`INSERT INTO requestor (id, approval_request_id, user_id) SELECT id::text || ':' || ${c.p(requestor)}, id, ${c.p(user ?? requestor)} FROM ap_state`
 					);
-					if (notes.length > 0)
-						noticeInsert(
-							c,
-							'ap_notice',
-							notes,
-							b.now,
-							'EXISTS (SELECT 1 FROM ap_state)',
-							m.teams,
-							m.workspace.signup?.policies
-						);
+					if (runs.length > 0) enqueue(c, runs, { when: 'EXISTS (SELECT 1 FROM ap_state)' });
+				}
+			};
+		}),
+
+		resubmit: Effect.fn('Approvals.resubmit')(function* (act) {
+			const a = yield* load(act.request);
+			if (a === null)
+				return yield* Effect.fail(
+					BoltError.make('notFound', 'admission', 'No approval request has this id.')
+				);
+			if (a.route.__boltReadGuards !== undefined)
+				return yield* Effect.fail(
+					BoltError.make(
+						'sourceChanged',
+						'admission',
+						'This request depends on earlier reads. Reject it and start a fresh request.'
+					)
+				);
+			const allowed = act.snapshot.kind === 'allow';
+			const route = act.snapshot.kind === 'allow' ? a.route : act.snapshot;
+			const unknown = unknownTeam(m, route);
+			if (unknown !== undefined)
+				return yield* Effect.fail(
+					BoltError.make(
+						'invalidSpec',
+						'admission',
+						`The approval flow names the team '${unknown}', which this workspace does not declare.`
+					)
+				);
+			// the same steps resume where changes were requested; changed steps restart at the first
+			const next: Step = allowed
+				? { state: 'Approved', step: a.step }
+				: { state: 'Pending', step: sameFlow(a.route, route) ? a.step : 0 };
+			const b = act.bindings,
+				by = actorRef(act.authority.actor);
+			const entry: LogEntry = {
+				move: 'resubmit',
+				by,
+				at: b.now,
+				from: 'ChangesRequested',
+				to: next.state,
+				step: next.step,
+				reason: null,
+				changed: [
+					...new Set(
+						act.changed.flatMap((row) =>
+							row.collection === a.collection && row.id === a.record
+								? row.fields
+								: row.fields.map((f) => `${row.collection}.${f}`)
+						)
+					)
+				]
+			};
+			const shown = face(route, next);
+			const runs = notified(
+				a,
+				route,
+				'resubmit',
+				next,
+				act.records.map((r: HeldRecord): Json => ({ ...r.values, id: r.id })),
+				b.now
+			);
+			return {
+				request: a.id,
+				pending: !allowed,
+				pieces: (c: Chain) => {
+					c.cte(
+						'ap_resubmit',
+						`UPDATE bolt_approvals SET state = ${c.p(next.state)}, step = ${next.step}, route = ${c.p(route)}::jsonb,
+		log = log || jsonb_build_array(${c.p(entry)}::jsonb), closed_at = ${c.p(allowed ? b.now : null)}::timestamptz
+	WHERE id::text = ${c.p(a.id)} AND state = 'ChangesRequested' AND requestor = ${c.p(by)} AND ${GATED} RETURNING id`
+					);
+					c.assert(
+						'(SELECT count(*) FROM ap_resubmit) = 1',
+						'conflict',
+						JSON.stringify({ collection: 'approval_request', ids: [a.id] })
+					);
+					c.cte(
+						'ap_resubmit_face',
+						`UPDATE approval_request SET status = ${c.p(STATUS[next.state])}, step = ${next.step}, steps = ${shown.steps},
+		step_names = ${c.p(shown.names)}::jsonb, approver_teams = ${c.p(shown.teams)}::jsonb, approver_users = ${c.p(shown.users)}::jsonb,
+		superseder_teams = ${c.p(shown.superseders)}::jsonb, closed_at = ${c.p(allowed ? b.now : null)}::timestamptz,
+		closed_by = ${c.p(allowed ? by : null)}, revision = revision + 1 WHERE id IN (SELECT id FROM ap_resubmit)`
+					);
+					if (allowed) standing(c, a, act.authority.actor, b.now);
+					if (runs.length > 0) enqueue(c, runs, { when: 'EXISTS (SELECT 1 FROM ap_resubmit)' });
 				}
 			};
 		})
 	};
 
-	/** A reviewer's or requester's current source authority (a stale preview or a moved team decides nothing). */
+	/** A reviewer's current source authority (a stale preview or a moved team decides nothing). */
 	const currentMember = Effect.fn('Approvals.currentMember')(function* (
 		actor: Extract<Authority['actor'], { kind: 'member' }>,
 		preview?: Authority['preview'],
-		admin = false
+		admin: boolean = false
 	) {
 		if (preview === undefined) return yield* sourceAuthorities.member(db, actor.id, !admin);
 		const real = yield* sourceAuthorities.member(db, preview.by);
@@ -428,53 +503,61 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		return current === null ? null : { ...current, preview };
 	});
 
-	/** A release removed the open request's collection, or its record (that the request did not delete). */
-	const sourceGone = Effect.fn('Approvals.sourceGone')(function* (a: Stored) {
-		if (!OPEN.includes(a.state)) return false;
-		const table = cat.collections.get(a.collection)?.model.name;
-		if (table === undefined) return true;
-		if (
-			a.records.some((r) => r.collection === a.collection && r.id === a.record && r.op === 'delete')
-		)
-			return false;
-		// ponytail: one existence read per open request in a list; batch per collection when lists grow
-		const rows = yield* db.rows(Schema.Struct({ n: Schema.Number }), {
-			text: `SELECT count(*)::int AS n FROM ${q(table)} WHERE id::text = $1`,
-			params: [a.record]
-		});
-		return (rows[0]?.n ?? 0) === 0;
-	});
-	/** One move: the guarded state change, its log entry, the readable face, the notices and (reject, withdraw) the rollback. */
-	const process = Effect.fn('Approvals.process')(function* (
+	/**
+	 * One decision: the guarded state change, its log entry, the readable face, the notify event and (reject) the
+	 * rollback. A superseder's approve supersedes; a request whose record or model a release removed ends by reject.
+	 */
+	const decide = Effect.fn('Approvals.decide')(function* (
 		x: DecideInput
 	): Effect.fn.Return<Decision, EngineError> {
+		if (x.authority.actor.kind !== 'member')
+			return refused('forbidden', 'Only a member may decide an approval.');
 		const a = yield* load(x.requestId);
 		if (a === null) return refused('notFound', 'No approval request has this id.');
-		const move = MOVES[x.status];
-		const gone = yield* sourceGone(a);
-		const given = x.reason?.trim() ?? '';
-		const reason = move === 'close' && given === '' ? SOURCE_CHANGED : given;
 		const auth =
 			x.authority.actor.kind === 'member'
 				? yield* currentMember(x.authority.actor, x.authority.preview, x.authority.admin)
 				: x.authority;
 		if (auth === null)
 			return refused('forbidden', 'You are no longer authorized to act on this request.');
-		const t = transition(a, a.route.steps.length, move, rolesOf(a, auth), reason, gone);
+		const roles = rolesOf(a, auth),
+			move = moveOf(x.decision, roles),
+			reason = x.reason?.trim() ?? '';
+		const t = transition(a, a.route.steps.length, move, roles, reason);
 		if ('refused' in t)
 			return t.refused === 'forbidden'
 				? refused('forbidden', t.message)
-				: t.refused === 'sourceChanged'
-					? refused('sourceChanged', t.message)
-					: refused('invalidInput', t.message, t.refused === 'reason' ? 'reason' : undefined);
+				: refused('invalidInput', t.message, t.refused === 'reason' ? 'reason' : undefined);
+		const readGuards =
+			move === 'approve' || move === 'supersede' ? a.route.__boltReadGuards : undefined;
+		if (readGuards !== undefined && readGuards.sourceEpoch !== options.sourceEpoch)
+			return refused(
+				'sourceChanged',
+				'This request was prepared by another source release. Reject it and start a fresh request.'
+			);
 		const { next, edge } = t;
 		const now = x.now,
 			by = actorRef(auth.actor),
-			open = OPEN.includes(next.state);
+			open = OPEN.includes(next.state),
+			stands = next.state === 'Approved' || next.state === 'Superseded';
+		const b = yield* options.bindings(now);
 		const plan =
 			edge.rollback === true
-				? yield* rollbackPlan(m, db, a.records, yield* options.bindings(now))
-				: { writes: [], restored: [], rolledBack: [] as RolledBack[], skipped: [] as Skipped[] };
+				? yield* rollbackPlan(m, db, a.records, b)
+				: {
+						writes: [],
+						restored: [],
+						rolledBack: [] as RolledBack[],
+						skipped: [] as Skipped[],
+						observations: []
+					};
+		if (
+			plan.skipped.some((record) => record.field === '*' && record.reason !== 'collectionRemoved')
+		)
+			return refused(
+				'invalidInput',
+				'An approval checkpoint cannot be restored. The request and its records remain held.'
+			);
 		const entry: LogEntry = {
 			move,
 			by,
@@ -485,8 +568,17 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			reason: reason === '' ? null : reason,
 			...(edge.rollback === true ? { rolledBack: plan.rolledBack, skipped: plan.skipped } : {})
 		};
-		const notes = yield* notices(a, eventsOf(move, a, next), yield* current(a), auth, now);
-		const b = yield* options.bindings(now);
+		const runs = notified(
+			a,
+			a.route,
+			move,
+			next,
+			notifies(a.collection) ? yield* current(a) : [],
+			now
+		);
+		const refreshKey = `approval:${a.id}:${a.log.length}`;
+		const mint = minter(`approval:${a.id}:${a.log.length}`, now);
+		const shown = face(a.route, next);
 		const statement = compileCommit(m, cat, {
 			key: `approval:${a.id}:${a.log.length}`,
 			digest: canonical({ request: a.id, at: a.log.length, move, by }),
@@ -497,12 +589,23 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			writes: plan.writes,
 			owned: [],
 			rate: [],
-			runs: [],
+			runs: runs.map((run) => ({ ...run, id: mint() })),
 			notices: [],
 			output: null,
 			restored: plan.restored,
 			approvalDecision: { request: a.id },
+			...(readGuards === undefined ? {} : { fingerprints: readGuards.fingerprints }),
 			before: (c) => {
+				for (const observation of plan.observations) {
+					const selected = `SELECT revision FROM ${q(table(observation.collection))} WHERE id::text = ${c.p(observation.id)}`;
+					c.assert(
+						observation.revision === null
+							? `NOT EXISTS (${selected})`
+							: `coalesce((${selected}) = ${c.p(observation.revision)}, false)`,
+						'conflict',
+						JSON.stringify({ collection: observation.collection, ids: [observation.id] })
+					);
+				}
 				// the request as loaded, locked: a concurrent move on it waits, then finds it moved
 				c.cte(
 					'ap_authorize',
@@ -519,47 +622,15 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				c.cte(
 					'up',
 					`UPDATE bolt_approvals SET state = ${c.p(next.state)}, step = ${next.step}, log = log || jsonb_build_array(${c.p(entry)}::jsonb),
-	closed_at = ${c.p(open ? null : now)}::timestamptz WHERE id IN (SELECT id FROM ap_authorize) RETURNING id`
+	closed_at = ${c.p(open ? null : now)}::timestamptz${readGuards === undefined ? '' : `, route = jsonb_set(route, '{__boltReadGuardRefresh}', to_jsonb(${c.p(refreshKey)}::text))`} WHERE id IN (SELECT id FROM ap_authorize) RETURNING id`
 				);
 				c.cte(
 					'pr',
 					`UPDATE approval_request SET status = ${c.p(STATUS[next.state])}, step = ${next.step},
-	approver_teams = ${c.p(open ? teamIds(a.route.steps[next.step]) : [])}::jsonb, superseder_teams = ${c.p(open ? teamIds(a.route.superseded_by) : [])}::jsonb,
+	approver_teams = ${c.p(shown.teams)}::jsonb, approver_users = ${c.p(shown.users)}::jsonb, superseder_teams = ${c.p(shown.superseders)}::jsonb,
 	closed_at = ${c.p(open ? null : now)}::timestamptz, closed_by = ${c.p(open ? null : by)}, revision = revision + 1 WHERE id IN (SELECT id FROM up)`
 				);
-				if (notes.length > 0)
-					noticeInsert(
-						c,
-						'ap_notice',
-						notes,
-						now,
-						'EXISTS (SELECT 1 FROM up)',
-						m.teams,
-						m.workspace.signup?.policies
-					);
-				// the change stands: the outbound sends its held records deferred are queued now, from their current rows
-				const sending = a.records.filter(
-					(r) => r.op !== 'delete' && outboundFrom(m).has(r.collection)
-				);
-				if ((next.state === 'Approved' || next.state === 'Superseded') && sending.length > 0)
-					outboundPiece(
-						m,
-						c,
-						now,
-						new Set(sending.map((r) => r.collection)),
-						c.cte(
-							'ap_out',
-							[...new Set(sending.map((r) => r.collection))]
-								.map(
-									(collection) =>
-										`SELECT ${c.p(collection)}::text AS c, t.id::text AS id, t.revision, r.op, 'direct'::text AS cause, false AS erased,
-		NULL::jsonb AS o, to_jsonb(t) AS n FROM ${q(cat.collections.get(collection)?.model.name ?? collection)} t
-		JOIN jsonb_to_recordset(${c.p(sending.filter((s) => s.collection === collection).map(({ id, op }) => ({ id, op })))}::jsonb) AS r(id text, op text)
-			ON t.id::text = r.id WHERE EXISTS (SELECT 1 FROM up)`
-								)
-								.join(' UNION ALL ')
-						)
-					);
+				if (stands) standing(c, a, auth.actor, now);
 				c.assert(
 					'(SELECT count(*) FROM up) = 1',
 					'conflict',
@@ -567,7 +638,36 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				);
 			}
 		});
-		const result = yield* Effect.result(db.returning(CommitAnswer, statement));
+		const lockedTables = [
+			...new Set([
+				...(readGuards?.tables ?? []),
+				...plan.observations.map((observation) => observation.collection),
+				...affectedTables(m, cat, plan.writes),
+				'bolt_approvals',
+				'approval_request'
+			])
+		].sort();
+		const decisionLock: Lock | undefined =
+			readGuards === undefined && plan.observations.length === 0
+				? undefined
+				: { tables: lockedTables, mode: 'SHARE ROW EXCLUSIVE' };
+		const result = yield* Effect.result(
+			db
+				.transaction({
+					statements: [
+						...statement,
+						...(readGuards === undefined
+							? []
+							: [readGuardBaseline(a.id, readGuards, readGuards.sourceEpoch, refreshKey)])
+					],
+					...(decisionLock === undefined ? {} : { lock: decisionLock })
+				})
+				.pipe(
+					Effect.flatMap((answers) =>
+						decodeRows(CommitAnswer, answers[statement.length - 1] ?? { rows: [], affected: 0 })
+					)
+				)
+		);
 		if (Result.isFailure(result)) {
 			const outcome = decided(result.failure, constraintsOf(m)).outcome;
 			return outcome.kind === 'refused' || outcome.kind === 'conflict'
@@ -578,7 +678,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		if (answer?.approval_decided !== 1) return conflict(a.id);
 		yield* options.committed?.(answer) ?? Effect.void;
 		yield* options.changed?.(a.id, a.records) ?? Effect.void;
-		return { kind: 'decided', requestId: a.id, status: STATUS[next.state] };
+		return { kind: 'decided', requestId: a.id, status: next.state };
 	});
 
 	const list = Effect.fn('Approvals.list')(function* (
@@ -609,62 +709,74 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			if (participant(a, auth) || a.requestor === me || (yield* readable(a.collection, a.record)))
 				seen.push(a);
 		}
-		const refs = [...new Set(seen.flatMap((a) => [a.requestor, ...a.log.map((d) => d.by)]))]
-			.filter((x) => x.startsWith('member:'))
-			.map((x) => x.slice('member:'.length));
+		const member = 'member:';
+		const ids = [
+			...new Set(
+				seen.flatMap((a) => [
+					...[a.requestor, ...a.log.map((d) => d.by)]
+						.filter((x) => x.startsWith(member))
+						.map((x) => x.slice(member.length)),
+					...a.route.steps.flatMap((s) => s.users)
+				])
+			)
+		];
 		const names =
-			refs.length === 0
+			ids.length === 0
 				? []
 				: yield* db.rows(Schema.Struct({ id: Schema.String, name: Schema.NullOr(Schema.String) }), {
-						text: `SELECT id::text AS id, name FROM sys_user WHERE id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
-						params: [JSON.stringify(refs)]
+						text: `SELECT id::text AS id, coalesce(name, email) AS name FROM sys_user WHERE id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+						params: [JSON.stringify(ids)]
 					});
-		const name = new Map(names.map((n) => [`member:${n.id}`, n.name]));
-		const who = (ref: string): Who => ({ ref, name: name.get(ref) ?? null });
+		const name = new Map(names.map((n) => [n.id, n.name]));
+		const who = (ref: string): Who => ({
+			ref,
+			name: ref.startsWith(member) ? (name.get(ref.slice(member.length)) ?? null) : null
+		});
 		const teamCatalogue = teams(m);
-		return yield* Effect.forEach(seen, (a) =>
-			Effect.map(sourceGone(a), (gone): ApprovalView => ({
-				id: a.id,
-				collection: a.collection,
-				record: a.record,
-				action: a.action,
-				at: a.at,
-				status: STATUS[a.state],
-				step: a.step,
-				steps: a.route.steps,
-				superseded_by: a.route.superseded_by,
-				teamNames: Object.fromEntries(
-					[...new Set([...a.route.steps.flat(), ...a.route.superseded_by])].map((handle) => [
+		return seen.map((a): ApprovalView => ({
+			id: a.id,
+			collection: a.collection,
+			record: a.record,
+			action: a.action,
+			at: a.at,
+			status: a.state,
+			step: a.step,
+			steps: a.route.steps,
+			superseded_by: a.route.superseded_by,
+			teamNames: Object.fromEntries(
+				[...new Set([...a.route.steps.flatMap((s) => s.teams), ...a.route.superseded_by])].map(
+					(handle) => [
 						handle,
 						Object.hasOwn(teamCatalogue, handle) ? (teamCatalogue[handle]?.name ?? handle) : handle
-					])
-				),
-				requestor: who(a.requestor),
-				log: a.log.map((d) => ({
-					move: d.move,
-					by: who(d.by),
-					at: d.at,
-					from: d.from === null ? null : STATUS[d.from],
-					to: STATUS[d.to],
-					step: d.step,
-					reason: d.reason,
-					rolledBack: d.rolledBack,
-					skipped: d.skipped
-				})),
-				records: a.records.map(({ collection, id, op }) => ({ collection, id, op })),
-				moves: movesFor(a.state, rolesOf(a, auth), gone).map(({ move, reason }) => ({
-					status: STATUS_OF[move],
-					reason
-				})),
-				mine: a.requestor === me,
-				participant: participant(a, auth)
-			}))
-		);
+					]
+				)
+			),
+			userNames: Object.fromEntries(
+				[...new Set(a.route.steps.flatMap((s) => s.users))].map((id) => [id, name.get(id) ?? id])
+			),
+			requestor: who(a.requestor),
+			log: a.log.map((d) => ({
+				move: d.move,
+				by: who(d.by),
+				at: d.at,
+				from: d.from,
+				to: d.to,
+				step: d.step,
+				reason: d.reason,
+				changed: d.changed,
+				rolledBack: d.rolledBack,
+				skipped: d.skipped
+			})),
+			records: a.records.map(({ collection, id, op }) => ({ collection, id, op })),
+			moves: decisionsFor(a.state, rolesOf(a, auth)),
+			mine: a.requestor === me,
+			participant: participant(a, auth)
+		}));
 	});
 
 	return {
 		hook,
-		process,
+		decide,
 		list,
 		view: Effect.fn('Approvals.view')(function* (
 			requestId: string,
@@ -679,39 +791,24 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 const bindingOf = (m: EngineManifest, at?: string) =>
 	Effect.gen(function* () {
 		const now = at ?? new Date(yield* Clock.currentTimeMillis).toISOString();
-		return {
-			now,
-			today: localOf(Date.parse(now), m.workspace.tz).date,
-			tz: m.workspace.tz,
-			params: {}
-		};
+		return bindingsAt(now, m.workspace.tz);
 	});
 /** Source routing is a direct planner dependency; it never acquires Approvals or Writes. */
-export const approvalHook = (
-	manifest: EngineManifest,
-	db: TenantDbShape,
-	guest?: GuestShape
-): ApprovalHook =>
-	makeApprovals(manifest, db, { guest, bindings: (at) => bindingOf(manifest, at) }).hook;
+export const approvalHook = (manifest: EngineManifest, db: TenantDbShape): ApprovalHook =>
+	makeApprovals(manifest, db, { bindings: (at) => bindingOf(manifest, at) }).hook;
 export const ApprovalsLive = Layer.effect(
 	Approvals,
 	Effect.gen(function* () {
 		const manifest = yield* Manifest,
+			audit = yield* Audit,
+			activation = yield* Activation,
 			db = yield* TenantDb,
-			guest = yield* Guest,
 			live = yield* Live,
-			wake = yield* Wake,
-			links = yield* Links;
+			context = yield* Effect.context<Effect.Services<ReturnType<typeof committed>>>();
 		const area = makeApprovals(manifest, db, {
-			guest,
+			sourceEpoch: activation.release,
 			bindings: (at) => bindingOf(manifest, at),
-			committed: (answer) =>
-				committed(answer).pipe(
-					Effect.provideService(Live, live),
-					Effect.provideService(Wake, wake),
-					Effect.provideService(Links, links),
-					Effect.asVoid
-				),
+			committed: (answer) => committed(answer).pipe(Effect.provideContext(context), Effect.asVoid),
 			changed: (requestId, records) =>
 				Effect.sync(() => {
 					live.syncChanged('approval_request', [requestId]);
@@ -723,7 +820,22 @@ export const ApprovalsLive = Layer.effect(
 				})
 		});
 		return Approvals.of({
-			process: area.process,
+			decide: (input: DecideInput) =>
+				audited(
+					db,
+					{
+						category: 'approval',
+						action: input.decision,
+						actor: auditActor(input.authority.actor),
+						approval: input.requestId,
+						payload: encodeWire({
+							requestId: input.requestId,
+							decision: input.decision,
+							reason: input.reason
+						})
+					},
+					area.decide(input)
+				).pipe(Effect.provideService(Audit, audit)),
 			list: area.list,
 			view: (id, authority, readable) =>
 				area.view(id, authority, readable).pipe(Effect.map(Option.fromNullishOr))

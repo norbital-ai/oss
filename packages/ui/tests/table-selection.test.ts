@@ -4,11 +4,12 @@ import { Effect } from 'effect';
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach } from '@effect/vitest';
+import { vi } from 'vitest';
 import { viewFixture, browser } from './view-fixture.ts';
 import type { TableProps, TableSource } from '../src/table/Table.svelte';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
-const { flushSync, mount, tick, unmount } = await import('svelte');
+const { createRawSnippet, flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
@@ -27,8 +28,7 @@ afterEach(async () => {
 async function show(
 	rows: TableSource,
 	columns: TableProps['columns'] = ['name'],
-	onOpen?: TableProps['onOpen'],
-	layout?: TableProps['layout']
+	onOpen?: TableProps['onOpen']
 ) {
 	const calls: Value[] = [];
 	const { bolt } = await viewFixture();
@@ -44,7 +44,6 @@ async function show(
 				of: rows,
 				columns,
 				...(onOpen === undefined ? {} : { onOpen }),
-				...(layout === undefined ? {} : { layout }),
 				toolbar: {
 					title: false,
 					search: false,
@@ -127,6 +126,65 @@ it.live('select all uses record IDs rather than local row positions', () =>
 	})
 );
 
+it.live(
+	'controlled server pages retain supplied rows and order while default local views use URL filters',
+	() =>
+		Effect.gen(function* () {
+			const rows = [
+				{ id: 'b', name: 'Beta' },
+				{ id: 'a', name: 'Alpha' }
+			];
+			const { bolt } = yield* browser(() => viewFixture());
+			const footer = createRawSnippet(() => ({
+				render: () => '<span data-provided-footer>Previous page</span>'
+			}));
+			for (const [key, value, expected] of [
+				['q', 'Alpha', ['Alpha']],
+				['q', 'no matching event', []],
+				['where', '{"name":{"eq":"Alpha"}}', ['Alpha']],
+				['order', 'name:asc', ['Alpha', 'Beta']]
+			] as const) {
+				for (const controlled of [false, true]) {
+					const params = new URLSearchParams({
+						[`server-page.${key}`]: value,
+						'elsewhere.q': 'keep'
+					});
+					history.replaceState(null, '', `/?${params}`);
+					const target = document.body.appendChild(document.createElement('div'));
+					const app = mount(Harness, {
+						target,
+						props: {
+							bolt,
+							catalog: {},
+							part: 'table',
+							props: {
+								of: rows,
+								columns: ['name'],
+								key: 'server-page',
+								toolbar: false,
+								controlled,
+								footer
+							}
+						}
+					});
+					try {
+						yield* browser(() => settle());
+						assert.deepEqual(
+							[...target.querySelectorAll('tbody tr')].map((row) => textOf(row).trim()),
+							controlled ? ['Beta', 'Alpha'] : expected
+						);
+						if (controlled) assert.equal(location.search, `?${params}`);
+						assert.ok(target.querySelector('[data-table-footer] [data-provided-footer]'));
+					} finally {
+						yield* browser(() => unmount(app));
+						target.remove();
+					}
+				}
+			}
+			history.replaceState(null, '', '/');
+		})
+);
+
 for (const [label, rows] of [
 	['missing IDs', [{ name: 'January' }]],
 	['blank IDs', [{ id: ' ', name: 'January' }]]
@@ -200,7 +258,13 @@ for (const [label, input, expected] of [
 				await unmount(app);
 				target.remove();
 			});
-			yield* browser(() => settle());
+			yield* browser(() =>
+				vi.waitFor(async () => {
+					flushSync();
+					await tick();
+					assert.equal(textOf(target).includes('Resin A'), true);
+				})
+			);
 			assert.deepEqual(calls, [{ name: 'stock.availability', args: expected }]);
 			assert.equal(textOf(target).includes('Resin A'), true);
 		})
@@ -238,28 +302,5 @@ it.live('phone cards reveal extra report values without opening the row', () =>
 		element<HTMLElement>(extra, 'summary').click();
 		yield* browser(() => settle());
 		assert.equal(extra.open, false);
-	})
-);
-
-it.live('financial grid keeps all columns and right-aligned amounts on narrow screens', () =>
-	Effect.gen(function* () {
-		const { target } = yield* browser(() =>
-			show(
-				[{ name: 'Sales', amount: '12.00' }],
-				['name', { field: 'amount', align: 'end' }],
-				undefined,
-				'grid'
-			)
-		);
-		assert.equal(target.querySelector('[data-table-list]'), null);
-		assert.equal(
-			element<HTMLElement>(target, '[data-table-wide]').classList.contains('hidden'),
-			false
-		);
-		assert.ok(
-			element<HTMLElement>(target, '[data-table-wide] tbody td:last-child').classList.contains(
-				'tabular-nums'
-			)
-		);
 	})
 );

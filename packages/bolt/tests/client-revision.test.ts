@@ -20,7 +20,7 @@ it.effect('a revision get sends { revision } and leaves the ledger at the live r
 			sent.push({ url: request.url, body });
 			if ('reads' in body) {
 				const read = present(body.reads[0]);
-				const revision = Schema.decodeUnknownSync(Revision)(read.a[2] ?? {}).revision;
+				const revision = Schema.decodeUnknownSync(Revision)(read.a[1] ?? {}).revision;
 				return Response.json({
 					answers: [
 						{ id: 'j1', revision: revision ?? 3, title: revision === undefined ? 'live' : 'past' }
@@ -38,18 +38,18 @@ it.effect('a revision get sends { revision } and leaves the ledger at the live r
 			locale: 'en',
 			fetch
 		});
-		expect(yield* bolt.get('jobs', 'j1')).toMatchObject({ revision: 3, title: 'live' });
-		expect(yield* bolt.get('jobs', 'j1', undefined, { revision: 1 })).toMatchObject({
+		expect(yield* bolt.query('jobs', { id: 'j1' })).toMatchObject({ revision: 3, title: 'live' });
+		expect(yield* bolt.query('jobs', { id: 'j1', revision: 1 })).toMatchObject({
 			revision: 1,
 			title: 'past'
 		});
 		expect(Schema.decodeUnknownSync(QBody)(present(sent[1]).body).reads[0]).toEqual({
-			m: 'get',
-			a: ['jobs', 'j1', { revision: 1 }]
+			m: 'query',
+			a: ['jobs', { id: 'j1', revision: 1 }]
 		});
 		expect(Schema.decodeUnknownSync(QBody)(present(sent[0]).body).reads[0]).toEqual({
-			m: 'get',
-			a: ['jobs', 'j1']
+			m: 'query',
+			a: ['jobs', { id: 'j1' }]
 		});
 		yield* Effect.flip(bolt.act('jobs.update', { target: 'j1', set: { title: 'x' } }));
 		expect(Schema.decodeUnknownSync(ActBody)(present(sent[2]).body).observed).toEqual({ j1: 3 });
@@ -83,9 +83,9 @@ it.effect(
 				locale: 'en',
 				fetch
 			});
-			yield* bolt.get('jobs', 'j1');
+			yield* bolt.query('jobs', { id: 'j1' });
 			revision = 4;
-			yield* bolt.get('jobs', 'j1');
+			yield* bolt.query('jobs', { id: 'j1' });
 			const outcome = yield* Effect.flip(
 				bolt.act('jobs.update', { target: 'j1', set: { title: 'draft' } }, { observed: { j1: 3 } })
 			);

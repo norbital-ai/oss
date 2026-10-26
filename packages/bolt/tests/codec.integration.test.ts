@@ -1,19 +1,21 @@
 // The value codec on PGlite: periods written on every path (act, nested relation action, seed restore), and the
-// transform's `existing` handed over in wire form (X-11, rule 70, §5.8).
+// update callback's `before` handed over in wire form (X-11, rule 70, §5.8).
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { CrossAnswer, Invocation, Outcome } from '../src/engine/contracts.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { fromStore } from '../src/protocol/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Guest, type Bridge, type GuestShape } from '../src/engine/services.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
-import { seed } from '../src/engine/write/seed.ts';
+import { restoreSource, seed } from '../src/engine/write/seed.ts';
 import { readEngine } from '../src/engine/query/engine.ts';
-import { read, where } from '../src/protocol/ir.ts';
+import { read } from '../src/protocol/reads.ts';
+import { where } from '@norbital-ai/store';
 import { evaluate } from '../src/engine/query/eval.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
@@ -73,7 +75,7 @@ const idOf = (o: Outcome) => {
 };
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, plan(null, manifest), { accept: true });
+	yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 	let n = 0;
 	const run = (
 		over: Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>,
@@ -161,7 +163,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 			yield* seed(
 				manifest,
 				db,
-				{
+				restoreSource({
 					shifts: [
 						{
 							id: '0199a000-0000-7000-8000-000000000001',
@@ -169,7 +171,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 							span: { from: '2025-01-01', to: null }
 						}
 					]
-				},
+				}),
 				NOW
 			);
 			expect(yield* stored()).toEqual([{ name: 's', span: '[2025-01-01,)', slot: null }]);
@@ -177,9 +179,9 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 	);
 });
 
-describe('codec: the transform reads `existing` in wire form (§5.8)', () => {
+describe('codec: the update callback reads `before` in wire form (§5.8)', () => {
 	it.effect(
-		'an update hands the guest the stored row as `db.read` would: ISO ends, not range text',
+		'an update hands the guest the stored row as `db.query` would: ISO ends, not range text',
 		() =>
 			Effect.gen(function* () {
 				const { run } = yield* CodecFixture;
@@ -195,17 +197,37 @@ describe('codec: the transform reads `existing` in wire form (§5.8)', () => {
 						Effect.die(new Error('This fixture does not execute supplied guest programs.')),
 					invoke: (inv: Invocation) =>
 						Effect.sync(() => {
-							seen = inv.ctx.existing?.[0] ?? null;
-							const inputs = Schema.decodeUnknownSync(Schema.Array(Schema.Json))(inv.input);
-							const input = inputs[0];
-							if (input === undefined) throw new Error('No transform input');
-							return { kind: 'ok', output: [input], cpuMs: 0 };
+							expect(inv.kind).toBe('update');
+							const changes = Schema.decodeUnknownSync(
+								Schema.Array(
+									Schema.Struct({
+										before: Schema.Json,
+										set: Schema.Json
+									})
+								)
+							)(inv.input);
+							const change = changes[0];
+							if (change === undefined) throw new Error('No update callback input');
+							seen = change.before;
+							return { kind: 'ok', output: [change.set] };
 						})
 				};
 				committed(
 					(yield* run(
 						{ verb: 'update', input: { target: id, set: { name: 'b' } } },
-						{ guest, transforms: new Set(['shifts']) }
+						{
+							guest,
+							manifest: {
+								...manifest,
+								collections: {
+									...manifest.collections,
+									shifts: {
+										read: { fields: 'all' },
+										update: { input: { columns: cols }, transform: true }
+									}
+								}
+							}
+						}
 					)).outcome
 				);
 				expect(seen).toMatchObject({
@@ -229,14 +251,14 @@ describe('codec: `Where` says a json list is empty', () => {
 				yield* seed(
 					manifest,
 					db,
-					{
+					restoreSource({
 						shifts: [
 							{ id: id(1), name: 'empty', span, notes: [] },
 							{ id: id(2), name: 'none', span },
 							{ id: id(3), name: 'full', span, notes: ['x'] },
 							{ id: id(4), name: 'object', span, notes: { a: 1 } }
 						]
-					},
+					}),
 					NOW
 				);
 				const cat = catalogOf(manifest),
@@ -259,7 +281,9 @@ describe('codec: `Where` says a json list is empty', () => {
 				});
 				expect(yield* names(true)).toEqual(['empty', 'none']);
 				expect(yield* names(false)).toEqual(['full']);
-				const p = where(cat, 'shifts', { notes: { isEmpty: true } });
+				const p = yield* where(cat, 'shifts', { notes: { isEmpty: true } }).pipe(
+					Effect.mapError(fromStore)
+				);
 				expect(
 					[[], null, ['x'], { a: 1 }].map((notes) =>
 						evaluate({ cat, bindings: b, authority: null }, 'shifts', p, { id: id(9), notes })
@@ -269,7 +293,7 @@ describe('codec: `Where` says a json list is empty', () => {
 	);
 });
 
-describe('codec: the MY-nihon payroll read pattern fits one transform (rule 72)', () => {
+describe('codec: the MY-nihon payroll read pattern fits one declared query (rule 72)', () => {
 	it.live(
 		'two waves, 7.1 MB of statutory rules paged 4 rows a crossing with `select`: under 40 crossings, 4 MiB each, 32 MiB read',
 		() =>
@@ -316,16 +340,16 @@ describe('codec: the MY-nihon payroll read pattern fits one transform (rule 72)'
 					// world.ts: wave 1 (9 reads by company), wave 2 (16 reads by people, plus the lineage's schemes 4 rows a page)
 					const source = `import { Effect } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
-export default { collection: { schemes: { bodies: { transform: function* (inputs, ctx) {
-	const small = (n) => Effect.all(Array.from({ length: n }, () => ctx.db.read('people', { where: { name: { like: 'p%' } }, all: true })), { concurrency: 'unbounded' });
+export default { collection: { schemes: { bodies: { queries: { payroll: function* (input, ctx) {
+	const small = (n) => Effect.all(Array.from({ length: n }, () => ctx.query('people', { where: { name: { like: 'p%' } }, all: true })), { concurrency: 'unbounded' });
 	yield* small(9);
 	const pages = () => Effect.gen(function* () { const rows = []; let after = null;
-		do { const p = yield* ctx.db.read('schemes', { select: { code: true, rules: true, rate: true }, orderBy: 'code', limit: 4, ...(after === null ? {} : { after }) }); rows.push(...p.rows); after = p.next; } while (after !== null);
+		do { const p = yield* ctx.query('schemes', { select: { code: true, rules: true, rate: true }, orderBy: 'code', limit: 4, ...(after === null ? {} : { after }) }); rows.push(...p.rows); after = p.next; } while (after !== null);
 		return rows; });
 	const [schemes, people] = yield* Effect.all([pages(), small(16)], { concurrency: 'unbounded' });
 	const bytes = schemes.reduce((n, s) => n + s.rules[0].when.length, 0);
 	return [{ schemes: schemes.length, people: people[0].rows.length, bytes, authority: schemes.some((s) => 'authority' in s), since: typeof people[0].rows[0].since, rate: schemes[0].rate instanceof Decimal, rateText: schemes[0].rate.toString() }];
-} } } } };`;
+} } } } } };`;
 					const context = yield* Layer.build(
 						TestWorkspace.layer({ manifest: m, guest: yield* program(source), now: NOW })
 					);
@@ -334,7 +358,7 @@ export default { collection: { schemes: { bodies: { transform: function* (inputs
 					yield* seed(
 						m,
 						db,
-						{
+						restoreSource({
 							schemes: sizes.map((bytes, i) => ({
 								id: uuid(i),
 								code: `S${String(i).padStart(2, '0')}`,
@@ -347,7 +371,7 @@ export default { collection: { schemes: { bodies: { transform: function* (inputs
 								name: `p${i}`,
 								since: '2024-01-01'
 							}))
-						},
+						}),
 						NOW
 					);
 					const reads = readEngine({ db, manifest: m }),
@@ -370,19 +394,17 @@ export default { collection: { schemes: { bodies: { transform: function* (inputs
 					};
 					const inv: Invocation = {
 						id: 'payroll',
-						kind: 'transform',
-						target: 'schemes',
-						input: [{}],
+						kind: 'query',
+						target: 'schemes.payroll',
+						input: {},
 						ctx: {
 							actor: admin.actor,
 							now: NOW,
 							today: TODAY,
 							tz: 'UTC',
-							seed: 's',
-							existing: [null]
+							seed: 's'
 						},
 						budget: {
-							cpuMs: LIMITS.guestCpuMs,
 							crossings: LIMITS.crossings.sync,
 							readBytes: LIMITS.readBytes
 						}
@@ -401,7 +423,6 @@ export default { collection: { schemes: { bodies: { transform: function* (inputs
 						}
 					]);
 					expect(batches.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(LIMITS.crossings.sync);
-					expect(o.cpuMs).toBeLessThan(LIMITS.guestCpuMs);
 				})
 			)
 	);

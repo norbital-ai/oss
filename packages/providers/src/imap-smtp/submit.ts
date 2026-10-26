@@ -1,7 +1,7 @@
 import { createTransport } from 'nodemailer';
 import { Effect, FiberSet, Scope } from 'effect';
 import type { OutboundAttachment } from '@norbital-ai/bolt/engine';
-import { connectPublic } from '@norbital-ai/bolt/engine';
+import { connectPublic } from '@norbital-ai/bolt/node';
 import type { Socket } from 'node:net';
 import { checkServerIdentity } from 'node:tls';
 import { ProviderRefused } from '../errors.ts';

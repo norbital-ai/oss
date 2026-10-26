@@ -1,25 +1,39 @@
 // @vitest-environment happy-dom
 // Runtime gaps the template migration found (§5.8, §5.8.1, §3.3.5, rules 55, 56): `ctx.progress` in automations, stopping
 // a queued or running run (the engine, the shell route and `$bolt.runs.stop`), the files facility over the host's files
-// port (put, get, meta and url, seeded files included), and a pipeline import's bodies carried by `bolt check`.
+// port (put, get, meta and url, seeded files included), and a file sync's bodies carried by `bolt check`.
 import './setup-happy-dom.js';
 import { randomUUID } from 'node:crypto';
 import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from '@effect/vitest';
-import { Context, Deferred, Effect, Fiber, FiberSet, Layer, Option, Result, Schema } from 'effect';
+import {
+	Context,
+	Deferred,
+	Effect,
+	Fiber,
+	FiberSet,
+	Layer,
+	Option,
+	Result,
+	Schema,
+	Stream
+} from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import type { Json } from '../src/decl/values.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { Callables, Runs } from '../src/engine/services.ts';
 import { Files, WebRead } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { TestWorkspace, type Kit } from '../src/test/index.ts';
+import { TestWorkspace, type Kit, type TestOptions } from '../src/test/index.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { program } from './support/guest-fixture.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
-import { loadPackWithAssets } from '../src/engine/artifact/read.ts';
-import { sha256Hex } from '../src/engine/write/sql.ts';
+import { packAssetLoader } from '../src/engine/artifact/read.ts';
+import { sourceOf } from '../src/engine/write/pack.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import { check } from '../src/compiler/check/index.ts';
 import { shellApi } from '../src/shell/runtime.ts';
 
@@ -34,7 +48,7 @@ const manifest = Result.getOrThrow(
 				label: 'title',
 				fields: {
 					title: { kind: 'text' },
-					file: { kind: 'file', accept: ['text/*'], max: '1MiB', optional: true }
+					file: { kind: 'file', accept: ['text/*'], max: '8MiB', optional: true }
 				}
 			},
 			secrets: {
@@ -53,7 +67,6 @@ const manifest = Result.getOrThrow(
 			secrets: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
 		},
 		integrations: {},
-		pipelines: {},
 		teams: { ops: ['ops'] },
 		connections: {},
 		envoys: {},
@@ -110,19 +123,20 @@ const required = <T>(value: T | undefined): T => {
 };
 const sql = (t: Kit, text: string, params: Json[] = []) =>
 	t.db.rows(Schema.Record(Schema.String, Schema.Json), { text, params });
-const setup = (web?: WebRead['Service']['read'], shell = false) =>
+const setup = (web?: WebRead['Service']['read'], shell = false, database?: TestOptions['db']) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest,
 				guest: yield* guest,
+				...(database === undefined ? {} : { db: database }),
 				...(web === undefined ? {} : { ports: Layer.succeed(WebRead, { read: web }) }),
 				...(shell
 					? {
 							host: {
 								publicUrl: 'https://acme.example',
 								secure: false,
-								workspace: { name: 'Acme', handle: 'acme' }
+								workspace: () => ({ name: 'Acme', handle: 'acme' })
 							}
 						}
 					: {})
@@ -377,70 +391,250 @@ describe('the files facility in automations (§5.8.1)', () => {
 		})
 	);
 
-	it.live('a seeded file carries its size and digest, and an automation reads its bytes', () =>
-		Effect.gen(function* () {
-			const { context, t, start } = yield* setup();
-			const dir = join(scratch, `pack-${randomUUID()}`);
-			mkdirSync(join(dir, 'assets', 'docs'), { recursive: true });
-			const bytes = new TextEncoder().encode('seeded'),
-				digest = sha256Hex(bytes);
-			writeFileSync(join(dir, 'assets', 'docs', 'seed.txt'), bytes);
-			yield* t.db.write({ text: 'DELETE FROM sys_run', params: [] });
-			const loaded = yield* loadPackWithAssets(
-				t.db,
-				manifest,
-				{
+	it.live(
+		'seed media uses bounded batches outside database transactions, retains each file and remains readable',
+		() =>
+			Effect.gen(function* () {
+				let active = 0;
+				let activeFiles = 0;
+				let openStreams = 0;
+				let batches = 0;
+				let puts = 0;
+				let streams = 0;
+				const storedBytes: number[] = [];
+				const database = Layer.effect(
+					TenantDb,
+					Effect.gen(function* () {
+						const pg = yield* PgliteDb.open();
+						const observed: PgliteClient = {
+							query: (text, params) => pg.query(text, params),
+							exec: (text) => pg.exec(text),
+							transaction: (body) => {
+								let entered = false;
+								return pg
+									.transaction(async (tx) => {
+										expect(activeFiles).toBe(0);
+										expect(openStreams).toBe(0);
+										entered = true;
+										active++;
+										batches++;
+										return await body(tx);
+									})
+									.finally(() => {
+										if (entered) active--;
+									});
+							}
+						};
+						return PgliteDb.make(observed);
+					})
+				).pipe(Layer.provide(Pristine.layer));
+				const { context, t, start } = yield* setup(undefined, false, database);
+				const originalFiles = Context.get(context, Files);
+				const files: Files['Service'] = {
+					...originalFiles,
+					put: (bytes, meta) =>
+						Effect.suspend(() => {
+							expect(active).toBe(0);
+							activeFiles++;
+							puts++;
+							storedBytes.push(bytes.byteLength);
+							return originalFiles.put(bytes, meta).pipe(
+								Effect.ensuring(
+									Effect.sync(() => {
+										activeFiles--;
+										expect(active).toBe(0);
+									})
+								)
+							);
+						})
+				};
+				const dir = join(scratch, `pack-${randomUUID()}`);
+				mkdirSync(join(dir, 'assets', 'docs'), { recursive: true });
+				const bytes = new TextEncoder().encode('seeded'),
+					digest = sha256Hex(bytes);
+				writeFileSync(join(dir, 'assets', 'docs', 'seed.txt'), bytes);
+				const extra = [2, 2, 2, 2, 6, 6].map((mib, index) => {
+					const bytes = new Uint8Array(mib * 1024 * 1024);
+					const path = `docs/extra-${index}.txt`;
+					writeFileSync(join(dir, 'assets', path), bytes);
+					return {
+						path,
+						bytes: bytes.byteLength,
+						sha256: sha256Hex(bytes),
+						contentType: 'text/plain'
+					};
+				});
+				yield* t.db.write({ text: 'DELETE FROM sys_run', params: [] });
+				const pack = sourceOf({
 					dir,
-					rows: { docs: [{ id: randomUUID(), title: 'S', file: { asset: 'docs/seed.txt' } }] },
+					rows: {
+						docs: [
+							{ id: randomUUID(), title: 'S', file: { asset: 'docs/seed.txt' } },
+							...extra.map((asset) => ({
+								id: randomUUID(),
+								title: asset.path,
+								file: { asset: asset.path }
+							}))
+						]
+					},
 					meta: {
 						format: 1,
 						name: 'base',
 						hash: 'h',
 						start: [],
-						rows: { docs: 1 },
-						assets: [{ path: 'docs/seed.txt', bytes: 6, sha256: digest, contentType: 'text/plain' }]
+						rows: { docs: 1 + extra.length },
+						assets: [
+							{ path: 'docs/seed.txt', bytes: 6, sha256: digest, contentType: 'text/plain' },
+							...extra
+						]
 					}
-				},
-				Context.get(context, Files),
-				t.clock.now()
-			).pipe(Effect.provide(node));
-			expect(loaded).toBe(true);
-			const [row] = yield* sql(t, `SELECT file FROM docs`);
-			expect(required(row)['file']).toMatchObject({
-				name: 'seed.txt',
-				mime: 'text/plain',
-				bytes: 6,
-				sha256: digest
-			});
-			yield* start('read_doc', { ref: required(required(row)['file']) });
-			yield* t.runDue();
-			expect(
-				(yield* sql(t, `SELECT state, output FROM sys_run WHERE automation = 'read_doc'`))[0]
-			).toMatchObject({ state: 'succeeded', output: { text: 'seeded', meta: { bytes: 6 } } });
-		})
+				});
+				const beforeLoad = batches;
+				const loader = yield* packAssetLoader(
+					t.db,
+					manifest,
+					{
+						...pack,
+						rows: (collection, from) =>
+							Stream.unwrap(
+								Effect.sync(() => {
+									expect(active).toBe(0);
+									openStreams++;
+									streams++;
+									return pack.rows(collection, from);
+								})
+							).pipe(
+								Stream.tap(() => Effect.sync(() => expect(active).toBe(0))),
+								Stream.ensuring(
+									Effect.sync(() => {
+										openStreams--;
+										expect(active).toBe(0);
+									})
+								)
+							)
+					},
+					files,
+					t.clock.now()
+				).pipe(Effect.provide(node));
+				let loaded: 'loaded' | 'hadRows' | 'more' = 'more';
+				let largestBatch = 0;
+				while (loaded === 'more') {
+					const before = puts;
+					loaded = yield* loader.step.pipe(Effect.provide(node));
+					const batch = storedBytes.slice(before);
+					largestBatch = Math.max(largestBatch, batch.length);
+					expect(batch.length).toBeLessThanOrEqual(4);
+					expect(
+						batch.length <= 1 || batch.reduce((sum, bytes) => sum + bytes, 0) <= 8 * 1024 * 1024
+					).toBe(true);
+				}
+				expect(loaded).toBe('loaded');
+				expect(largestBatch).toBe(4);
+				expect(puts).toBe(1 + extra.length);
+				expect(batches).toBeGreaterThan(beforeLoad);
+				expect(puts).toBeGreaterThan(0);
+				expect(streams).toBeGreaterThan(0);
+				expect(active).toBe(0);
+				expect(activeFiles).toBe(0);
+				expect(openStreams).toBe(0);
+				expect((yield* sql(t, `SELECT id FROM sys_file`)).length).toBe(1 + extra.length);
+				const [row] = yield* sql(t, `SELECT file FROM docs WHERE title = 'S'`);
+				expect(required(row)['file']).toMatchObject({
+					name: 'seed.txt',
+					mime: 'text/plain',
+					bytes: 6,
+					sha256: digest
+				});
+				yield* start('read_doc', { ref: required(required(row)['file']) });
+				yield* t.runDue();
+				expect(
+					(yield* sql(t, `SELECT state, output FROM sys_run WHERE automation = 'read_doc'`))[0]
+				).toMatchObject({ state: 'succeeded', output: { text: 'seeded', meta: { bytes: 6 } } });
+			})
 	);
 });
 
-describe('pipelines from source', () => {
+describe('file syncs from source', () => {
 	it.live(
-		'`bolt check` keeps the bodies a pipeline import declares, so the feed calls them',
+		'`bolt check` keeps file read, write and custom parser bodies on their model',
 		() =>
 			Effect.gen(function* () {
-				const root = copy('pipeline');
+				const root = copy('file-sync');
 				writeFileSync(
-					join(root, 'src/data/collection/customers/+pipeline.ts'),
-					`import { pipeline } from '@norbital-ai/bolt';
-export default pipeline('customers', { import: { description: 'Buyers from a sheet.',
-	input: { rows: { kind: 'list', of: { kind: 'object', fields: { name: { kind: 'text' } } } } },
-	records: (input) => input.rows, known: function* () { return {}; }, map: (r) => ({ name: r.name }),
-	related: { customers: () => [] }, check: function* () { return []; }, template: function* () { return []; } } });`
+					join(root, 'src/data/model/customers/+model.ts'),
+					`import { model, type Finding } from '@norbital-ai/bolt';
+export default model('customers', {
+	description: 'Buyers', label: 'name', key: ['name'],
+	fields: {
+		name: { kind: 'text' },
+		rating: { kind: 'custom', of: 'rating', optional: true },
+		order_count: { kind: 'count', of: 'orders' }
+	},
+	read: 'all',
+	create: { columns: ['name', 'rating'] },
+	update: { columns: ['name', 'rating'] },
+	syncs: {
+		sheet: {
+			with: 'file',
+			parser: ['csv', {
+				type: 'text/plain', extensions: ['.buyers'],
+				parse: function* buyerSheetParse(file, ctx) {
+					const text = yield* ctx.files.text(file);
+					return text.split('\\n').map((line, i) => {
+						const [name = '', related_name] = line.split('|');
+						return { name, related_name: related_name ?? null, $at: i + 1 };
+					});
+				}
+			}],
+			schema: {
+				name: { kind: 'text', label: 'Buyer name' },
+				related_name: { kind: 'text', optional: true }
+			},
+			read: function* buyerSheetRead({ records }, ctx) {
+				const names = records.map((r) => r.name.trim());
+				const known = yield* ctx.db.query('customers', {
+					where: { name: { in: names } }, select: { name: true }, all: true
+				});
+				const existing = new Set(known.rows.map((r) => r.name));
+				return {
+					rows: records.filter((r) => r.name.trim() !== '').map((r) => ({ name: r.name.trim() })),
+					findings: records.flatMap((r): Finding[] => r.name.trim() === ''
+						? [{ at: r.$at, field: 'name', message: 'A buyer name is required.', severity: 'refuse' }]
+						: existing.has(r.name.trim())
+							? [{ at: r.$at, field: 'name', message: 'This buyer already exists.', severity: 'warn' }]
+							: []),
+					related: { customers: records.flatMap((r) => {
+						const name = r.related_name?.trim();
+						return name ? [{ name }] : [];
+					}) }
+				};
+			},
+			write: function* buyerSheetExport(_, ctx) {
+				const buyers = yield* ctx.db.query('customers', {
+					select: { name: true }, orderBy: { name: 'asc' }, all: true
+				});
+				return buyers.rows.map((r) => ({ name: r.name, related_name: null }));
+			}
+		}
+	}
+});`
 				);
 				const c = yield* check(root).pipe(Effect.provide(node));
 				expect(c.errors).toEqual([]);
-				if (c.manifest === undefined) throw new Error('compiled manifest missing');
-				expect(c.manifest.pipelines['customers']).toMatchObject({
-					import: { known: true, check: true, template: true, related: { customers: true } }
+				if (c.manifest === undefined || c.guest === undefined)
+					throw new Error('compiled manifest or guest missing');
+				expect(c.manifest.collections['customers']?.syncs?.['sheet']).toMatchObject({
+					with: 'file',
+					parser: ['csv', { type: 'text/plain', extensions: ['.buyers'] }],
+					schema: {
+						name: { kind: 'text', label: 'Buyer name' },
+						related_name: { kind: 'text', optional: true }
+					},
+					read: true,
+					write: true
 				});
+				for (const body of ['buyerSheetParse', 'buyerSheetRead', 'buyerSheetExport'])
+					expect(c.guest.source).toContain(body);
 			}),
 		120_000
 	);

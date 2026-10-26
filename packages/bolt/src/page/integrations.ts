@@ -105,7 +105,7 @@ export function integrationClient(instance: string, options: Options = {}) {
 				).pipe(
 					Effect.flatMap((source) =>
 						Effect.sync(() => {
-							source.onmessage = (event) => {
+							source.onmessage = (event: MessageEvent<unknown>) => {
 								const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
 									event.data
 								);
@@ -150,7 +150,7 @@ export function integrationClients(options: Options = {}) {
 	let source: EventSource | null = null;
 	const open = () => {
 		const opened = new EventSource(`${options.base ?? BASE}?stream=1`);
-		opened.onmessage = (event) => {
+		opened.onmessage = (event: MessageEvent<unknown>) => {
 			const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(event.data);
 			const status = Option.isSome(parsed) ? decodeStatus(parsed.value) : null;
 			if (status === null) {

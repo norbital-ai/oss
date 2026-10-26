@@ -51,8 +51,14 @@ const convention = (root: string, path: string): boolean => {
  * Guard the actual transitive browser graph, before raw/url loaders can expose source bytes.
  * Canonicalize only discovered role files and modules Vite actually resolves; there is no directory scan.
  * Type-only imports are erased by Vite/Svelte before graph resolution and remain valid.
+ * A module the platform layer exposes (`platform`: resolved id → its import) is imported from the layer, never bundled
+ * again; the mapping sits here because this hook sees every import's final resolution.
  */
-export const clientImportBoundary = (root: string, files: readonly Discovered[]): Plugin => {
+export const clientImportBoundary = (
+	root: string,
+	files: readonly Discovered[],
+	platform: ReadonlyMap<string, string> = new Map()
+): Plugin => {
 	const canonical = new Map<string, Promise<string>>();
 	const canonicalPath = (path: string) => {
 		let pending = canonical.get(path);
@@ -103,8 +109,10 @@ export const clientImportBoundary = (root: string, files: readonly Discovered[])
 		async resolveId(id, importer, options) {
 			await guard(id, importer);
 			const resolved = await this.resolve(id, importer, { ...options, skipSelf: true });
-			if (resolved !== null) await guard(resolved.id);
-			return resolved;
+			if (resolved === null) return resolved;
+			await guard(resolved.id);
+			const shared = resolved.external ? undefined : platform.get(resolved.id);
+			return shared === undefined ? resolved : { id: shared, external: true };
 		},
 		// repository-health:allow EFF3 -- Guard resolved IDs before Vite's raw/url loaders read their bytes.
 		async load(id) {

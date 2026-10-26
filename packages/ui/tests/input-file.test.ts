@@ -47,8 +47,7 @@ it.live(
 			const props = reactive<ComponentProps<typeof Input>>({
 				readonly: true,
 				value: 0,
-				id: 'readonly-value',
-				class: 'test-value'
+				id: 'readonly-value'
 			});
 			const app = mount(Input, { target, props });
 			mounted.push(async () => {
@@ -57,7 +56,6 @@ it.live(
 			});
 			flushSync();
 			assert.equal(element(target, '#readonly-value[data-readonly]').textContent, '0');
-			assert.ok(element(target, '#readonly-value').classList.contains('test-value'));
 			assert.equal(target.querySelector('input'), null);
 			assert.equal(target.querySelector('button'), null);
 			props.value = 'Latest value';

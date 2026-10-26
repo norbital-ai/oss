@@ -1,10 +1,11 @@
-import { assert, it } from '@effect/vitest';
-import { Effect, FileSystem, Result } from 'effect';
+import { expect, it } from '@effect/vitest';
+import { Effect, FileSystem } from 'effect';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
+import * as NodePath from '@effect/platform-node/NodePath';
 import { join } from 'node:path';
 import { readPack } from '../src/engine/write/pack.ts';
 
-it.effect('a failed row decode releases its seed-pack file', () =>
+it.effect('a malformed rows line fails the pack read as a seed decode', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
@@ -22,25 +23,7 @@ it.effect('a failed row decode releases its seed-pack file', () =>
 				})
 			);
 			yield* fs.writeFileString(join(dir, 'rows', 'orders.jsonl'), '{\n');
-			let released = 0;
-			const watched: FileSystem.FileSystem = {
-				...fs,
-				open: (path, options) =>
-					fs.open(path, options).pipe(
-						Effect.tap(() =>
-							Effect.addFinalizer(() =>
-								Effect.sync(() => {
-									released++;
-								})
-							)
-						)
-					)
-			};
-			const result = yield* Effect.result(
-				readPack(dir).pipe(Effect.provideService(FileSystem.FileSystem, watched))
-			);
-			assert.isTrue(Result.isFailure(result));
-			assert.strictEqual(released, 1);
+			expect(yield* Effect.flip(readPack(dir))).toMatchObject({ code: 'seedDecode' });
 		})
-	).pipe(Effect.provide(NodeFileSystem.layer))
+	).pipe(Effect.provide(NodeFileSystem.layer), Effect.provide(NodePath.layer))
 );

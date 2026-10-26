@@ -53,6 +53,25 @@ const refused = (arm: string) =>
 		`PROBE uses \`${arm.replace('.', '\\.')}\`, which the front-end model cannot evaluate`
 	);
 
+it.effect('alias coverage reads JSONC without stripping wildcard path strings', () =>
+	Effect.sync(() => {
+		assert.deepEqual(
+			probe(
+				{ rule: { all: [{ kind: 'ImportDeclaration' }, { aliasCovered: true }] } },
+				{
+					'tsconfig.json': `{
+						// A wildcard may be followed by a path segment.
+						"compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*/index.ts"], }, },
+					}`,
+					'src/feature/panel/probe.ts': "import { value } from '../../lib/value/index.js';",
+					'src/lib/value/index.ts': 'export const value = 1;'
+				}
+			),
+			['src/feature/panel/probe.ts']
+		);
+	})
+);
+
 const TS_ONLY: Readonly<Record<string, unknown>> = {
 	pattern: { pattern: { context: 'foo()', selector: 'CallExpression' } },
 	nthChild: { nthChild: 1 },

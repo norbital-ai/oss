@@ -3,7 +3,7 @@ import { element } from './elements.ts';
 import { viewFixture, jsonRecord, type ViewScript, browser } from './view-fixture.ts';
 import { Deferred, Effect, Queue, Schema, Stream } from 'effect';
 // The toolbar's ⚡ menu: an author item is an icon, a name, a description and its handler; the menu keeps each row's
-// state (pending, done, failed in place and as a toast) and wires a collection's pipeline in by itself.
+// state (pending, done, failed in place and as a toast) and wires a collection's file sync in by itself.
 import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Json } from '@norbital-ai/std/wire';
@@ -369,32 +369,30 @@ it.live('a handler returning nothing closes the menu (it opened its own surface)
 	})
 );
 
-it.live(
-	'sync starts the declared integration feed instead of inferring a run from the collection name',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, started } = yield* browser(() => fakeBolt());
-			yield* browser(() =>
-				show({
-					bolt,
-					of: 'appointments',
-					catalog: {
-						appointments: {
-							label: ['name'],
-							fields: { name: { kind: 'text' } },
-							integration: 'google_calendar.events'
-						}
+it.live('sync starts the declared model sync by name', () =>
+	Effect.gen(function* () {
+		const { bolt, started } = yield* browser(() => fakeBolt());
+		yield* browser(() =>
+			show({
+				bolt,
+				of: 'appointments',
+				catalog: {
+					appointments: {
+						label: ['name'],
+						fields: { name: { kind: 'text' } },
+						syncs: { events: { kind: 'remote', with: 'google_calendar' } }
 					}
-				})
-			);
-			yield* browser(() => open());
-			yield* browser(() => press('sync'));
-			assert.deepEqual(started, [{ automation: 'google_calendar.events', input: {} }]);
-		})
+				}
+			})
+		);
+		yield* browser(() => open());
+		yield* browser(() => press('sync:events'));
+		assert.deepEqual(started, [{ automation: 'appointments.sync.events', input: {} }]);
+	})
 );
 
 it.live(
-	"a collection's import and export pipelines are rows of their own, run through the menu",
+	"a collection's import and export file syncs are rows of their own, run through the menu",
 	() =>
 		Effect.gen(function* () {
 			const { bolt, started } = yield* browser(() => fakeBolt());
@@ -402,7 +400,7 @@ it.live(
 				jobs: {
 					label: ['name'],
 					fields: { name: { kind: 'text' } },
-					pipeline: { import: 'Jobs from a JSON file', export: 'Every job as JSON' }
+					syncs: { sheet: { kind: 'file', parser: ['json'], import: true, export: ['json'] } }
 				}
 			};
 			const uploads: string[] = [];
@@ -413,9 +411,15 @@ it.live(
 				});
 			const target = yield* browser(() => show({ bolt, catalog, of: 'jobs', upload }));
 			yield* browser(() => open());
-			assert.ok(textOf(row('import')).includes('Jobs from a JSON file'));
-			yield* browser(() => press('export-pipeline'));
-			assert.deepEqual(started, [{ automation: 'jobs.pipeline', input: { mode: 'export' } }]);
+			assert.ok(textOf(row('import:sheet')).includes('Import'));
+			assert.equal(
+				element<HTMLInputElement>(target, '[data-view-import]').accept,
+				'.json,application/json'
+			);
+			yield* browser(() => press('export:sheet:json'));
+			assert.deepEqual(started, [
+				{ automation: 'jobs.sync.sheet', input: { mode: 'export', to: 'json' } }
+			]);
 			const input = element<HTMLInputElement>(target, '[data-view-import]');
 			Object.defineProperty(input, 'files', {
 				value: [new File(['[]'], 'jobs.json', { type: 'application/json' })],
@@ -423,9 +427,9 @@ it.live(
 			});
 			input.dispatchEvent(new Event('change', { bubbles: true }));
 			yield* browser(() => settle());
-			assert.deepEqual(uploads, ['jobs.$import']);
+			assert.deepEqual(uploads, ['jobs.sync.sheet']);
 			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.pipeline',
+				automation: 'jobs.sync.sheet',
 				input: { mode: 'import', file: 'f1' }
 			});
 			assert.equal(target.querySelectorAll<HTMLElement>('[data-run]').length, 2);
@@ -439,7 +443,7 @@ it.live(
 			const rows = new Map<string, RunRow>(),
 				subs = new Set<() => void>();
 			const set = (id: string, row: Omit<RunRow, 'id' | 'automation'>) => {
-				rows.set(id, { id, automation: 'jobs.pipeline', ...row });
+				rows.set(id, { id, automation: 'jobs.sync.sheet', ...row });
 				for (const notify of subs) notify();
 			};
 			const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
@@ -468,7 +472,7 @@ it.live(
 				jobs: {
 					label: ['name'],
 					fields: { name: { kind: 'text' } },
-					pipeline: { import: 'Jobs from a sheet' }
+					syncs: { sheet: { kind: 'file', import: true } }
 				}
 			};
 			const target = yield* browser(() =>
@@ -480,10 +484,10 @@ it.live(
 				})
 			);
 			yield* browser(() => open());
-			assert.ok(row('template'), 'the template row comes with the import');
-			yield* browser(() => press('template'));
+			assert.ok(row('template:sheet'), 'the template row comes with the import');
+			yield* browser(() => press('template:sheet'));
 			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.pipeline',
+				automation: 'jobs.sync.sheet',
 				input: { mode: 'template' }
 			});
 			const input = element<HTMLInputElement>(target, '[data-view-import]');
@@ -494,7 +498,7 @@ it.live(
 			input.dispatchEvent(new Event('change', { bubbles: true }));
 			yield* browser(() => settle());
 			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.pipeline',
+				automation: 'jobs.sync.sheet',
 				input: { mode: 'import', file: 'f1' }
 			});
 			const first = `run-${started.length}`;
@@ -508,12 +512,12 @@ it.live(
 				status: 'succeeded',
 				result: {
 					applied: false,
-					findings: [{ row: 3, column: 'Day', message: 'a holiday', severity: 'warn' }]
+					findings: [{ at: 3, field: 'Day', message: 'a holiday', severity: 'warn' }]
 				}
 			});
 			yield* browser(() => settle());
 			assert.ok(element<HTMLElement>(document, '[data-view-menu]'), 'the menu opens on findings');
-			assert.equal(row('import').dataset.status, 'review');
+			assert.equal(row('import:sheet').dataset.status, 'review');
 			assert.match(
 				textOf(element<HTMLElement>(document, '[data-import-findings]')),
 				/Row 3 · Day: a holiday/
@@ -521,7 +525,7 @@ it.live(
 			element<HTMLButtonElement>(document, '[data-import-accept]').click();
 			yield* browser(() => settle());
 			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.pipeline',
+				automation: 'jobs.sync.sheet',
 				input: { mode: 'import', file: 'f1', accept: true }
 			});
 			set(`run-${started.length}`, {
@@ -529,7 +533,7 @@ it.live(
 				result: { applied: true, created: 2, updated: 1, deleted: 0, findings: [] }
 			});
 			yield* browser(() => settle());
-			assert.equal(row('import').dataset.status, 'done');
+			assert.equal(row('import:sheet').dataset.status, 'done');
 			assert.deepEqual(
 				toasts.map((t) => [t.tone, t.text]),
 				[['success', '2 created, 1 updated, 0 deleted']]
@@ -551,13 +555,11 @@ it.live(
 			};
 			rows.set('run-1', {
 				id: 'run-1',
-				automation: 'jobs.pipeline',
+				automation: 'jobs.sync.sheet',
 				status: 'succeeded',
 				result: {
 					applied: false,
-					findings: [
-						{ row: 2, column: 'hours', message: 'expected an integer', severity: 'refuse' }
-					]
+					findings: [{ at: 2, field: 'hours', message: 'expected an integer', severity: 'refuse' }]
 				}
 			});
 			const { bolt } = yield* browser(() => fakeBolt({ runs }));
@@ -565,7 +567,7 @@ it.live(
 				jobs: {
 					label: ['name'],
 					fields: { name: { kind: 'text' } },
-					pipeline: { import: 'Jobs from a sheet' }
+					syncs: { sheet: { kind: 'file', import: true } }
 				}
 			};
 			const target = yield* browser(() =>
@@ -583,28 +585,28 @@ it.live(
 			});
 			input.dispatchEvent(new Event('change', { bubbles: true }));
 			yield* browser(() => settle());
-			assert.equal(row('import').dataset.status, 'failed');
+			assert.equal(row('import:sheet').dataset.status, 'failed');
 			assert.match(
-				textOf(element<HTMLElement>(row('import'), '[data-menu-error]')),
+				textOf(element<HTMLElement>(row('import:sheet'), '[data-menu-error]')),
 				/Nothing was imported/
 			);
 			assert.match(
 				textOf(element<HTMLElement>(document, '[data-import-findings]')),
-				/Row 2 · hours: expected an integer/
+				/Row 2 · Hours: expected an integer/
 			);
 			assert.equal(document.querySelector('[data-import-accept]'), null);
 			assert.equal(required(toasts.at(-1)).tone, 'error');
 		})
 );
 
-it.live("the toolbar's context rides on the pipeline's template and import runs", () =>
+it.live("the toolbar's context rides on the file sync's template and import runs", () =>
 	Effect.gen(function* () {
 		const { bolt, started } = yield* browser(() => fakeBolt());
 		const catalog: NonNullable<KindsHost['catalog']> = {
 			jobs: {
 				label: ['name'],
 				fields: { name: { kind: 'text' } },
-				pipeline: { import: 'Jobs from a sheet' }
+				syncs: { sheet: { kind: 'file', import: true } }
 			}
 		};
 		const target = yield* browser(() =>
@@ -617,9 +619,9 @@ it.live("the toolbar's context rides on the pipeline's template and import runs"
 			})
 		);
 		yield* browser(() => open());
-		yield* browser(() => press('template'));
+		yield* browser(() => press('template:sheet'));
 		assert.deepEqual(started.at(-1), {
-			automation: 'jobs.pipeline',
+			automation: 'jobs.sync.sheet',
 			input: { mode: 'template', context: { company_id: 'c1' } }
 		});
 		const input = element<HTMLInputElement>(target, '[data-view-import]');
@@ -630,7 +632,7 @@ it.live("the toolbar's context rides on the pipeline's template and import runs"
 		input.dispatchEvent(new Event('change', { bubbles: true }));
 		yield* browser(() => settle());
 		assert.deepEqual(started.at(-1), {
-			automation: 'jobs.pipeline',
+			automation: 'jobs.sync.sheet',
 			input: { mode: 'import', file: 'f1', context: { company_id: 'c1' } }
 		});
 	})
@@ -641,7 +643,7 @@ it.live(
 	'shared outcome feedback covers all action outcomes and honors localized success text',
 	() =>
 		Effect.gen(function* () {
-			const { notify } = yield* browser(() => import('../src/actions/notify.ts'));
+			const { notify } = yield* browser(() => import('../src/actions/outcome.ts'));
 			const bolt = { t: (key: string) => (key === 'Refused' ? key : 'Localized') };
 			const outcomes: Outcome[] = [
 				{ kind: 'committed', output: null, records: [] },
@@ -728,7 +730,7 @@ it.live('a template run the toolbar started saves its file once when it succeeds
 					jobs: {
 						label: ['name'],
 						fields: { name: { kind: 'text' } },
-						pipeline: { import: 'Jobs from a sheet' }
+						syncs: { sheet: { kind: 'file', import: true } }
 					}
 				},
 				of: 'jobs',
@@ -736,11 +738,11 @@ it.live('a template run the toolbar started saves its file once when it succeeds
 			})
 		);
 		yield* browser(() => open());
-		yield* browser(() => press('template'));
+		yield* browser(() => press('template:sheet'));
 		const succeed = () => {
 			rows.set('run-1', {
 				id: 'run-1',
-				automation: 'jobs.pipeline',
+				automation: 'jobs.sync.sheet',
 				status: 'succeeded',
 				result: {
 					file: {

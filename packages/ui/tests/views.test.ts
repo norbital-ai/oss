@@ -1,4 +1,5 @@
-import { required, browser } from './view-fixture.ts';
+import './dom.ts';
+import { required, textOf, browser } from './view-fixture.ts';
 import assert from 'node:assert/strict';
 import { it, vi } from '@effect/vitest';
 import { and, compact } from '../src/filter/scope.ts';
@@ -13,9 +14,11 @@ import { rangeText, searchRows, readTableState, writeTableState } from '../src/t
 import { readState, failed } from '../src/read/state.ts';
 import { rowsOps } from '../src/relations/operations.ts';
 import { series } from '../src/chart/series.ts';
-import { pageRead } from '../src/read/paging.ts';
+import type { Page } from '../src/collection/types.ts';
+import type { Query } from '../src/client/contract.ts';
+import { reactive } from './kit-state.svelte.js';
 import { heavySelect, listSelect, unref, refOf } from '../src/relations/select.ts';
-import { Deferred, Effect, Queue, Stream } from 'effect';
+import { Deferred, Effect, Queue } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { formatValue as show } from '../src/kinds/kind.ts';
 import { viewFixture } from './view-fixture.ts';
@@ -74,7 +77,7 @@ it.effect('table cursor and search round-trip through the URL', () =>
 	})
 );
 
-it.live('a later page stays live: one live read of every row up to it, sliced to its own', () =>
+it.live('a later page stays live through Query state; a restored cursor reads once', () =>
 	Effect.gen(function* () {
 		const lived: Json[] = [];
 		const { bolt } = yield* browser(() =>
@@ -94,19 +97,45 @@ it.live('a later page stays live: one live read of every row up to it, sliced to
 				}
 			})
 		);
-		const read = (limit: number, after?: string) =>
-			bolt.read('c', after === undefined ? { limit } : { limit, after });
-		const first = yield* Stream.runCollect(pageRead(bolt, read, 25, 0, null).pipe(Stream.take(1)));
-		assert.equal(first[0]?.rows.length, 25);
-		const third = yield* Stream.runCollect(pageRead(bolt, read, 25, 2, 'c2').pipe(Stream.take(1)));
-		assert.deepEqual(lived.at(-1), { limit: 75 });
-		assert.deepEqual(
-			third[0]?.rows.map((r) => r.id),
-			Array.from({ length: 25 }, (_, i) => String(50 + i))
-		);
-		const restored = yield* Stream.runCollect(pageRead(bolt, read, 25, null, 'c9'));
-		assert.equal(lived.length, 2);
-		assert.equal(restored[0]?.rows[0]?.id, 'once');
+		const { flushSync, mount, tick, unmount } = yield* browser(() => import('svelte'));
+		const { default: Harness } = yield* browser(() => import('./paging-harness.svelte'));
+		const settle = async () => {
+			for (let i = 0; i < 5; i++) {
+				flushSync();
+				await tick();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+		};
+		const state = reactive<{
+			read(limit: number, after?: string): Query<Page>;
+			index: number | null;
+			after: string | null;
+		}>({
+			read: (limit: number, after?: string) =>
+				bolt.query<Page>('c', after === undefined ? { limit } : { limit, after }),
+			index: 0,
+			after: null
+		});
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, { target, props: state });
+		const shown = () => textOf(target.querySelector('output'));
+		try {
+			yield* browser(settle);
+			assert.equal(shown(), Array.from({ length: 25 }, (_, i) => String(i)).join(','));
+			state.index = 2;
+			state.after = 'c2';
+			yield* browser(settle);
+			assert.deepEqual(lived.at(-1), { limit: 75 });
+			assert.equal(shown(), Array.from({ length: 25 }, (_, i) => String(50 + i)).join(','));
+			state.index = null;
+			state.after = 'c9';
+			yield* browser(settle);
+			assert.equal(lived.length, 2);
+			assert.equal(shown(), 'once');
+		} finally {
+			yield* browser(() => unmount(app));
+			target.remove();
+		}
 	})
 );
 

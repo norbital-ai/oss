@@ -23,16 +23,21 @@ import { FetchHttpClient, HttpClient } from 'effect/unstable/http';
 import { defaultProviders, toDrivers } from '@norbital-ai/providers';
 import { PairingInvalid } from '@norbital-ai/providers/errors';
 import { program } from '../../bolt/tests/support/guest-fixture.ts';
-import { CONTRACT } from '../../bolt/src/compiler/artifact/index.ts';
-import { artifactHash, treeHash, type ArtifactJson } from '../../bolt/src/engine/artifact/read.ts';
-import { sha256Hex } from '../../bolt/src/engine/write/sql.ts';
+import { prepareMigrations } from '../../bolt/src/compiler/migrations.ts';
+import {
+	artifactHash,
+	CONTRACT,
+	treeHash,
+	type ArtifactJson
+} from '../../bolt/src/engine/artifact/read.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import type { Json } from '../../bolt/src/decl/values.ts';
 import type { Provider } from '../../bolt/src/engine/integrations/driver.ts';
 import { instanceRequest } from '../../bolt/src/engine/integrations/instances.ts';
 import { fingerprint, schemaSlice } from '../../bolt/src/engine/schema/plan.ts';
 import { InstanceStatus } from '../../bolt/src/protocol/schema.ts';
-import { Drivers, Feeds, Reads, TenantDb } from '@norbital-ai/bolt/engine';
+import { Drivers, Reads, Syncs, TenantDb } from '@norbital-ai/bolt/engine';
 import { BoltConfig } from '../src/config.ts';
 import { httpProvider, sqlServerProvider } from '../src/drivers.ts';
 import type { sqlServerDatabase } from '../src/database.ts';
@@ -63,7 +68,6 @@ const manifest = {
 	},
 	policies: {},
 	automations: {},
-	pipelines: {},
 	teams: {},
 	integrations: {
 		calendar: { description: 'Google Calendar', driver: 'calendar' },
@@ -204,18 +208,18 @@ const network: typeof fetch = async (input, init) => {
 		bearer: headers.get('authorization')
 	});
 };
-const queries: { credential: Json; statement: string }[] = [];
+const queries: { credential: Json; operation: Json }[] = [];
 const database: ReturnType<typeof sqlServerDatabase> = {
 	query: (credential, request) =>
 		Effect.sync(() => {
-			queries.push({ credential, statement: request.statement });
+			queries.push({ credential, operation: request });
 			return { rows: [{ n: 1 }] };
 		})
 };
 const root = join(tmpdir(), 'norbital-scratch', `bolt-server-integrations-${randomUUID()}`),
 	artifact = join(root, 'artifact');
 const guest = `export default {
-	collection: { probe: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.read('sys_user', { limit: 1 }); } } } } },
+	collection: { probe: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.query('sys_user', { limit: 1 }); } } } } },
 	integration_definition: { erp: { bodies: { test: function* (ctx) { yield* ctx.request({ method: 'GET', path: '/health' }); } } } },
 };`,
 	compiledGuest = program(guest),
@@ -240,6 +244,7 @@ const config = () =>
 					BOLT_PORT: '0',
 					BOLT_PUBLIC_URL: 'http://localhost:3100',
 					BOLT_PGLITE_DIR: join(root, 'db'),
+					BOLT_AUDIT_DIR: join(root, 'audit'),
 					BOLT_FILES_PROVIDER: 'local',
 					BOLT_FILES_ENDPOINT: join(root, 'files'),
 					BOLT_GOOGLE_OAUTH_CLIENT_ID: 'host-google-client',
@@ -259,14 +264,13 @@ const writeFixture = Effect.gen(function* () {
 	if (compiled.sourceMap !== undefined)
 		yield* fs.writeFileString(join(artifact, 'guest.mjs.map'), compiled.sourceMap);
 	yield* fs.writeFileString(join(artifact, 'client', 'index.html'), '<!doctype html>');
+	yield* prepareMigrations(artifact, manifest, 'generate');
 	const body: Omit<ArtifactJson, 'hash'> = {
 		format: 1,
 		contract: CONTRACT,
 		handle: 'acme',
 		name: 'Acme',
 		schema: fingerprint(schemaSlice(manifest)),
-		transforms: [],
-		projections: [],
 		client: { entry: '', css: [] },
 		pages: {},
 		hashes: {
@@ -392,7 +396,8 @@ layer(
 			expect(authorize.origin).toBe('https://accounts.google.com');
 			expect(Object.fromEntries(authorize.searchParams)).toMatchObject({
 				client_id: 'host-google-client',
-				scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
+				scope:
+					'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
 				redirect_uri: 'http://localhost:3100/hooks/oauth/callback'
 			});
 			expect(JSON.stringify(paired)).not.toContain('host-google-secret');
@@ -595,7 +600,7 @@ layer(
 				expect(yield* t.state('erp')).toMatchObject({ state: 'connected', stored: true });
 				const current = t.current(),
 					links = Context.get(current.server.context, Drivers);
-				expect(yield* Context.get(current.server.context, Feeds).test('erp')).toBeUndefined();
+				expect(yield* Context.get(current.server.context, Syncs).test('erp')).toBeUndefined();
 				expect(
 					yield* instanceRequest({ manifest, db: current.db, links }, 'erp', {
 						method: 'GET',
@@ -686,11 +691,11 @@ layer(
 			).toBe(200);
 			expect(
 				yield* Context.get(t.current().server.context, Drivers)
-					.request('ledger', { statement: 'SELECT 1 AS n', parameters: {} })
+					.request('ledger', { op: 'values', values: { n: 1 } })
 					.pipe(Effect.timeout(1_000))
 			).toEqual({ rows: [{ n: 1 }] });
 			expect(queries).toEqual([
-				{ credential: 'Server=db;Database=ledger', statement: 'SELECT 1 AS n' }
+				{ credential: 'Server=db;Database=ledger', operation: { op: 'values', values: { n: 1 } } }
 			]);
 		})
 	);
@@ -741,7 +746,7 @@ layer(
 				yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
 				yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
 				const held = yield* Effect.forkChild(
-					t.call('POST', '/__bolt/q', { reads: [{ m: 'query', a: ['probe', 'hold', {}] }] })
+					t.call('POST', '/__bolt/q', { reads: [{ m: 'query', a: ['probe.hold', {}] }] })
 				);
 				yield* Deferred.await(entered);
 				let tested = false;

@@ -140,6 +140,13 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 	],
 	custom: [[{ kind: 'custom', of: 'money' }, json]],
 	id: [[{ kind: 'id', of: 'orders' }, fc.uuid()]],
+	ref: [
+		[{ kind: 'ref', to: 'orders' }, fc.string()],
+		[
+			{ kind: 'ref', to: ['orders', 'quotes'] },
+			fc.record({ collection: fc.constantFrom('orders', 'quotes'), id: fc.string() })
+		]
+	],
 	list: [
 		[
 			{ kind: 'list', of: { kind: 'decimal', scale: 2 }, max: 5 },

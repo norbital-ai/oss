@@ -2,16 +2,20 @@
 // body is marked `true`), decoded once at each boundary that reads one (`bolt check`, `readArtifact`). Its parts are the
 // decl types. `bolt check` proves an authored literal against its type (tsc over the source, then `Verify`), so a part
 // decodes as an object of its declared type, while the manifest's own shape (its parts, the workspace, the teams, the
-// connections and the agent text) decodes exactly: an unknown part, a part that is no object or a workspace without its
-// zone is `ManifestInvalid`. The accessors derive, once per manifest, what interiors recomputed and cast.
+// connections, the policies and the agent text) decodes exactly: an unknown part, a part that is no object or a workspace
+// without its zone is `ManifestInvalid`. The accessors derive, once per manifest, what interiors recomputed and cast.
 // Runtime imports stay off `contracts.ts`: it re-exports this module.
 import { Predicate, Result, Schema } from 'effect';
 import type { Manifest } from '../compiler/load.ts';
 import type { TeamData, TeamEntries, SourceTeam } from '../decl/access/team.ts';
-import type { CollectionSpec } from '../decl/collection.ts';
 import type { customField } from '../decl/custom-field.ts';
-import type { FieldKind, InputFields } from '../decl/fields.ts';
-import type { ModelSpec } from '../decl/model.ts';
+import type { FieldKind } from '../decl/fields.ts';
+import {
+	splitModel,
+	type CollectionSpec,
+	type ModelLiteral,
+	type ModelSpec
+} from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { EnvoySpec, mcp } from '../decl/runtime/agent.ts';
 import type { AppSpec, GroupSpec } from '../decl/runtime/app.ts';
@@ -22,44 +26,67 @@ import { SYSTEM } from '../system/index.ts';
 import { ManifestInvalid } from './errors.ts';
 
 // ── parts without a decl type of their own: the literal as the manifest holds it ──
-/** A `+*.policy.ts` literal; each collection's grant is the access compiler's to read (`access/authority.ts`). */
-type PolicyData = {
-	description: string;
-	grants: { readonly [collection: string]: { readonly [key: string]: unknown } };
-	automations?: readonly string[];
-	capabilities?: { readonly [kind: string]: readonly string[] };
-	limits?: { readonly [key: string]: unknown };
-};
-/** A `+pipeline.ts` literal; `records` and `map` are required bodies, the optional ones are marked when attached. */
-type PipelineData = {
-	import?: {
-		description: string;
-		input: InputFields;
-		context?: InputFields;
-		onConflict?: 'update' | 'keep';
-		known?: true;
-		related?: { readonly [relation: string]: true };
-		scope?: { by: readonly string[]; range?: string; of?: true };
-		check?: true;
-		template?: true;
-	};
-	export?: {
-		description: string;
-		select: readonly string[];
-		where?: object;
-		format: 'csv' | 'xlsx' | 'json';
-	};
-};
+/** A grant's scope: `true`, `'read'` (a write's read scope) or a `Where`. */
+const ScopeWhere = Schema.Union([Schema.Literal(true), Schema.Literal('read'), Schema.JsonObject]);
+/**
+ * `{ where?, fields?, previous?, approval? }`; a `Where` naming a model field of one of those names is told apart by
+ * `scopeObject`. `approval: true` marks the arm's approval flow, a callback the guest runs (`policy.<p>.grants.<model>.<op>.approval`).
+ */
+export const ScopeData = Schema.Struct({
+	where: Schema.optionalKey(ScopeWhere),
+	fields: Schema.optionalKey(Schema.Array(Schema.String)),
+	previous: Schema.optionalKey(ScopeWhere),
+	approval: Schema.optionalKey(Schema.Literal(true))
+});
+export type ScopeData = typeof ScopeData.Type;
+/** One operation's grant: `true`, `'read'`, a scope object or a bare `Where`. */
+const GrantArm = Schema.Union([
+	Schema.Literal(true),
+	Schema.Literal('read'),
+	ScopeData,
+	Schema.JsonObject
+]);
+export type GrantArm = typeof GrantArm.Type;
+/** A policy's grant on one collection, workspace-agnostic (the decl side is `Grant<C>`); `fields` is an identity grant's. */
+const GrantData = Schema.Struct({
+	via: Schema.optionalKey(Schema.String),
+	read: Schema.optionalKey(GrantArm),
+	history: Schema.optionalKey(GrantArm),
+	create: Schema.optionalKey(GrantArm),
+	update: Schema.optionalKey(GrantArm),
+	delete: Schema.optionalKey(GrantArm),
+	fields: Schema.optionalKey(Schema.Array(Schema.String)),
+	queries: Schema.optionalKey(Schema.Array(Schema.String)),
+	moves: Schema.optionalKey(
+		Schema.Union([Schema.Literal('all'), Schema.Record(Schema.String, Schema.Array(Schema.String))])
+	)
+});
+export type GrantData = typeof GrantData.Type;
+/** A `+*.policy.ts` literal; its grants decode here once, and the access compiler reads them (`access/authority.ts`). */
+const PolicyData = Schema.Struct({
+	description: Schema.String,
+	grants: Schema.Record(Schema.String, GrantData),
+	automations: Schema.optionalKey(Schema.Array(Schema.String)),
+	capabilities: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+	limits: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+});
 /** A definition's optional test body is marked in the engine projection. */
 type IntegrationData = IntegrationSpec & { readonly test?: true };
-/** A custom field's literal; `check` marks an attached `validate`. */
-type CustomFieldData = ReturnType<typeof customField>['spec'] & { check?: true };
+/** A custom field's literal; `check` marks its `validate`. */
+type CustomFieldData = Omit<ReturnType<typeof customField>['spec'], 'validate'> & { check?: true };
 
 /** A part the compiler proved against `T`: an object here. */
 const part = <T extends object>(identifier: string) =>
 	Schema.declare((u: unknown): u is T => Predicate.isObject(u), { identifier });
 const parts = <T extends object>(identifier: string) =>
 	Schema.Record(Schema.String, part<T>(identifier));
+const ModelData = part<ModelSpec>('model').check(
+	Schema.makeFilter((model) =>
+		model.was === undefined || typeof model.was === 'string'
+			? undefined
+			: 'was must be a previous model name'
+	)
+);
 
 // ── the parts decoded exactly ──
 const SecretDecl = Schema.Struct({
@@ -121,22 +148,35 @@ const Connection = Schema.Struct({
 	integration: Schema.String,
 	envoy: Schema.optionalKey(Schema.String)
 });
-/** `+agent.md`, `+agent.external.md` and the skills, as text. */
+/**
+ * A skill (compute model §3, "Running a file"): a folder of `SKILL.md`, its scripts and the pure-JavaScript packages it
+ * vendors, at most `SKILL_BYTES`. Its `SKILL.md` text, the digest of its tree (sha256 hex of the sorted
+ * `<path>\0<sha256 hex>` lines, `\n`-joined) and its file paths, sorted; the bytes are the artifact's `skills/<name>/`.
+ */
+export const SkillSchema = Schema.Struct({
+	text: Schema.String,
+	digest: Schema.String,
+	files: Schema.Array(Schema.String)
+});
+export type SkillSpec = typeof SkillSchema.Type;
+export const SKILL_BYTES = 10 * 1024 * 1024;
+/** The skill's text in its tree (in a workspace's source, the folder's `+skill.md`). */
+export const SKILL_FILE = 'SKILL.md';
+/** `+agent.md`, `+agent.external.md` (text) and the skills. */
 const Agent = Schema.Struct({
 	internal: Schema.optionalKey(Schema.String),
 	external: Schema.optionalKey(Schema.String),
-	skills: Schema.Record(Schema.String, Schema.String)
+	skills: Schema.Record(Schema.String, SkillSchema)
 });
 
 export const EngineManifestSchema = Schema.Struct({
 	workspace: Workspace,
-	models: parts<ModelSpec>('model'),
+	models: Schema.Record(Schema.String, ModelData),
 	relationships: parts<RelationshipSpec>('relationship'),
 	collections: parts<CollectionSpec>('collection'),
 	/** The workspace's integration definitions by name (bolt's conversation definitions are `SYSTEM.integrations`). */
 	integrations: parts<IntegrationData>('integration definition'),
-	pipelines: parts<PipelineData>('pipeline'),
-	policies: parts<PolicyData>('policy'),
+	policies: Schema.Record(Schema.String, PolicyData),
 	teams: Teams,
 	automations: parts<AutomationSpec>('automation'),
 	/** The named instances, by slot (the `sys_integration` id). */
@@ -145,7 +185,7 @@ export const EngineManifestSchema = Schema.Struct({
 	envoys: parts<EnvoySpec>('envoy'),
 	mcp: parts<ReturnType<typeof mcp>>('mcp server'),
 	apps: parts<AppSpec>('app'),
-	/** `+kiosk.ts` literals: standalone kiosks with their assigned policies. */
+	/** `+kiosk.ts` literals: standalone kiosks with their assigned policies and the origins that may frame them (`embed`). */
 	kiosks: Schema.optionalKey(parts<KioskSpec>('kiosk')),
 	/** `+group.ts` literals: nav groups of apps. */ // hook:shell
 	groups: Schema.optionalKey(parts<GroupSpec>('group')),
@@ -172,35 +212,82 @@ const specs = (role: Record<string, unknown>) =>
 	Object.fromEntries(Object.entries(role).map(([k, v]) => [k, literal(v)]));
 const defined = (o: Record<string, unknown>) =>
 	Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+/**
+ * A role whose literal carries a body (`integration`'s `test`, `customField`'s `validate`, `automation`'s `run`): the data
+ * without it, and `<as>: true` where the engine needs to know it exists. A body is a function, or the check serializer's `true`.
+ */
+const marked = (role: Record<string, unknown>, body: string, as?: string) =>
+	Object.fromEntries(
+		Object.entries(role).map(([name, v]) => {
+			const { [body]: fn, ...data } = object(literal(v));
+			return [name, as === undefined || fn === undefined ? data : { ...data, [as]: true }];
+		})
+	);
+/** A write arm's `approval` callback (`policy.<p>.grants.<model>.<op>.approval`, run in the guest) marked `true`. */
+const policyData = (p: unknown): unknown =>
+	Predicate.isObject(p) && 'grants' in p && Predicate.isObject(p.grants)
+		? {
+				...p,
+				grants: Object.fromEntries(
+					Object.entries(object(p.grants)).map(([model, grant]) => [
+						model,
+						Predicate.isObject(grant)
+							? Object.fromEntries(
+									Object.entries(object(grant)).map(([op, arm]) => [
+										op,
+										Predicate.isObject(arm) &&
+										'approval' in arm &&
+										typeof arm.approval === 'function'
+											? { ...arm, approval: true }
+											: arm
+									])
+								)
+							: grant
+					])
+				)
+			}
+		: p;
+/** A `model()` literal (the compiler proved it against its type); anything else is left to `decodeManifest` to refuse. */
+const isModelLiteral = (u: unknown): u is ModelLiteral =>
+	Predicate.isObject(u) && 'fields' in u && Predicate.isObject(u.fields);
+/** Each model literal split into the engine's three parts (`splitModel`): storage, its refs, and its exposure when it has `read`. */
+function modelParts(role: Record<string, unknown>) {
+	const models: { [name: string]: unknown } = {},
+		relationships: { [key: string]: unknown } = {},
+		collections: { [name: string]: unknown } = {};
+	for (const [name, v] of Object.entries(role)) {
+		const lit = literal(v);
+		if (!isModelLiteral(lit)) {
+			models[name] = lit;
+			continue;
+		}
+		const parts = splitModel(name, lit);
+		models[name] = parts.model;
+		Object.assign(relationships, parts.relationships);
+		if (parts.collection !== undefined) collections[name] = parts.collection;
+	}
+	return { models, relationships, collections };
+}
 /** P1's loaded manifest as the engine's, before `decodeManifest`: `+secrets.ts` joins the workspace as `secrets`. */
 export function projectManifest(m: Manifest): unknown {
 	const { connections = {}, ...workspace } = object(m.workspace['']);
 	const secrets = m.secrets[''];
 	return {
 		workspace: secrets === undefined ? workspace : { ...workspace, secrets },
-		models: specs(m.model),
-		relationships: m.relationship[''] ?? {},
-		collections: specs(m.collection),
-		integrations: Object.fromEntries(
-			Object.entries(m.integration_definition).map(([name, definition]) => {
-				const bodies = object(object(definition)['bodies']);
-				return [
-					name,
-					{ ...object(literal(definition)), ...(bodies['test'] === true ? { test: true } : {}) }
-				];
-			})
+		...modelParts(m.model),
+		integrations: marked(m.integration_definition, 'test', 'test'),
+		policies: Object.fromEntries(
+			Object.entries(m.policy).map(([name, v]) => [name, policyData(literal(v))])
 		),
-		pipelines: specs(m.pipeline),
-		policies: specs(m.policy),
 		teams: m.team[''] ?? {},
-		automations: specs(m.automation),
+		automations: marked(m.automation, 'run'),
 		connections,
 		envoys: specs(m.envoy),
 		mcp: specs(m.mcp),
 		apps: specs(m.app),
 		kiosks: specs(m.kiosk),
 		groups: specs(m.group),
-		customFields: specs(m.custom_field),
+		customFields: marked(m.custom_field, 'validate', 'check'),
 		agent: {
 			...defined({ internal: m.agent[''], external: m.agent_external[''] }),
 			skills: specs(m.skill)

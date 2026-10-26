@@ -9,12 +9,14 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import { Command, Flag } from 'effect/unstable/cli';
+import { Argument, Command, Flag } from 'effect/unstable/cli';
 import { ChildProcess } from 'effect/unstable/process';
+import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
 import { TemplateManifest } from '../protocol/schema.ts';
 import { readArtifact } from '../engine/artifact/read.ts';
 import { schemaSql } from '../compiler/artifact/index.ts';
+import { workers } from './test.ts';
 
 export const templateMetadataFile = 'norbital.template.json';
 export const templateRefNamespace = 'refs/heads/templates';
@@ -120,15 +122,15 @@ export const actualCounts = Effect.fn('bolt.templateCounts')(function* (director
 				total += 1;
 		return total;
 	});
-	const [collections, apps, automations] = yield* Effect.all(
+	const [models, apps, automations] = yield* Effect.all(
 		[
-			count('src/data/model', /^\+[^/]+\.model\.ts$/),
+			count('src/data/model', /^[^/]+\/\+model\.ts$/),
 			count('src/app', /(?:^|\/)\+app\.ts$/),
 			count('src/automation', /^\+[^/]+\.automation\.ts$/)
 		],
 		{ concurrency: 3 }
 	);
-	return { collections, apps, automations };
+	return { models, apps, automations };
 });
 export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 	root: string = process.cwd(),
@@ -227,12 +229,9 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 		const manifest = yield* json(Package, path.join(template.directory, 'package.json'));
 		if (manifest.private !== true)
 			return yield* fail(`Template ${template.slug} must remain a private application package.`);
-		for (const name of ['lint', 'check', 'build', 'test'])
+		for (const name of ['build', 'test'])
 			if (!manifest.scripts?.[name]?.trim())
 				return yield* fail(`Template ${template.slug} needs a ${name} script.`);
-		for (const name of ['prettier', 'prettier-plugin-svelte', 'svelte-check', 'typescript'])
-			if (manifest.devDependencies?.[name] === undefined)
-				return yield* fail(`Template ${template.slug} needs standalone dev dependency ${name}.`);
 		if (!exactVersion.test(manifest.dependencies?.['@norbital-ai/bolt'] ?? ''))
 			return yield* fail(
 				`Template ${template.slug} must pin @norbital-ai/bolt to an exact version.`
@@ -281,7 +280,7 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 				`Template ${template.slug} does not satisfy first-party peer pins:\n  ${problems.join('\n  ')}`
 			);
 		const counts = yield* actualCounts(template.directory);
-		for (const key of ['collections', 'apps', 'automations'] as const)
+		for (const key of ['models', 'apps', 'automations'] as const)
 			if (template.counts[key] !== counts[key])
 				return yield* fail(
 					`Template ${template.slug} declares ${template.counts[key]} ${key} in ${templateMetadataFile}; found ${counts[key]}.`
@@ -342,7 +341,7 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 				);
 		if (yield* fs.exists(path.join(template.directory, '.norbital', 'migrations')))
 			return yield* fail(
-				`${template.slug}: schema comes from the manifest, not maintained migrations`
+				`${template.slug}: committed migrations belong in migrations/, beside src/`
 			);
 		const artifactDir = path.join(template.directory, '.norbital', 'artifact');
 		if (yield* fs.exists(artifactDir)) {
@@ -524,16 +523,70 @@ export const changedSince = Effect.fn('bolt.templatesChanged')(function* (
 			)
 	);
 });
+// ponytail: a fixed bound; each template's build or projection peaks near 1 GB (the compiler, the checker), so half the
+// cores, at most 3
+const bound = Math.max(1, Math.min(3, Math.floor(availableParallelism() / 2)));
+/** A run's `Test Files` and `Tests` lines, one line. */
+const summary = (output: string) =>
+	stripVTControlCharacters(output)
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => /^(Test Files|Tests)\s/.test(line))
+		.join('; ');
+/**
+ * Every template (or those `only` names, by directory or handle) through its own `test` script, its own `bolt test`:
+ * standalone, on its own pins and its own Vitest. `bound` run at once and share the machine's workers.
+ */
+export const testTemplates = Effect.fn('bolt.templatesTest')(function* (
+	root: string = process.cwd(),
+	only?: readonly string[],
+	args: readonly string[] = []
+) {
+	const all = yield* discoverTemplates(root);
+	const unmatched = (only ?? []).filter(
+		(name) => !all.some((template) => template.slug === name || template.handle === name)
+	);
+	if (unmatched.length > 0) return yield* fail(`No template matched ${unmatched.join(', ')}.`);
+	const templates =
+		only === undefined
+			? all
+			: all.filter((template) => only.includes(template.slug) || only.includes(template.handle));
+	const concurrency = Math.min(bound, workers);
+	const share = `--maxWorkers=${Math.max(1, Math.floor(workers / concurrency))}`;
+	const failed = yield* Effect.forEach(
+		templates,
+		(template) =>
+			run('pnpm', ['run', 'test', '.', '--', share, ...args], { cwd: template.directory }).pipe(
+				Effect.flatMap((output) => Console.log(`${template.slug}: ${summary(output)}`)),
+				Effect.as(undefined),
+				Effect.catchTag('TemplateError', (error) =>
+					Console.error(`${template.slug} failed: ${error.message}`).pipe(Effect.as(template.slug))
+				)
+			),
+		{ concurrency }
+	);
+	const names = failed.filter((slug) => slug !== undefined);
+	if (names.length > 0) return yield* fail(`Template suites failed: ${names.join(', ')}.`);
+});
+export type TemplateTester = (
+	root: string,
+	only: readonly string[]
+) => Effect.Effect<
+	void,
+	Effect.Error<ReturnType<typeof testTemplates>>,
+	Effect.Services<ReturnType<typeof testTemplates>>
+>;
 /**
  * Each template as a tenant receives it: its tracked files alone, installed offline from its committed lock (fetched
- * once into the shared store, so a lock that cannot install without the network fails here), built, then its suite.
+ * once into the shared store, so a lock that cannot install without the network fails here) and checked; then each
+ * projection's own `bolt test` through `bolt templates test`, which builds it.
  * `NORBITAL_TEMPLATES_SINCE` (default `origin/main`; `all` for every template) limits it to the templates changed
- * since that revision. A `check` or `lint` script that the build or the repository's own format check already runs is
- * not run twice.
+ * since that revision.
  */
 export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 	root: string = process.cwd(),
-	filter?: string
+	filter?: string,
+	test: TemplateTester = testTemplates
 ) {
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
@@ -561,7 +614,7 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 					`Verifying ${templates.length} of ${all.length} templates changed since ${since} (NORBITAL_TEMPLATES_SINCE=all for every one).`
 				);
 			const credentials = yield* registryConfiguration;
-			const verify = Effect.fnUntraced(function* (template: Template) {
+			const prepare = Effect.fnUntraced(function* (template: Template) {
 				const destination = path.join(dir, template.slug);
 				yield* fs.makeDirectory(destination, { recursive: true });
 				yield* materializeCandidate(root, template, destination);
@@ -579,29 +632,20 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 				yield* pnpm('fetch', ['fetch', '--frozen-lockfile']);
 				yield* fs.remove(npmrc);
 				yield* pnpm('install', ['install', '--frozen-lockfile', '--offline']);
-				const scripts =
-					(yield* json(Package, path.join(destination, 'package.json'))).scripts ?? {};
-				const suite = scripts['test'] ?? '';
-				const banked = suite.includes('--bank');
-				if (scripts['check'] !== 'bolt check') yield* pnpm('check', ['check']);
-				if (banked || !/\bbolt build\b/.test(suite))
-					yield* pnpm('build', ['exec', 'bolt', 'build']);
-				if (scripts['lint'] !== 'prettier --check .') yield* pnpm('lint', ['lint']);
-				if (banked)
-					yield* Console.log(
-						`${template.slug}: its suite reads the seed bank; the local gate runs it.`
-					);
-				else yield* pnpm('test', ['test']);
-				const artifact = path.join(destination, '.norbital', 'artifact', 'artifact.json');
+				yield* pnpm('check', ['exec', 'bolt', 'check']);
+			});
+			yield* Effect.forEach(templates, prepare, { concurrency: bound, discard: true });
+			if (templates.length > 0)
+				yield* test(
+					dir,
+					templates.map((template) => template.slug)
+				);
+			for (const template of templates) {
+				const artifact = path.join(dir, template.slug, '.norbital', 'artifact', 'artifact.json');
 				if (!(yield* fs.exists(artifact)))
 					return yield* fail(`${template.slug} bolt build emitted no ${artifact}.`);
 				yield* Console.log(`Validated clean standalone projection: ${template.slug}.`);
-			});
-			// ponytail: a fixed bound; each projection peaks near 1 GB (vitest + svelte-check), so half the cores, at most 3
-			yield* Effect.forEach(templates, verify, {
-				concurrency: Math.max(1, Math.min(3, Math.floor(availableParallelism() / 2))),
-				discard: true
-			});
+			}
 		})
 	);
 });
@@ -709,6 +753,30 @@ const lockCommand = Command.make(
 			...(Option.isSome(filter) ? { filter: filter.value } : {})
 		})
 );
+const testCommand = Command.make(
+	'test',
+	{
+		only: optional('only').pipe(
+			Flag.withDescription(
+				'comma-separated template directories or handles; every template when absent'
+			)
+		),
+		args: Argument.variadic(Argument.string('args'))
+	},
+	({ only, args }) =>
+		testTemplates(
+			process.cwd(),
+			Option.match(only, {
+				onNone: () => undefined,
+				onSome: (names) =>
+					names
+						.split(',')
+						.map((name) => name.trim())
+						.filter(Boolean)
+			}),
+			args
+		)
+);
 const verifyCommand = Command.make('verify', { filter: optional('filter') }, ({ filter }) =>
 	verifyTemplates(process.cwd(), Option.getOrUndefined(filter))
 );
@@ -731,5 +799,5 @@ const publishCommand = Command.make(
 		})
 );
 export const templatesCommand = Command.make('templates').pipe(
-	Command.withSubcommands([checkCommand, lockCommand, verifyCommand, publishCommand])
+	Command.withSubcommands([checkCommand, lockCommand, testCommand, verifyCommand, publishCommand])
 );

@@ -7,11 +7,15 @@
 <script lang="ts">
 	import { Option, Schema } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { CodeEditor, Icon } from '@norbital-ai/ui';
+	import { CodeEditor, Icon, StructuredData } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
-	import { failureOf, resultLine, stepView, type StepView } from './view.ts';
+	import { failureOf, reportView, resultLine, stepView, type StepView } from './view.ts';
 
-	let { steps, t }: { steps: readonly AgentRow[]; t: (key: string) => string } = $props();
+	let {
+		steps,
+		t,
+		activity = false
+	}: { steps: readonly AgentRow[]; t: (key: string) => string; activity?: boolean } = $props();
 
 	const PageRead = Schema.Struct({ url: Schema.optionalKey(Schema.String), page: Schema.String });
 	const json = (text: string | undefined) =>
@@ -38,9 +42,10 @@
 	const pane = new SvelteMap<string, 'code' | 'input' | 'output'>();
 </script>
 
-<ol class="mt-1 space-y-0.5 border-l border-border/70 pl-3">
+<ol class={activity ? 'space-y-1' : 'mt-1 space-y-0.5 border-l border-border/70 pl-3'}>
 	{#each steps as s (s.id)}
-		{@const v = viewOf(s)}
+		{@const report = reportView(s)}
+		{@const v = report ?? viewOf(s)}
 		{@const tool = s.tool}
 		{@const failed = tool?.failed === true}
 		{@const reason = failureOf(tool)}
@@ -48,6 +53,7 @@
 			class="animate-in fade-in-0 slide-in-from-bottom-1 animation-duration-150 ease-out motion-reduce:animate-none"
 			data-step
 			data-tool={tool?.name}
+			data-report={s.report?.conversation}
 			data-step-icon={v.icon}
 			data-step-state={active(s) ? 'running' : failed ? 'failed' : 'done'}
 		>
@@ -56,29 +62,47 @@
 				ontoggle={(e) => (e.currentTarget.open ? opened.add(s.id) : opened.delete(s.id))}
 			>
 				<summary
-					class="flex cursor-pointer list-none items-center gap-2 rounded py-0.5 text-xs [&::-webkit-details-marker]:hidden {failed
+					class="flex cursor-pointer list-none items-center rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden {activity
+						? 'gap-3 py-2.5 text-sm'
+						: 'gap-2 py-0.5 text-xs'} {failed
 						? 'text-destructive'
 						: 'text-muted-foreground hover:text-foreground'}"
 				>
 					<Icon
 						name={failed ? 'lucide:circle-alert' : active(s) ? 'lucide:loader-circle' : v.icon}
-						class="size-3.5 shrink-0 {active(s) ? 'animate-spin motion-reduce:animate-none' : ''}"
+						class="shrink-0 {activity ? 'size-4.5' : 'size-3.5'} {active(s)
+							? 'animate-spin motion-reduce:animate-none'
+							: ''}"
 					/>
-					<span class="shrink-0 font-medium {active(s) ? 'agent-shimmer' : ''}">{t(v.verb)}</span>
+					<span class="shrink-0 {activity ? '' : 'font-medium'} {active(s) ? 'agent-shimmer' : ''}"
+						>{t(v.verb)}</span
+					>
 					{#if v.target !== ''}<span class="min-w-0 truncate opacity-80" title={v.target}
 							>{v.target}</span
 						>{/if}
 					{#if tool?.ms !== undefined && tool.ms >= 100}<span
 							class="ml-auto shrink-0 tabular-nums opacity-70">{seconds(tool.ms)}</span
 						>{:else}<span class="ml-auto"></span>{/if}
-					<Icon
-						name="lucide:chevron-right"
-						class="size-3 shrink-0 opacity-40 transition-transform group-open/step:rotate-90"
-					/>
+					{#if !activity}<Icon
+							name="lucide:chevron-right"
+							class="size-3 shrink-0 opacity-40 transition-transform group-open/step:rotate-90"
+						/>{/if}
 				</summary>
 				{#if opened.has(s.id)}
 					<div class="mt-1 mb-2 grid gap-1.5 text-xs">
-						{#if tool === undefined}
+						{#if report !== null}
+							<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
+								<CodeEditor
+									value={report.message}
+									readonly
+									wrap
+									minHeight="0"
+									class="text-[0.7rem]"
+									language="plaintext"
+									aria-label={t('Output')}
+								/>
+							</div>
+						{:else if tool === undefined}
 							<p class="whitespace-pre-wrap text-muted-foreground italic" data-reasoning>
 								{s.reasoning}
 							</p>
@@ -112,6 +136,7 @@
 										>
 									{/each}
 								</div>
+								{@const data = json((shown === 'input' ? tool.args : tool.result) ?? '')}
 								{@const text =
 									shown === 'code'
 										? (v.code?.text ?? '')
@@ -122,21 +147,28 @@
 									data-step-pane={shown}
 								>
 									{#key `${s.id}:${shown}`}
-										<CodeEditor
-											value={text}
-											readonly
-											wrap
-											minHeight="0"
-											class="text-[0.7rem]"
-											language={shown === 'code'
-												? (v.code?.language ?? 'plaintext')
-												: /^\s*[[{]/.test(text)
-													? 'json'
-													: 'plaintext'}
-											aria-label={t(
-												shown === 'code' ? 'Code' : shown === 'input' ? 'Input' : 'Output'
-											)}
-										/>
+										{#if shown !== 'code' && data !== null && typeof data === 'object' && !Schema.is(PageRead)(data)}
+											<StructuredData
+												value={data}
+												name={t(shown === 'input' ? 'Input' : 'Output')}
+											/>
+										{:else}
+											<CodeEditor
+												value={text}
+												readonly
+												wrap
+												minHeight="0"
+												class="text-[0.7rem]"
+												language={shown === 'code'
+													? (v.code?.language ?? 'plaintext')
+													: /^\s*[[{]/.test(text)
+														? 'json'
+														: 'plaintext'}
+												aria-label={t(
+													shown === 'code' ? 'Code' : shown === 'input' ? 'Input' : 'Output'
+												)}
+											/>
+										{/if}
 									{/key}
 								</div>
 							{/if}

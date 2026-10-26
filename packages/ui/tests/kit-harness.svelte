@@ -2,19 +2,18 @@
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mountEdge } from '../src/effect/index.js';
-	// Mounts the kit pieces under test: nested Tabs, a Sheet with a page input outside it, a Drawer, a LogView.
+	// Mounts a Sheet with a page input outside it, a Drawer and a LogView.
 	import { Tabs } from '../src/primitives/tabs/index.js';
-	import { Drawer, Sheet } from '../src/primitives/sheet/index.js';
+	import Drawer from '../src/primitives/sheet/drawer.svelte';
+	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import LogView from '../src/logs/LogView.svelte';
 	import GuardProbe from './guard-probe.svelte';
 	import type { LogLine } from '../src/logs/logs.js';
-	import type { TabLevel } from '../src/primitives/tabs/level.js';
 	import type { LogViewProps } from '../src/logs/LogView.svelte';
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
 
 	let {
 		part,
-		innerLevel,
 		sheetOpen = $bindable(false),
 		drawerOpen = $bindable(false),
 		path = '/a',
@@ -23,9 +22,8 @@
 		hasOlder = false,
 		dirty = () => false
 	}: {
-		part: 'tabs' | 'sheet' | 'drawer' | 'logs' | 'guarded';
+		part: 'sheet' | 'drawer' | 'logs' | 'guarded';
 		dirty?: () => boolean;
-		innerLevel?: TabLevel;
 		sheetOpen?: boolean;
 		drawerOpen?: boolean;
 		path?: string;
@@ -36,11 +34,6 @@
 </script>
 
 {#snippet leaf()}<p>leaf</p>{/snippet}
-{#snippet third()}<Tabs tabs={[{ name: 'x', title: 'X', body: leaf }]} />{/snippet}
-{#snippet second()}<Tabs
-		level={innerLevel}
-		tabs={[{ name: 'b', title: 'B', body: third }]}
-	/>{/snippet}
 {#snippet inSheet()}<Tabs tabs={[{ name: 's', title: 'S', body: leaf }]} /><input
 		data-inside
 	/>{/snippet}
@@ -52,8 +45,6 @@
 
 {#if part === 'guarded'}
 	<Sheet bind:open={sheetOpen} title="Draft"><GuardProbe {dirty} /></Sheet>
-{:else if part === 'tabs'}
-	<Tabs tabs={[{ name: 'a', title: 'A', body: second }]} />
 {:else if part === 'sheet'}
 	<Tabs tabs={[{ name: 'p', title: 'P', body: page }]} />
 {:else if part === 'drawer'}

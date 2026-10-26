@@ -1,36 +1,110 @@
 <!--
-	What tool steps made (a screenshot, a document, a sandbox output), outside their fold, the agent panel's and each
+	What tool steps made (a screenshot, a document), outside their fold, the agent panel's and each
 	sub-agent's: a stored image is a small thumbnail that opens full size in a dialog (fit to the viewport; Escape or the
-	backdrop closes it) with its download in the corner; any other file is a chip that downloads it.
+	backdrop closes it) with its download in the corner; any other file is a chip that downloads it. The session rail uses
+	quiet filename rows with image thumbnails and an on-demand browser PDF preview.
 -->
 <script lang="ts">
 	import { Dialog, Icon } from '@norbital-ai/ui';
+	import { SvelteSet } from 'svelte/reactivity';
 	import type { AgentRow } from '../../protocol/wire.ts';
+	type MadeFile = NonNullable<AgentRow['files']>[number];
 
 	let {
 		files,
 		fileHref,
-		t
+		t,
+		rail = false
 	}: {
-		files: readonly NonNullable<AgentRow['files']>[number][];
+		files: readonly MadeFile[];
 		fileHref: (id: string) => string;
 		t: (key: string) => string;
+		/** Quiet file rows in the session rail; transcript images retain their larger tiles. */
+		rail?: boolean;
 	} = $props();
 
-	/** The image open full size. */
-	let shown = $state<{ name: string; href: string } | null>(null);
+	/** The image or PDF open full size. */
+	let shown = $state<{ name: string; href: string; mime: string } | null>(null);
+	const failedImages = new SvelteSet<string>();
+	const fileIcon = (mime: string) =>
+		mime.startsWith('image/')
+			? 'lucide:image'
+			: mime.includes('presentation')
+				? 'lucide:presentation'
+				: mime.includes('sheet') || mime.includes('csv')
+					? 'lucide:sheet'
+					: 'lucide:file-text';
 </script>
 
-<div class="mt-2 flex flex-wrap items-end gap-2" data-made-files>
+{#snippet fileLabel(file: MadeFile, href: string | undefined)}
+	<span
+		class="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-muted"
+		aria-hidden="true"
+	>
+		{#if href !== undefined && file.mime.startsWith('image/') && !failedImages.has(href)}
+			<img
+				src={`${href}${href.includes('?') ? '&' : '?'}preview=64`}
+				alt=""
+				width="40"
+				height="40"
+				loading="lazy"
+				decoding="async"
+				class="size-full object-cover object-top"
+				onerror={() => failedImages.add(href)}
+			/>
+		{:else}<Icon name={fileIcon(file.mime)} class="size-5 text-muted-foreground" />{/if}
+	</span>
+	<span class="min-w-0 truncate text-sm" title={file.name}>{file.name}</span>
+{/snippet}
+
+<div class={rail ? 'grid gap-1' : 'mt-2 flex flex-wrap items-end gap-2'} data-made-files>
 	{#each files as f, i (i)}
 		{@const href = f.id === undefined ? undefined : fileHref(f.id)}
-		{#if href !== undefined && f.mime.startsWith('image/')}
+		{#if rail}
+			<div class="flex min-w-0 items-center gap-2" data-made-file={f.name}>
+				{#if href !== undefined && (f.mime.startsWith('image/') || f.mime === 'application/pdf')}
+					<button
+						type="button"
+						class="flex min-w-0 flex-1 items-center gap-3 rounded-md py-1.5 text-left hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+						aria-label={`${t('Preview')} ${f.name}`}
+						onclick={() => (shown = { name: f.name, href, mime: f.mime })}
+						data-made-image={f.mime.startsWith('image/') ? '' : undefined}
+						data-made-preview
+					>
+						{@render fileLabel(f, href)}
+					</button>
+				{:else if href !== undefined}
+					<a
+						{href}
+						target="_blank"
+						rel="noreferrer"
+						download={f.name}
+						class="flex min-w-0 flex-1 items-center gap-3 rounded-md py-1.5 text-left hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+					>
+						{@render fileLabel(f, href)}
+					</a>
+				{:else}
+					<span class="flex min-w-0 flex-1 items-center gap-3 py-1.5">
+						{@render fileLabel(f, href)}
+					</span>
+				{/if}
+				{#if href !== undefined}<a
+						{href}
+						target="_blank"
+						rel="noreferrer"
+						download={f.name}
+						class="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+						aria-label={`${t('Download')} ${f.name}`}
+						title={t('Download')}><Icon name="lucide:download" class="size-3.5" /></a
+					>{/if}
+			</div>
+		{:else if href !== undefined && f.mime.startsWith('image/')}
 			<span class="relative inline-block" data-made-file={f.name}>
 				<button
 					type="button"
 					class="block overflow-hidden rounded-lg border border-border focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 					title={f.name}
-					onclick={() => (shown = { name: f.name, href })}
+					onclick={() => (shown = { name: f.name, href, mime: f.mime })}
 					data-made-image
 					><img
 						src={`${href}?preview=512`}
@@ -57,16 +131,7 @@
 				class="inline-flex max-w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 				data-made-file={f.name}
 			>
-				<Icon
-					name={f.mime.startsWith('image/')
-						? 'lucide:image'
-						: f.mime.includes('presentation')
-							? 'lucide:presentation'
-							: f.mime.includes('sheet') || f.mime.includes('csv')
-								? 'lucide:sheet'
-								: 'lucide:file-text'}
-					class="size-4 shrink-0 text-muted-foreground"
-				/>
+				<Icon name={fileIcon(f.mime)} class="size-4 shrink-0 text-muted-foreground" />
 				<span class="min-w-0 truncate font-medium">{f.name}</span>
 				<Icon name="lucide:download" class="size-3.5 shrink-0 text-muted-foreground" />
 			</a>
@@ -80,15 +145,26 @@
 		if (!o) shown = null;
 	}}
 >
-	<Dialog.Content class="w-auto max-w-[calc(100vw-2rem)] gap-2 p-2 pt-10">
+	<Dialog.Content
+		class="{shown?.mime === 'application/pdf'
+			? 'w-[calc(100vw-2rem)] max-w-4xl'
+			: 'w-auto max-w-[calc(100vw-2rem)]'} gap-2 p-2 pt-10"
+	>
 		{#if shown !== null}
 			<Dialog.Title class="sr-only">{shown.name}</Dialog.Title>
-			<img
-				src={shown.href}
-				alt={shown.name}
-				class="max-h-[calc(100dvh-6rem)] max-w-full rounded object-contain"
-				data-made-image-full
-			/>
+			{#if shown.mime === 'application/pdf'}
+				<iframe
+					src={`${shown.href}#page=1&view=FitH`}
+					title={shown.name}
+					class="h-[75dvh] w-full rounded border-0 bg-background"
+					data-made-pdf-full
+				></iframe>
+			{:else}<img
+					src={shown.href}
+					alt={shown.name}
+					class="max-h-[calc(100dvh-6rem)] max-w-full rounded object-contain"
+					data-made-image-full
+				/>{/if}
 		{/if}
 	</Dialog.Content>
 </Dialog.Root>

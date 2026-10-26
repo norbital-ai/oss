@@ -1,13 +1,13 @@
 /// <reference types="node" />
 // Loading (§3.2, rule 2): import each role's default export and gather the manifest, keyed by role then path-derived name.
-import { Effect, FileSystem, Path, Predicate, Schema } from 'effect';
+import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
 import { ROLES, type Role } from '../decl/layout.ts';
-import { SYSTEM_COLUMNS } from '../protocol/catalog.ts'; // hook:write
-import { SYSTEM } from '../system/index.ts';
-import { DRIVERS, type IntegrationSpec } from '../decl/runtime/integration.ts';
+import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
 import { pageServerMetadata } from '../decl/runtime/page.ts';
+import { treeDigest } from '../engine/artifact/read.ts';
+import { SKILL_BYTES, SKILL_FILE } from '../engine/manifest.ts';
 
 /**
  * `manifest[role][name]`: a `.ts` role's default export (declarations are data), a `.md` role's text, a `.svelte`
@@ -21,6 +21,45 @@ class LoadError extends Schema.TaggedError<LoadError>()('LoadError', {
 	path: Schema.String,
 	cause: Schema.Defect()
 }) {}
+
+/** A skill's folder as its tree: `+skill.md` is its `SKILL.md`; dot-files are not part of it; a link is refused. */
+const skillTree = Effect.fnUntraced(function* (
+	abs: string,
+	file: string,
+	text: string,
+	fail: (code: Diagnostic['code'], path: string, message: string) => void
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const dir = path.dirname(abs),
+		real = yield* fs.realPath(dir);
+	const files: (readonly [string, Uint8Array])[] = [];
+	let bytes = 0;
+	for (const entry of yield* fs.readDirectory(dir, { recursive: true })) {
+		const at = path.join(dir, entry),
+			name = entry.split(path.sep).join('/');
+		if (name.split('/').some((part) => part.startsWith('.'))) continue;
+		if ((yield* fs.realPath(at)) !== path.join(real, entry)) {
+			fail('load/skill-link', file, `${name} is a link; a skill holds its own files`);
+			continue;
+		}
+		if ((yield* fs.stat(at)).type !== 'File') continue;
+		if (name === SKILL_FILE) {
+			fail('load/skill-file', file, `the skill's ${SKILL_FILE} is its +skill.md; remove ${name}`);
+			continue;
+		}
+		const content = name === '+skill.md' ? new TextEncoder().encode(text) : yield* fs.readFile(at);
+		bytes += content.byteLength;
+		files.push([name === '+skill.md' ? SKILL_FILE : name, content]);
+	}
+	if (bytes > SKILL_BYTES)
+		fail(
+			'load/skill-size',
+			file,
+			`a skill is at most ${SKILL_BYTES / 1024 / 1024} MiB (this one is ${bytes} bytes)`
+		);
+	return { text, digest: treeDigest(files), files: files.map(([name]) => name).sort() };
+});
 
 export const load = Effect.fn('bolt.load')(function* (root: string, files: readonly Discovered[]) {
 	const fs = yield* FileSystem.FileSystem;
@@ -40,10 +79,11 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 					f.path,
 					'a skill starts with frontmatter holding `description:`'
 				);
-			manifest[f.role][f.name] = text;
+			manifest[f.role][f.name] =
+				f.role === 'skill' ? yield* skillTree(abs, f.path, text, fail) : text;
 		} else {
 			const loaded = yield* Effect.tryPromise({
-				try: () => import(pathToFileURL(abs).href),
+				try: (): Promise<unknown> => import(pathToFileURL(abs).href),
 				catch: (cause) => new LoadError({ path: f.path, cause })
 			}).pipe(Effect.result);
 			if (loaded._tag === 'Failure') {
@@ -56,12 +96,14 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 				);
 				continue;
 			}
-			const mod: { default?: unknown } = loaded.success;
-			if (mod.default === undefined)
+			const declaration = Predicate.isObject(loaded.success)
+				? loaded.success['default']
+				: undefined;
+			if (declaration === undefined)
 				fail('load/no-default', f.path, `default-export the ${f.role} declaration`);
 			else if (f.role === 'page_server' || f.role === 'kiosk_page_server') {
 				const codec = yield* Effect.tryPromise({
-					try: () =>
+					try: (): Promise<unknown> =>
 						import(
 							pathToFileURL(
 								path.join(
@@ -76,23 +118,23 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 					fail('load/page-server-codec', f.path, String(codec.failure.cause));
 					continue;
 				}
-				const shared: { default?: unknown } = codec.success;
+				const shared = Predicate.isObject(codec.success) ? codec.success['default'] : undefined;
 				const metadata = yield* Effect.try({
-					try: () => pageServerMetadata(mod.default, shared.default),
+					try: () => pageServerMetadata(declaration, shared),
 					catch: (cause) => new LoadError({ path: f.path, cause })
 				}).pipe(Effect.result);
 				if (metadata._tag === 'Failure')
 					fail('load/page-server-shape', f.path, String(metadata.failure.cause));
 				else manifest[f.role][f.name] = metadata.success;
-			} else manifest[f.role][f.name] = mod.default;
+			} else manifest[f.role][f.name] = declaration;
 		}
 	}
 	return { manifest, errors };
 });
 
 /**
- * The manifest-level checks of a loaded manifest (names against folders, integration definitions, listed pages). A workspace
- * may not reach into the built-in layer: `table` is a system model's, and a relationship adds no column to a system table.
+ * The manifest-level checks of a loaded manifest (names against paths, integration definitions, listed pages). A workspace
+ * may not reach into the built-in layer: `table` is a system model's.
  */
 export function manifestErrors(
 	manifest: Manifest,
@@ -101,15 +143,15 @@ export function manifestErrors(
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
 		errors.push({ code, path, message: `${path}: ${message}` });
-	// A role typed against its own folder takes its name (`collection('<m>', …)`), which must be the folder's.
-	for (const role of ['collection', 'pipeline', 'app', 'group', 'kiosk'] as const) {
+	// A declaration typed by its own name takes it first (`model('<m>', …)`), and it must be the path's (`load/name-path`).
+	for (const role of NAMED) {
 		for (const [name, d] of Object.entries(manifest[role] ?? {})) {
-			const declared = (d as { name?: unknown }).name;
+			const declared = Predicate.isObject(d) ? d['name'] : undefined;
 			if (declared !== name)
 				fail(
-					`load/${role}-name`,
+					'load/name-path',
 					sourcePath(role, name),
-					`declares ${role}('${String(declared)}'); the folder names it '${name}'`
+					`declares ${CALLS[role]}('${String(declared)}'); its path names it '${name}'`
 				);
 		}
 	}
@@ -151,11 +193,7 @@ export function manifestErrors(
 					: Predicate.isObject(entry)
 						? entry['policies']
 						: undefined;
-				if (
-					!handle.trim() ||
-					!Array.isArray(policies) ||
-					policies.some((policy) => typeof policy !== 'string')
-				) {
+				if (!handle.trim() || !Array.isArray(policies) || !policies.every(Predicate.isString)) {
 					fail('load/team-shape', path, `team '${handle}' declares its policy list`);
 					continue;
 				}
@@ -190,32 +228,25 @@ export function manifestErrors(
 			}
 		}
 	}
-	errors.push(...integrationErrors(manifest));
 	// hook:write — every row carries the system columns; a model field of the same name would shadow one (`revision` is the
 	// row version every update checks, rule 25), so it is refused here rather than as a duplicate column at migration
 	if (layer === 'workspace') {
 		for (const [name, d] of Object.entries(manifest.model)) {
-			for (const f of Object.keys((d as { fields?: object } | undefined)?.fields ?? {}))
+			const literal = spec(d);
+			for (const f of Object.keys(Predicate.isObject(literal['fields']) ? literal['fields'] : {}))
 				if (SYSTEM_COLUMNS.some((column) => column === f))
 					fail(
 						'load/reserved-field',
 						sourcePath('model', name),
 						`'${f}' is a system column on every row (${SYSTEM_COLUMNS.join(', ')}); name the field for what it holds, e.g. '${name.replace(/s$/, '')}_${f}'`
 					);
-			if ((d as { table?: unknown } | undefined)?.table !== undefined)
+			if (literal['table'] !== undefined)
 				fail(
 					'load/system-only',
 					sourcePath('model', name),
 					'`table` describes a built-in system table; a workspace model takes the engine columns'
 				);
 		}
-		for (const key of Object.keys((manifest.relationship[''] ?? {}) as object))
-			if (Object.hasOwn(SYSTEM.models, key.slice(0, key.indexOf('.'))))
-				fail(
-					'load/system-owned',
-					sourcePath('relationship', ''),
-					`'${key}': ${key.slice(0, key.indexOf('.'))} is a built-in system table; a relationship to it is declared on your model`
-				);
 	}
 	// `app/page-unlisted` (§3.3.1): every page file has an entry in its app's `pages`, whose key order is nav order.
 	for (const page of Object.keys(manifest.page ?? {})) {
@@ -274,142 +305,28 @@ export function manifestErrors(
 	return errors;
 }
 
-/** The literal of a `{ name, spec }` declaration (collection, app, group, integration, pipeline), else the export itself. */
+/** The literal of a `{ name, spec }` declaration (model, automation, custom field, integration, app, group, kiosk), else the export itself. */
 export function spec(d: unknown): { readonly [key: string]: unknown } {
 	const o = (d ?? {}) as { spec?: object };
 	return (o.spec ?? o) as { readonly [key: string]: unknown };
 }
 
-type Obj = { readonly [key: string]: unknown };
-const list = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
-/** Whether a definition carries a conversation: its own (a custom chat over http), or its driver's. */
-const conversational = (d: IntegrationSpec | undefined): boolean =>
-	d !== undefined && (d.conversation !== undefined || 'conversation' in (DRIVERS[d.driver] ?? {}));
-
-/**
- * Integration definitions (`src/integration/<name>/`): the literal names its folder; each feed writes one collection that
- * exposes no create, delete or action and that no other feed writes, keyed by one FK to `sys_integration` pinned to the
- * definition and the feed's `key`; every declared feed, outbound rule, command `run` and custom conversation has its body;
- * a notification goes to the inbox or through a conversation connection.
- */
-function integrationErrors(manifest: Manifest): Diagnostic[] {
-	const errors: Diagnostic[] = [];
-	const fail = (code: Diagnostic['code'], path: string, message: string) =>
-		errors.push({ code, path, message: `${path}: ${message}` });
-	const definitions: { readonly [name: string]: IntegrationSpec } = {
-		...SYSTEM.integrations,
-		...Object.fromEntries(
-			Object.entries(manifest.integration_definition).map(([name, d]) => [
-				name,
-				spec(d) as IntegrationSpec
-			])
-		)
-	};
-	const relationships = { ...SYSTEM.relationships, ...((manifest.relationship[''] ?? {}) as Obj) };
-	const fedBy = new Map<string, string>();
-	for (const [name, d] of Object.entries(manifest.integration_definition)) {
-		const path = sourcePath('integration_definition', name);
-		const declared = Predicate.isObject(d) ? d['name'] : undefined;
-		if (declared !== name)
-			fail(
-				'load/name-mismatch',
-				path,
-				`declares integration('${String(declared)}'); the folder names it '${name}'`
-			);
-		const s = definitions[name]!,
-			bodies = Predicate.isObject(d) && Predicate.isObject(d['bodies']) ? d['bodies'] : {};
-		const attached = (part: string, key: string, body: string) => {
-			const of = bodies[part];
-			return Predicate.isObject(of) && Predicate.isObject(of[key]) && Boolean(of[key][body]);
-		};
-		for (const [feed, f] of Object.entries(s.feeds ?? {})) {
-			const at = `feed '${feed}'`;
-			const pushed = f.from === 'driver' || f.from === 'messages';
-			if (!attached('feeds', feed, pushed ? 'map' : 'read'))
-				fail(
-					'load/missing-body',
-					path,
-					`${at} has no body: attach ${name}.feed('${feed}', { ${pushed ? 'map' : 'read'} })`
-				);
-			const c = manifest.collection[f.into];
-			if (c === undefined) {
-				fail('load/feed-target', path, `${at} writes '${f.into}', which is no collection`);
-				continue;
-			}
-			const exposed = ['create', 'delete', 'actions'].filter((k) => spec(c)[k] !== undefined);
-			if (exposed.length > 0)
-				fail(
-					'load/feed-target',
-					path,
-					`${at} writes '${f.into}', whose collection exposes ${exposed.join(', ')}: a feed's rows change only through it (local fields through update)`
-				);
-			const other = fedBy.get(f.into);
-			if (other !== undefined)
-				fail('load/feed-target', path, `${at} writes '${f.into}', which ${other} already writes`);
-			fedBy.set(f.into, `${name}.${feed}`);
-			const key = list((manifest.model[f.into] as Obj | undefined)?.['key']).map(String);
-			const instance = (field: string) => {
-				const r = relationships[`${f.into}.${field}`];
-				return Predicate.isObject(r) && r['to'] === 'sys_integration'
-					? Predicate.isObject(r['where']) && Predicate.isObject(r['where']['integration'])
-						? r['where']['integration']['eq']
-						: null
-					: undefined;
-			};
-			const fks = key.filter((field) => instance(field) !== undefined);
-			const rest = key.filter((field) => instance(field) === undefined);
-			if (
-				fks.length !== 1 ||
-				instance(fks[0]!) !== name ||
-				rest.length !== f.key.length ||
-				f.key.some((field) => !rest.includes(field))
-			)
-				fail(
-					'load/feed-key',
-					path,
-					`${at}: the model key of '${f.into}' is one FK to sys_integration pinned to '${name}' (where: { integration: { eq: '${name}' } }) and the feed's key (${f.key.join(', ')}); it is [${key.join(', ')}]`
-				);
-		}
-		for (const rule of Object.keys(s.outbound ?? {})) {
-			if (!attached('outbound', rule, 'build'))
-				fail(
-					'load/missing-body',
-					path,
-					`outbound '${rule}' has no body: attach ${name}.outbound('${rule}', { build })`
-				);
-			else if (!conversational(s) && !attached('outbound', rule, 'run'))
-				fail(
-					'load/missing-body',
-					path,
-					`outbound '${rule}' commands through a ${s.driver} instance: its body declares run`
-				);
-		}
-		if (s.conversation !== undefined)
-			for (const body of ['receive', 'send'] as const)
-				if (!bodies[body])
-					fail('load/missing-body', path, `a custom conversation attaches ${name}.${body}(…)`);
-	}
-	const connections =
-		(
-			manifest.workspace[''] as
-				{ connections?: { readonly [slot: string]: { integration: string } } } | undefined
-		)?.connections ?? {};
-	for (const [name, c] of Object.entries(manifest.collection))
-		for (const rules of Object.values(
-			(spec(c)['notifications'] ?? {}) as { readonly [event: string]: readonly Obj[] }
-		))
-			for (const rule of rules) {
-				const channel = rule['channel'];
-				if (
-					channel !== undefined &&
-					channel !== 'inbox' &&
-					!conversational(definitions[connections[String(channel)]?.integration ?? ''])
-				)
-					fail(
-						'load/notification-channel',
-						sourcePath('collection', name),
-						`a notification's channel is 'inbox' or a conversation connection; '${String(channel)}' is not`
-					);
-			}
-	return errors;
-}
+/** The roles whose declaration takes its name first, and the call each is. */
+const NAMED = [
+	'model',
+	'custom_field',
+	'automation',
+	'integration_definition',
+	'app',
+	'group',
+	'kiosk'
+] as const;
+const CALLS: { readonly [R in (typeof NAMED)[number]]: string } = {
+	model: 'model',
+	custom_field: 'customField',
+	automation: 'automation',
+	integration_definition: 'integration',
+	app: 'app',
+	group: 'group',
+	kiosk: 'kiosk'
+};

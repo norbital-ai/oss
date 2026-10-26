@@ -2,23 +2,20 @@
 // One guarantee per test (rules 25, 32, 64–67).
 import { randomUUID } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { describe, expect, it } from '@effect/vitest';
+import { describe, expect, it, vi } from '@effect/vitest';
 import {
-	Config,
 	Context,
 	Deferred,
 	Effect,
 	FiberSet,
 	Layer,
-	Option,
 	Predicate,
 	Queue,
 	Schema,
 	Stream
 } from 'effect';
-import { DbError } from '../src/engine/errors.ts';
 import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
-import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { SqlReadCapture, type SqlReadCaptureService } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
 import { Agents, Live, Reads, Writes, type LiveView } from '../src/engine/services.ts';
 import { routeFixture } from './support/route-fixture.ts';
@@ -26,15 +23,14 @@ import { sse } from './support/live-bolt.ts';
 import { program } from './support/guest-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import { createBolt, patched } from '../src/page/bolt.ts';
-import type { Authority, Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome, Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
-import { PostgresDb } from '../src/engine/db/postgres.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { lowerRead } from '../src/engine/query/engine.ts';
 import type { Frame } from '../src/protocol/wire.ts';
-import type { ReadIR } from '../src/protocol/ir-types.ts';
+import type { ReadIR } from '../src/protocol/reads.ts';
 import { Chain, noticeCaptures, noticeInsert } from '../src/engine/write/sql.ts';
-import { ACME, guest, manifest as base, seed, SHADY } from './engine-fixture.ts';
+import { ACME, callbacks, guest, manifest as base, seed, SHADY } from './engine-fixture.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -62,35 +58,20 @@ const Captures = Schema.Array(
 	})
 );
 
-const compiledGuest = program(guest.source);
 const cell = (
-	dbLayer: NonNullable<TestOptions['db']> = PgliteDb.layer(),
-	m: EngineManifest = manifest
+	dbLayer?: NonNullable<TestOptions['db']>,
+	m: EngineManifest = manifest,
+	source = guest.source
 ) =>
 	Effect.gen(function* () {
 		let reads = 0;
-		const db = Layer.effect(
-			TenantDb,
-			Effect.gen(function* () {
-				const inner = yield* TenantDb;
-				return TenantDb.typed({
-					...inner,
-					read: (statements) =>
-						Effect.suspend(() => {
-							reads += statements.length;
-							return inner.read(statements);
-						})
-				});
-			})
-		).pipe(Layer.provide(dbLayer));
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest: m,
-				guest: yield* compiledGuest,
-				transforms: ['orders'],
+				guest: yield* program(source),
 				seed,
 				now: NOW,
-				db
+				...(dbLayer === undefined ? {} : { db: dbLayer })
 			})
 		);
 		const t = Context.get(context, TestWorkspace),
@@ -99,6 +80,26 @@ const cell = (
 			queries = Context.get(context, Reads),
 			agents = Context.get(context, Agents),
 			route = yield* routeFixture(context);
+		const nativeQuery = queries.run;
+		const countedQuery: typeof queries.run = (...args: Parameters<typeof queries.run>) =>
+			Effect.gen(function* () {
+				const previous = yield* SqlReadCapture;
+				const capture: SqlReadCaptureService = {
+					read: (statements, execute) => {
+						const counted: typeof execute = (sql) =>
+							Effect.suspend(() => {
+								reads += sql.length;
+								return execute(sql);
+							});
+						return previous === undefined
+							? counted(statements)
+							: previous.read(statements, counted);
+					}
+				};
+				return yield* nativeQuery(...args).pipe(Effect.provideService(SqlReadCapture, capture));
+			});
+		const querySpy = vi.spyOn(queries, 'run').mockImplementation(countedQuery);
+		yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
 		const rep = t.as(t.member(['rep'])).authority;
 		const run = yield* FiberSet.makeRuntimePromise().pipe(Effect.provide(context));
 		const fetch: typeof globalThis.fetch = (input, init) => {
@@ -131,7 +132,7 @@ const cell = (
 				const seen: (readonly Readonly<Record<string, unknown>>[])[] = [],
 					answered = yield* Queue.unbounded<typeof BrowserPage.Type>();
 				let current: typeof BrowserPage.Type | undefined;
-				yield* bolt.live<unknown>(bolt.read('orders', { all: true })).pipe(
+				yield* bolt.observe<unknown>(bolt.query('orders', { all: true })).pipe(
 					Stream.runForEach((page) =>
 						Effect.gen(function* () {
 							if (!Schema.is(BrowserPage)(page)) throw new Error('Invalid live order page');
@@ -266,7 +267,8 @@ describe('live + protocol + $bolt on PGlite', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { bolt, orders } = yield* cell();
+					// the blocked-customer check is an authored create transform
+					const { bolt, orders } = yield* cell(PgliteDb.layer(), callbacks);
 					const view = yield* orders();
 					const o = yield* bolt
 						.act('orders.create', { title: 'shady', region: 'north', customer: SHADY })
@@ -295,18 +297,29 @@ describe('live + protocol + $bolt on PGlite', () => {
 							...manifest.policies.rep,
 							grants: {
 								...manifest.policies.rep.grants,
-								orders: { ...grant, approval: { create: [{ steps: [['finance']] }] } }
+								orders: { ...grant, create: { approval: true as const } }
 							}
 						}
 					}
 				};
-				const { t, bolt, orders } = yield* cell(PgliteDb.layer(), proposed);
+				const source = guest.source.replace(
+					'export default {',
+					`export default { policy: { rep: { grants: { orders: { create: { approval: (_write, flow) => flow.step('Finance', { teams: ['finance'] }) } } } } },`
+				);
+				const { t, bolt, orders } = yield* cell(PgliteDb.layer(), proposed, source);
 				const view = yield* orders();
 				expect(
 					yield* bolt.act('orders.create', { title: 'held', region: 'north', customer: ACME })
 				).toMatchObject({ kind: 'pendingApproval', records: [{ collection: 'orders' }] });
 				expect(view.rows()).toMatchObject([
-					{ title: 'held', $approval: { state: 'Pending', step: 0, steps: 1 } }
+					{
+						title: 'held',
+						$approval: {
+							state: 'Pending',
+							step: 0,
+							steps: [{ name: 'Finance', teams: ['finance'], users: [] }]
+						}
+					}
 				]);
 				expect(
 					(yield* t.db.read([
@@ -354,11 +367,13 @@ describe('live + protocol + $bolt on PGlite', () => {
 			Effect.gen(function* () {
 				const { bolt } = yield* cell();
 				yield* bolt.act('orders.create', { title: 'desk', region: 'north', customer: ACME });
-				const page = yield* bolt.read<typeof BrowserPage.Type>('orders', { all: true });
-				expect(yield* bolt.get('orders', String(present(page.rows[0])['id']))).toMatchObject({
+				const page = yield* bolt.query<typeof BrowserPage.Type>('orders', { all: true });
+				expect(
+					yield* bolt.query('orders', { id: String(present(page.rows[0])['id']) })
+				).toMatchObject({
 					title: 'desk'
 				});
-				expect(yield* bolt.read('nope', { all: true }).pipe(Effect.flip)).toMatchObject({
+				expect(yield* bolt.query('nope', { all: true }).pipe(Effect.flip)).toMatchObject({
 					code: expect.any(String)
 				});
 			})
@@ -375,7 +390,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				const { rep, live, queries, count, watcher, register, settled, other } = yield* cell();
 				const w = yield* watcher(rep);
 				yield* register(w, 'simple', {
-					read: lowerRead(manifest, 'read', [
+					read: lowerRead(manifest, 'query', [
 						'orders',
 						{ select: { title: true, status: true }, all: true }
 					])
@@ -401,7 +416,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				expect(w.held.get('simple')).toEqual(
 					(yield* queries.run(
 						[
-							lowerRead(manifest, 'read', [
+							lowerRead(manifest, 'query', [
 								'orders',
 								{ select: { title: true, status: true }, all: true }
 							])
@@ -440,8 +455,8 @@ describe('live deltas on PGlite (rule 65)', () => {
 						c,
 						'n',
 						[
-							{ id: 'n1', to: { user: me }, title: 'To you' },
-							{ id: 'n2', to: { team: 'nobody' }, title: 'Nobody' }
+							{ id: 'n1', to: [{ user: me }], title: 'To you', attachments: [] },
+							{ id: 'n2', to: [{ team: 'nobody' }], title: 'Nobody', attachments: [] }
 						],
 						NOW,
 						'true',
@@ -523,7 +538,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				Effect.gen(function* () {
 					const { rep, live, queries, count, watcher, register, settled, other } = yield* cell();
 					const w = yield* watcher(rep);
-					const totals = lowerRead(manifest, 'read', [
+					const totals = lowerRead(manifest, 'query', [
 						'orders',
 						{ select: { title: true, total: true }, all: true }
 					]);
@@ -550,7 +565,13 @@ describe('live deltas on PGlite (rule 65)', () => {
 						bindings: b(),
 						invocationId: randomUUID()
 					});
-					expect(r.captured.find((x) => x.collection === 'lines')?.new?.['amount']).toBe('1.20');
+					// both rows keep their scale; capture order between them is not part of the contract
+					expect(
+						r.captured
+							.filter((x) => x.collection === 'lines')
+							.map((x) => x.new?.['amount'])
+							.sort()
+					).toEqual(['1.20', '2.00']);
 					count.reset();
 					live.publish(r.captured);
 					yield* settled;
@@ -592,7 +613,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				byTitle: ['orders', { select: { title: true }, orderBy: { title: 'asc' }, limit: 10 }]
 			};
 			const irs: { [view: string]: ReadIR } = Object.fromEntries(
-				Object.entries(shapes).map(([k, a]) => [k, lowerRead(manifest, 'read', a)])
+				Object.entries(shapes).map(([k, a]) => [k, lowerRead(manifest, 'query', a)])
 			);
 			for (const [view, read] of Object.entries(irs)) yield* register(w, view, { read });
 			const check = () =>
@@ -672,54 +693,6 @@ describe('live deltas on PGlite (rule 65)', () => {
 				yield* shapes(yield* cell());
 			})
 		)
-	);
-
-	it.live(
-		'every view shape stays equal to a fresh read (Postgres, BOLT_TEST_PG)',
-		(test) =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const configured = yield* Config.option(Config.string('BOLT_TEST_PG'));
-					if (Option.isNone(configured)) return test.skip();
-					const { default: pg } = yield* Effect.tryPromise({
-						try: () => import('pg'),
-						catch: (error) => new DbError({ message: String(error), sqlstate: '08006' })
-					});
-					const edge = <A>(call: () => Promise<A>) =>
-						Effect.tryPromise({
-							try: call,
-							catch: (error) => new DbError({ message: String(error), sqlstate: '08006' })
-						});
-					const name = `bolt_live_${randomUUID().replaceAll('-', '')}`;
-					const admin = yield* Effect.acquireRelease(
-						Effect.sync(() => new pg.Pool({ connectionString: configured.value, max: 1 })),
-						(pool) => edge(() => pool.end()).pipe(Effect.orDie)
-					);
-					yield* Effect.acquireRelease(
-						edge(() => admin.query(`create database ${name}`)),
-						() =>
-							edge(() => admin.query(`drop database if exists ${name} with (force)`)).pipe(
-								Effect.orDie
-							)
-					);
-					const target = new URL(configured.value);
-					target.pathname = `/${name}`;
-					const pool = yield* Effect.acquireRelease(
-						Effect.sync(
-							() =>
-								new pg.Pool({
-									connectionString: target.toString(),
-									max: 4,
-									options: '-c TimeZone=UTC'
-								})
-						),
-						(pool) => edge(() => pool.end()).pipe(Effect.orDie)
-					);
-					pool.on('error', () => {});
-					yield* shapes(yield* cell(PostgresDb.layer(pool)));
-				})
-			),
-		60_000
 	);
 
 	it.live('the agent transcript takes each written message as a patch, with no re-read', () =>

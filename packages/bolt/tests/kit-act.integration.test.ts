@@ -1,10 +1,9 @@
 import { actReply, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
 import { Context, Effect, Layer } from 'effect';
 // The test kit's `As.act` routes a collection callable as `/__bolt/act` does (`dispatchAct`): `<c>.erase` is the engine's
-// generated erase (rule 38e), never a lookup of an action named `erase`. Its `cpu` option is a host's compute meter.
+// generated erase (rule 38e), never a lookup of an action named `erase`.
 import { describe, expect, it } from '@effect/vitest';
-import type { Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 
@@ -21,7 +20,6 @@ const manifest = {
 	policies: { p: { description: 'P', grants: { docs: { read: true, create: true } } } },
 	automations: {},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -30,10 +28,6 @@ const manifest = {
 	customFields: {},
 	agent: { skills: {} }
 } satisfies EngineManifest;
-
-const guest = {
-	source: `export default { collection: { docs: { bodies: { transform: function* (rows) { return rows; } } } } };`
-};
 
 const created = (o: Outcome) => {
 	if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
@@ -77,48 +71,5 @@ describe('t.as(x).act routes a generated verb as /__bolt/act does', () => {
 					).toEqual([{ n: 0 }]);
 				})
 			)
-	);
-});
-
-describe('testWorkspace({ cpu })', () => {
-	it.live('reports each settled guest invocation once, with its CPU and crossings', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const seen: { kind: string; target: string; cpuMs: number; crossings: number }[] = [];
-				const context = yield* Layer.build(
-					TestWorkspace.layer({
-						manifest,
-						guest: yield* program(guest.source),
-						transforms: ['docs'],
-						cpu: (invocation, cpuMs, tally) => {
-							seen.push({
-								kind: invocation.kind,
-								target: invocation.target,
-								cpuMs,
-								crossings: tally.crossings
-							});
-						}
-					})
-				);
-				const t = Context.get(context, TestWorkspace),
-					route = yield* routeFixture(context);
-				created(
-					(yield* actReply(route, t.as(t.admin).authority, {
-						callable: 'docs.create',
-						input: { title: 'desk' },
-						issuedAt: t.clock.now()
-					})).outcome
-				);
-				expect(seen).toEqual([
-					{
-						kind: 'transform',
-						target: 'docs',
-						cpuMs: expect.any(Number),
-						crossings: expect.any(Number)
-					}
-				]);
-				expect(present(seen[0]).cpuMs).toBeGreaterThan(0);
-			})
-		)
 	);
 });

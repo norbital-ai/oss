@@ -12,8 +12,6 @@
 	interface Layout extends Schema.Schema.Type<typeof Layout> {}
 	const decodeLayout = Schema.decodeUnknownResult(Schema.fromJsonString(Layout));
 	import type {
-		ActionInputOf,
-		ActionKey,
 		CollectionKey,
 		ManyOf,
 		Page,
@@ -27,19 +25,19 @@
 		Values,
 		WhereOf
 	} from '../collection/types.js';
-	import type { Json, Q } from '../client/contract.js';
+	import type { Json, Query } from '../client/contract.js';
 	import type { OrderBy, Where } from '../filter/filter.js';
 	import type { Toolbar, ToolbarItem } from '../collection/ViewToolbar.svelte';
 	import type { Kind } from '../kinds/kind.js';
 
 	type TableData<R extends Values> = Page<R> | readonly R[];
-	/** A table's source: a collection name, a named collection query, a native read/query Effect, or a local row array. */
+	/** A table's source: a collection name, a named collection query (paged by the table), a native `bolt.query`, or a local row array. */
 	export type TableSource<R extends Values = Values> =
 		| CollectionKey
 		| {
-				[N in QueryKey]: { query: N; input?: QueryInputOf<N>; on?: readonly CollectionKey[] };
+				[N in QueryKey]: { query: N; input?: QueryInputOf<N> };
 		  }[QueryKey]
-		| Q<TableData<R>>
+		| Query<TableData<R>>
 		| readonly R[];
 	type PageRow<T> = T extends { readonly rows: readonly (infer R extends Values)[] }
 		? R
@@ -51,7 +49,7 @@
 		? RowOf<S> & Values
 		: S extends { query: infer N }
 			? PageRow<QueryOutputOf<N>>
-			: S extends Q<infer T>
+			: S extends Query<infer T>
 				? PageRow<T>
 				: S extends readonly (infer R extends Values)[]
 					? R
@@ -80,15 +78,12 @@
 	export type Col<R = Row, K = R> = {
 		[F in keyof K & string]: F | ColumnDefinition<R, K, F>;
 	}[keyof K & string];
-	/** A row action literal: `{ action: '<c>.<a>', input?, confirm? }`; the default input targets the row. */
+	/** A row's labelled native handler, optionally confirmed before it runs. */
 	export type RowAction<R = Row> = {
-		[A in ActionKey]: {
-			action: A;
-			input?: (row: R) => ActionInputOf<A>;
-			confirm?: string;
-			label?: string;
-		};
-	}[ActionKey];
+		label: string;
+		confirm?: string;
+		run: (row: R) => Effect.Effect<unknown, Error> | void;
+	};
 	/** Typed by the source `of` names, including the native row and authored column field types. */
 	export type TableProps<S = TableSource, R extends Values = RowIn<S>, K = ColumnsIn<S>> = {
 		of: S & TableSource<R & Partial<K>>;
@@ -104,11 +99,19 @@
 		layout?: 'responsive' | 'grid';
 		/** The chrome: title, description, search, filter and sort, the actions menu and New (`ViewToolbar`). */
 		toolbar?: Toolbar<R>;
+		/** A host-backed page may supply its own cursor controls in place of the default range and pager. */
+		footer?: Snippet;
+		/** For a supplied row array, the caller owns filtering, sorting and paging; display those rows verbatim. */
+		controlled?: boolean;
+		/** A controlled local matrix inside another surface: content height, no card, toolbar or footer. */
+		embedded?: boolean;
+		/** Semantic row treatment, shared by the grid and narrow layout. */
+		rowClass?: (row: R) => string | undefined;
+		/** An action revealed on row hover or keyboard focus, inside the final displayed cell. */
+		rowTrailing?: Snippet<[R]>;
 		actions?: readonly RowAction<R>[];
 		/** The URL parameter prefix; defaults to the source's name. */
 		key?: string;
-		/** A clock query's refresh (`every`, rule 64). */
-		every?: string;
 		empty?: Snippet;
 		onOpen?: (row: R) => void;
 		/** Local arrays only: editable when given; each change is a fresh array. */
@@ -118,7 +121,7 @@
 	};
 	const localSource = <R extends Values>(value: TableSource<R>): value is readonly R[] =>
 		Array.isArray(value);
-	const querySource = <R extends Values>(value: TableSource<R>): value is Q<TableData<R>> =>
+	const querySource = <R extends Values>(value: TableSource<R>): value is Query<TableData<R>> =>
 		Effect.isEffect(value);
 	const tableInput = <R extends Values>(value: TableSource<R>) => {
 		if (typeof value === 'string') return { _tag: 'collection' as const, name: value };
@@ -142,37 +145,35 @@
 	import { Button } from '../primitives/button/index.js';
 	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import * as Popover from '../primitives/popover/index.js';
-	import { Tooltip } from '../primitives/tooltip/index.js';
-	import { Combobox } from '../primitives/combobox/index.js';
+	import Tooltip from '../primitives/tooltip/tooltip.svelte';
+	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
 	import { useKinds } from '../kinds/context.js';
 	import { likeWhere } from '../kinds/kind.js';
 	import { KINDS } from '../kinds/registry.js';
 	import { openRecord } from '../record/navigation.js';
 	import { provideCollection } from '../collection/context.js';
-	import { useBolt } from '../client/context.js';
-	import { type Outcome } from '../client/contract.js';
+	import { useOptionalBolt } from '../client/context.js';
+	import type { ViewBolt } from '../client/contract.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
 	import { watch } from '../read/live.svelte.js';
-	import { notify } from '../actions/notify.js';
+	import { toast } from '../toast/toast.svelte.js';
 	import { localExposure, matches, orderOf, sortable, sortRows } from '../filter/filter.js';
-	import { actOutcome } from '../actions/outcome.js';
 	import { and, compact } from '../filter/scope.js';
-	import { COUNT_EVERY_MS, once, pageRead } from '../read/paging.js';
+	import { COUNT_EVERY_MS, pageRead } from '../read/paging.js';
 	import { countOf, isRow, nextOf, rowsOf } from '../read/results.js';
-	import { filesOf, like, valueAt } from '../cell/value.js';
+	import { like, valueAt } from '../cell/value.js';
 	import { humanize, label, lowerLead, msg } from '../text/messages.js';
 	import { listSelect, refOf, unref } from '../relations/select.js';
 	import {
-		queryIds,
 		rangeText,
 		readTableState,
 		searchRows,
 		writeTableState,
 		type TableState
 	} from './model.js';
-	import { type ReadState } from '../read/state.js';
+	import { queryState, type Reading, type ReadState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar, { selectionEnabled } from '../collection/ViewToolbar.svelte';
 	import ReadGate from '../read/ReadGate.svelte';
@@ -189,16 +190,27 @@
 		pageSize = 25,
 		layout = 'responsive',
 		toolbar = {},
+		footer: customFooter,
+		controlled = false,
+		embedded = false,
+		rowClass,
+		rowTrailing,
 		actions = [],
 		key,
-		every,
 		empty,
 		onOpen,
 		onChange,
 		add,
 		remove
 	}: TableProps<S, RowIn<S>, ColumnsIn<S>> = $props();
-	const bolt = useBolt();
+	const client = useOptionalBolt();
+	if (client === undefined && !untrack(() => embedded && controlled && localSource(of)))
+		throw new Error('A view needs the shell: call provideBolt(bolt) above it.');
+	const host = () => {
+		if (client === undefined) throw new Error('A remote table needs the shell.');
+		return client;
+	};
+	const text: Pick<ViewBolt, 't'> = client ?? { t: (key) => key };
 	const kinds = useKinds();
 
 	type ReadRow = RowIn<S> & Partial<ColumnsIn<S>>;
@@ -232,18 +244,19 @@
 	);
 	const tb = $derived(toolbar === false ? {} : toolbar);
 	// search where the collection declares search fields (rule 16), else `like` over its label's text fields, or over a
-	// local array's columns, or through a named similarity or query (the toolbar's `/<name>`)
+	// local array's columns, or through `search.semantic` or a search index (the toolbar's `/<name>`)
 	const exposed = $derived(kinds.catalog?.[collection]);
 	const indexed = $derived((exposed?.search?.length ?? 0) > 0);
 	const byLabel = (q: string) =>
 		indexed ? undefined : likeWhere(exposed, exposed?.label ?? [], q);
 	const canSearch = $derived(
-		kind === 'local' ||
-			(kind === 'collection' &&
-				(indexed ||
-					byLabel('x') !== undefined ||
-					exposed?.similarity !== undefined ||
-					exposed?.queries !== undefined))
+		!controlled &&
+			(kind === 'local' ||
+				(kind === 'collection' &&
+					(indexed ||
+						byLabel('x') !== undefined ||
+						exposed?.semantic === true ||
+						exposed?.indexes !== undefined)))
 	);
 	const kindOf = (f: string) => {
 		const column = columns.find((c) => colOf(c).field === f);
@@ -273,10 +286,10 @@
 	const fieldLabel = (f: string) =>
 		collection === ''
 			? (kindOf(f)?.label ?? humanize(f))
-			: label(bolt, collection, f, kindOf(f)?.label);
+			: label(text, collection, f, kindOf(f)?.label);
 	// the cells' enum and state words read this collection's catalog keys
 	provideCollection(() => collection);
-	const canFilter = $derived(kind === 'collection' || kind === 'local');
+	const canFilter = $derived(!controlled && (kind === 'collection' || kind === 'local'));
 	// the view popover's catalog: the caller's exposure, or a local array's columns (kinds from its values)
 	const LOCAL = '$local';
 	const source = $derived(kind === 'local' ? LOCAL : collection);
@@ -294,15 +307,16 @@
 				: { ...kinds.catalog, [collection]: localExposure([], fields, (f) => fieldLabel(f)) }
 	);
 	const sorts = $derived(
-		kind === 'collection' || kind === 'local'
+		!controlled && (kind === 'collection' || kind === 'local')
 			? sortable(catalog[source], kind !== 'local', catalog)
 			: []
 	);
-	const vs = viewState(bolt, {
+	const vs = viewState(client, {
 		key: () => urlKey,
 		collection: () => source,
 		catalog: () => catalog,
-		initialFilter: () => initialFilter
+		initialFilter: () => initialFilter,
+		enabled: () => !controlled
 	});
 	// Local projections can drive bulk actions only when each row names a distinct, stable record.
 	const localIds = $derived(
@@ -356,60 +370,16 @@
 	// ── view state in the URL (rule 8) ──
 	const params = () =>
 		typeof location === 'undefined' ? new URLSearchParams() : new URL(location.href).searchParams;
-	let st = $state<TableState>(untrack(() => readTableState(params(), urlKey)));
+	let st = $state<TableState>(
+		untrack(() => (controlled ? { after: null, q: '' } : readTableState(params(), urlKey)))
+	);
 	let back = $state<(string | null)[]>([]);
 	let qText = $state(untrack(() => st.q));
-	// a typed index the toolbar runs, a named similarity (§3.3.4) or query: its rows, in its order, in place of the page;
-	// read once, not live
-	let probe = $state<{ name: string; via: 'similar' | 'query'; input: Json } | null>(null);
-	function probed(p: {
-		name: string;
-		via: 'similar' | 'query';
-		input: Json;
-	}): Effect.Effect<Page<ReadRow>, import('../client/contract.js').ReadError> {
-		return Effect.gen(function* () {
-			const select = listSelect(kinds.catalog, name, fields, refs),
-				where = scope;
-			if (p.via === 'similar') {
-				if (bolt.similar === undefined)
-					return yield* Effect.fail(
-						Object.assign(new Error('this host answers no similar read'), {
-							_tag: 'ReadFailed' as const,
-							code: 'unsupported'
-						})
-					);
-				return {
-					rows: tableRows(
-						yield* bolt.similar<readonly ReadRow[]>(
-							name,
-							p.name,
-							p.input,
-							compact({ where, select, limit: size })
-						)
-					),
-					next: null
-				};
-			}
-			const answer = yield* bolt.query<TableData<ReadRow>>(`${name}.${p.name}`, p.input);
-			const out = queryIds(answer, exposed?.queries?.[p.name]?.output, name);
-			if ('rows' in out) return { rows: tableRows(answer), next: null };
-			if (out.ids.length === 0) return { rows: [], next: null };
-			const byId = new Map(
-				tableRows(
-					yield* bolt.read<Page<ReadRow>>(
-						name,
-						compact({ where: and(where, { id: { in: out.ids } }), select, limit: out.ids.length })
-					)
-				).map((r) => [r['id'], r])
-			);
-			return {
-				rows: out.ids.map((id) => byId.get(id)).filter((row): row is ReadRow => row !== undefined),
-				next: null
-			};
-		});
-	}
+	// a search index the toolbar runs (`/<index>` and its input): its nearest rows, in its order, in place of the page
+	let probe = $state<{ index: string; input: Json } | null>(null);
 	let notice = $state<string | null>(null);
 	$effect(() => {
+		if (controlled) return;
 		const next = writeTableState(params(), urlKey, st);
 		if (typeof location !== 'undefined')
 			history.replaceState(
@@ -447,56 +417,50 @@
 			? { where: scope, search: st.q || undefined }
 			: { where: and(scope, byLabel(st.q)), search: undefined }
 	);
-	const page = watch(() => {
+	const page = $derived.by((): Reading<TableData<ReadRow>> | null => {
 		const after = st.after ?? undefined;
+		const select = listSelect(kinds.catalog, name, fields, refs);
+		if (kind === 'collection' && probe !== null)
+			return host().query<Page<ReadRow>>(
+				name,
+				compact({ search: { [probe.index]: probe.input }, where: scope, select, limit: size })
+			);
 		// hook:agent-ui — a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
-		if (kind === 'collection' && probe !== null) return once(probed(probe));
 		if (kind === 'collection')
 			return pageRead(
-				bolt,
 				(limit, at) =>
-					bolt.read<Page<ReadRow>>(
+					host().query<Page<ReadRow>>(
 						name,
-						compact({
-							...searched,
-							orderBy: order,
-							select: listSelect(kinds.catalog, name, fields, refs),
-							limit,
-							after: at
-						})
+						compact({ ...searched, orderBy: order, select, limit, after: at })
 					),
 				size,
 				back.length > 0 ? back.length : null,
-				after,
-				every
+				after
 			);
 		if (tableSource._tag === 'query') {
 			const input = tableSource.input;
 			const declared = exposed?.queries?.[name.slice(name.lastIndexOf('.') + 1)]?.input;
-			return bolt.live(
-				bolt.query<TableData<ReadRow>>(
-					name,
-					isRow(input)
-						? compact({
-								...input,
-								...(declared === undefined || declared.limit !== undefined ? { limit: size } : {}),
-								...(declared === undefined || declared.after !== undefined ? { after } : {})
-							})
-						: input
-				),
-				{ on: [collection] }
+			return host().query<TableData<ReadRow>>(
+				name,
+				isRow(input)
+					? compact({
+							...input,
+							...(declared === undefined || declared.limit !== undefined ? { limit: size } : {}),
+							...(declared === undefined || declared.after !== undefined ? { after } : {})
+						})
+					: input
 			);
 		}
-		if (tableSource._tag === 'read')
-			return bolt.live(tableSource.read, every === undefined ? {} : { every });
+		if (tableSource._tag === 'read') return tableSource.read;
 		return null;
 	});
+	const pageState = $derived(queryState(page));
 	$effect(() => {
-		const s = page.state;
+		const s = pageState;
 		if (s.kind === 'error' && s.code === 'badCursor')
 			untrack(() => {
 				notice = msg(
-					bolt,
+					text,
 					'table.badCursor',
 					'That page is no longer available; showing the first page.'
 				);
@@ -505,25 +469,29 @@
 	});
 	const local = $derived(
 		kind === 'local'
-			? sortRows(
-					searchRows(tableSource._tag === 'local' ? tableSource.rows : [], st.q, fields).filter(
-						(r) => matches(r, { t: 'group', join: 'and', of: vs.rows })
-					),
-					vs.order
-				)
+			? controlled
+				? tableSource._tag === 'local'
+					? tableSource.rows
+					: []
+				: sortRows(
+						searchRows(tableSource._tag === 'local' ? tableSource.rows : [], st.q, fields).filter(
+							(r) => matches(r, { t: 'group', join: 'and', of: vs.rows })
+						),
+						vs.order
+					)
 			: []
 	);
 	const view: ReadState<readonly ReadRow[]> = $derived(
 		kind === 'local'
 			? { kind: 'ready', value: local }
-			: page.state.kind === 'ready'
+			: pageState.kind === 'ready'
 				? {
 						kind: 'ready',
-						value: tableRows(page.state.value)
+						value: tableRows(pageState.value)
 					}
-				: page.state
+				: pageState
 	);
-	const next = $derived(page.state.kind === 'ready' ? nextOf(page.state.value) : null);
+	const next = $derived(pageState.kind === 'ready' ? nextOf(pageState.value) : null);
 	// a long page (pageSize 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
 	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
 	const presented = $derived(
@@ -531,7 +499,7 @@
 			shownRows.map<[ReadRow, Values]>((row) => [
 				row,
 				typeof row['id'] === 'string'
-					? (unref(kinds.catalog, collection, refs, rowsOf([row]), bolt.locale)[0] ?? row)
+					? (unref(kinds.catalog, collection, refs, rowsOf([row]), client?.locale)[0] ?? row)
 					: row
 			])
 		)
@@ -555,15 +523,17 @@
 		const read = Effect.suspend(() => {
 			if (!first && !countInvalid) return Effect.succeed(cached);
 			const revision = countRevision;
-			return bolt.aggregate(collection, compact({ count: true, where })).pipe(
-				Effect.tap((answer) =>
-					Effect.sync(() => {
-						cached = answer;
-						first = false;
-						countInvalid = revision !== countRevision;
-					})
-				)
-			);
+			return host()
+				.aggregate(collection, compact({ count: true, where }))
+				.pipe(
+					Effect.tap((answer) =>
+						Effect.sync(() => {
+							cached = answer;
+							first = false;
+							countInvalid = revision !== countRevision;
+						})
+					)
+				);
 		});
 		return Stream.fromEffectSchedule(read, Schedule.spaced(COUNT_EVERY_MS));
 	});
@@ -571,7 +541,7 @@
 		countInvalid || countRead.error !== undefined ? null : countOf(countRead.value)
 	);
 	onChange_(
-		() => page.value,
+		() => page?.current,
 		(current, previous) => {
 			if (previous !== undefined && current !== undefined && current !== previous) {
 				countRevision++;
@@ -583,12 +553,6 @@
 	// ── selection and row actions (the toolbar runs its own) ──
 	type SelectedId = Parameters<ToolbarItem<RowIn<S>>['run']>[0][number];
 	const selected = new SvelteSet<SelectedId>();
-	const say = (o: Outcome) => {
-		notify(bolt, o);
-		if (o.kind === 'committed')
-			for (const f of filesOf(o.output)) window.open(bolt.fileUrl(f), '_blank', 'noopener');
-		if (o.kind === 'committed' || o.kind === 'pendingApproval') selected.clear();
-	};
 	// select-all: the page's rows, then (once the page is all selected) every row the scope and search match
 	const recordRow = <R extends RowIn<S>>(row: R): row is R & { readonly id: SelectedId } =>
 		typeof row['id'] === 'string' && row['id'].trim() !== '';
@@ -606,8 +570,8 @@
 		if (kind === 'local') return void local.filter(recordRow).forEach((r) => selected.add(r.id));
 		selecting = true;
 		fork(
-			bolt
-				.read<Page<RowIn<S>>>(name, compact({ ...searched, select: { id: true }, all: true }))
+			host()
+				.query<Page<RowIn<S>>>(name, compact({ ...searched, select: { id: true }, all: true }))
 				.pipe(
 					Effect.tap((answer) =>
 						Effect.sync(() => {
@@ -628,22 +592,25 @@
 		);
 	}
 	function rowAct(a: RowAction<RowIn<S>>, row: RowIn<S>) {
-		const input = a.input !== undefined ? a.input(row) : recordRow(row) ? { target: row.id } : null;
-		if (input === null) return;
 		const asked =
 			a.confirm === undefined
 				? Effect.succeed(true)
-				: confirmAction({ title: a.confirm, confirmLabel: a.label ?? a.action });
+				: confirmAction({ title: a.confirm, confirmLabel: a.label });
 		fork(
 			asked.pipe(
 				Effect.flatMap((confirmed) =>
 					confirmed
-						? actOutcome(bolt.act(a.action, input)).pipe(
-								Effect.tap((outcome) => Effect.sync(() => say(outcome)))
+						? Effect.try({
+								try: () => a.run(row),
+								catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+							}).pipe(
+								Effect.flatMap((output) => (output === undefined ? Effect.void : output)),
+								Effect.asVoid
 							)
 						: Effect.void
 				)
-			)
+			),
+			(error) => toast.error(text.t(error.message))
 		);
 	}
 	// the toolbar's CSV: every row of the current scope, search and sort, over the view's columns
@@ -654,7 +621,7 @@
 					labels: columns.map(colLabel),
 					kinds: columnKinds,
 					read: () =>
-						bolt.read(
+						host().query(
 							name,
 							compact({
 								...searched,
@@ -678,7 +645,7 @@
 	const range = $derived(
 		view.kind !== 'ready'
 			? null
-			: rangeText(bolt, back.length * size, view.value.length, paged ? count : view.value.length)
+			: rangeText(text, back.length * size, view.value.length, paged ? count : view.value.length)
 	);
 	const pages = $derived(count === null || !paged ? null : Math.max(1, Math.ceil(count / size)));
 	const setSize = (n: number) => {
@@ -786,7 +753,7 @@
 	};
 	/** A cell's full text, its tooltip when the single line truncates. */
 	const fullText = (row: ReadRow, f: string) =>
-		refOf(presentRow(row), f)?.text ?? show(valueAt(presentRow(row), f), bolt.locale);
+		refOf(presentRow(row), f)?.text ?? show(valueAt(presentRow(row), f), client?.locale);
 	const presentRow = (row: ReadRow): Values => presented.get(row) ?? row;
 	const columnValue = <F extends keyof ColumnsIn<S> & string>(row: ReadRow, field: F) => row[field];
 
@@ -858,56 +825,60 @@
 		class="text-muted-foreground flex shrink-0 min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t px-2 py-1 text-xs"
 		data-table-footer
 	>
-		{#if selectable && !(kind === 'local' && onChange)}{@render selection(rows)}{:else}<span
-				class="px-1 tabular-nums"
-				data-range>{range}</span
-			>{/if}
-		{#if paged}
-			<div class="flex items-center gap-1" data-pager>
-				<Combobox
-					variant="ghost"
-					class="w-24"
-					size="sm"
-					aria-label={msg(bolt, 'table.pageSize', 'Rows per page')}
-					searchable={false}
-					options={SIZES.map((n) => ({
-						value: String(n),
-						label: msg(bolt, 'table.perPage', '{n} / page', { n })
-					}))}
-					value={String(size)}
-					onChange={(v) => v !== null && setSize(Number(v))}
-				/>
-				<Button
-					size="icon-sm"
-					variant="ghost"
-					hint={msg(bolt, 'table.prev', 'Previous')}
-					aria-label={msg(bolt, 'table.prev', 'Previous')}
-					disabled={back.length === 0}
-					onclick={() => {
-						st = { ...st, after: back.at(-1) ?? null };
-						back = back.slice(0, -1);
-					}}><Glyph name="left" /></Button
-				>
-				<span class="min-w-16 text-center tabular-nums" data-page
-					>{pages === null
-						? msg(bolt, 'table.page', 'Page {page}', { page: back.length + 1 })
-						: msg(bolt, 'table.pageOf', 'Page {page} of {pages}', {
-								page: back.length + 1,
-								pages
-							})}</span
-				>
-				<Button
-					size="icon-sm"
-					variant="ghost"
-					hint={msg(bolt, 'table.next', 'Next')}
-					aria-label={msg(bolt, 'table.next', 'Next')}
-					disabled={next === null}
-					onclick={() => {
-						back = [...back, st.after];
-						st = { ...st, after: next };
-					}}><Glyph name="right" /></Button
-				>
-			</div>
+		{#if customFooter}{@render customFooter()}{:else}
+			{#if selectable && !(kind === 'local' && onChange)}{@render selection(rows)}{:else}<span
+					class="px-1 tabular-nums"
+					data-range>{range}</span
+				>{/if}
+			{#if paged}
+				<div class="flex items-center gap-1" data-pager>
+					<Combobox
+						variant="ghost"
+						class="w-24"
+						size="sm"
+						aria-label={msg(text, 'table.pageSize', 'Rows per page')}
+						searchable={false}
+						options={SIZES.map((n) => ({
+							value: String(n),
+							label: msg(text, 'table.perPage', '{n} / page', { n })
+						}))}
+						value={String(size)}
+						onChange={(v) => v !== null && setSize(Number(v))}
+					/>
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						hint={msg(text, 'table.prev', 'Previous')}
+						aria-label={msg(text, 'table.prev', 'Previous')}
+						disabled={back.length === 0}
+						onclick={() => {
+							st = { ...st, after: back.at(-1) ?? null };
+							back = back.slice(0, -1);
+						}}><Glyph name="left" /></Button
+					>
+					<span class="min-w-16 text-center tabular-nums" data-page
+						>{pages === null
+							? msg(text, 'table.page', 'Page {page}', { page: back.length + 1 })
+							: msg(text, 'table.pageOf', 'Page {page} of {pages}', {
+									page: back.length + 1,
+									pages
+								})}</span
+					>
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						hint={msg(text, 'table.next', 'Next')}
+						aria-label={msg(text, 'table.next', 'Next')}
+						disabled={next === null}
+						onclick={() => {
+							const cursor = next;
+							if (cursor === null) return;
+							back = [...back, st.after];
+							st = { ...st, after: cursor };
+						}}><Glyph name="right" /></Button
+					>
+				</div>
+			{/if}
 		{/if}
 	</footer>
 {/snippet}
@@ -930,7 +901,7 @@
 		<Popover.Root>
 			<Popover.Trigger
 				class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-8 max-sm:size-11 place-items-center rounded-sm"
-				aria-label={msg(bolt, 'table.rowActions', 'Row actions')}
+				aria-label={msg(text, 'table.rowActions', 'Row actions')}
 				data-row-menu><Glyph name="more" class="size-4" /></Popover.Trigger
 			>
 			<Popover.Content
@@ -943,14 +914,14 @@
 {/snippet}
 
 {#snippet rowActions(row: ReadRow)}
-	{#each actions as a (a.action)}
+	{#each actions as a (a)}
 		<Button
 			size="sm"
 			variant="ghost"
 			onclick={(e: MouseEvent) => {
 				e.stopPropagation();
 				rowAct(a, row);
-			}}>{a.label ?? humanize(a.action.slice(a.action.lastIndexOf('.') + 1))}</Button
+			}}>{a.label}</Button
 		>
 	{/each}
 	{#if kind === 'local' && onChange && remove}
@@ -961,7 +932,7 @@
 				if (tableSource._tag !== 'local') return;
 				const index = tableSource.rows.indexOf(row);
 				if (index >= 0) onChange(tableSource.rows.filter((_, i) => i !== index));
-			}}>{msg(bolt, 'table.remove', 'Remove')}</Button
+			}}>{msg(text, 'table.remove', 'Remove')}</Button
 		>
 	{/if}
 {/snippet}
@@ -975,15 +946,15 @@
 			<input
 				type="checkbox"
 				checked={all}
-				aria-label={msg(bolt, 'table.selectPage', 'Select this page')}
+				aria-label={msg(text, 'table.selectPage', 'Select this page')}
 				onchange={(e) => togglePage(rows, e.currentTarget.checked)}
 				data-select-page
 			/>
-			{msg(bolt, 'table.selectPage', 'Select this page')}
+			{msg(text, 'table.selectPage', 'Select this page')}
 		</label>
 		{#if selected.size > 0}
 			<span class="font-medium" data-selected-count
-				>{msg(bolt, 'table.selected', '{n} selected', { n: selected.size })}</span
+				>{msg(text, 'table.selected', '{n} selected', { n: selected.size })}</span
 			>
 			{#if all && matching !== null && matching > selected.size}
 				<Button
@@ -994,7 +965,7 @@
 					onclick={selectMatching}
 					data-select-matching
 				>
-					{msg(bolt, 'table.selectMatching', 'Select all {n} matching', { n: matching })}</Button
+					{msg(text, 'table.selectMatching', 'Select all {n} matching', { n: matching })}</Button
 				>
 			{/if}
 			<Button
@@ -1002,7 +973,7 @@
 				size="sm"
 				class="h-auto px-0 text-xs"
 				onclick={() => selected.clear()}
-				data-select-clear>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button
+				data-select-clear>{msg(text, 'table.clearSelection', 'Clear selection')}</Button
 			>
 		{:else}<span class="tabular-nums" data-range>{range}</span>{/if}
 	</div>
@@ -1011,450 +982,461 @@
 <!-- the view fills a bounded parent (a flex column or a definite height) and scrolls inside its card; it never grows the
      parent past its own minimum. The card: the grid (wide) or the list (narrow), then the footer, pinned at the card's foot. -->
 <section
-	class="@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2"
+	class={embedded
+		? '@container min-w-0'
+		: '@container flex h-full min-h-[min(18rem,100%)] min-w-0 flex-1 flex-col gap-2'}
 	data-view="table"
 	data-source={kind}
+	data-embedded={embedded || undefined}
 >
-	<ViewToolbar
-		config={toolbar}
-		{collection}
-		view={canFilter ? vs : undefined}
-		{catalog}
-		{source}
-		author={where}
-		sortable={sorts}
-		bind:q={qText}
-		searchable={canSearch}
-		selected={selectable ? [...selected] : undefined}
-		onSettled={() => selected.clear()}
-		{exporter}
-		onAdd={kind === 'local' && onChange && add
-			? () => onChange([...(tableSource._tag === 'local' ? tableSource.rows : []), add()])
-			: undefined}
-		onProbe={kind === 'collection'
-			? (p) => {
-					probe = p;
-					restart({});
-				}
-			: undefined}
-	/>
+	{#if !embedded}<ViewToolbar
+			config={toolbar}
+			{collection}
+			view={canFilter ? vs : undefined}
+			{catalog}
+			{source}
+			author={where}
+			sortable={sorts}
+			bind:q={qText}
+			searchable={canSearch}
+			selected={selectable ? [...selected] : undefined}
+			onSettled={() => selected.clear()}
+			{exporter}
+			onAdd={kind === 'local' && onChange && add
+				? () => onChange([...(tableSource._tag === 'local' ? tableSource.rows : []), add()])
+				: undefined}
+			onProbe={kind === 'collection'
+				? (p) => {
+						probe = p;
+						restart({});
+					}
+				: undefined}
+		/>{/if}
 	{#if notice}<p role="status" class="text-muted-foreground text-sm">{notice}</p>{/if}
 
-	<ReadGate
-		state={view}
-		what={collection === '' ? msg(bolt, 'table.rows', 'these rows') : label(bolt, collection)}
-	>
-		{#snippet children(rows)}
-			{#if rows.length === 0}
-				{#if empty}{@render empty()}
-				{:else}
-					<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
-					{@const what =
-						collection === ''
-							? msg(bolt, 'table.rows', 'rows')
-							: lowerLead(label(bolt, collection))}
-					<div class="bg-card min-w-0 rounded-md border" data-table-card>
-						{#if filtered}
-							<EmptyState
-								variant="inset"
-								icon="search"
-								title={msg(bolt, 'table.noMatch', 'No {what} match this search or filter', {
-									what
-								})}
-								hint={msg(
-									bolt,
-									'table.noMatchHint',
-									'Try a different search, or clear the filters.'
-								)}
-							>
-								<Button
-									size="sm"
-									variant="outline"
-									onclick={() => {
-										vs.clear();
-										qText = '';
-									}}>{msg(bolt, 'view.clearAll', 'Clear all')}</Button
-								>
-							</EmptyState>
-						{:else}
-							<EmptyState
-								variant="inset"
-								title={msg(bolt, 'table.empty', 'No {what} yet', { what })}
-								hint={canNew
-									? msg(bolt, 'table.noneHint', 'Create the first one to get started.')
-									: msg(bolt, 'table.emptyHint', 'Nothing has been added here yet.')}
-							>
-								{#if canNew}<Button
-										size="sm"
-										onclick={() =>
-											typeof tb.new === 'function'
-												? tb.new()
-												: openRecord(collection, 'new', contexts)}
-										><Glyph name="plus" />{msg(bolt, 'table.new', 'New')}</Button
-									>{/if}
-							</EmptyState>
-						{/if}
-					</div>
-				{/if}
+	{#snippet content(rows: readonly ReadRow[])}
+		{#if rows.length === 0}
+			{#if empty}{@render empty()}
 			{:else}
-				<div class="bg-card flex min-h-0 min-w-0 flex-1 flex-col rounded-md border" data-table-card>
-					<!-- its own scroll port : the grey header sticks, pinned columns stay while the rest scrolls sideways.
-					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
-					     the nowrap row actions never squeeze a truncating column down to its first letters -->
-					<div
-						class={[
-							'min-h-0 flex-1 overflow-auto rounded-t-md',
-							layout !== 'grid' && !(kind === 'local' && onChange) && 'hidden md:block'
-						]}
-						data-table-wide
-					>
-						<table
-							class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r"
+				<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
+				{@const what =
+					collection === '' ? msg(text, 'table.rows', 'rows') : lowerLead(label(text, collection))}
+				<div class={embedded ? 'min-w-0' : 'bg-card min-w-0 rounded-md border'} data-table-card>
+					{#if filtered}
+						<EmptyState
+							variant="inset"
+							icon="search"
+							title={msg(text, 'table.noMatch', 'No {what} match this search or filter', {
+								what
+							})}
+							hint={msg(text, 'table.noMatchHint', 'Try a different search, or clear the filters.')}
 						>
-							<thead class="bg-muted sticky top-0 z-20">
-								<tr>
-									{#if selectable}
-										<th class="bg-muted sticky left-0 z-10 w-8 px-2!"
-											><input
-												type="checkbox"
-												aria-label={msg(bolt, 'table.selectAll', 'Select all')}
-												checked={pageAll(rows)}
-												onchange={(e) => togglePage(rows, e.currentTarget.checked)}
-											/></th
-										>
-									{/if}
-									{#each ordered as c, ci (colOf(c).field)}
-										{@const f = colOf(c).field}
-										{@const isPinned = ci < pinCount}
-										<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
-										<th
-											class={[
-												'group bg-muted relative',
-												isPinned && 'sticky z-10',
-												isPinned && ci === pinCount - 1 && PIN_EDGE,
-												numeric(f) && 'text-right'
-											]}
-											style={[sized(widthOf(c)), isPinned ? `left:${leftOf(ci)}px` : '']
-												.filter(Boolean)
-												.join(';') || undefined}
-											draggable="true"
-											data-column={f}
-											ondragstart={(e) => {
-												dragging = f;
-												e.dataTransfer?.setData('text/x-bolt-column', f);
-											}}
-											ondragend={() => (dragging = null)}
-											ondragover={(e) => {
-												if (dragging !== null) e.preventDefault();
-											}}
-											ondrop={(e) => {
-												e.preventDefault();
-												if (dragging !== null) moveColumn(dragging, f);
-												dragging = null;
-											}}
-											{@attach measure(f)}
-										>
-											<span
-												class={['flex min-w-0 items-center gap-1', numeric(f) && 'justify-end']}
-											>
-												<span class="truncate whitespace-nowrap">{colLabel(c)}</span>
-												{@render columnInfo(c)}
-												{#if isPinned}<Glyph
-														name="pin"
-														class="text-muted-foreground size-3 shrink-0"
-													/>{/if}
-												<Popover.Root>
-													<Popover.Trigger
-														class={[
-															'text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100',
-															'opacity-0 group-hover:opacity-100'
-														]}
-														aria-label={msg(
-															bolt,
-															'table.columnMenu',
-															'Column options for {column}',
-															{ column: colLabel(c) }
-														)}
-														data-column-menu={f}
-														><Glyph name="more" class="size-3.5" /></Popover.Trigger
-													>
-													<Popover.Content
-														align="start"
-														class="flex w-52 flex-col gap-0.5 p-1.5 text-xs font-normal"
-													>
-														{@render colItem(
-															isPinned
-																? msg(bolt, 'table.unpin', 'Unpin column')
-																: msg(bolt, 'table.pin', 'Pin column'),
-															'pin',
-															() => togglePin(f)
-														)}
-														{@render colItem(
-															msg(bolt, 'table.hideColumn', 'Hide column'),
-															'eyeOff',
-															() => toggleHidden(f),
-															ordered.length === 1
-														)}
-														{@render colItem(
-															msg(bolt, 'table.moveLeft', 'Move left'),
-															'left',
-															() => moveColumn(f, -1),
-															ci === 0
-														)}
-														{@render colItem(
-															msg(bolt, 'table.moveRight', 'Move right'),
-															'right',
-															() => moveColumn(f, 1),
-															ci === ordered.length - 1
-														)}
-														{#if widths[f] !== undefined}{@render colItem(
-																msg(bolt, 'table.resetWidth', 'Reset width'),
-																'sync',
-																() => {
-																	const { [f]: _, ...rest } = widths;
-																	widths = rest;
-																	keep();
-																}
-															)}{/if}
-														{#if hiddenCols.length > 0}
-															<p
-																class="text-muted-foreground mt-1 border-t px-2 pt-2 pb-1 font-medium"
-															>
-																{msg(bolt, 'table.hiddenColumns', 'Hidden columns')}
-															</p>
-															{#each hiddenCols as h (colOf(h).field)}{@render colItem(
-																	colLabel(h),
-																	'eye',
-																	() => toggleHidden(colOf(h).field)
-																)}{/each}
-														{/if}
-													</Popover.Content>
-												</Popover.Root>
-											</span>
-											<!-- the resize handle: drag the column's right edge -->
-											<span
-												role="separator"
-												aria-orientation="vertical"
-												aria-label={msg(bolt, 'table.resize', 'Resize column')}
-												data-column-resize
-												class="group/resize absolute inset-y-0 -right-1 z-10 flex w-2 cursor-col-resize touch-none justify-center select-none"
-												onpointerdown={(e) => resize(e, f)}
-											>
-												<span
-													class="bg-muted-foreground/40 group-hover/resize:bg-brand my-auto h-5 w-px opacity-0 transition-opacity group-hover:opacity-100 group-hover/resize:w-0.5"
-												></span>
-											</span>
-										</th>
-									{/each}
-									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th
-											class={['bg-muted z-10', ACTS_EDGE]}
-										></th>{/if}
-								</tr>
-							</thead>
-							<tbody>
-								{#if wide.on}<tr aria-hidden="true" {@attach wide.anchor}
-										><td colspan={span} style="height:{wide.before}px;padding:0;border:0"></td></tr
-									>{/if}
-								{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
-									{@const i = wide.start + j}
-									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-									{@const held = approvalOf(row)}
-									<tr
-										class={[
-											'group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]',
-											opens && 'focus-visible:[&>td]:bg-accent cursor-pointer outline-none',
-											held !== null &&
-												(held.state === 'Pending'
-													? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
-													: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]')
-										]}
-										data-approval={held?.state}
-										title={held === null ? undefined : approvalText(bolt, held)}
-										{@attach wide.measure(rowKey(i))}
-										tabindex={opens ? 0 : undefined}
-										onclick={(e) => rowClick(e, row)}
-										onkeydown={(e) => {
-											if (opens && e.target === e.currentTarget && e.key === 'Enter') {
-												e.preventDefault();
-												open(row);
-											}
-										}}
-									>
-										{#if selectable && recordRow(row)}
-											<td class="bg-card sticky left-0 z-[1] px-2!">
-												<input
-													type="checkbox"
-													aria-label={msg(bolt, 'table.select', 'Select')}
-													checked={selected.has(row.id)}
-													onchange={(e) =>
-														e.currentTarget.checked
-															? selected.add(row.id)
-															: selected.delete(row.id)}
-												/>
-											</td>
-										{/if}
-										{#each ordered as c, ci (colOf(c).field)}
-											{@const col = colOf(c)}
-											{@const w = widthOf(c)}
-											{@const isPinned = ci < pinCount}
-											<td
-												class={[
-													'bg-card',
-													isPinned ? 'sticky z-[1]' : ci === 0 && 'relative',
-													isPinned && ci === pinCount - 1 && PIN_EDGE,
-													numeric(col.field) && 'text-right tabular-nums'
-												]}
-												style={[sized(w), isPinned ? `left:${leftOf(ci)}px` : '']
-													.filter(Boolean)
-													.join(';') || undefined}
-											>
-												{#if kind === 'local' && onChange && col.edit && !col.cell}
-													{@const value = valueAt(row, col.field)}
-													<input
-														class="border-input h-7 w-full rounded-sm border px-1"
-														type={typeof value === 'number' ? 'number' : 'text'}
-														value={String(value ?? '')}
-														onchange={(e) => edit(row, col.field, e.currentTarget.value)}
-													/>
-												{:else}
-													<!-- one line: a long value truncates, its full text is the tooltip -->
-													<div
-														class={[
-															'truncate [&_[data-enum-list]]:flex-nowrap',
-															w === undefined && 'max-w-80',
-															ci === 0 && opens && 'pr-7'
-														]}
-														title={fullText(row, col.field) || undefined}
-													>
-														{@render cell(row, col, ci === 0 && opens)}
-													</div>
-												{/if}
-												{#if ci === 0 && opens}
-													<!-- the open button : shown on hover or focus, beside the row's own click -->
-													<button
-														type="button"
-														class="bg-card text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm border opacity-0 shadow-xs outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
-														aria-label={msg(bolt, 'table.openRow', 'Open')}
-														title={msg(bolt, 'table.openRow', 'Open')}
-														onclick={() => open(row)}
-														data-row-open><Glyph name="expand" class="size-3.5" /></button
-													>
-												{/if}
-											</td>
-										{/each}
-										{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
-											<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
-												>{@render rowMenu(row)}</td
-											>
-										{/if}
-									</tr>
-								{/each}
-								{#if wide.after > 0}<tr aria-hidden="true"
-										><td colspan={span} style="height:{wide.after}px;padding:0;border:0"></td></tr
-									>{/if}
-							</tbody>
-						</table>
-					</div>
-					{#if layout !== 'grid' && !(kind === 'local' && onChange)}
-						<ul
-							class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md md:hidden"
-							data-table-list
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={() => {
+									vs.clear();
+									qText = '';
+								}}>{msg(text, 'view.clearAll', 'Clear all')}</Button
+							>
+						</EmptyState>
+					{:else}
+						<EmptyState
+							variant="inset"
+							title={msg(text, 'table.empty', 'No {what} yet', { what })}
+							hint={canNew
+								? msg(text, 'table.noneHint', 'Create the first one to get started.')
+								: msg(text, 'table.emptyHint', 'Nothing has been added here yet.')}
 						>
-							{#if narrow.on}<li
-									aria-hidden="true"
-									style="height:{narrow.before}px"
-									{@attach narrow.anchor}
-								></li>{/if}
-							{#each narrow.slice(rows) as row, j (row['id'] ?? narrow.start + j)}
-								{@const i = narrow.start + j}
-								{@const [lead, ...rest] = ordered.map(colOf).filter((c) => c.hide !== 'narrow')}
-								<li
-									class={[
-										'relative flex min-w-0 items-start gap-2 px-3 py-2.5 transition-colors',
-										recordRow(row) && selected.has(row.id) ? 'bg-accent/40' : 'hover:bg-muted/40'
-									]}
-									{@attach narrow.measure(rowKey(i))}
-								>
-									<ApprovalAccent {row} />
-									{#if selectable && recordRow(row)}
-										<input
-											class="mt-1"
-											type="checkbox"
-											aria-label={msg(bolt, 'table.select', 'Select')}
-											checked={selected.has(row.id)}
-											onchange={(e) =>
-												e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
-										/>
-									{/if}
-									<!-- a phone has no hover: the card itself opens the record; not a <button>, so a relation's link inside
-									     receives its own tap (it opens the related record) -->
-									<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
-									<div
-										role={opens ? 'button' : undefined}
-										tabindex={opens ? 0 : undefined}
-										class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 text-left"
-										data-row-card
-										onclick={(e) => rowClick(e, row)}
-										onkeydown={(e) => {
-											if (
-												opens &&
-												e.target === e.currentTarget &&
-												(e.key === 'Enter' || e.key === ' ')
-											) {
-												e.preventDefault();
-												open(row);
-											}
-										}}
-									>
-										{#if lead}<span class="truncate text-sm font-medium"
-												>{@render cell(row, lead, opens)}</span
-											>{/if}
-										{#if rest.length > 0}
-											<div class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
-												{#each rest.slice(0, 4) as c (c.field)}
-													<span
-														class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"
-														><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(c)}<span
-															class="text-foreground/80 min-w-0 truncate [&_[data-enum-list]]:flex-nowrap"
-															>{@render cell(row, c)}</span
-														></span
-													>
-												{/each}
-												{#if rest.length > 4}<details class="basis-full" data-row-extra-fields>
-														<summary class="cursor-pointer py-1"
-															>{msg(bolt, 'table.moreFields', '+{n} fields', {
-																n: rest.length - 4
-															})}</summary
-														>
-														<div class="flex flex-col gap-1 py-1">
-															{#each rest.slice(4) as c (c.field)}
-																<span class="inline-flex max-w-full min-w-0 items-baseline gap-1"
-																	><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(
-																		c
-																	)}<span class="text-foreground/80 min-w-0 break-words"
-																		>{@render cell(row, c)}</span
-																	></span
-																>
-															{/each}
-														</div>
-													</details>{/if}
-											</div>
-										{/if}
-									</div>
-									{#if actions.length > 0}<div class="flex shrink-0 flex-wrap justify-end">
-											{@render rowActions(row)}
-										</div>{/if}
-								</li>
-							{/each}
-							{#if narrow.after > 0}<li
-									aria-hidden="true"
-									style="height:{narrow.after}px"
-								></li>{/if}
-						</ul>
+							{#if canNew}<Button
+									size="sm"
+									onclick={() =>
+										typeof tb.new === 'function'
+											? tb.new()
+											: openRecord(collection, 'new', contexts)}
+									><Glyph name="plus" />{msg(text, 'table.new', 'New')}</Button
+								>{/if}
+						</EmptyState>
 					{/if}
-					{@render footer(rows)}
 				</div>
 			{/if}
-		{/snippet}
-	</ReadGate>
+			{#if !embedded && customFooter}{@render footer(rows)}{/if}
+		{:else}
+			<div
+				class={embedded
+					? 'min-w-0'
+					: 'bg-card flex min-h-0 min-w-0 flex-1 flex-col rounded-md border'}
+				data-table-card
+			>
+				<!-- its own scroll port : the grey header sticks, pinned columns stay while the rest scrolls sideways.
+					     Every column keeps its natural width (a long value stops at max-w-80): a table wider than the card scrolls, so
+					     the nowrap row actions never squeeze a truncating column down to its first letters -->
+				<div
+					class={[
+						embedded ? 'min-w-0 overflow-x-auto' : 'min-h-0 flex-1 overflow-auto rounded-t-md',
+						!embedded && layout !== 'grid' && !(kind === 'local' && onChange) && 'hidden md:block'
+					]}
+					data-table-wide
+				>
+					<table
+						class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r"
+					>
+						<thead class="bg-muted sticky top-0 z-20">
+							<tr>
+								{#if selectable}
+									<th class="bg-muted sticky left-0 z-10 w-8 px-2!"
+										><input
+											type="checkbox"
+											aria-label={msg(text, 'table.selectAll', 'Select all')}
+											checked={pageAll(rows)}
+											onchange={(e) => togglePage(rows, e.currentTarget.checked)}
+										/></th
+									>
+								{/if}
+								{#each ordered as c, ci (colOf(c).field)}
+									{@const f = colOf(c).field}
+									{@const isPinned = ci < pinCount}
+									<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
+									<th
+										class={[
+											'group bg-muted relative',
+											isPinned && 'sticky z-10',
+											isPinned && ci === pinCount - 1 && PIN_EDGE,
+											numeric(f) && 'text-right'
+										]}
+										style={[sized(widthOf(c)), isPinned ? `left:${leftOf(ci)}px` : '']
+											.filter(Boolean)
+											.join(';') || undefined}
+										draggable="true"
+										data-column={f}
+										ondragstart={(e) => {
+											dragging = f;
+											e.dataTransfer?.setData('text/x-bolt-column', f);
+										}}
+										ondragend={() => (dragging = null)}
+										ondragover={(e) => {
+											if (dragging !== null) e.preventDefault();
+										}}
+										ondrop={(e) => {
+											e.preventDefault();
+											if (dragging !== null) moveColumn(dragging, f);
+											dragging = null;
+										}}
+										{@attach measure(f)}
+									>
+										<span class={['flex min-w-0 items-center gap-1', numeric(f) && 'justify-end']}>
+											<span class="truncate whitespace-nowrap">{colLabel(c)}</span>
+											{@render columnInfo(c)}
+											{#if isPinned}<Glyph
+													name="pin"
+													class="text-muted-foreground size-3 shrink-0"
+												/>{/if}
+											<Popover.Root>
+												<Popover.Trigger
+													class={[
+														'text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100',
+														'opacity-0 group-hover:opacity-100'
+													]}
+													aria-label={msg(text, 'table.columnMenu', 'Column options for {column}', {
+														column: colLabel(c)
+													})}
+													data-column-menu={f}
+													><Glyph name="more" class="size-3.5" /></Popover.Trigger
+												>
+												<Popover.Content
+													align="start"
+													class="flex w-52 flex-col gap-0.5 p-1.5 text-xs font-normal"
+												>
+													{@render colItem(
+														isPinned
+															? msg(text, 'table.unpin', 'Unpin column')
+															: msg(text, 'table.pin', 'Pin column'),
+														'pin',
+														() => togglePin(f)
+													)}
+													{@render colItem(
+														msg(text, 'table.hideColumn', 'Hide column'),
+														'eyeOff',
+														() => toggleHidden(f),
+														ordered.length === 1
+													)}
+													{@render colItem(
+														msg(text, 'table.moveLeft', 'Move left'),
+														'left',
+														() => moveColumn(f, -1),
+														ci === 0
+													)}
+													{@render colItem(
+														msg(text, 'table.moveRight', 'Move right'),
+														'right',
+														() => moveColumn(f, 1),
+														ci === ordered.length - 1
+													)}
+													{#if widths[f] !== undefined}{@render colItem(
+															msg(text, 'table.resetWidth', 'Reset width'),
+															'sync',
+															() => {
+																const { [f]: _, ...rest } = widths;
+																widths = rest;
+																keep();
+															}
+														)}{/if}
+													{#if hiddenCols.length > 0}
+														<p
+															class="text-muted-foreground mt-1 border-t px-2 pt-2 pb-1 font-medium"
+														>
+															{msg(text, 'table.hiddenColumns', 'Hidden columns')}
+														</p>
+														{#each hiddenCols as h (colOf(h).field)}{@render colItem(
+																colLabel(h),
+																'eye',
+																() => toggleHidden(colOf(h).field)
+															)}{/each}
+													{/if}
+												</Popover.Content>
+											</Popover.Root>
+										</span>
+										<!-- the resize handle: drag the column's right edge -->
+										<span
+											role="separator"
+											aria-orientation="vertical"
+											aria-label={msg(text, 'table.resize', 'Resize column')}
+											data-column-resize
+											class="group/resize absolute inset-y-0 -right-1 z-10 flex w-2 cursor-col-resize touch-none justify-center select-none"
+											onpointerdown={(e) => resize(e, f)}
+										>
+											<span
+												class="bg-muted-foreground/40 group-hover/resize:bg-brand my-auto h-5 w-px opacity-0 transition-opacity group-hover:opacity-100 group-hover/resize:w-0.5"
+											></span>
+										</span>
+									</th>
+								{/each}
+								{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th
+										class={['bg-muted z-10', ACTS_EDGE]}
+									></th>{/if}
+							</tr>
+						</thead>
+						<tbody>
+							{#if wide.on}<tr aria-hidden="true" {@attach wide.anchor}
+									><td colspan={span} style="height:{wide.before}px;padding:0;border:0"></td></tr
+								>{/if}
+							{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
+								{@const i = wide.start + j}
+								<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+								{@const held = approvalOf(row)}
+								<tr
+									class={[
+										'group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]',
+										opens && 'focus-visible:[&>td]:bg-accent cursor-pointer outline-none',
+										rowClass?.(row),
+										held !== null &&
+											(held.state === 'Pending'
+												? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
+												: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]')
+									]}
+									data-approval={held?.state}
+									title={held === null ? undefined : approvalText(text, held)}
+									{@attach wide.measure(rowKey(i))}
+									tabindex={opens ? 0 : undefined}
+									onclick={(e) => rowClick(e, row)}
+									onkeydown={(e) => {
+										if (opens && e.target === e.currentTarget && e.key === 'Enter') {
+											e.preventDefault();
+											open(row);
+										}
+									}}
+								>
+									{#if selectable && recordRow(row)}
+										<td class="bg-card sticky left-0 z-[1] px-2!">
+											<input
+												type="checkbox"
+												aria-label={msg(text, 'table.select', 'Select')}
+												checked={selected.has(row.id)}
+												onchange={(e) =>
+													e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
+											/>
+										</td>
+									{/if}
+									{#each ordered as c, ci (colOf(c).field)}
+										{@const col = colOf(c)}
+										{@const w = widthOf(c)}
+										{@const isPinned = ci < pinCount}
+										<td
+											class={[
+												'bg-card',
+												isPinned
+													? 'sticky z-[1]'
+													: (ci === 0 || (rowTrailing && ci === ordered.length - 1)) && 'relative',
+												isPinned && ci === pinCount - 1 && PIN_EDGE,
+												numeric(col.field) && 'text-right tabular-nums',
+												embedded && 'align-middle',
+												rowTrailing && ci === ordered.length - 1 && 'pr-9!'
+											]}
+											style={[sized(w), isPinned ? `left:${leftOf(ci)}px` : '']
+												.filter(Boolean)
+												.join(';') || undefined}
+										>
+											{#if kind === 'local' && onChange && col.edit && !col.cell}
+												{@const value = valueAt(row, col.field)}
+												<input
+													class="border-input h-7 w-full rounded-sm border px-1"
+													type={typeof value === 'number' ? 'number' : 'text'}
+													value={String(value ?? '')}
+													onchange={(e) => edit(row, col.field, e.currentTarget.value)}
+												/>
+											{:else}
+												<!-- one line: a long value truncates, its full text is the tooltip -->
+												<div
+													class={[
+														embedded
+															? 'min-w-0 whitespace-normal'
+															: 'truncate [&_[data-enum-list]]:flex-nowrap',
+														!embedded && w === undefined && 'max-w-80',
+														ci === 0 && opens && 'pr-7'
+													]}
+													title={fullText(row, col.field) || undefined}
+												>
+													{@render cell(row, col, ci === 0 && opens)}
+												</div>
+											{/if}
+											{#if rowTrailing && ci === ordered.length - 1}
+												<div
+													class="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
+													data-row-trailing
+												>
+													{@render rowTrailing(row)}
+												</div>
+											{/if}
+											{#if ci === 0 && opens}
+												<!-- the open button : shown on hover or focus, beside the row's own click -->
+												<button
+													type="button"
+													class="bg-card text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm border opacity-0 shadow-xs outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
+													aria-label={msg(text, 'table.openRow', 'Open')}
+													title={msg(text, 'table.openRow', 'Open')}
+													onclick={() => open(row)}
+													data-row-open><Glyph name="expand" class="size-3.5" /></button
+												>
+											{/if}
+										</td>
+									{/each}
+									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
+										<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
+											>{@render rowMenu(row)}</td
+										>
+									{/if}
+								</tr>
+							{/each}
+							{#if wide.after > 0}<tr aria-hidden="true"
+									><td colspan={span} style="height:{wide.after}px;padding:0;border:0"></td></tr
+								>{/if}
+						</tbody>
+					</table>
+				</div>
+				{#if !embedded && layout !== 'grid' && !(kind === 'local' && onChange)}
+					<ul class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md md:hidden" data-table-list>
+						{#if narrow.on}<li
+								aria-hidden="true"
+								style="height:{narrow.before}px"
+								{@attach narrow.anchor}
+							></li>{/if}
+						{#each narrow.slice(rows) as row, j (row['id'] ?? narrow.start + j)}
+							{@const i = narrow.start + j}
+							{@const [lead, ...rest] = ordered.map(colOf).filter((c) => c.hide !== 'narrow')}
+							<li
+								class={[
+									'relative flex min-w-0 items-start gap-2 px-3 py-2.5 transition-colors',
+									recordRow(row) && selected.has(row.id) ? 'bg-accent/40' : 'hover:bg-muted/40',
+									rowClass?.(row)
+								]}
+								{@attach narrow.measure(rowKey(i))}
+							>
+								<ApprovalAccent {row} />
+								{#if selectable && recordRow(row)}
+									<input
+										class="mt-1"
+										type="checkbox"
+										aria-label={msg(text, 'table.select', 'Select')}
+										checked={selected.has(row.id)}
+										onchange={(e) =>
+											e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
+									/>
+								{/if}
+								<!-- a phone has no hover: the card itself opens the record; not a <button>, so a relation's link inside
+									     receives its own tap (it opens the related record) -->
+								<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
+								<div
+									role={opens ? 'button' : undefined}
+									tabindex={opens ? 0 : undefined}
+									class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 text-left"
+									data-row-card
+									onclick={(e) => rowClick(e, row)}
+									onkeydown={(e) => {
+										if (
+											opens &&
+											e.target === e.currentTarget &&
+											(e.key === 'Enter' || e.key === ' ')
+										) {
+											e.preventDefault();
+											open(row);
+										}
+									}}
+								>
+									{#if lead}<span class="truncate text-sm font-medium"
+											>{@render cell(row, lead, opens)}</span
+										>{/if}
+									{#if rest.length > 0}
+										<div class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+											{#each rest.slice(0, 4) as c (c.field)}
+												<span
+													class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"
+													><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(c)}<span
+														class="text-foreground/80 min-w-0 truncate [&_[data-enum-list]]:flex-nowrap"
+														>{@render cell(row, c)}</span
+													></span
+												>
+											{/each}
+											{#if rest.length > 4}<details class="basis-full" data-row-extra-fields>
+													<summary class="cursor-pointer py-1"
+														>{msg(text, 'table.moreFields', '+{n} fields', {
+															n: rest.length - 4
+														})}</summary
+													>
+													<div class="flex flex-col gap-1 py-1">
+														{#each rest.slice(4) as c (c.field)}
+															<span class="inline-flex max-w-full min-w-0 items-baseline gap-1"
+																><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(
+																	c
+																)}<span class="text-foreground/80 min-w-0 break-words"
+																	>{@render cell(row, c)}</span
+																></span
+															>
+														{/each}
+													</div>
+												</details>{/if}
+										</div>
+									{/if}
+								</div>
+								{#if actions.length > 0}<div class="flex shrink-0 flex-wrap justify-end">
+										{@render rowActions(row)}
+									</div>{/if}
+							</li>
+						{/each}
+						{#if narrow.after > 0}<li aria-hidden="true" style="height:{narrow.after}px"></li>{/if}
+					</ul>
+				{/if}
+				{#if !embedded}{@render footer(rows)}{/if}
+			</div>
+		{/if}
+	{/snippet}
+	{#if embedded}
+		{@render content(shownRows)}
+	{:else}
+		<ReadGate
+			state={view}
+			what={collection === '' ? msg(text, 'table.rows', 'these rows') : label(text, collection)}
+		>
+			{#snippet children(rows)}{@render content(rows)}{/snippet}
+		</ReadGate>
+	{/if}
 </section>

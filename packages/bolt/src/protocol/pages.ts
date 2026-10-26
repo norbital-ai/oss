@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import {
 	Context,
 	Crypto,
@@ -8,6 +7,7 @@ import {
 	FileSystem,
 	Layer,
 	Option,
+	Path,
 	Schema
 } from 'effect';
 import type * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
@@ -15,7 +15,6 @@ import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
 import type { Artifact } from '../engine/artifact/read.ts';
 import type { CrossAnswer } from '../engine/contracts.ts';
 import { Activation, Guest, GuestLimits, Manifest, Reads } from '../engine/services.ts';
-import { withRequestCpu } from '../engine/guest/request-cpu.ts';
 import { ShellHandler, type PublicPageRoute } from '../shell/host.ts';
 import { audienceOf, framePolicy, route, type ShellManifest } from '../shell/nav.ts';
 import { BoltError } from './errors.ts';
@@ -104,6 +103,7 @@ export const publicPages = (artifact: Artifact) =>
 		PublicPages,
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
+			const { join } = yield* Path.Path;
 			const documents = new Map(
 				yield* Effect.forEach(Object.keys(artifact.pages), (key) =>
 					fs
@@ -174,7 +174,6 @@ export const publicPages = (artifact: Artifact) =>
 							policies: caller.authority.policies
 						},
 						budget: {
-							cpuMs: limits.cpuMs,
 							crossings: limits.crossings.sync,
 							readBytes: limits.readBytes
 						}
@@ -268,7 +267,6 @@ export const publicPages = (artifact: Artifact) =>
 					FiberSet.run(
 						requests,
 						render(request).pipe(
-							withRequestCpu,
 							Effect.catch((error) => Effect.succeed(Option.some(responseError(error))))
 						)
 					).pipe(

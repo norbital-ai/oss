@@ -15,30 +15,34 @@ import {
 	Predicate,
 	PubSub,
 	Random,
+	Result,
 	Redacted,
 	Schema,
 	Semaphore
 } from 'effect';
+import * as EffectArray from 'effect/Array';
 import type { Json } from '../../decl/values.ts';
+const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 import type { Holder } from '../access/authority.ts';
 import { issueAutomationDelegation, delegatedVerbAuthority } from '../access/delegation.ts';
 import { Port, type PortFailure } from '../port.ts';
 import { AgentHost } from '../agent/index.ts';
-import { inferFacility, type InferTool } from '../agent/ai.ts';
+import { inferArgsOf, inferFacility, type InferTool } from '../agent/ai.ts';
+import { EmbedInputs, ImageOptions, Reference } from '../facilities.ts';
 import { readTool } from '../agent/tools.ts';
+import { SaidContent, StepContent } from '../agent/schema.ts';
 import {
 	LIMITS,
 	type AiMessage,
 	type Authority,
-	type Bindings,
 	type CrossAnswer,
 	type GuestOutcome
 } from '../contracts.ts';
 import { isTransient, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { withRequestCpu } from '../guest/request-cpu.ts';
-import { TenantDb } from '../db/tenant-db.ts';
-import { Ai, Drivers, Transport } from '../ports.ts';
+import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
+import { ReadDeps } from '../query/engine.ts';
+import { Ai, Drivers, Logs, Transport } from '../ports.ts';
 import {
 	Activation,
 	Callables,
@@ -54,6 +58,7 @@ import {
 	Wake,
 	Writes,
 	type CrossCall,
+	type ActsRequest,
 	type FacilityCall,
 	type RetrySpec,
 	type RunHandler
@@ -61,28 +66,35 @@ import {
 import { actorRef } from '../write/commit.ts';
 import {
 	answer,
-	canonical,
 	Chain,
 	GATED,
+	makeReadGuards,
 	noticeCaptures,
-	noticeInsert,
-	sha256Hex
+	noticeInsert
 } from '../write/sql.ts';
+import { canonical, sha256Hex } from '@norbital-ai/store';
 import { pruneHistory } from '../query/history.ts';
-import { localOf } from '@norbital-ai/std/zone';
+import { bindingsAt } from '../query/reader.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
-import { decodeInput } from '../callables/decode.ts';
+import { decodeInput, decodeOutput } from '../callables/decode.ts';
+import { isBatchCallable } from '../callables/index.ts';
 import { DecisionTrace, readableFile, storedFiles } from '../decisions/index.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
-import { preview } from '../conversations/store.ts';
+import { preview, stableId } from '../conversations/store.ts';
 import { instanceRequest } from '../integrations/instances.ts';
-import { feedsOf } from '../integrations/feeds.ts';
 import { verifiedWebhook, type WebhookRequest } from './webhook.ts';
-import { nextSlot } from './cron.ts';
 import { enqueue, nextDue, triggersOf } from './queue.ts';
-import { BUCKET_MS, backoffMs, dueAt, iso, offsetMs } from './time.ts';
+import { backoffMs, dueAt, iso, offsetMs } from './time.ts';
 import { NOTICE_PUSH, noticePush } from './push.ts';
-import { logged } from '../guest/telemetry.ts';
+import { GuestParking, PARK_MS } from '../guest/runner.ts';
+import { RunJournal, type JournalEntry } from './journal.ts';
+import { makeTransactions, transactionFailure } from '../transactions.ts';
+import { Audit } from '../audit.ts';
+import { audited } from '../audit-operation.ts';
+import { NOTIFY, noticeRows, runNotify } from '../notifications/notify.ts';
+import { fileSyncHandlers } from '../sync/file.ts';
+import { syncTriggers } from '../sync/index.ts';
+import { EMBED, embedRun } from '../integrations/embed.ts';
 const Member = Schema.Struct({
 	kind: Schema.Literal('member'),
 	id: Schema.String,
@@ -112,12 +124,7 @@ const Actor = Schema.Union([
 		by: Schema.Union([
 			Schema.Struct({ automation: Schema.String }),
 			Schema.Struct({ platform: Schema.String }),
-			Schema.Struct({ integration: Schema.String, instance: Schema.String, feed: Schema.String }),
-			Schema.Struct({
-				integration: Schema.String,
-				instance: Schema.String,
-				outbound: Schema.String
-			})
+			Schema.Struct({ sync: Schema.String, instance: Schema.String })
 		])
 	})
 ]);
@@ -142,7 +149,20 @@ const RowSchema = Schema.Struct({
 	actor: Schema.NullOr(Schema.String),
 	starter: Schema.NullOr(HolderSchema)
 });
-type Row = typeof RowSchema.Type;
+/**
+ * An event run's input (`queueTriggered`): one collection's changed ids, and a delete's old images. A run's input by its
+ * cause: an event's is this, decoded once as the run is claimed (`Row.event`); any other's is the start's own JSON.
+ */
+const EventInput = Schema.StructWithRest(
+	Schema.Struct({
+		collection: Schema.String,
+		ids: Schema.Array(Schema.Json),
+		rows: Schema.optionalKey(Schema.Array(Schema.Json))
+	}),
+	[Schema.Record(Schema.String, Schema.Json)]
+);
+const eventOf = Schema.decodeUnknownOption(EventInput);
+type Row = typeof RowSchema.Type & { readonly event: typeof EventInput.Type | undefined };
 export const RunViewRow = Schema.Struct({
 	id: Schema.String,
 	automation: Schema.String,
@@ -153,7 +173,25 @@ export const RunViewRow = Schema.Struct({
 	progress: Schema.Json,
 	output: Schema.Json,
 	error: Schema.NullOr(
-		Schema.Struct({ code: Schema.String, message: Schema.optionalKey(Schema.String) })
+		Schema.Struct({
+			code: Schema.String,
+			message: Schema.optionalKey(Schema.String),
+			field: Schema.optionalKey(Schema.String),
+			row: Schema.optionalKey(Schema.Number),
+			rows: Schema.optionalKey(Schema.Array(Schema.Number)),
+			rule: Schema.optionalKey(Schema.String),
+			data: Schema.optionalKey(Schema.Struct({ requestId: Schema.String })),
+			records: Schema.optionalKey(
+				Schema.Array(
+					Schema.Struct({
+						collection: Schema.String,
+						id: Schema.String,
+						fields: Schema.Array(Schema.String)
+					})
+				)
+			),
+			invocation: Schema.optionalKey(Schema.String)
+		})
 	),
 	attempts: Schema.Number,
 	results: Schema.Json,
@@ -188,10 +226,7 @@ export type RunView = {
 	due_at: string;
 	started: string | null;
 	progress: Json;
-	error: {
-		code: string;
-		message?: string | undefined;
-	} | null;
+	error: RunViewRow['error'];
 	attempt_count: number;
 	result?: Json;
 	input?: Json;
@@ -230,11 +265,96 @@ const jsonSchemaOf = (input: Schema.Top, tool: string) => {
 	}).pipe(Effect.mapError(Port.failure(tool)));
 };
 const EVENTS = new Set(['created', 'updated', 'deleted']);
+const EFFECTS = new Set([
+	'act',
+	'acts',
+	'schedule',
+	'notify',
+	'send',
+	'request',
+	'progress',
+	'transactionBegin'
+]);
+/**
+ * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
+ * stored files it reads (each must be the run's to read), whether it stores a new one (journalled, then the run's own),
+ * and the host tools an inference names. Arguments of another shape gate nothing; the dispatcher refuses them.
+ */
+type CallFacts = {
+	readonly reads: readonly string[];
+	readonly stores: boolean;
+	readonly tools: readonly string[] | undefined;
+};
+function factsOf(call: FacilityCall): CallFacts {
+	// built per call: `facilities.ts` reaches this module through `decisions`, so its schemas are not there at load
+	const [first, options] = call.args,
+		referenceOf = Schema.decodeUnknownOption(Reference);
+	const ids = (refs: readonly (string | { readonly id: string })[]) =>
+		refs.flatMap((ref) => (typeof ref === 'string' ? [] : [ref.id]));
+	switch (call._tag) {
+		case 'files.put':
+		case 'ai.speak':
+			return { reads: [], stores: true, tools: undefined };
+		case 'files.image':
+			return {
+				reads: ids(Option.toArray(referenceOf(first))),
+				stores: Option.exists(
+					Schema.decodeUnknownOption(ImageOptions)(options ?? {}),
+					(o) => o.jpeg !== undefined
+				),
+				tools: undefined
+			};
+		case 'files.meta':
+		case 'files.get':
+		case 'files.url':
+		case 'files.text':
+		case 'files.table':
+		case 'files.sheet':
+		case 'ai.transcribe':
+			return { reads: ids(Option.toArray(referenceOf(first))), stores: false, tools: undefined };
+		case 'convert.document':
+			return {
+				reads: ids(
+					Option.toArray(
+						Schema.decodeUnknownOption(Schema.Struct({ reference: Schema.optionalKey(Reference) }))(
+							options
+						)
+					).flatMap((o) => (o.reference === undefined ? [] : [o.reference]))
+				),
+				stores: true,
+				tools: undefined
+			};
+		case 'ai.embed':
+			return {
+				reads: ids(Option.getOrElse(Schema.decodeUnknownOption(EmbedInputs)(first), () => [])),
+				stores: false,
+				tools: undefined
+			};
+		case 'ai.sys_2.infer': {
+			const a = Option.getOrUndefined(inferArgsOf(first ?? {}));
+			return { reads: ids(a?.files ?? []), stores: false, tools: a?.tools };
+		}
+		default:
+			return { reads: [], stores: false, tools: undefined };
+	}
+}
+/** An inference's messages as its transcript rows hold them: a tool step, or a prompt's or reply's words. */
+const stepOf = Schema.decodeUnknownOption(StepContent),
+	saidOf = Schema.decodeUnknownOption(SaidContent);
 const MAX_IDS = 10000,
 	DAY = 86400000,
 	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
 	LANES = 4;
 const PRUNE = 'bolt.prune';
+/**
+ * Where a run's row stands. A queued run has its row; a fired cron's run writes it only with its first effect:
+ * `record` writes it once and answers false when the slot already ran.
+ */
+type Ledger = {
+	readonly record: Effect.Effect<boolean, EngineError>;
+	readonly written: () => boolean;
+};
+const QUEUED: Ledger = { record: Effect.succeed(true), written: () => true };
 export class Nudges extends Context.Service<Nudges, PubSub.PubSub<number>>()('bolt/Nudges') {}
 export const WakeLive = Layer.effect(
 	Wake,
@@ -284,7 +404,11 @@ const JournalAnswer = Schema.Union([
 	Schema.Struct({
 		ok: Schema.Literal(false),
 		error: Schema.Union([
-			Schema.Struct({ kind: Schema.Literal('bolt'), code: Schema.String, message: Schema.String }),
+			Schema.Struct({
+				kind: Schema.Literals(['bolt', 'refused']),
+				code: Schema.String,
+				message: Schema.String
+			}),
 			Schema.Struct({
 				kind: Schema.Literal('unavailable'),
 				facility: Schema.String,
@@ -306,15 +430,21 @@ const JournalAnswer = Schema.Union([
 		journal: Schema.optionalKey(Schema.Boolean)
 	})
 ]);
-const Notices = Schema.Array(
-	Schema.Struct({
-		to: Schema.Json,
-		title: Schema.Json,
-		body: Schema.optionalKey(Schema.Json),
-		link: Schema.optionalKey(Schema.Json),
-		once: Schema.optionalKey(Schema.String)
-	})
-);
+type Failed = Extract<CrossAnswer, { ok: false }>['error'];
+/** A failed answer as its journal holds it. */
+const failureJson = (error: Failed): Json =>
+	error.kind === 'unavailable'
+		? { kind: error.kind, facility: error.facility, reason: error.reason }
+		: error.kind === 'bolt' || error.kind === 'refused'
+			? { kind: error.kind, code: error.code, message: error.message }
+			: {
+					kind: error.kind,
+					message: error.message,
+					...(error.status === undefined ? {} : { status: error.status })
+				};
+/** What one execution leaves in its run's journal: whether there is one to delete, and whether it filled. */
+type Durability = { touched: boolean; full: boolean };
+const JOURNAL_FULL = "The run's journal is full: its AI, infer and HTTP answers are over 64 MiB.";
 const CreatedFile = Schema.Struct({
 	id: Schema.String.check(Schema.isUUID()),
 	name: Schema.String,
@@ -326,6 +456,7 @@ export const RunsLive = Layer.effect(
 	Runs,
 	Effect.gen(function* () {
 		const m = yield* Manifest,
+			audit = yield* Audit,
 			db = yield* TenantDb,
 			activation = yield* Activation,
 			guest = yield* Guest,
@@ -340,90 +471,84 @@ export const RunsLive = Layer.effect(
 			nudges = yield* Nudges,
 			drivers = yield* Drivers;
 		const ai = yield* Ai,
+			logs = yield* Logs,
 			agentHost = yield* AgentHost;
+		const hostJournal = yield* Effect.serviceOption(RunJournal);
+		const runJournal = Option.isSome(hostJournal) ? hostJournal.value : yield* RunJournal.memory;
+		/** A completed run's journal goes; one left behind is the host's to expire. */
+		const forget = (durability: Durability, run: string) =>
+			durability.touched
+				? runJournal.clear(run).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
+				: Effect.void;
 		const crypto = yield* Crypto.Crypto;
 		const uuid = crypto.randomUUIDv4.pipe(
 			Effect.mapError((error) =>
 				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 			)
 		);
-		const crons = triggersOf(m).crons.filter((trigger) => {
-			if (drivers.available) return true;
-			const feed = feedsOf(m).get(trigger.automation);
-			return (
-				feed?.from !== 'read' ||
-				trigger.key !== `feed:${feed.run}:${feed.spec.cron}@${m.workspace.tz}`
-			);
-		});
+		const crons = [...triggersOf(m).crons, ...(drivers.available ? syncTriggers(m) : [])];
 		const tenant = yield* ConfigProvider.ConfigProvider;
 		const stopping = new Set<string>();
-		/** A running run's stop signal: `stop` completes it, which ends the crossing in flight (an inference can run 30 min). */
+		/** A running run's stop signal: `stop` completes it, which ends the crossing in flight (an inference has no time limit). */
 		const halts = new Map<string, Deferred.Deferred<void>>();
-		// A lane's claim commits before the next one reads, so two lanes never claim the same automation.
+		// A lane's claim commits before the next one checks the automation's remaining capacity.
 		const lanes = yield* Semaphore.make(LANES),
 			claims = yield* Semaphore.make(1),
 			tickPermit = yield* Semaphore.make(1);
+		const capacities: Record<string, number> = {};
+		for (const [name, automation] of Object.entries(m.automations))
+			capacities[name] = automation.concurrency?.max ?? 1;
+		// Local permits match native admission; undeclared platform handlers keep one permit.
+		const locks = new Map<string, Semaphore.Semaphore>();
+		const lock = (automation: string) => {
+			let held = locks.get(automation);
+			if (held === undefined)
+				locks.set(automation, (held = Semaphore.makeUnsafe(capacities[automation] ?? 1)));
+			return held;
+		};
 		let prunedDay = -1;
-		yield* registry.register({ [NOTICE_PUSH]: yield* noticePush });
-		const bindingsAt = (now: number): Bindings => ({
-			now: iso(now),
-			today: localOf(now, m.workspace.tz).date,
-			tz: m.workspace.tz,
-			params: {}
+		yield* registry.register({
+			[NOTICE_PUSH]: yield* noticePush,
+			[NOTIFY]: yield* runNotify,
+			[EMBED]: yield* embedRun,
+			...(yield* fileSyncHandlers)
 		});
 		const announce = (at: string) =>
 			deadlines
 				.announce(at)
 				.pipe(Effect.andThen(PubSub.publish(nudges, Date.parse(at))), Effect.asVoid);
-		const slotDue = (trigger: ReturnType<typeof triggersOf>['crons'][number], after: number) => {
-			const slot = nextSlot(trigger.cron, after, trigger.tz);
-			return trigger.bucket ? Math.ceil(slot / BUCKET_MS) * BUCKET_MS : slot;
-		};
-		const boot = (recover = true) =>
-			Effect.gen(function* () {
-				const now = yield* Clock.currentTimeMillis,
-					c = new Chain();
+		const boot = Effect.gen(function* () {
+			const now = yield* Clock.currentTimeMillis,
+				c = new Chain();
+			c.cte(
+				'lost',
+				// a handed-off request's work lived in its generation's memory: it is not run again (the person asks again)
+				`UPDATE sys_run SET leases = leases + 1, due_at = ${c.p(iso(now))}::timestamptz, state = CASE WHEN cause = 'handoff' OR leases >= 3 THEN 'failed' ELSE 'queued' END, error = CASE WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
+			);
+			if (activation.start.length > 0) {
 				c.cte(
-					'lost',
-					`UPDATE sys_run SET leases = leases + 1, due_at = ${c.p(iso(now))}::timestamptz, state = CASE WHEN leases < 3 THEN 'queued' ELSE 'failed' END, error = CASE WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' AND ${c.p(recover)} RETURNING id, state, due_at`
+					'admitted',
+					`INSERT INTO bolt_run_admitted (at) SELECT ${c.p(iso(now))}::timestamptz WHERE NOT EXISTS (SELECT 1 FROM bolt_run_admitted) RETURNING at`
 				);
-				c.cte(
-					'gone',
-					`DELETE FROM sys_run WHERE state = 'queued' AND cause = 'cron' AND NOT (jsonb_build_array(automation, key) IN (SELECT e.value FROM jsonb_array_elements(${c.p(crons.map((trigger) => [trigger.automation, trigger.key]))}::jsonb) e)) RETURNING id`
-				);
-				const slots = enqueue(
-					c,
-					{
-						select:
-							crons.length === 0
-								? `SELECT NULL::text AS automation WHERE false`
-								: `SELECT gen_random_uuid()::text AS id, v.automation, '{}'::jsonb AS input, v.due::timestamptz AS due_at, v.key, 'cron'::text AS cause, 0 AS depth FROM jsonb_to_recordset(${c.p(crons.map((trigger) => ({ automation: trigger.automation, key: trigger.key, due: iso(slotDue(trigger, now)) })))}::jsonb) v(automation text,key text,due text) WHERE NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.automation = v.automation AND (r.key = v.key OR (r.run_key = v.key AND r.state = 'running')))`
-					},
-					{ conflict: 'keep' }
-				);
-				if (activation.start.length > 0) {
-					c.cte(
-						'admitted',
-						`INSERT INTO bolt_run_admitted (at) SELECT ${c.p(iso(now))}::timestamptz WHERE NOT EXISTS (SELECT 1 FROM bolt_run_admitted) RETURNING at`
-					);
-					enqueue(c, {
-						select: `SELECT a AS automation, '{}'::jsonb AS input, x.at AS due_at, 'start'::text AS cause, 0 AS depth FROM admitted x, jsonb_array_elements_text(${c.p(activation.start)}::jsonb) a`
-					});
-				}
-				const rows = yield* db.returning(
-					Schema.Struct({ next: Schema.NullOr(Schema.String) }),
-					c.sql(
-						`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued' AND id NOT IN (SELECT id FROM gone)), (SELECT min(due_at) FROM ${slots}), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next`
-					)
-				);
-				yield* deadlines.settle(rows[0]?.next ?? null);
-			});
+				enqueue(c, {
+					select: `SELECT a AS automation, '{}'::jsonb AS input, x.at AS due_at, 'start'::text AS cause, 0 AS depth FROM admitted x, jsonb_array_elements_text(${c.p(activation.start)}::jsonb) a`
+				});
+			}
+			const rows = yield* db.returning(
+				Schema.Struct({ next: Schema.NullOr(Schema.String) }),
+				c.sql(
+					`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued'), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next`
+				)
+			);
+			yield* deadlines.settle(rows[0]?.next ?? null);
+		});
 		const claim = (now: number, pruned = false, custom = false) =>
 			Effect.gen(function* () {
 				const c = new Chain(),
 					automations = c.p(Object.keys(m.automations)),
+					capacity = c.p(capacities),
 					due = c.p(iso(now)),
-					eligible = `r.state = 'queued' AND r.due_at <= ${due}::timestamptz AND (NOT ${c.p(pruned)} OR r.automation <> ${c.p(PRUNE)}) AND NOT EXISTS (SELECT 1 FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running')`;
+					eligible = `r.state = 'queued' AND r.due_at <= ${due}::timestamptz AND (NOT ${c.p(pruned)} OR r.automation <> ${c.p(PRUNE)}) AND (SELECT count(*) FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running') < coalesce((${capacity}::jsonb ->> r.automation)::int, 1)`;
 				if (custom) {
 					c.cte(
 						'head',
@@ -440,30 +565,36 @@ export const RunsLive = Layer.effect(
 					: '';
 				c.cte(
 					'claimed',
-					`${batch} UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${due}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.cause = 'cron' OR s.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) THEN NULL ELSE s.key END WHERE s.state = 'queued' AND s.id IN (SELECT r.id FROM sys_run r WHERE ${eligible} AND ${custom ? `r.id IN (SELECT id FROM batch WHERE position = 1 OR ids <= ${c.p(MAX_IDS)})` : `r.automation NOT IN (SELECT jsonb_array_elements_text(${automations}::jsonb))`} ORDER BY r.due_at, r.id LIMIT 1000 FOR UPDATE SKIP LOCKED) RETURNING s.*`
+					`${batch} UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${due}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) THEN NULL ELSE s.key END WHERE s.state = 'queued' AND s.id IN (SELECT r.id FROM sys_run r WHERE ${eligible} AND ${custom ? `r.id IN (SELECT id FROM batch WHERE position = 1 OR ids <= ${c.p(MAX_IDS)})` : `r.automation NOT IN (SELECT jsonb_array_elements_text(${automations}::jsonb))`} ORDER BY r.due_at, r.id LIMIT 1000 FOR UPDATE SKIP LOCKED) RETURNING s.*`
 				);
 				const rows = yield* db.returning(
 					Schema.Struct({ runs: Schema.Array(RowSchema), next: Schema.NullOr(Schema.String) }),
 					c.sql(
 						`(SELECT coalesce(jsonb_agg(to_jsonb(x) || jsonb_build_object('due_at', x.due_at::text) ORDER BY x.due_at, x.id), '[]'::jsonb) FROM claimed x) AS runs, (SELECT min(due_at)::text FROM sys_run WHERE state = 'queued' AND id NOT IN (SELECT id FROM claimed)) AS next`
-					)
+					),
+					// Taken before the statement snapshot: separate runtimes must see the previous claim.
+					{ advisory: ['bolt:runs:claim'] }
 				);
-				return rows[0] ?? { runs: [], next: null };
+				const claimed = rows[0];
+				return {
+					runs: (claimed?.runs ?? []).map((row): Row => ({
+						...row,
+						event: EVENTS.has(row.cause) ? Option.getOrUndefined(eventOf(row.input)) : undefined
+					})),
+					next: claimed?.next ?? null
+				};
 			});
 		const batches = (rows: readonly Row[]): Row[][] => {
 			const out: Row[][] = [];
 			for (const group of Map.groupBy(
 				rows,
 				(row) =>
-					`${row.automation}\u0000${EVENTS.has(row.cause) ? `${row.cause}\u0000${Predicate.isObject(row.input) ? String(row.input['collection'] ?? '') : ''}` : row.id}`
+					`${row.automation}\u0000${row.event === undefined ? row.id : `${row.cause}\u0000${row.event.collection}`}`
 			).values()) {
 				let batch: Row[] = [],
 					count = 0;
 				for (const row of group) {
-					const size =
-						Predicate.isObject(row.input) && Array.isArray(row.input['ids'])
-							? row.input['ids'].length
-							: 0;
+					const size = row.event?.ids.length ?? 0;
 					if (batch.length > 0 && count + size > MAX_IDS) {
 						out.push(batch);
 						batch = [];
@@ -482,8 +613,9 @@ export const RunsLive = Layer.effect(
 			const aged = {
 				sys_run: `state IN ('succeeded', 'failed', 'stopped', 'skipped') AND finished_at < $1::timestamptz - interval '90 days'`,
 				// a pruned run's journal goes with it, in this pass or (past the cap) as an orphan in a later one
-				bolt_idem: `(run IS NOT NULL AND (run IN (SELECT id FROM sel_sys_run) OR NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.id = bolt_idem.run)))
-				OR (run IS NULL AND issued_at < $1::timestamptz - interval '24 hours')`,
+				bolt_idem: `((run IS NOT NULL AND (run IN (SELECT id FROM sel_sys_run) OR NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.id = bolt_idem.run)))
+				OR (run IS NULL AND issued_at < $1::timestamptz - interval '24 hours'))
+				AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`,
 				bolt_rate: `window_start < $1::timestamptz - interval '1 day'`,
 				sys_notification: `(read_at < $1::timestamptz - interval '90 days') OR at < $1::timestamptz - interval '365 days'`, // L-BOLT-354
 				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`
@@ -526,13 +658,52 @@ export const RunsLive = Layer.effect(
 			yield* db.write(c.sql('NULL AS outcome'));
 			return { deleted: deleted + pruned, continued: now };
 		});
+		/** A crossing that writes, sends, schedules or reports: a fired cron's run writes its row before the first. */
+		const effecting = (call: Exclude<CrossCall, { _tag: 'read' }>) =>
+			EFFECTS.has(call._tag) ||
+			call._tag.startsWith('ai.') ||
+			call._tag === 'convert.document' ||
+			call._tag === 'files.put' ||
+			(call._tag === 'files.image' &&
+				Option.exists(
+					Schema.decodeUnknownOption(ImageOptions)(call.args[1] ?? {}),
+					(o) => o.jpeg !== undefined
+				));
+		/** The first wake or fire of a day prunes (rule 56); `undefined` once it ran today, or when it made no progress. */
+		const daily = (now: number) =>
+			Effect.suspend(
+				(): Effect.Effect<{ deleted: number; continued?: number } | undefined, EngineError> => {
+					if (Math.floor(now / DAY) === prunedDay) return Effect.succeed(undefined);
+					prunedDay = Math.floor(now / DAY);
+					return prune(now).pipe(
+						Effect.catchTag('BoltError', (error): Effect.Effect<undefined, EngineError> =>
+							error.code !== 'noProgress'
+								? Effect.fail(error)
+								: logs
+										.write({
+											at: iso(now),
+											severity: 'warn',
+											event: 'prune.noProgress',
+											invocation: PRUNE,
+											run: null,
+											conversation: null,
+											turn: null,
+											attributes: { code: error.code, message: error.message }
+										})
+										.pipe(Effect.as(undefined))
+						)
+					);
+				}
+			);
 		const invoke = (
 			run: Row,
 			ids: readonly string[],
 			holder: Holder,
 			input: Json,
 			dues: number[],
-			warnings: string[]
+			warnings: string[],
+			record: Ledger['record'],
+			durability: Durability
 		) =>
 			Effect.gen(function* () {
 				const cause = yield* Schema.decodeUnknownEffect(
@@ -552,21 +723,119 @@ export const RunsLive = Layer.effect(
 					)
 				);
 				const now = yield* Clock.currentTimeMillis,
-					b = bindingsAt(now),
+					b = bindingsAt(now, m.workspace.tz),
 					authority = yield* identity.authority(holder);
 				const delegation = issueAutomationDelegation(m, authority, run.id, run.automation);
-				const replaying = run.attempts > 1 || run.leases > 0;
+				// One optimistic read boundary per confirmed commit, retained across failures within this attempt.
+				const priorReads = makeReadGuards(activation.release);
+				// Only native write admission is sequenced; inference and other facilities remain parallel.
+				const writeLane = yield* Semaphore.make(1);
+				const transactions = yield* makeTransactions({
+					audit,
+					db,
+					manifest: m,
+					reads,
+					writes,
+					authority,
+					authorityForVerb: (name) => delegatedVerbAuthority(m, authority, delegation, name),
+					bindings: b,
+					sourceEpoch: activation.release,
+					invocationId: run.id,
+					input
+				});
+				let transactionOpen = false;
+				let transactionReadGeneration: number | undefined;
+				let transactionInvocationId = run.id;
+				const nativeTables = new Set([
+					...Object.keys(m.models),
+					'bolt_schema',
+					'bolt_history',
+					'bolt_seq',
+					'bolt_idem',
+					'bolt_idem_outcome',
+					'bolt_rate',
+					'bolt_push_subscriptions',
+					'bolt_host_nonce',
+					'bolt_credential',
+					'bolt_approvals',
+					'bolt_run_admitted'
+				]);
+				let replaying = run.attempts > 1 || run.leases > 0;
 				const journal = new Map<string, Json>();
 				const createdFiles = new Set<string>();
 				const halt = yield* Deferred.make<void>();
 				halts.set(run.id, halt);
-				if (replaying) {
-					const rows = yield* db.rows(Schema.Struct({ key: Schema.String, outcome: Schema.Json }), {
+				/** The side effects' outcomes this run already committed (`bolt_idem`), for a replay. */
+				const committed = db
+					.rows(Schema.Struct({ key: Schema.String, outcome: Schema.Json }), {
 						text: `SELECT i.key, o.outcome FROM bolt_idem i JOIN bolt_idem_outcome o USING (key) WHERE i.run = $1`,
 						params: [run.id]
+					})
+					.pipe(
+						Effect.map((rows) => {
+							journal.clear();
+							for (const row of rows) journal.set(row.key, row.outcome);
+						})
+					);
+				if (replaying) yield* committed;
+				/** The run's own journal of AI, infer and HTTP answers, read once per pass at its first such call. */
+				const readJournal = Effect.cached(
+					runJournal.read(run.id).pipe(
+						Effect.map((entries) => {
+							if (entries.length > 0) durability.touched = true;
+							return new Map(entries.map((entry): [string, JournalEntry] => [entry.key, entry]));
+						})
+					)
+				);
+				let stored = yield* readJournal;
+				/** Journals one answer: past its cap the run ends `journalFull`; another failed write only costs durability. */
+				const note = (key: string, answer: Json) =>
+					runJournal.write(run.id, { key, attempt: run.attempts, answer }).pipe(
+						Effect.andThen(
+							Effect.sync(() => {
+								durability.touched = true;
+							})
+						),
+						Effect.catch((error) =>
+							error.code === 'journalFull'
+								? Effect.sync(() => {
+										durability.full = true;
+									})
+								: Effect.logWarning(error)
+						)
+					);
+				/** An AI, infer or HTTP call: its journalled answer when it already answered, else live and then journalled. */
+				const durably = (key: string, live: Effect.Effect<CrossAnswer, EngineError>) =>
+					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
+						if (durability.full) return fail('journalFull', JOURNAL_FULL);
+						const entry = (yield* stored).get(key);
+						if (entry !== undefined) {
+							const replayed = yield* replayAnswer(entry.answer);
+							// a failure stands only for the attempt that met it: a retry asks again
+							if (replayed.ok || entry.attempt === run.attempts) return replayed;
+						}
+						const got = yield* live;
+						// bytes ride no journal: such an answer is asked again on a replay
+						if (got.ok && (got.bins?.length ?? 0) > 0) return got;
+						yield* note(
+							key,
+							got.ok ? { ok: true, value: got.value } : { ok: false, error: failureJson(got.error) }
+						);
+						return got;
 					});
-					for (const row of rows) journal.set(row.key, row.outcome);
-				}
+				/** A parked run's next pass: a fresh isolate replays from the start, effects and answers from their journals. */
+				const resume = Effect.gen(function* () {
+					replaying = true;
+					seen.clear();
+					yield* committed;
+					stored = yield* readJournal;
+				}).pipe(
+					Effect.mapError((error) =>
+						error._tag === 'BoltError'
+							? error
+							: BoltError.make('internal', 'guest', 'the parked run could not resume', error)
+					)
+				);
 				const seen = new Map<string, number>();
 				const keyOf = (kind: string, target: string, args: Json) => {
 					const digest = sha256Hex(canonical([kind, target, args])),
@@ -628,20 +897,9 @@ export const RunsLive = Layer.effect(
 							BoltError.make('corrupt', 'guest', 'a run journal contains an invalid answer')
 						)
 					);
-				const rememberFile = (call: FacilityCall, answer: CrossAnswer) =>
+				const rememberFile = (facts: CallFacts, answer: CrossAnswer) =>
 					Effect.gen(function* () {
-						if (
-							!answer.ok ||
-							!(
-								call._tag === 'files.put' ||
-								call._tag === 'convert.document' ||
-								call._tag === 'ai.speak' ||
-								(call._tag === 'files.image' &&
-									Predicate.isObject(call.args[1]) &&
-									call.args[1]['jpeg'] !== undefined)
-							)
-						)
-							return;
+						if (!answer.ok || !facts.stores) return;
 						const file = yield* Schema.decodeUnknownEffect(CreatedFile)(answer.value).pipe(
 							Effect.mapError(() =>
 								BoltError.make('corrupt', 'guest', 'a file creation answered an invalid FileRef')
@@ -649,31 +907,9 @@ export const RunsLive = Layer.effect(
 						);
 						createdFiles.add(file.id);
 					});
-				const checkFiles = (call: FacilityCall) =>
+				const checkFiles = (facts: CallFacts) =>
 					Effect.gen(function* () {
-						const refs: string[] = [];
-						const collect = (value: Json | undefined) => {
-							if (Predicate.isObject(value) && typeof value['id'] === 'string')
-								refs.push(value['id']);
-						};
-						if (
-							(call._tag.startsWith('files.') && call._tag !== 'files.put') ||
-							call._tag === 'ai.transcribe'
-						)
-							collect(call.args[0]);
-						if (call._tag === 'convert.document') {
-							const options = call.args[1];
-							if (Predicate.isObject(options)) collect(options['reference']);
-						}
-						if (call._tag === 'ai.embed' && Array.isArray(call.args[0]))
-							for (const value of call.args[0]) collect(value);
-						if (
-							call._tag === 'ai.sys_2.infer' &&
-							Predicate.isObject(call.args[0]) &&
-							Array.isArray(call.args[0]['files'])
-						)
-							for (const value of call.args[0]['files']) collect(value);
-						for (const id of refs) {
+						for (const id of facts.reads) {
 							const found = yield* db.one(Schema.Struct({ field: Schema.String }), {
 								text: `SELECT coalesce(field, '') AS field FROM sys_file WHERE id = $1`,
 								params: [id]
@@ -694,7 +930,8 @@ export const RunsLive = Layer.effect(
 						}
 						return true;
 					});
-				const facility = (call: FacilityCall) =>
+				/** A facility call, gated by its `facts`; `key` names an infer's own steps in the run's journal. */
+				const facility = (call: FacilityCall, facts: CallFacts, key: string) =>
 					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
 						if (call._tag === 'ai.sys_1.decide')
 							return yield* facilities.dispatch(call).pipe(
@@ -704,13 +941,8 @@ export const RunsLive = Layer.effect(
 									automation: run.automation
 								})
 							);
-						if (
-							call._tag !== 'ai.sys_2.infer' ||
-							!Predicate.isObject(call.args[0]) ||
-							!Array.isArray(call.args[0]['tools'])
-						)
-							return yield* facilities.dispatch(call);
-						const names = [...new Set(call.args[0]['tools'].map(String))];
+						if (call._tag !== 'ai.sys_2.infer') return yield* facilities.dispatch(call);
+						const names = [...new Set(facts.tools ?? [])];
 						const hostTools = agentHost.hostTools;
 						const hosted =
 							typeof hostTools === 'function'
@@ -763,7 +995,7 @@ export const RunsLive = Layer.effect(
 								}
 							} satisfies CrossAnswer;
 						// one browsing session per inference: inferences side by side in one run never share a page
-						const session = yield* crypto.randomUUIDv4.pipe(Effect.mapError(Port.failure('infer')));
+						const session = stableId('infer', key);
 						const tools: InferTool[] = hosted
 							.filter((tool) => names.includes(tool.name))
 							.map((tool) => ({
@@ -794,7 +1026,7 @@ export const RunsLive = Layer.effect(
 						// `decision.made` traces a sys_1 call: the run's own record of the research it did
 						const recorded = (name: string, input: Json, error?: string) =>
 							Effect.gen(function* () {
-								yield* logged({
+								yield* logs.write({
 									at: new Date(yield* Clock.currentTimeMillis).toISOString(),
 									severity: error === undefined ? 'info' : 'warn',
 									event: 'infer.tool',
@@ -838,7 +1070,7 @@ export const RunsLive = Layer.effect(
 						const label = Option.isSome(named) ? named.value.label : undefined;
 						yield* db
 							.write({
-								text: "INSERT INTO sys_conversation (id, title, run, status, model) VALUES ($1, $2, $3, 'running', $4)",
+								text: "INSERT INTO sys_conversation (id, title, run, status, model) VALUES ($1, $2, $3, 'running', $4) ON CONFLICT (id) DO UPDATE SET status = 'running', updated_at = now()",
 								params: [
 									session,
 									label === undefined ? run.automation : `${run.automation} · ${label}`,
@@ -850,32 +1082,33 @@ export const RunsLive = Layer.effect(
 						// a tool row carries the call's input as the panel shows a step (its query, address or path), as an
 						// agent's does; the model's own messages keep it once, in its call
 						const asked = new Map<string, string>();
-						const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
-						const transcribe = (message: AiMessage) => {
-							const call = isRecord(message.content) ? message.content : undefined;
-							const calls = call?.['toolCalls'];
-							if (message.role === 'assistant' && Array.isArray(calls))
-								for (const c of calls)
-									if (isRecord(c) && typeof c['id'] === 'string')
-										asked.set(c['id'], JSON.stringify(c['input'] ?? null));
-							const id =
-								message.role === 'tool' && typeof call?.['id'] === 'string'
-									? call['id']
-									: undefined;
-							const args = id === undefined ? undefined : asked.get(id);
+						const transcribe = (message: AiMessage, index: number) => {
+							// the message's content decoded as a transcript row's, by its role
+							const step =
+									message.role === 'tool'
+										? Option.getOrUndefined(stepOf(message.content))
+										: undefined,
+								words =
+									message.role === 'tool'
+										? undefined
+										: Option.getOrUndefined(saidOf(message.content));
+							if (typeof words === 'object' && words !== null)
+								for (const c of words.toolCalls ?? []) asked.set(c.id, JSON.stringify(c.input));
+							const args = step === undefined ? undefined : asked.get(step.id);
 							const content: Json =
-								call !== undefined && args !== undefined ? { ...call, args } : message.content;
+								step !== undefined && args !== undefined ? { ...step, args } : message.content;
 							const text =
-								typeof content === 'string'
-									? content
-									: Predicate.isObject(content) && typeof content['text'] === 'string'
-										? content['text']
+								typeof words === 'string'
+									? words
+									: typeof words === 'object' && words?.text !== undefined
+										? words.text
 										: JSON.stringify(content);
 							return db
 								.write({
-									text: "INSERT INTO sys_message (id, conversation, role, content, text, preview, mode, author) VALUES (gen_random_uuid()::text, $1, $2, $3::jsonb, $4, $5, 'agent', $6)",
+									text: "INSERT INTO sys_message (id, conversation, role, content, text, preview, mode, author) VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'agent', $7) ON CONFLICT (id) DO NOTHING",
 									// the automation asked: its prompt is written by it, as a member writes theirs
 									params: [
+										stableId(session, String(index)),
 										session,
 										message.role,
 										// a prompt is a bare string: encoded, it is JSON like every other content
@@ -887,10 +1120,32 @@ export const RunsLive = Layer.effect(
 								})
 								.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 						};
+						// each step the inference persists is in the journal under its call's key: a lost host costs one step
+						const prefix = `${key}#step:`;
+						// `durably` read the journal before this live call: a failed read resumes nothing
+						const entries = yield* stored.pipe(
+							Effect.orElseSucceed(() => new Map<string, JournalEntry>())
+						);
+						const steps = [...entries.values()]
+							.flatMap((entry) =>
+								entry.key.startsWith(prefix)
+									? [[Number(entry.key.slice(prefix.length)), entry.answer] as const]
+									: []
+							)
+							.sort(([a], [b]) => a - b)
+							.map(([, step]) => step);
 						return yield* inferFacility(ai, {
 							load: facilities.fileLoader,
 							onDraft: recorded,
-							onMessage: transcribe
+							onMessage: transcribe,
+							onResume: () =>
+								db
+									.write({
+										text: 'DELETE FROM sys_message WHERE conversation = $1',
+										params: [session]
+									})
+									.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore),
+							steps: { done: steps, persist: (index, step) => note(`${prefix}${index}`, step) }
 						})(call, [...records, ...tools].map(traced)).pipe(
 							Effect.ensuring(
 								db
@@ -919,15 +1174,55 @@ export const RunsLive = Layer.effect(
 							_tag: 'read';
 						}
 					>
-				): Effect.Effect<CrossAnswer, EngineError> =>
-					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
+				): Effect.Effect<CrossAnswer, EngineError> => {
+					const work = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 						if (stopping.has(run.id)) return fail('stopped', 'The run was stopped.');
+						if (transactionOpen && !call._tag.startsWith('transaction')) {
+							yield* transactions.abort();
+							transactionOpen = false;
+							return fail('invalidInput', 'Only tx.query and tx.act may run inside a transaction.');
+						}
+						if (effecting(call) && !(yield* record))
+							return fail('stopped', 'This cron slot already ran.');
 						switch (call._tag) {
-							case 'prepareCreate':
-								return fail(
-									'unsupported',
-									'native create preparation is available only inside a collection transform'
-								);
+							case 'transactionBegin': {
+								const { key } = keyOf('transaction', 'transaction', null);
+								transactionInvocationId = key;
+								const snapshot = priorReads.snapshot();
+								const begun = yield* transactions.begin({
+									key,
+									issuedAt: b.now,
+									readGuards: snapshot.guards
+								});
+								transactionOpen = !begun.cached;
+								transactionReadGeneration = begun.cached ? undefined : snapshot.generation;
+								return {
+									ok: true,
+									value: begun.cached
+										? { cached: true, outcome: encodeWire(begun.outcome) }
+										: { cached: false }
+								};
+							}
+							case 'transactionRead':
+								return {
+									ok: true,
+									value: { value: yield* transactions.read(call.reads, call.keys) }
+								};
+							case 'transactionAct':
+								return { ok: true, value: yield* transactions.act(call) };
+							case 'transactionFinish': {
+								const result = yield* transactions.finish(call);
+								transactionOpen = false;
+								if (result.readGuardsConsumed === true && transactionReadGeneration !== undefined)
+									priorReads.consume(transactionReadGeneration);
+								transactionReadGeneration = undefined;
+								return { ok: true, value: encodeWire(result.outcome) };
+							}
+							case 'transactionAbort':
+								yield* transactions.abort();
+								transactionOpen = false;
+								transactionReadGeneration = undefined;
+								return { ok: true, value: null };
 							case 'progress': {
 								const decoded = yield* Schema.decodeUnknownEffect(
 									Schema.Struct({
@@ -965,9 +1260,7 @@ export const RunsLive = Layer.effect(
 								const name =
 									call.callable._tag === 'Verb'
 										? `${call.callable.collection}.${call.callable.verb}`
-										: call.callable._tag === 'Action'
-											? `${call.callable.collection}.${call.callable.action}`
-											: '';
+										: '';
 								const { key } = keyOf(
 									'act',
 									name,
@@ -976,34 +1269,18 @@ export const RunsLive = Layer.effect(
 										: { input: call.input, observed: call.options.observed }
 								);
 								const k = call.options?.once === undefined ? key : `once:${call.options.once}`;
-								if (call.callable._tag === 'Action') {
-									const result = yield* calls.action({
-										collection: call.callable.collection,
-										action: call.callable.action,
-										input: call.input,
-										key: k,
-										issuedAt: b.now,
-										retry: replaying,
-										authority,
-										bindings: b,
-										invocationId: k,
-										from: 'Server',
-										...(call.options?.observed === undefined
-											? {}
-											: { observed: call.options.observed })
-									});
-									// a body failure settles `unknown` for a client; the automation gets the failure itself
-									if (result.error !== undefined)
-										return fail(result.error.code, result.error.message);
-									return { ok: true, value: result.outcome };
-								}
 								if (call.callable._tag !== 'Verb')
-									return fail('invalidInput', 'ctx.act takes a collection verb or action');
+									return fail('invalidInput', 'ctx.act takes a generated collection verb');
+								const observedRead = priorReads.snapshot();
+								const guards = observedRead.guards;
 								const result = yield* writes.act({
 									collection: call.callable.collection,
 									verb: call.callable.verb,
 									input: call.input,
 									mode: { _tag: 'Direct' },
+									...(guards.fingerprints.length === 0 && guards.inconsistent !== true
+										? {}
+										: { readGuards: guards }),
 									key: k,
 									issuedAt: b.now,
 									retry: replaying,
@@ -1017,23 +1294,34 @@ export const RunsLive = Layer.effect(
 										? {}
 										: { onConflict: call.options.onConflict })
 								});
+								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
 								return { ok: true, value: result.outcome };
 							}
 							case 'acts': {
-								const acts = [];
+								const acts: ActsRequest['acts'][number][] = [];
 								for (const act of call.acts) {
-									if (act.callable._tag !== 'Verb')
-										return fail('invalidInput', 'act.many takes generated verbs');
+									if (!isBatchCallable(act.callable))
+										return fail(
+											'invalidInput',
+											'An act batch takes create, update, upsert or delete.'
+										);
 									acts.push({
 										collection: act.callable.collection,
 										verb: act.callable.verb,
-										input: act.input
+										input: act.input,
+										...(act.observed === undefined ? {} : { observed: act.observed }),
+										...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
 									});
 								}
-								const { key } = keyOf('acts', 'acts', acts);
+								const { key } = keyOf('acts', 'acts', encodeWire(acts));
+								const observedRead = priorReads.snapshot();
+								const guards = observedRead.guards;
 								const result = yield* calls.acts({
 									name: 'act.many',
 									acts,
+									...(guards.fingerprints.length === 0 && guards.inconsistent !== true
+										? {}
+										: { readGuards: guards }),
 									key,
 									issuedAt: b.now,
 									authority,
@@ -1041,6 +1329,7 @@ export const RunsLive = Layer.effect(
 									invocationId: key,
 									from: 'Server'
 								});
+								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
 								return { ok: true, value: result.outcome };
 							}
 							case 'schedule': {
@@ -1107,24 +1396,10 @@ export const RunsLive = Layer.effect(
 								return { ok: true, value };
 							}
 							case 'notify': {
-								const notices = yield* Schema.decodeUnknownEffect(Notices)(
-									Array.isArray(call.notices) ? call.notices : [call.notices]
-								).pipe(
-									Effect.mapError(() =>
-										BoltError.make('invalidInput', 'guest', 'notify takes notices')
-									)
-								);
-								if (
-									notices.some(
-										(notice) =>
-											notice.to === null || (Array.isArray(notice.to) && notice.to.length === 0)
-									)
-								)
-									return fail('invalidInput', 'notify: a notice names at least one recipient');
 								const { key, digest } = keyOf('notify', '', call.notices),
 									previous = hit(key);
 								const report = (value: Json) => {
-									if (Predicate.isObject(value) && Array.isArray(value['unaddressed']))
+									if (Predicate.isObject(value) && EffectArray.isArray(value['unaddressed']))
 										for (const title of value['unaddressed'])
 											warnings.push(`notify: '${String(title)}' reached no member`);
 								};
@@ -1132,24 +1407,7 @@ export const RunsLive = Layer.effect(
 									report(previous);
 									return { ok: true, value: null, journal: true };
 								}
-								const rows = yield* Effect.forEach(notices, (notice) =>
-									Effect.map(uuid, (id) => ({
-										id,
-										to: notice.to,
-										title:
-											typeof notice.title === 'string'
-												? notice.title
-												: JSON.stringify(notice.title),
-										body:
-											notice.body === undefined
-												? null
-												: typeof notice.body === 'string'
-													? notice.body
-													: JSON.stringify(notice.body),
-										link: notice.link ?? null,
-										once: notice.once ?? null
-									}))
-								);
+								const rows = yield* noticeRows(call.notices, { manifest: m, id: key });
 								report(
 									yield* journalled(
 										key,
@@ -1171,6 +1429,8 @@ export const RunsLive = Layer.effect(
 								return { ok: true, value: null };
 							}
 							case 'send': {
+								if (call.to === null)
+									return fail('invalidInput', 'ctx.send names its connection or instance');
 								const prepared = yield* prepareSend(m, db, call.to, call.message, crypto);
 								if ('error' in prepared) return fail('invalidInput', prepared.error);
 								const { key, digest } = keyOf('send', call.to, call.message),
@@ -1191,50 +1451,40 @@ export const RunsLive = Layer.effect(
 							case 'request': {
 								if (call.to === null)
 									return fail('invalidInput', 'ctx.request names its connection or instance');
-								const { key, digest } = keyOf('request', call.to, call.operation),
-									previous = hit(key);
-								if (previous !== undefined) return yield* replayAnswer(previous);
-								const got = yield* instanceRequest(
-									{ manifest: m, db, links: drivers },
-									call.to,
-									call.operation
+								const { key } = keyOf('request', call.to, call.operation);
+								return yield* durably(
+									key,
+									instanceRequest({ manifest: m, db, links: drivers }, call.to, call.operation)
 								);
-								if (got.ok)
-									yield* journalled(
-										key,
-										digest,
-										() => {},
-										(c) => `${c.p({ ok: true, value: got.value })}::jsonb`
-									);
-								return got;
 							}
 							default: {
-								if (!(yield* checkFiles(call)))
+								const facts = factsOf(call);
+								if (!(yield* checkFiles(facts)))
 									return {
 										ok: false,
 										error: { kind: 'invalid', message: 'this run cannot read file' }
 									};
-								const effecting =
-									call._tag.startsWith('ai.') ||
-									call._tag === 'convert.document' ||
-									call._tag === 'files.put' ||
-									(call._tag === 'files.image' &&
-										Predicate.isObject(call.args[1]) &&
-										call.args[1]['jpeg'] !== undefined);
-								if (!effecting) return yield* facility(call);
-								const stored =
+								// AI and web answers are slow, costly or unrepeatable: the run's journal keeps them (§3 "Durable steps")
+								const durable = call._tag.startsWith('ai.') || call._tag === 'web.read';
+								if (!durable && !effecting(call)) return yield* facility(call, facts, '');
+								const files: Effect.Success<ReturnType<typeof storedFiles>> =
 									call._tag === 'ai.embed' ? yield* storedFiles(db, call.args[0]) : new Map();
-								const digests = [...stored].map(([id, row]) => [id, row.sha256]).sort();
-								const { key, digest } = keyOf(call._tag, '', [...call.args, digests]),
-									previous = hit(key);
-								if (previous !== undefined) {
-									const got = yield* replayAnswer(previous);
-									yield* rememberFile(call, got);
+								const digests = [...files].map(([id, row]) => [id, row.sha256]).sort();
+								const { key, digest } = keyOf(call._tag, '', [...call.args, digests]);
+								if (durable) {
+									const got = yield* durably(key, facility(call, facts, key));
+									yield* rememberFile(facts, got);
 									return got;
 								}
-								const got = yield* facility(call);
+								const previous = hit(key);
+								if (previous !== undefined) {
+									const got = yield* replayAnswer(previous);
+									yield* rememberFile(facts, got);
+									return got;
+								}
+								const got = yield* facility(call, facts, key);
 								if (got.ok) {
-									yield* rememberFile(call, got);
+									yield* rememberFile(facts, got);
 									yield* journalled(
 										key,
 										digest,
@@ -1246,6 +1496,10 @@ export const RunsLive = Layer.effect(
 							}
 						}
 					});
+					return call._tag === 'act' || call._tag === 'acts' || call._tag.startsWith('transaction')
+						? writeLane.withPermit(work)
+						: work;
+				};
 				return yield* guest
 					.invoke(
 						{
@@ -1263,7 +1517,6 @@ export const RunsLive = Layer.effect(
 								cause
 							},
 							budget: {
-								cpuMs: LIMITS.guestCpuMs,
 								crossings: LIMITS.crossings.automation,
 								readBytes: LIMITS.readBytes
 							}
@@ -1271,28 +1524,96 @@ export const RunsLive = Layer.effect(
 						{
 							cross: (batch) =>
 								Effect.gen(function* () {
+									if (
+										(batch.length !== 1 &&
+											batch.some((call) => call._tag.startsWith('transaction'))) ||
+										(transactionOpen && batch.some((call) => !call._tag.startsWith('transaction')))
+									) {
+										const aborted = yield* Effect.result(transactions.abort());
+										transactionOpen = false;
+										transactionReadGeneration = undefined;
+										return batch.map(() =>
+											Result.isFailure(aborted)
+												? failure(aborted.failure)
+												: fail(
+														'invalidInput',
+														'A transaction admits one native operation at a time.'
+													)
+										);
+									}
 									const requests = batch.flatMap((call) =>
 										call._tag === 'read' ? [call.read] : []
 									);
+									const tables = new Set<string>();
+									const observation = priorReads.begin(tables);
+									const capture = {
+										read: (
+											statements: Parameters<typeof observation.capture.read>[0],
+											execute: Parameters<typeof observation.capture.read>[1]
+										) => {
+											// Native SQL may also read approval, history, sync or agent metadata outside the business IR.
+											// Restrict conservative identifier matches to existing native tables; no authored SQL is admitted.
+											for (const statement of statements)
+												for (const match of statement.text.matchAll(
+													/\b(?:FROM|JOIN)\s+(?:"((?:[^"]|"")*)"|([a-z_][a-z0-9_]*))/gi
+												)) {
+													const table =
+														match[1] === undefined
+															? match[2]?.toLowerCase()
+															: match[1].replaceAll('""', '"');
+													if (table !== undefined && nativeTables.has(table)) tables.add(table);
+												}
+											return observation.capture.read(statements, execute);
+										}
+									};
 									const answers =
 										requests.length === 0
 											? []
-											: yield* reads.run(requests, { as: 'caller', authority }, b).pipe(
+											: yield* reads.run(requests, { as: 'caller', authority }, b, 'Server').pipe(
+													Effect.provideService(SqlReadCapture, capture),
+													Effect.provideService(ReadDeps, tables),
+													Effect.tap(() =>
+														Effect.try({
+															try: observation.finish,
+															catch: (error) =>
+																error instanceof BoltError
+																	? error
+																	: BoltError.make('internal', 'admission', String(error), error)
+														})
+													),
 													Effect.map((values) =>
 														values.map((value): CrossAnswer => ({ ok: true, value }))
 													),
-													Effect.catch((error) =>
+													Effect.catch((error): Effect.Effect<readonly CrossAnswer[]> =>
 														Effect.succeed(requests.map(() => failure(error)))
 													)
 												);
 									let index = 0;
-									return yield* Effect.forEach(batch, (call) =>
+									return yield* Effect.forEach(batch, (call): Effect.Effect<CrossAnswer> =>
 										call._tag === 'read'
 											? Effect.succeed(
 													answers[index++] ?? fail('internal', 'the read returned no answer')
 												)
 											: crossing(call).pipe(
-													Effect.catch((error) => Effect.succeed(failure(error))),
+													Effect.catch((error): Effect.Effect<CrossAnswer> =>
+														call._tag.startsWith('transaction')
+															? transactions.abort().pipe(
+																	Effect.catch(() => Effect.void),
+																	Effect.andThen(
+																		Effect.sync((): CrossAnswer => {
+																			transactionOpen = false;
+																			transactionReadGeneration = undefined;
+																			return {
+																				ok: true,
+																				value: encodeWire(
+																					transactionFailure(error, transactionInvocationId)
+																				)
+																			} satisfies CrossAnswer;
+																		})
+																	)
+																)
+															: Effect.succeed(failure(error))
+													),
 													Effect.raceFirst(
 														Deferred.await(halt).pipe(
 															Effect.as(fail('stopped', 'The run was stopped.'))
@@ -1303,8 +1624,17 @@ export const RunsLive = Layer.effect(
 								})
 						}
 					)
-					.pipe(Effect.ensuring(Effect.sync(() => halts.delete(run.id))));
-			});
+					.pipe(
+						// a wait past PARK_MS parks the run: no isolate while it waits, a fresh one replays when it answers
+						Effect.provideService(GuestParking, { afterMs: PARK_MS, resume }),
+						Effect.map((outcome): GuestOutcome =>
+							durability.full
+								? { kind: 'failed', error: BoltError.make('journalFull', 'guest', JOURNAL_FULL) }
+								: outcome
+						),
+						Effect.ensuring(Effect.sync(() => halts.delete(run.id)))
+					);
+			}).pipe(Effect.scoped);
 		const interrupted = (rows: readonly Row[], message: string) =>
 			db
 				.write({
@@ -1315,34 +1645,22 @@ export const RunsLive = Layer.effect(
 					]
 				})
 				.pipe(Effect.asVoid);
-		const execute = (rows: readonly Row[]) =>
+		const execute = (rows: readonly Row[], ledger = QUEUED) =>
 			Effect.gen(function* () {
 				const head = rows[0];
 				if (head === undefined) return [];
 				const now = yield* Clock.currentTimeMillis,
 					spec = m.automations[head.automation],
 					dues: number[] = [],
-					warnings: string[] = [];
+					warnings: string[] = [],
+					durability: Durability = { touched: false, full: false };
 				let input: Json = head.input;
-				const eventInput = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(
-					head.input
-				);
-				if (EVENTS.has(head.cause) && Option.isSome(eventInput))
+				if (head.event !== undefined)
 					input = {
-						...eventInput.value,
-						ids: rows.flatMap((row) =>
-							Predicate.isObject(row.input) && Array.isArray(row.input['ids'])
-								? row.input['ids']
-								: []
-						),
+						...head.event,
+						ids: rows.flatMap((row) => row.event?.ids ?? []),
 						...(head.cause === 'deleted'
-							? {
-									rows: rows.flatMap((row) =>
-										Predicate.isObject(row.input) && Array.isArray(row.input['rows'])
-											? row.input['rows']
-											: []
-									)
-								}
+							? { rows: rows.flatMap((row) => row.event?.rows ?? []) }
 							: {})
 					};
 				const decoded =
@@ -1356,35 +1674,35 @@ export const RunsLive = Layer.effect(
 								prune(now).pipe(Effect.map((result): Json => ({ ...result })))
 							)
 						: yield* registry.handler(head.automation);
-				if (spec === undefined && Option.isSome(handler))
+				if (spec === undefined && Option.isSome(handler)) {
+					// Platform handlers own their I/O and page statements, so claim a fired slot before handing them control.
+					// A queued attempt already has its lease; a repeated cron slot must never enter the handler again.
+					if (!ledger.written() && !(yield* ledger.record)) return dues;
 					outcome = yield* handler.value(input, head).pipe(
-						Effect.map((output): GuestOutcome => ({ kind: 'ok', output, cpuMs: 0 })),
+						Effect.map((output): GuestOutcome => ({ kind: 'ok', output })),
 						Effect.catch((error) =>
 							Effect.succeed({
 								kind: 'failed',
 								error:
 									error._tag === 'BoltError'
 										? error
-										: BoltError.make('internal', 'guest', error.message, error),
-								cpuMs: 0
+										: BoltError.make('internal', 'guest', error.message, error)
 							} satisfies GuestOutcome)
 						)
 					);
-				else if (spec === undefined)
+				} else if (spec === undefined)
 					outcome = {
 						kind: 'failed',
 						error: BoltError.make(
 							'unknownAutomation',
 							'admission',
 							`no automation '${head.automation}'`
-						),
-						cpuMs: 0
+						)
 					};
 				else if (decoded !== undefined && decoded.problems.length > 0)
 					outcome = {
 						kind: 'failed',
-						error: BoltError.make('invalidInput', 'decode', 'The run input did not decode.'),
-						cpuMs: 0
+						error: BoltError.make('invalidInput', 'decode', 'The run input did not decode.')
 					};
 				else {
 					if (decoded?.value !== undefined) input = encodeWire(decoded.value);
@@ -1399,13 +1717,19 @@ export const RunsLive = Layer.effect(
 					if (holder === undefined)
 						outcome = {
 							kind: 'failed',
-							error: BoltError.make('noTrigger', 'admission', 'the run has no starter'),
-							cpuMs: 0
+							error: BoltError.make('noTrigger', 'admission', 'the run has no starter')
 						};
 					else {
-						if (Predicate.isObject(input) && Array.isArray(input['rows']) && !holder.admin) {
+						const removedRows = Predicate.isObject(input) ? input['rows'] : undefined;
+						if (
+							head.cause === 'deleted' &&
+							head.event !== undefined &&
+							Predicate.isObject(input) &&
+							jsonArray(removedRows) &&
+							!holder.admin
+						) {
 							const authority = yield* identity.authority(holder),
-								collection = typeof input['collection'] === 'string' ? input['collection'] : '';
+								collection = head.event.collection;
 							const arms = authority.collections[collection]?.read ?? [],
 								all = arms.some((arm) => arm.fields === 'all'),
 								keep = new Set([
@@ -1419,8 +1743,8 @@ export const RunsLive = Layer.effect(
 									arms.length === 0
 										? []
 										: all
-											? input['rows']
-											: input['rows'].map((row) =>
+											? removedRows
+											: removedRows.map((row) =>
 													Predicate.isObject(row)
 														? Object.fromEntries(
 																Object.entries(row).filter(([field]) => keep.has(field))
@@ -1435,13 +1759,33 @@ export const RunsLive = Layer.effect(
 							holder,
 							input,
 							dues,
-							warnings
+							warnings,
+							ledger.record,
+							durability
 						);
 					}
+				}
+				if (outcome.kind === 'ok' && spec?.output !== undefined) {
+					const decoded = yield* Effect.result(decodeOutput(m, spec.output, outcome.output));
+					outcome =
+						decoded._tag === 'Success'
+							? { ...outcome, output: decoded.success }
+							: { kind: 'failed', error: decoded.failure };
 				}
 				if (outcome.kind === 'failed' && outcome.error.code === 'interrupted') {
 					yield* interrupted(rows, outcome.error.message);
 					return dues;
+				}
+				if (!ledger.written()) {
+					// An authored cron that only read writes nothing; platform handlers claimed their slot before I/O.
+					const idle =
+						outcome.kind === 'ok' &&
+						(spec !== undefined ||
+							(Predicate.isObject(outcome.output) && outcome.output['pages'] === 0));
+					if (idle || !(yield* ledger.record)) {
+						yield* forget(durability, head.id);
+						return dues;
+					}
 				}
 				for (const row of rows) stopping.delete(row.id);
 				const platformRetry = yield* registry.retry(head.automation),
@@ -1460,7 +1804,17 @@ export const RunsLive = Layer.effect(
 					outcome.kind === 'ok'
 						? null
 						: outcome.kind === 'refused'
-							? { code: 'refused', message: outcome.message }
+							? {
+									code: outcome.code ?? 'refused',
+									message: outcome.message,
+									...(outcome.field === undefined ? {} : { field: outcome.field }),
+									...(outcome.row === undefined ? {} : { row: outcome.row }),
+									...(outcome.rows === undefined ? {} : { rows: outcome.rows }),
+									...(outcome.rule === undefined ? {} : { rule: outcome.rule }),
+									...(outcome.data === undefined ? {} : { data: outcome.data }),
+									...(outcome.records === undefined ? {} : { records: outcome.records }),
+									...(outcome.invocation === undefined ? {} : { invocation: outcome.invocation })
+								}
 							: { code: outcome.error.code, message: outcome.error.message };
 				const result = {
 					attempt: head.attempts,
@@ -1477,36 +1831,24 @@ export const RunsLive = Layer.effect(
 					'done',
 					`UPDATE sys_run s SET state = ${c.p(state)}, output = ${c.p(outcome.kind === 'ok' ? JSON.stringify(outcome.output) : null)}::jsonb, error = ${c.p(error)}::jsonb, finished_at = ${state === 'queued' ? 'NULL' : `${c.p(iso(at))}::timestamptz`}, due_at = coalesce(${c.p(due === null ? null : iso(due))}::timestamptz, s.due_at), results = s.results || jsonb_build_array(${c.p(result)}::jsonb) WHERE s.id IN (SELECT jsonb_array_elements_text(${c.p(rows.map((row) => row.id))}::jsonb)) AND s.state <> 'stopped' RETURNING s.id`
 				);
-				const cron =
-					head.cause === 'cron' && !retry
-						? crons.find(
-								(trigger) => trigger.automation === head.automation && trigger.key === head.run_key
-							)
-						: undefined;
-				const next = cron === undefined ? undefined : slotDue(cron, at);
-				if (cron !== undefined && next !== undefined) {
-					dues.push(next);
-					enqueue(
-						c,
-						[
-							{
-								automation: cron.automation,
-								input: {},
-								dueAt: iso(next),
-								key: cron.key,
-								cause: 'cron',
-								depth: 0
-							}
-						],
-						{ conflict: 'keep' }
-					);
-				}
-				yield* db.write(c.sql(`(SELECT count(*) FROM done)::int AS n`));
-				// The open tick's nudge fiber claims the next slot; `dues` alone waits for every inflight run to end.
-				if (next !== undefined) yield* PubSub.publish(nudges, next);
+				yield* audited(
+					db,
+					{
+						category: 'automation',
+						action: 'finish',
+						actor: { kind: 'system', id: head.id, label: null },
+						run: head.id,
+						payload: encodeWire({
+							automation: head.automation,
+							runIds: rows.map((row) => row.id),
+							result
+						})
+					},
+					db.write(c.sql(`(SELECT count(*) FROM done)::int AS n`))
+				).pipe(Effect.provideService(Audit, audit));
+				if (state !== 'queued') yield* forget(durability, head.id);
 				return dues;
 			}).pipe(
-				withRequestCpu,
 				Effect.onInterrupt(() =>
 					interrupted(rows, 'The run was interrupted while its generation was draining (rule 71a).')
 				)
@@ -1533,14 +1875,16 @@ export const RunsLive = Layer.effect(
 							)
 						).pipe(Effect.asVoid);
 					const run = (group: readonly Row[]) =>
-						execute(group).pipe(
-							Effect.tap((times) =>
-								Effect.sync(() => {
-									dues.push(...times);
-								})
-							),
-							Effect.asVoid
-						);
+						lock(group[0]?.automation ?? '')
+							.withPermit(execute(group))
+							.pipe(
+								Effect.tap((times) =>
+									Effect.sync(() => {
+										dues.push(...times);
+									})
+								),
+								Effect.asVoid
+							);
 					const custom = Effect.gen(function* () {
 						while (true) {
 							const admitted = yield* lanes.withPermitsIfAvailable(1)(
@@ -1579,27 +1923,9 @@ export const RunsLive = Layer.effect(
 							)
 						);
 					};
-					if (Math.floor(now / DAY) !== prunedDay) {
-						prunedDay = Math.floor(now / DAY);
-						const pass = yield* prune(now).pipe(
-							Effect.catchTag('BoltError', (error): Effect.Effect<undefined, EngineError> =>
-								error.code !== 'noProgress'
-									? Effect.fail(error)
-									: logged({
-											at: iso(now),
-											severity: 'warn',
-											event: 'prune.noProgress',
-											invocation: PRUNE,
-											run: null,
-											conversation: null,
-											turn: null,
-											attributes: { code: error.code, message: error.message }
-										}).pipe(Effect.as(undefined))
-							)
-						);
-						pruned = pass !== undefined;
-						if (pass?.continued !== undefined) dues.push(pass.continued);
-					}
+					const pass = yield* daily(now);
+					pruned = pass !== undefined;
+					if (pass?.continued !== undefined) dues.push(pass.continued);
 					let armed = Infinity;
 					yield* Effect.forkScoped(
 						Effect.forever(
@@ -1710,14 +2036,64 @@ export const RunsLive = Layer.effect(
 				yield* announce(due);
 				return { status: 200 };
 			});
+		/** Cron `id` at `slot`: the run id is their digest, so a repeat meets the row its first effect wrote. */
+		const fire = Effect.fn('Runs.fire')(function* (id: string, slot: string) {
+			const at = Date.parse(slot);
+			if (!crons.some((entry) => entry.id === id) || !Number.isFinite(at))
+				return yield* Effect.fail(
+					BoltError.make('invalidInput', 'admission', `no cron '${id}' fires at '${slot}'`)
+				);
+			const now = yield* Clock.currentTimeMillis;
+			const pass = yield* daily(now);
+			if (pass?.continued !== undefined) yield* announce(iso(pass.continued));
+			const run: Row = {
+				id: sha256Hex(canonical(['cron', id, iso(at)])).slice(0, 32),
+				automation: id,
+				input: {},
+				due_at: iso(at),
+				run_key: null,
+				cause: 'cron',
+				depth: 0,
+				attempts: 1,
+				leases: 0,
+				actor: null,
+				starter: null,
+				event: undefined
+			};
+			let written = false;
+			const record = yield* Effect.cached(
+				Effect.gen(function* () {
+					const c = new Chain();
+					const inserted = enqueue(
+						c,
+						{
+							select: `SELECT ${c.p(run.id)}::text AS id, ${c.p(run.automation)}::text AS automation, ${c.p(run.due_at)}::timestamptz AS due_at, 'cron'::text AS cause, 0 AS depth, 'running'::text AS state, 1 AS attempts, ${c.p(iso(now))}::timestamptz AS started_at`
+						},
+						{ conflict: 'keep' }
+					);
+					const rows = yield* db.returning(
+						Schema.Struct({ n: Schema.Number }),
+						c.sql(`(SELECT count(*) FROM ${inserted})::int AS n`)
+					);
+					written = (rows[0]?.n ?? 0) > 0;
+					return written;
+				})
+			);
+			const dues = yield* lock(run.automation).withPermit(
+				execute([run], { record, written: () => written })
+			);
+			if (dues.length > 0) yield* announce(iso(Math.min(...dues)));
+			return { ran: written };
+		});
 		return {
-			boot: boot(),
-			reconfigure: boot(false),
+			boot,
 			tick,
 			nudge: (at: string) => PubSub.publish(nudges, Date.parse(at)).pipe(Effect.asVoid),
 			view,
 			stop,
-			webhook
+			webhook,
+			crons: Effect.succeed(crons),
+			fire
 		};
 	})
 );

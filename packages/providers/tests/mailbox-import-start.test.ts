@@ -8,8 +8,8 @@ import { ProviderUnavailable } from '../src/errors.ts';
 import { fakeFetch, host, messagesOf, until, type Host } from './kit.ts';
 import { fakeImap } from './mail-servers.ts';
 
-vi.mock('@norbital-ai/bolt/engine', async (original) => {
-	const actual = await original<typeof import('@norbital-ai/bolt/engine')>();
+vi.mock('@norbital-ai/bolt/node', async (original) => {
+	const actual = await original<typeof import('@norbital-ai/bolt/node')>();
 	const { Effect } = await import('effect');
 	return {
 		...actual,

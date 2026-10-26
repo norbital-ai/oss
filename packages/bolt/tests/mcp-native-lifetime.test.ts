@@ -1,70 +1,66 @@
-import { Client } from '@modelcontextprotocol/client';
+// The turn's MCP sessions over a Promise `McpPort` (`Mcp.fromAbi`), as a host binds it: interruption aborts the port
+// call, a failed connect is kept for the turn, and every opened session closes exactly once.
 import { expect, it, vi } from '@effect/vitest';
 import { Effect, Exit, Fiber, Scope } from 'effect';
-import { mcpSessions } from '../src/engine/agent/mcp.ts';
+import type { McpPort } from '../src/engine/contracts.ts';
+import { Mcp } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
+import { mcpSessions } from '../src/engine/agent/mcp.ts';
 
-const fixture = Effect.gen(function* () {
-	const scope = yield* Scope.make();
-	yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
-	const sessions = yield* mcpSessions(
-		{ mcp: { good: { description: '', url: 'URL' }, other: { description: '', url: 'URL' } } },
-		{ secret: () => Effect.succeed('http://fixture.invalid/mcp') }
-	).pipe(Scope.provide(scope));
-	return { sessions, close: Scope.close(scope, Exit.void) };
-});
-
-const sdk = Effect.acquireRelease(
-	Effect.sync(() => {
-		const connect = vi.spyOn(Client.prototype, 'connect').mockResolvedValue(undefined);
-		const close = vi.spyOn(Client.prototype, 'close').mockResolvedValue(undefined);
-		return { connect, close };
-	}),
-	() => Effect.sync(() => vi.restoreAllMocks())
-);
-
-it.effect('waits for interrupted native SDK acquisition before closing its client', () =>
+const fixture = (port: McpPort) =>
 	Effect.gen(function* () {
-		const { connect, close } = yield* sdk;
+		const scope = yield* Scope.make();
+		yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
+		const sessions = yield* mcpSessions(
+			{ mcp: { good: { description: '', url: 'GOOD' }, other: { description: '', url: 'OTHER' } } },
+			{ secret: (name) => Effect.succeed(`https://${name.toLowerCase()}.test/mcp`) }
+		).pipe(Scope.provide(scope), Effect.provide(Mcp.fromAbi(port)));
+		return { sessions, close: Scope.close(scope, Exit.void) };
+	});
+const port = (connect: McpPort['connect']) => {
+	const close = vi.fn(async (_session: string) => {});
+	const mcp: McpPort = {
+		connect: vi.fn(connect),
+		tools: async () => [],
+		call: async () => ({ content: [] }),
+		close
+	};
+	return { mcp, close };
+};
+
+it.effect("an interrupted connect aborts the port's signal and leaves nothing to close", () =>
+	Effect.gen(function* () {
 		const started = Promise.withResolvers<void>();
-		const native = Promise.withResolvers<void>();
 		let signal: AbortSignal | undefined;
-		connect.mockImplementation((_transport, options) => {
-			signal = options?.signal;
+		const p = port((_server, s) => {
+			signal = s;
 			started.resolve();
-			return native.promise;
+			return new Promise<string>(() => {});
 		});
-		const f = yield* fixture;
-		yield* Effect.addFinalizer(() => Effect.sync(() => native.resolve()));
+		const f = yield* fixture(p.mcp);
 		const call = yield* Effect.forkChild(f.sessions.call('good', 'echo', {}));
 		yield* Port.attempt('fixture.connect', () => started.promise);
-		const interrupting = yield* Effect.forkChild(Fiber.interrupt(call), { startImmediately: true });
-		yield* Fiber.join(interrupting);
+		yield* Fiber.interrupt(call);
 		expect(signal?.aborted).toBe(true);
-		const stopping = yield* Effect.forkChild(f.close, { startImmediately: true });
-		expect(stopping.pollUnsafe()).toBeUndefined();
-		expect(close).not.toHaveBeenCalled();
-		expect(yield* f.sessions.call('other', 'echo', {}).pipe(Effect.flip)).toMatchObject({
-			_tag: 'Unavailable',
-			reason: 'the session scope is closed'
-		});
-		native.reject(new Error('connection aborted'));
-		yield* Fiber.join(stopping);
-		expect(connect).toHaveBeenCalledTimes(1);
-		expect(close).toHaveBeenCalledTimes(1);
+		yield* f.close;
+		expect(p.close).not.toHaveBeenCalled();
 	})
 );
 
-it.effect('caches rejected SDK acquisition and releases its client exactly once', () =>
+it.effect('keeps a rejected connect for the turn and closes an opened session exactly once', () =>
 	Effect.gen(function* () {
-		const { connect, close } = yield* sdk;
-		connect.mockRejectedValue(new Error('connection refused'));
-		const f = yield* fixture;
+		const p = port(async (server) => {
+			if (server.url === 'https://good.test/mcp') throw new Error('connection refused');
+			return 'session-other';
+		});
+		const f = yield* fixture(p.mcp);
 		const failure = yield* f.sessions.call('good', 'echo', {}).pipe(Effect.flip);
 		expect(failure).toMatchObject({ kind: 'upstream', message: 'connection refused' });
 		expect(yield* f.sessions.call('good', 'echo', {}).pipe(Effect.flip)).toBe(failure);
+		yield* f.sessions.call('other', 'echo', {});
 		yield* Effect.all([f.close, f.close], { concurrency: 'unbounded' });
-		expect(connect).toHaveBeenCalledTimes(1);
-		expect(close).toHaveBeenCalledTimes(1);
+		expect(p.mcp.connect).toHaveBeenCalledTimes(2);
+		expect(p.close).toHaveBeenCalledTimes(1);
+		expect(p.close).toHaveBeenCalledWith('session-other');
 	})
 );

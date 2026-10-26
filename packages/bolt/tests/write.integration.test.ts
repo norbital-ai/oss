@@ -1,41 +1,85 @@
 // engine/write on PGlite: one guarantee per test (rules 19–29, 34, 40–43, 45 hook, 70).
 import type { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Layer, Schema } from 'effect';
+import { Effect, Layer, Schema, Stream } from 'effect';
 import {
 	TenantDb as TenantDbService,
 	type TenantDbShape as TenantDb
 } from '../src/engine/db/tenant-db.ts';
 import { dbError } from '../src/engine/db/wire.ts';
 import type { Json } from '../src/decl/values.ts';
+import type { ApprovalSnapshot } from '../src/decl/access/policy.ts';
 import type { GuestOutcome, Invocation, Lock, Outcome } from '../src/engine/contracts.ts';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { applyPlan, plan, schemaSlice } from '../src/engine/schema/plan.ts';
 import { catalogOf, toPred } from '../src/engine/access/pred.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
-import { compileCommit } from '../src/engine/write/commit.ts';
-import { seed } from '../src/engine/write/seed.ts';
+import {
+	act,
+	type ActRequest,
+	type ApprovalHook,
+	type WriteEngine
+} from '../src/engine/write/act.ts';
+import { executeCommit, type Commit } from '../src/engine/write/commit.ts';
+import { restorer, restoreSource, seed } from '../src/engine/write/seed.ts';
 import { admin, arm, authority, grants, manifest, NOW, TODAY } from './write-fixture.ts';
 
 let pg: PGlite, db: TenantDb;
 const count = { reads: 0, writes: 0 };
+const native = { active: 0, batches: 0, streams: 0 };
 let n = 0;
 const fixture = Layer.effectDiscard(
 	Effect.gen(function* () {
 		pg = yield* PgliteDb.open();
-		db = PgliteDb.make(pg);
-		yield* applyPlan(db, plan(null, manifest), { accept: true });
+		const client: PgliteClient = {
+			query: (text, params) => pg.query(text, params),
+			exec: (text) => pg.exec(text),
+			transaction: (body) => {
+				let entered = false;
+				return pg
+					.transaction(async (tx) => {
+						expect(native.streams).toBe(0);
+						entered = true;
+						native.active++;
+						native.batches++;
+						return await body(tx);
+					})
+					.finally(() => {
+						if (entered) native.active--;
+					});
+			}
+		};
+		db = PgliteDb.make(client);
+		yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 		const inner = db;
 		db = TenantDbService.typed({
 			read: (statements) => (count.reads++, inner.read(statements)),
 			write: (statement, lock) => (count.writes++, inner.write(statement, lock)),
-			transaction: inner.transaction
+			transaction: (batch) => (count.writes++, inner.transaction(batch)),
+			session: inner.session
 		});
 		count.reads = 0;
 		count.writes = 0;
 	})
 ).pipe(Layer.provide(Pristine.layer));
+
+/** Observe the actual source's pulls and finalizer, including a bounded chunk's early close. */
+const outsideBatch = <A, E, R>(source: Stream.Stream<A, E, R>) =>
+	Stream.unwrap(
+		Effect.sync(() => {
+			expect(native.active).toBe(0);
+			native.streams++;
+			return source.pipe(
+				Stream.tap(() => Effect.sync(() => expect(native.active).toBe(0))),
+				Stream.ensuring(
+					Effect.sync(() => {
+						expect(native.active).toBe(0);
+						native.streams--;
+					})
+				)
+			);
+		})
+	);
 
 type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
 const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
@@ -635,7 +679,7 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 			}).pipe(Effect.provide(fixture))
 	);
 
-	it.effect('a create is scoped on its post-image, after the transform (rule 35)', () =>
+	it.effect('a create is scoped on its post-image, after its callback (rule 35)', () =>
 		Effect.gen(function* () {
 			const onlyUpper = {
 				t: 'cmp',
@@ -647,9 +691,8 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 			expect(
 				(yield* run({ verb: 'create', input: { title: 'desk' }, authority: caller })).outcome
 			).toMatchObject({ code: 'forbidden' });
-			const upper = transformEngine((inv) => ({
+			const upper = callbackEngine((inv) => ({
 				kind: 'ok',
-				cpuMs: 1,
 				output: Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ title: Schema.String })))(
 					inv.input
 				).map((x) => ({ ...x, title: x.title.toUpperCase() }))
@@ -661,12 +704,39 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 	);
 });
 
-function transformEngine(
+const callbackRows = (invocation: Invocation) =>
+	invocation.kind === 'update'
+		? Schema.decodeUnknownSync(
+				Schema.Array(
+					Schema.Struct({
+						before: Schema.Record(Schema.String, Schema.Json),
+						set: Schema.Record(Schema.String, Schema.Json)
+					})
+				)
+			)(invocation.input).map((change) => change.set)
+		: Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)))(
+				invocation.input
+			);
+
+function callbackEngine(
 	body: (inv: Invocation) => GuestOutcome,
 	calls: Invocation[] = []
 ): Partial<WriteEngine> {
+	const orders = manifest.collections['orders'];
+	if (orders?.create === undefined || orders.update === undefined)
+		throw new Error('The callback fixture needs create and update contracts');
 	return {
-		transforms: new Set(['orders']),
+		manifest: {
+			...manifest,
+			collections: {
+				...manifest.collections,
+				orders: {
+					...orders,
+					create: { ...orders.create, transform: true },
+					update: { ...orders.update, transform: true }
+				}
+			}
+		},
 		guest: {
 			invokeProgram: () =>
 				Effect.die(new Error('This fixture does not execute supplied guest programs.')),
@@ -675,11 +745,11 @@ function transformEngine(
 	};
 }
 
-describe('engine/write: the transform (rules 19, 27)', () => {
-	it.effect('gives an id upsert its stored row, without passing id to the transform payload', () =>
+describe('engine/write: per-verb callbacks (rules 19, 27)', () => {
+	it.effect('gives an id upsert its stored row beside its set, without putting id in the set', () =>
 		Effect.gen(function* () {
 			const calls: Invocation[] = [];
-			const engine = transformEngine((inv) => ({ kind: 'ok', cpuMs: 1, output: inv.input }), calls);
+			const engine = callbackEngine((inv) => ({ kind: 'ok', output: callbackRows(inv) }), calls);
 			const id = yield* order('desk');
 			const changed = committed(
 				(yield* run(
@@ -692,53 +762,56 @@ describe('engine/write: the transform (rules 19, 27)', () => {
 				)).outcome
 			);
 			expect(changed).toMatchObject({ output: [id] });
+			expect(calls[0]!.kind).toBe('update');
 			expect(calls[0]!.input).toEqual([
-				{ note: 'measured', lines: { create: [{ label: 'tile', amount: '2' }] } }
+				{
+					before: expect.objectContaining({ id, title: 'desk' }),
+					set: { note: 'measured', lines: { create: [{ label: 'tile', amount: '2' }] } }
+				}
 			]);
-			expect(calls[0]!.ctx.existing![0]).toMatchObject({ id, title: 'desk' });
 			expect(yield* rows(`select note from orders`)).toEqual([{ note: 'measured' }]);
 			expect(yield* rows(`select label from lines`)).toEqual([{ label: 'tile' }]);
 		}).pipe(Effect.provide(fixture))
 	);
 
-	it.effect('runs once per batch with ctx.existing, and its payload is the write', () =>
-		Effect.gen(function* () {
-			const calls: Invocation[] = [];
-			const engine = transformEngine(
-				(inv) => ({
-					kind: 'ok',
-					cpuMs: 1,
-					output: Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)))(
-						inv.input
-					).map((x) => ({ ...x, note: 'derived' }))
-				}),
-				calls
-			);
-			const id = yield* order('a');
-			committed(
-				(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'b' } }] }, engine))
-					.outcome
-			);
-			committed(
-				(yield* run({ verb: 'create', input: [{ title: 'c' }, { title: 'd' }] }, engine)).outcome
-			);
-			expect(
-				calls.map((c) => Schema.decodeUnknownSync(Schema.Array(Schema.Json))(c.input).length)
-			).toEqual([1, 2]);
-			expect(calls[0]!.ctx.existing![0]).toMatchObject({ title: 'a' });
-			expect(yield* rows(`select note from orders order by title`)).toEqual([
-				{ note: 'derived' },
-				{ note: 'derived' },
-				{ note: 'derived' }
-			]);
-		}).pipe(Effect.provide(fixture))
+	it.effect(
+		'runs once per verb batch with before beside each update set, and returns the write payloads',
+		() =>
+			Effect.gen(function* () {
+				const calls: Invocation[] = [];
+				const engine = callbackEngine(
+					(inv) => ({
+						kind: 'ok',
+						output: callbackRows(inv).map((x) => ({ ...x, note: 'derived' }))
+					}),
+					calls
+				);
+				const id = yield* order('a');
+				committed(
+					(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'b' } }] }, engine))
+						.outcome
+				);
+				committed(
+					(yield* run({ verb: 'create', input: [{ title: 'c' }, { title: 'd' }] }, engine)).outcome
+				);
+				expect(
+					calls.map((c) => Schema.decodeUnknownSync(Schema.Array(Schema.Json))(c.input).length)
+				).toEqual([1, 2]);
+				expect(calls.map((call) => call.kind)).toEqual(['update', 'create']);
+				expect(calls[0]!.input).toMatchObject([{ before: { title: 'a' }, set: { title: 'b' } }]);
+				expect(yield* rows(`select note from orders order by title`)).toEqual([
+					{ note: 'derived' },
+					{ note: 'derived' },
+					{ note: 'derived' }
+				]);
+			}).pipe(Effect.provide(fixture))
 	);
 
 	it.effect('a refusal is recorded, so a replay answers it without running guest code again', () =>
 		Effect.gen(function* () {
 			const calls: Invocation[] = [];
-			const engine = transformEngine(
-				() => ({ kind: 'refused', message: 'no desks', field: 'title', cpuMs: 1 }),
+			const engine = callbackEngine(
+				() => ({ kind: 'refused', message: 'no desks', field: 'title' }),
 				calls
 			);
 			const first = yield* run({ verb: 'create', input: { title: 'desk' }, key: 'g' }, engine);
@@ -747,7 +820,7 @@ describe('engine/write: the transform (rules 19, 27)', () => {
 				code: 'refused',
 				message: 'no desks',
 				field: 'title',
-				rule: 'orders.transform'
+				rule: 'orders.create'
 			});
 			const replay = yield* run(
 				{ verb: 'create', input: { title: 'desk' }, key: 'g', retry: true },
@@ -761,7 +834,7 @@ describe('engine/write: the transform (rules 19, 27)', () => {
 
 describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 	it.effect(
-		'a transform that read takes one sorted SHARE ROW EXCLUSIVE lock over write and read tables',
+		'a callback that read takes one sorted SHARE ROW EXCLUSIVE lock over write and read tables',
 		() =>
 			Effect.gen(function* () {
 				const locks: (Lock | undefined)[] = [];
@@ -769,10 +842,11 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 				db = TenantDbService.typed({
 					read: inner.read,
 					write: (statement, lock) => (locks.push(lock), inner.write(statement, lock)),
-					transaction: inner.transaction
+					transaction: (batch) => (locks.push(batch.lock), inner.transaction(batch)),
+					session: inner.session
 				});
 				const engine = {
-					...transformEngine((inv) => ({ kind: 'ok', cpuMs: 1, output: inv.input })),
+					...callbackEngine((inv) => ({ kind: 'ok', output: callbackRows(inv) })),
 					bridge: () => ({ cross: () => Effect.succeed([]), tables: () => ['tags'] })
 				};
 				committed((yield* run({ verb: 'create', input: { title: 'a' } }, engine)).outcome);
@@ -782,7 +856,7 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 
 	it.effect('queued runs and notices are pieces of the statement, behind the gate', () =>
 		Effect.gen(function* () {
-			const x = {
+			const x: Commit = {
 				key: 'q',
 				digest: 'd',
 				issuedAt: NOW,
@@ -804,12 +878,24 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 						key: 'once'
 					}
 				],
-				notices: [{ id: 'n1', to: { channel: 'mail', recipients: [{ user: 'u' }] }, title: 'Hi' }]
+				notices: [
+					{
+						id: 'n1',
+						to: [{ user: 'u' }],
+						via: ['mail'],
+						title: 'Hi',
+						body: null,
+						link: null,
+						once: 'notice-once',
+						attachments: []
+					}
+				]
 			};
-			yield* db.write(compileCommit(manifest, catalogOf(manifest), x));
-			yield* db.write(
-				compileCommit(manifest, catalogOf(manifest), { ...x, runs: [{ ...x.runs[0]!, id: 'r2' }] })
-			);
+			yield* executeCommit(db, manifest, catalogOf(manifest), x);
+			yield* executeCommit(db, manifest, catalogOf(manifest), {
+				...x,
+				runs: [{ ...x.runs[0]!, id: 'r2' }]
+			});
 			// the mail notice queues its own delivery run, once, like the rest
 			expect(
 				yield* one(`select (select count(*)::int from sys_run where automation = 'remind') r, (select count(*)::int from sys_run where automation = 'notifications.deliver') d,
@@ -823,21 +909,36 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 	it.effect('a routed create commits provisionally under the request the hook opens', () =>
 		Effect.gen(function* () {
 			const requestId = '0199a000-0000-7000-8000-0000000000aa';
+			const snapshot: Extract<ApprovalSnapshot, { kind: 'steps' }> = {
+				kind: 'steps',
+				steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
+				superseded_by: []
+			};
 			const routed = authority({
 				orders: grants({
-					create: [],
-					approval: { create: [{ steps: [['finance']] }], update: [], delete: [] }
+					create: [{ ...arm(), approval: true }]
 				})
 			});
+			const routes: Parameters<ApprovalHook['route']>[0][] = [];
+			const approval: ApprovalHook = {
+				route: (request) =>
+					Effect.sync(() => {
+						routes.push(request);
+						return { requestId, route: request.snapshot, pieces: () => {} };
+					}),
+				resubmit: () => Effect.die('This create does not resubmit an approval request')
+			};
+			const calls: Invocation[] = [];
 			const engine: Partial<WriteEngine> = {
-				approval: {
-					route: () =>
-						Effect.succeed({
-							requestId,
-							route: { steps: [['finance']], superseded_by: [] },
-							pieces: () => {}
+				guest: {
+					invokeProgram: () => Effect.die('The approval hook test does not execute programs'),
+					invoke: (invocation) =>
+						Effect.sync(() => {
+							calls.push(invocation);
+							return { kind: 'ok', output: snapshot };
 						})
-				}
+				},
+				approval
 			};
 			const o = (yield* run(
 				{ verb: 'create', input: { title: 'held' }, authority: routed },
@@ -845,6 +946,17 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 			)).outcome;
 			expect(o).toMatchObject({ kind: 'pendingApproval', requestId });
 			const [created] = yield* rows(`select id::text from orders`);
+			expect(calls.map(({ kind, target }) => [kind, target])).toEqual([
+				['approval', 'p.orders.create']
+			]);
+			expect(routes).toHaveLength(1);
+			expect(routes[0]).toMatchObject({
+				collection: 'orders',
+				record: created?.['id'],
+				action: 'create',
+				snapshot,
+				records: [{ id: created?.['id'], action: 'create', values: { title: 'held' } }]
+			});
 			expect(o).toMatchObject({
 				records: [{ collection: 'orders', id: created?.['id'], revision: 1 }]
 			});
@@ -867,8 +979,29 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 					],
 					lines: [{ id: '0199a000-0000-4000-8000-000000000002', label: 'a', amount: '5', order: o }]
 				};
-				expect(yield* seed(manifest, db, pack, NOW)).toEqual({ inserted: 2 });
-				expect(yield* seed(manifest, db, pack, NOW)).toEqual({ inserted: 0 });
+				// each collection is read once, as it is restored, in relationship order (a pack is never in memory whole)
+				const reads: string[] = [];
+				const streamed = restoreSource(pack);
+				const batches = native.batches;
+				expect(
+					yield* seed(
+						manifest,
+						db,
+						{
+							collections: ['lines', 'orders'],
+							rows: (c, from) =>
+								outsideBatch(
+									Stream.unwrap(Effect.sync(() => (reads.push(c), streamed.rows(c, from))))
+								)
+						},
+						NOW
+					)
+				).toEqual({ inserted: 2 });
+				expect(reads).toEqual(['orders', 'lines']);
+				expect(native.batches).toBeGreaterThan(batches);
+				expect(native.active).toBe(0);
+				expect(native.streams).toBe(0);
+				expect(yield* seed(manifest, db, restoreSource(pack), NOW)).toEqual({ inserted: 0 });
 				expect(yield* one(`select status, total::text from orders`)).toEqual({
 					status: 'submitted',
 					total: '5'
@@ -878,7 +1011,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 						seed(
 							manifest,
 							db,
-							{
+							restoreSource({
 								orders: [
 									{
 										...pack.orders[0]!,
@@ -888,7 +1021,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 										total: '9'
 									}
 								]
-							},
+							}),
 							NOW
 						)
 					)).message
@@ -896,6 +1029,63 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 				committed((yield* run({ verb: 'create', input: { title: 'next' } })).outcome);
 				expect(yield* one(`select number from orders where title = 'next'`)).toEqual({
 					number: 'PO-2026-0043'
+				});
+			}).pipe(Effect.provide(fixture))
+	);
+	it.effect(
+		'restores in bounded 1 MiB steps, admitting an oversized row alone, then derives roll-ups and counters',
+		() =>
+			Effect.gen(function* () {
+				const o = '0199a000-0000-4000-8000-000000000011';
+				// Each 1.5 MiB row exceeds the byte target and therefore owns its own chunk.
+				const label = 'x'.repeat(1.5 * 1024 * 1024);
+				const pack = {
+					orders: [
+						{ id: o, title: 'stepped', number: 'PO-2026-0007', status: 'submitted', total: '3.00' }
+					],
+					lines: [1, 2, 3].map((i) => ({
+						id: `0199a000-0000-4000-8000-00000000002${i}`,
+						label,
+						amount: '1',
+						order: o
+					}))
+				};
+				const reads: (readonly [string, number])[] = [];
+				const streamed = restoreSource(pack);
+				const restore = yield* restorer(
+					manifest,
+					db,
+					{
+						collections: ['lines', 'orders'],
+						rows: (c, from) =>
+							outsideBatch(
+								Stream.unwrap(Effect.sync(() => (reads.push([c, from]), streamed.rows(c, from))))
+							)
+					},
+					NOW
+				);
+				const steps: boolean[] = [];
+				let more = true;
+				while (more) {
+					more = yield* restore.step;
+					steps.push(more);
+					expect(native.active).toBe(0);
+					expect(native.streams).toBe(0);
+				}
+				expect(steps).toEqual([true, true, true, true, false]);
+				expect(reads).toEqual([
+					['orders', 0],
+					['lines', 0],
+					['lines', 1],
+					['lines', 2]
+				]);
+				expect(restore.inserted()).toBe(4);
+				expect(yield* restore.step).toBe(false);
+				// The given total spans all three chunks; the counter came from the first step.
+				expect(yield* one(`select total::text from orders`)).toEqual({ total: '3' });
+				committed((yield* run({ verb: 'create', input: { title: 'next' } })).outcome);
+				expect(yield* one(`select number from orders where title = 'next'`)).toEqual({
+					number: 'PO-2026-0008'
 				});
 			}).pipe(Effect.provide(fixture))
 	);
@@ -921,7 +1111,7 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 						notes: { read: { fields: 'all' }, create: { input: { columns: ['body', 'line'] } } }
 					}
 				} satisfies EngineManifest;
-				yield* applyPlan(db, plan(schemaSlice(manifest), ext), { accept: true });
+				yield* applyPlan(db, yield* plan(schemaSlice(manifest), ext), { accept: true });
 				const parent = yield* order('draft-parent', [{ label: 'a', amount: '1' }]);
 				const line = String(
 					(yield* one(`select id::text from lines where "order" = '${parent}'`))['id']
@@ -956,7 +1146,8 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 						{ manifest: ext }
 					)).outcome.kind
 				).toBe('committed');
-				expect(count.reads).toBe(2);
+				// Two grant/reference batches, then one native holder check for the owned child and its parent.
+				expect(count.reads).toBe(3);
 				committed(
 					(yield* run({
 						verb: 'update',
@@ -1008,7 +1199,7 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 						notes: { read: { fields: 'all' }, create: { input: { columns: ['body', 'line'] } } }
 					}
 				} satisfies EngineManifest;
-				yield* applyPlan(db, plan(schemaSlice(manifest), ext), { accept: true });
+				yield* applyPlan(db, yield* plan(schemaSlice(manifest), ext), { accept: true });
 				const id = yield* order('desk', [{ label: 'a', amount: '1' }]);
 				const line = String(
 					(yield* one(`select id::text from lines where "order" = '${id}'`))['id']

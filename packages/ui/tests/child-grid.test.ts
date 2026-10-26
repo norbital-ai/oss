@@ -423,49 +423,62 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 it.live(
 	'a custom body retains a child draft and original revision through history and a conflict',
 	() =>
-		Effect.gen(function* () {
-			const { bolt, script, capabilities, acts } = yield* browser(fixture);
-			let childRevision = 7;
-			const originalGet = script.get,
-				originalCapabilities = capabilities;
-			script.get = (collection, id, select, options) =>
-				options?.revision === undefined
-					? originalGet(collection, id)
-					: { id, revision: options.revision, title: 'Past job' };
-			script.history = () => [
-				{
-					revision: 2,
-					at: '2026-10-01T00:00:00Z',
-					actor: { kind: 'member', id: 'u1' },
-					changed: { title: 'Past job' }
-				},
-				{
-					revision: 3,
-					at: '2026-10-02T00:00:00Z',
-					actor: { kind: 'member', id: 'u1' },
-					changed: { title: 'Job' }
-				}
-			];
-			script.read = () => ({
-				rows: [
-					{ id: 'l1', revision: childRevision, amount: childRevision === 7 ? 1 : 10, job: 'j1' }
-				],
-				next: null
-			});
-			script.capabilities = (collection, id) => {
-				const value = originalCapabilities(collection, id);
-				return collection === 'jobs' ? value : { ...value, revision: childRevision };
-			};
-			script.act = (callable, input, options) => {
-				acts.push({ callable, input, options });
-				return {
-					kind: 'conflict',
-					records: [{ collection: 'lines', id: 'l1', fields: ['amount'] }]
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { bolt, script, capabilities, acts } = yield* browser(fixture);
+				let childRevision = 7;
+				const changed = new Set<() => void>();
+				script.changes = (read, emit) => {
+					if (read.m === 'query' && read.a[0] === 'lines') changed.add(emit);
+					return () => {
+						changed.delete(emit);
+					};
 				};
-			};
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, { target, props: { bolt, catalog, part: 'childCustom' } });
-			try {
+				const originalGet = script.get,
+					originalCapabilities = capabilities;
+				script.get = (collection, id, select, options) =>
+					options?.revision === undefined
+						? originalGet(collection, id)
+						: { id, revision: options.revision, title: 'Past job' };
+				script.history = () => [
+					{
+						revision: 2,
+						at: '2026-10-01T00:00:00Z',
+						actor: { kind: 'member', id: 'u1' },
+						changed: { title: 'Past job' }
+					},
+					{
+						revision: 3,
+						at: '2026-10-02T00:00:00Z',
+						actor: { kind: 'member', id: 'u1' },
+						changed: { title: 'Job' }
+					}
+				];
+				script.read = () => ({
+					rows: [
+						{ id: 'l1', revision: childRevision, amount: childRevision === 7 ? 1 : 10, job: 'j1' }
+					],
+					next: null
+				});
+				script.capabilities = (collection, id) => {
+					const value = originalCapabilities(collection, id);
+					return collection === 'jobs' ? value : { ...value, revision: childRevision };
+				};
+				script.act = (callable, input, options) => {
+					acts.push({ callable, input, options });
+					return {
+						kind: 'conflict',
+						records: [{ collection: 'lines', id: 'l1', fields: ['amount'] }]
+					};
+				};
+				const target = document.body.appendChild(document.createElement('div'));
+				const app = mount(Harness, { target, props: { bolt, catalog, part: 'childCustom' } });
+				yield* Effect.addFinalizer(() =>
+					browser(async () => {
+						await unmount(app);
+						target.remove();
+					}).pipe(Effect.orDie)
+				);
 				yield* browser(() => settle());
 				required(button(target, 'Edit')).click();
 				yield* browser(() => settle());
@@ -477,6 +490,8 @@ it.live(
 				amount.dispatchEvent(new Event('input', { bubbles: true }));
 				yield* browser(() => settle());
 				childRevision = 8;
+				assert.ok(changed.size > 0, 'the remote edit reaches the subscribed child query');
+				for (const emit of changed) emit();
 				element<HTMLElement>(target, '[data-timeline-trigger]').click();
 				yield* browser(() => settle());
 				const slider = element<HTMLElement>(document, '[data-record-timeline] [role=slider]');
@@ -485,9 +500,14 @@ it.live(
 				assert.equal(target.querySelector('[data-child-grid] input'), null);
 				slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
 				yield* browser(() => settle());
-				assert.equal(
-					element<HTMLInputElement>(target, '[data-child-grid] [data-field=amount] input').value,
-					'2'
+				yield* browser(() =>
+					vi.waitFor(() =>
+						assert.equal(
+							element<HTMLInputElement>(target, '[data-child-grid] [data-field=amount] input')
+								.value,
+							'2'
+						)
+					)
 				);
 				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
 				yield* browser(() => settle());
@@ -500,11 +520,8 @@ it.live(
 					'2'
 				);
 				assert.match(textOf(target), /changed/);
-			} finally {
-				yield* browser(() => unmount(app));
-				target.remove();
-			}
-		})
+			})
+		)
 );
 
 it.live(

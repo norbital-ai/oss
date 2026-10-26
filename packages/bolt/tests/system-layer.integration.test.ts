@@ -3,18 +3,28 @@
 import { randomBytes } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Option, Redacted, Schema } from 'effect';
+import { Context, Effect, Layer, Option, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
+import type { KeysPort } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '../src/engine/errors.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { toPred } from '../src/engine/access/pred.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
+import { Keys } from '../src/engine/ports.ts';
 import { Secrets } from '../src/engine/secrets.ts';
+import { keysPort } from '../src/node/keys.ts';
 import { act, recordCapabilities, type ActRequest } from '../src/engine/write/act.ts';
-import { loadPack, type Pack } from '../src/engine/write/pack.ts';
+import {
+	loadPack,
+	packLoader,
+	sourceOf,
+	type Pack,
+	type PackStep
+} from '../src/engine/write/pack.ts';
 import {
 	admin,
 	arm,
@@ -67,8 +77,28 @@ const Instance = Schema.Struct({
 	revision: Schema.Number
 });
 const fixture = Effect.gen(function* () {
-	const db = yield* TenantDb;
-	yield* applyPlan(db, plan(null, m), { accept: true });
+	const pg = yield* PgliteDb.open();
+	const native = { active: 0, batches: 0, keyActive: 0, keyCalls: { seal: 0, open: 0 } };
+	const client: PgliteClient = {
+		query: (text, params) => pg.query(text, params),
+		exec: (text) => pg.exec(text),
+		transaction: (body) => {
+			let entered = false;
+			return pg
+				.transaction(async (tx) => {
+					expect(native.keyActive).toBe(0);
+					entered = true;
+					native.active++;
+					native.batches++;
+					return await body(tx);
+				})
+				.finally(() => {
+					if (entered) native.active--;
+				});
+		}
+	};
+	const db = PgliteDb.make(client);
+	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	yield* db.write({
 		text: `insert into sys_user (id, name) values ($1, 'Ada'), ('u2', 'Bob')`,
 		params: [ada]
@@ -99,18 +129,34 @@ const fixture = Effect.gen(function* () {
 	});
 	const codec = () =>
 		Effect.gen(function* () {
+			const port = keysPort(randomBytes(32));
+			const keyCall = async <A>(method: 'seal' | 'open', work: () => Promise<A>): Promise<A> => {
+				expect(native.active).toBe(0);
+				native.keyActive++;
+				native.keyCalls[method]++;
+				try {
+					return await work();
+				} finally {
+					native.keyActive--;
+					expect(native.active).toBe(0);
+				}
+			};
+			const observed: KeysPort = {
+				seal: (plain, aad, signal) => keyCall('seal', () => port.seal(plain, aad, signal)),
+				open: (sealed, aad, signal) => keyCall('open', () => port.open(sealed, aad, signal))
+			};
 			const context = yield* Layer.build(
-				Secrets.layer([], Option.some(Redacted.make(randomBytes(32))))
+				Secrets.layer([]).pipe(Layer.provide(Keys.fromAbi(observed)))
 			).pipe(Effect.provideService(TenantDb, db));
 			return Context.get(context, Secrets);
 		});
-	return { db, read, run, created, codec };
+	return { db, read, run, created, codec, native };
 });
 class SystemFixture extends Context.Service<SystemFixture, Effect.Success<typeof fixture>>()(
 	'test/SystemFixture'
 ) {}
 const SystemFixtureLive = Layer.effect(SystemFixture, fixture).pipe(
-	Layer.provide(PgliteDb.layer()),
+	Layer.provide(Pristine.layer),
 	Layer.provideMerge(NodeCrypto.layer)
 );
 
@@ -428,7 +474,7 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 						tags: [{ id: '0199a000-0000-7000-8000-000000000043', name: 'vip' }]
 					}
 				};
-				expect(yield* loadPack(db, m, pack, NOW)).toBe(true);
+				expect(yield* loadPack(db, m, sourceOf(pack), NOW)).toBe(true);
 				expect(
 					yield* read(
 						NamedConfiguration,
@@ -439,8 +485,61 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 					{ id: 'desk', named: true, configuration: {} },
 					{ id: 'mail', named: true, configuration: {} }
 				]);
-				expect(yield* loadPack(db, m, pack, NOW)).toBe(false);
+				expect(yield* loadPack(db, m, sourceOf(pack), NOW)).toBe(false);
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
+	);
+	it.effect(
+		'a pack loads in steps: identity, each collection, the last step; then the answer stays',
+		() =>
+			Effect.gen(function* () {
+				const { db } = yield* SystemFixture;
+				yield* db.write({ text: 'DELETE FROM sys_user', params: [] });
+				const pack: Pack = {
+					dir: '',
+					meta: { format: 1, name: 'test', hash: '', start: [], assets: [], rows: { tags: 1 } },
+					rows: { tags: [{ id: '0199a000-0000-7000-8000-000000000044', name: 'vip' }] }
+				};
+				const loader = yield* packLoader(db, m, sourceOf(pack), NOW);
+				const steps: PackStep[] = [];
+				for (let i = 0; i < 4; i++) steps.push(yield* loader.step);
+				expect(steps).toEqual(['more', 'more', 'loaded', 'loaded']);
+				expect(yield* (yield* packLoader(db, m, sourceOf(pack), NOW)).step).toBe('hadRows');
+			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
+	);
+	it.effect('the same pack loader retries a failed identity batch before advancing', () =>
+		Effect.gen(function* () {
+			const { db, read } = yield* SystemFixture;
+			yield* db.write({ text: 'DELETE FROM sys_user', params: [] });
+			const id = '0199a000-0000-7000-8000-000000000055';
+			const pack: Pack = {
+				dir: '',
+				meta: { format: 1, name: 'test', hash: '', start: [], assets: [], rows: { sys_user: 1 } },
+				rows: { sys_user: [{ id, name: 'Retried member' }] }
+			};
+			const failure = DbError.make('57014', 'identity batch cancelled before execution');
+			let attempts = 0;
+			const once = TenantDb.typed({
+				...db,
+				transaction: (batch) =>
+					Effect.suspend(() => (++attempts === 1 ? Effect.fail(failure) : db.transaction(batch)))
+			});
+			const loader = yield* packLoader(once, m, sourceOf(pack), NOW);
+			expect(yield* Effect.flip(loader.step)).toBe(failure);
+			expect(attempts).toBe(1);
+			expect(yield* read(Id, 'select id from sys_user')).toEqual([]);
+			expect(yield* loader.step).toBe('more');
+			expect(attempts).toBe(2);
+			expect(
+				yield* read(
+					Schema.Struct({ id: Schema.String, name: Schema.String }),
+					'select id, name from sys_user'
+				)
+			).toEqual([{ id, name: 'Retried member' }]);
+			expect(yield* loader.step).toBe('loaded');
+			expect(attempts).toBe(3);
+			expect(yield* loader.step).toBe('loaded');
+			expect(attempts).toBe(3);
+		}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 });
 
@@ -454,7 +553,7 @@ describe('one configuration shape, however an instance is made', () => {
 					...m,
 					connections: { ...m.connections, ledger: { integration: 'erp' } }
 				};
-				yield* applyPlan(db, plan(yield* readApplied(db), slotted), { accept: true });
+				yield* applyPlan(db, yield* plan(yield* readApplied(db), slotted), { accept: true });
 				const id = yield* created({
 					integration: 'erp',
 					name: 'Ledger 2',
@@ -478,7 +577,7 @@ describe('one configuration shape, however an instance is made', () => {
 				).toMatchObject({ kind: 'committed' });
 				yield* applyPlan(
 					db,
-					plan(yield* readApplied(db), {
+					yield* plan(yield* readApplied(db), {
 						...slotted,
 						connections: { ...slotted.connections, extra: { integration: 'email' } }
 					}),
@@ -492,7 +591,7 @@ describe('one configuration shape, however an instance is made', () => {
 				).toEqual([{ configuration: { lag: 5, region: 'my' } }]);
 				yield* applyPlan(
 					db,
-					plan(yield* readApplied(db), {
+					yield* plan(yield* readApplied(db), {
 						...m,
 						connections: { ...m.connections, ledger: { integration: 'whatsapp' } }
 					}),
@@ -513,7 +612,8 @@ describe("instance credentials: sealed rows under the opener's epoch", () => {
 		'an opener loads what the previous one wrote; once it opens, the previous one is fenced for good',
 		() =>
 			Effect.gen(function* () {
-				const { db, read, codec } = yield* SystemFixture;
+				const { db, read, codec, native } = yield* SystemFixture;
+				const batches = native.batches;
 				const store = yield* credentials(db, yield* codec());
 				const a = yield* store.open('desk');
 				expect(a.values.size).toBe(0);
@@ -553,6 +653,11 @@ describe("instance credentials: sealed rows under the opener's epoch", () => {
 					'key:2': 'k2'
 				});
 				expect(yield* Effect.flip(store.open('nope'))).toMatchObject({ code: 'notFound' });
+				expect(native.batches).toBeGreaterThan(batches);
+				expect(native.keyCalls.seal).toBeGreaterThan(0);
+				expect(native.keyCalls.open).toBeGreaterThan(0);
+				expect(native.active).toBe(0);
+				expect(native.keyActive).toBe(0);
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 

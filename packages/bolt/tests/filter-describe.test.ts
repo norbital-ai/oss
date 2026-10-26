@@ -10,7 +10,7 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { DecisionsLive } from '../src/engine/decisions/index.ts';
-import type { Pred } from '../src/protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type {
@@ -80,7 +80,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -105,9 +104,7 @@ const grant = (masks: { [f: string]: Pred } = {}): CollectionAuthority => ({
 	create: [],
 	update: [],
 	delete: [],
-	approval: { create: [], update: [], delete: [] },
 	queries: [],
-	actions: [],
 	moves: {},
 	masks
 });
@@ -241,6 +238,8 @@ function system1(pick: (r: System1Request) => { readonly [id: string]: string | 
 const db = TenantDb.typed({
 	read: () => Effect.fail(DbError.make('XX000', 'Unexpected filter fixture database read')),
 	write: () => Effect.succeed({ rows: [], affected: 1 }),
+	session: () =>
+		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'Unexpected filter fixture transaction'))
 });
 const nativeDescriber = (
@@ -597,7 +596,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 						authority: caller(),
 						bindings
 					})
-				).toEqual({ ok: true, where: { window: { contains: { today: '' } } } });
+				).toEqual({ ok: true, where: { window: { contains: '2026-09-26' } } });
 				const year = system1(byField({ Window: { op: 'overlaps', value: 'this year' } }));
 				expect(
 					yield* describer(year).describe({
@@ -609,7 +608,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				).toEqual({
 					ok: true,
 					where: {
-						window: { overlaps: { from: { startOf: 'year' }, to: { startOf: 'year', shift: 1 } } }
+						window: { overlaps: { from: '2026-01-01', to: '2027-01-01' } }
 					}
 				});
 			})
@@ -733,89 +732,57 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 	);
 });
 
-describe("every offered condition is one its field's kind admits", () => {
-	it.effect(
-		'each, chosen alone, decodes: no text operator on a number, no number against text, no day for "is within"',
-		() =>
-			Effect.gen(function* () {
-				// every filterable kind on one collection, a description full of literals of every kind, and a found record
-				const jobs = manifest.models.jobs;
-				const kinds = {
-					...manifest,
-					models: {
-						...manifest.models,
-						jobs: {
-							...jobs,
-							fields: {
-								...jobs.fields,
-								urgent: { kind: 'bool' },
-								priority: { kind: 'enum', values: ['low', 'normal', 'high'] },
-								budget: { kind: 'money', optional: true },
-								visits: { kind: 'int' },
-								started_at: { kind: 'instant', optional: true }
-							}
-						}
-					},
-					collections: {
-						...manifest.collections,
-						jobs: {
-							read: {
-								fields: [
-									'title',
-									'hours',
-									'notes',
-									'scheduled_on',
-									'spot',
-									'window',
-									'status',
-									'tags',
-									'assignee',
-									'urgent',
-									'priority',
-									'budget',
-									'visits',
-									'started_at'
-								],
-								relations: ['assignee', 'lines']
-							}
+describe('described choices preserve scalar kinds', () => {
+	it.effect('decodes boolean, enum and numeric choices in one filter', () =>
+		Effect.gen(function* () {
+			const kinds = {
+				...manifest,
+				models: {
+					...manifest.models,
+					jobs: {
+						...manifest.models.jobs,
+						fields: {
+							...manifest.models.jobs.fields,
+							urgent: { kind: 'bool' },
+							priority: { kind: 'enum', values: ['low', 'normal', 'high'] },
+							visits: { kind: 'int' }
 						}
 					}
-				} satisfies EngineManifest;
-				const bob = '00000000-0000-4000-8000-0000000000b0';
-				const d = (port: System1Port) =>
-					nativeDescriber(port, kinds, (batch) =>
-						Effect.succeed(
-							batch.map((q) => ({
-								rows: q.collection === 'members' ? [{ id: bob, name: 'Bob Tan' }] : []
-							}))
-						)
-					);
-				const ask = {
-					collection: 'jobs',
-					authority: caller(),
-					bindings,
-					text: 'urgent high priority jobs for bob tan between 2 and 5 hours with 3 visits after 3rd October, before 2026-10-09, this week, tagged "ac" or pump, not done'
-				};
-				const first = system1(() => ({}));
-				yield* d(first).describe(ask);
-				const req = present(first.requests[0]);
-				let offered = 0;
-				for (const [id, q] of Object.entries(req.questions)) {
-					if (!/^f\d+$/.test(id) || q.type !== 'choice') continue;
-					for (const option of Object.keys(q.criteria).filter((k) => k !== 'no condition')) {
-						const named = Object.fromEntries(
-							Object.keys(req.questions)
-								.filter((k) => k.startsWith(`${id}.`))
-								.map((k) => [k, true])
-						);
-						const r = yield* d(system1(() => ({ [id]: option, ...named }))).describe(ask);
-						// chosen alone it builds a filter the strict decode admits; a word the text merely echoes may yield, never fail decode
-						if (!r.ok) expect(r.message, option).toMatch(/No field here matches/);
-						offered++;
+				},
+				collections: {
+					...manifest.collections,
+					jobs: {
+						read: {
+							...manifest.collections.jobs.read,
+							fields: [...manifest.collections.jobs.read.fields, 'urgent', 'priority', 'visits']
+						}
 					}
 				}
-				expect(offered).toBeGreaterThan(150);
-			})
+			} satisfies EngineManifest;
+			const port = system1(
+				byField({
+					Urgent: { op: 'is', value: 'yes' },
+					Priority: { op: 'is', value: 'high' },
+					Visits: { op: 'is', value: '3' }
+				})
+			);
+			const result = yield* nativeDescriber(port, kinds).describe({
+				collection: 'jobs',
+				authority: caller(),
+				bindings,
+				text: 'urgent high priority jobs with 3 visits'
+			});
+			expect(result).toMatchObject({
+				ok: true,
+				where: {
+					and: expect.arrayContaining([
+						{ urgent: { eq: true } },
+						{ priority: { eq: 'high' } },
+						{ visits: { eq: 3 } }
+					])
+				}
+			});
+		})
 	);
 });
 

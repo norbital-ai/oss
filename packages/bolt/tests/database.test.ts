@@ -4,7 +4,8 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { callbackTransaction, TenantDb } from '../src/engine/db/tenant-db.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
 import { Drivers } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
@@ -16,7 +17,7 @@ import {
 	DATABASE_MAX_BYTES
 } from '../src/engine/integrations/database.ts';
 import { instanceRequest } from '../src/engine/integrations/instances.ts';
-const request = { statement: 'SELECT @name AS name', parameters: { name: 'Ada' } };
+const request = { op: 'values' as const, values: { name: 'Ada' } };
 const m: EngineManifest = {
 	...manifest,
 	integrations: {
@@ -45,6 +46,8 @@ const db = TenantDb.typed({
 			}
 		]),
 	write: () => Effect.succeed({ rows: [], affected: 0 }),
+	session: () =>
+		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 });
 const drivers = (request: Drivers['Service']['request']): Drivers['Service'] => ({
@@ -56,32 +59,45 @@ const drivers = (request: Drivers['Service']['request']): Drivers['Service'] => 
 	changed: () => Port.unavailable('link')
 });
 
-it.live('interrupts a callback body and drains native rollback before closing its database', () =>
+it.live('interrupts a SQL batch and drains native rollback before closing its database', () =>
 	Effect.gen(function* () {
 		const started = Promise.withResolvers<void>();
+		const finishStatement = Promise.withResolvers<void>();
 		const rollingBack = Promise.withResolvers<void>();
 		const finishRollback = Promise.withResolvers<void>();
 		const events: string[] = [];
-		const transaction = callbackTransaction(
-			(callback) =>
-				callback({}).catch((cause: unknown) => {
+		const sent: string[] = [];
+		const client: PgliteClient = {
+			query: async () => ({ rows: [] }),
+			transaction: (body) =>
+				body({
+					query: async () => ({ rows: [] }),
+					exec: async (text) => {
+						sent.push(text);
+						if (text === 'select 1') {
+							events.push('statement started');
+							started.resolve();
+							await finishStatement.promise;
+							events.push('statement settled');
+						}
+						return [];
+					}
+				}).catch((cause: unknown) => {
 					events.push('rollback started');
 					rollingBack.resolve();
 					return finishRollback.promise.then(() => {
 						events.push('rollback finished');
 						throw cause;
 					});
-				}),
-			() => ({ query: () => Effect.succeed({ rows: [], affected: 0 }) }),
-			Effect.sync(() => started.resolve()).pipe(
-				Effect.andThen(Effect.never),
-				Effect.onInterrupt(() =>
-					Effect.sync(() => {
-						events.push('body interrupted');
-					})
-				)
-			)
-		);
+				})
+		};
+		const transaction = PgliteDb.make(client).transaction({
+			statements: [
+				{ text: 'select 1', params: [] },
+				{ text: 'select 2', params: [] }
+			],
+			lock: { tables: ['work'], advisory: ['batch'] }
+		});
 		yield* Effect.gen(function* () {
 			const call = yield* Effect.forkChild(
 				Effect.scoped(
@@ -91,20 +107,37 @@ it.live('interrupts a callback body and drains native rollback before closing it
 				)
 			);
 			yield* Effect.promise(() => started.promise);
-			const stopping = yield* Effect.forkChild(Fiber.interrupt(call));
+			const stopping = yield* Fiber.interrupt(call).pipe(
+				Effect.forkChild({ startImmediately: true })
+			);
+			yield* Effect.yieldNow;
+			yield* Effect.sync(() => finishStatement.resolve());
 			yield* Effect.promise(() => rollingBack.promise);
 			yield* Effect.sync(() => {
-				expect(events).toEqual(['body interrupted', 'rollback started']);
+				expect(events).toEqual(['statement started', 'statement settled', 'rollback started']);
+				expect(sent.slice(-3)).toEqual([
+					'lock table "work" in SHARE ROW EXCLUSIVE mode',
+					"select pg_advisory_xact_lock(hashtext('batch'))",
+					'select 1'
+				]);
 			}).pipe(Effect.ensuring(Effect.sync(() => finishRollback.resolve())));
 			yield* Fiber.join(stopping);
 			expect(events).toEqual([
-				'body interrupted',
+				'statement started',
+				'statement settled',
 				'rollback started',
 				'rollback finished',
 				'database closed'
 			]);
 			expect(Exit.hasInterrupts(yield* Fiber.await(call))).toBe(true);
-		}).pipe(Effect.ensuring(Effect.sync(() => finishRollback.resolve())));
+		}).pipe(
+			Effect.ensuring(
+				Effect.sync(() => {
+					finishStatement.resolve();
+					finishRollback.resolve();
+				})
+			)
+		);
 	})
 );
 
@@ -113,13 +146,13 @@ it('request shape and transport-independent bounds reject malformed operations',
 		{ ...request, maxRows: 1001 },
 		{ ...request, maxRows: 1.5 },
 		{ ...request, transaction: 'unsafe' },
-		{ ...request, parameters: { 'name; DROP TABLE x': 'Ada' } },
-		{ ...request, parameters: { value: Infinity } },
+		{ ...request, values: { value: Infinity } },
 		{
-			...request,
-			parameters: Object.fromEntries(Array.from({ length: 4001 }, (_, i) => [`p${i}`, null]))
+			op: 'call',
+			procedure: { schema: 'dbo', name: 'submit' },
+			arguments: { 'name; DROP TABLE x': 'Ada' }
 		},
-		{ ...request, statement: 'x'.repeat(DATABASE_MAX_BYTES + 1) }
+		{ ...request, values: { text: 'x'.repeat(DATABASE_MAX_BYTES + 1) } }
 	])
 		expect(() => validateDatabaseRequest(value)).toThrow();
 	expect(validateDatabaseRequest(request)).toEqual(request);

@@ -1,8 +1,6 @@
-import { required, textOf } from './view-fixture.ts';
-import { element } from './elements.ts';
-import { browser } from './view-fixture.ts';
+import { browser, required } from './view-fixture.ts';
 import { Effect } from 'effect';
-// Restored components (L-BOLT-773 NumberTuple, 708 avatar, 713 breadcrumb, 736 country picker, 746 feature colours).
+// Restored components (L-BOLT-773 NumberTuple, 736 country picker, 746 feature colours).
 import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Component } from 'svelte';
@@ -54,32 +52,15 @@ it.live(
 		})
 );
 
-it.live(
-	'internal primitives: avatar initials, breadcrumb current page, country flags and names',
-	() =>
-		Effect.gen(function* () {
-			const { default: Avatar } = yield* browser(
-				() => import('../src/primitives/avatar/avatar.svelte')
-			);
-			const a = show(Avatar, { name: 'Ada Lovelace' });
-			assert.equal(textOf(a.target).trim(), 'AL');
-			yield* browser(a.done);
-			const { default: Breadcrumb } = yield* browser(
-				() => import('../src/primitives/breadcrumb/breadcrumb.svelte')
-			);
-			const b = show(Breadcrumb, {
-				items: [{ label: 'Sales', href: '/app/sales' }, { label: 'Quotes' }]
-			});
-			assert.equal(element<HTMLAnchorElement>(b.target, 'a').getAttribute('href'), '/app/sales');
-			assert.equal(textOf(element<HTMLElement>(b.target, '[aria-current=page]')), 'Quotes');
-			yield* browser(b.done);
-			const { COUNTRY_CODES, flagOf } = yield* browser(
-				() => import('../src/primitives/country-picker/country-picker.svelte')
-			);
-			assert.equal(COUNTRY_CODES.length, 249);
-			assert.ok(COUNTRY_CODES.includes('SG') && COUNTRY_CODES.includes('MY'));
-			assert.equal(flagOf('sg'), '🇸🇬');
-		})
+it.live('country picker supplies country flags and names', () =>
+	Effect.gen(function* () {
+		const { COUNTRY_CODES, flagOf } = yield* browser(
+			() => import('../src/primitives/country-picker/country-picker.svelte')
+		);
+		assert.equal(COUNTRY_CODES.length, 249);
+		assert.ok(COUNTRY_CODES.includes('SG') && COUNTRY_CODES.includes('MY'));
+		assert.equal(flagOf('sg'), '🇸🇬');
+	})
 );
 
 it.live('feature colours cover every feature with literal classes', () =>

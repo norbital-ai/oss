@@ -9,7 +9,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
-import { applyEdit, inferFacility, modelCall } from '../src/engine/agent/ai.ts';
+import { applyEdit, inferFacility, modelCall, STALL_MS } from '../src/engine/agent/ai.ts';
 import { jsonDiff } from '../src/engine/agent/draft.ts';
 import {
 	bound,
@@ -26,7 +26,10 @@ import { respondSystem1 } from '../src/test/effect.ts';
 import { clockProbe } from './support/clock-probe.ts';
 
 const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
-const row = (seq: number, over: Partial<MessageRow> = {}): MessageRow => ({
+const row = (
+	seq: number,
+	over: Partial<Exclude<MessageRow, { role: 'tool' }>> = {}
+): MessageRow => ({
 	id: `m${seq}`,
 	conversation: 'c',
 	seq,
@@ -161,7 +164,7 @@ describe('the context projection (rule 60)', () => {
 			envoy: 'Norbius',
 			brief: 'Brief.',
 			task: 'Task.',
-			skills: { pricing: '---\ndescription: How we price\n---\nbody' }
+			skills: { pricing: { text: '---\ndescription: How we price\n---\nbody' } }
 		});
 		expect(s).toContain(
 			'Brief.\n\nTask.\n\nSkills (read one with the skill tool):\n- pricing: How we price'
@@ -173,7 +176,7 @@ describe('the context projection (rule 60)', () => {
 		expect(s).toContain("Never describe the workspace's own automated checks");
 		// a turn without the source tools (an envoy's) is never told to call them; staff in the app are
 		expect(system({ skills: {}, outline: '# Workspace outline' })).not.toMatch(
-			/workspace_search|workspace_type/
+			/workspace_search|workspace_lang/
 		);
 		expect(
 			system({ skills: {}, outline: '# Workspace outline', tools: [{ name: 'workspace_search' }] })
@@ -185,9 +188,9 @@ describe('the context projection (rule 60)', () => {
 			tools: [{ name: 'workspace_search' }]
 		});
 		expect(layout).toContain(LAYOUT_HELP);
-		expect(layout).toContain('src/data/model/+<name>.model.ts');
+		expect(layout).toContain('src/data/model/<name>/+model.ts');
 		expect(layout).toContain('src/app/<app>/+<name>.page.svelte');
-		expect(layout).toContain('src/data/collection/<name>/+collection.ts');
+		expect(layout).toContain('src/data/model/<name>/+representation.svelte');
 	});
 });
 
@@ -227,21 +230,19 @@ describe('the workspace outline', () => {
 				jobs: {
 					read: { fields: 'all' },
 					create: { input: { columns: ['title'] } },
-					update: { input: { columns: ['title', 'done'] } }
+					update: { input: { columns: ['title', 'done'] } },
+					syncs: {
+						sheet: { with: 'file', parser: ['json'] },
+						erp: { with: 'erp', every: '1h', read: true }
+					}
 				}
 			},
 			relationships: { 'jobs.site_id': { to: 'sites', inverse: 'tasks', optional: true } },
-			pipelines: {
-				jobs: {
-					import: { description: 'Import jobs', input: {} },
-					export: { description: 'Export jobs', select: ['title', 'done'], format: 'json' }
-				}
-			},
 			integrations: {
 				erp: {
 					description: 'The ERP',
 					driver: 'http',
-					feeds: { jobs: { into: 'jobs', key: ['title'], cron: '0 * * * *' } }
+					http: { baseUrl: 'https://erp.example' }
 				}
 			},
 			customFields: {},
@@ -256,24 +257,23 @@ describe('the workspace outline', () => {
 			agent: { skills: {} }
 		};
 		const lines = outline(m, null).split('\n');
-		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('fed by erp.jobs');
 		expect(lines.find((l) => l.startsWith('- sites'))).toContain(
 			'create(name, code?, tasks{create(title, site_id?), link}), update(as create), upsert, delete'
 		);
 		expect(lines.find((l) => l.startsWith('- jobs'))).toContain(
-			'create(title), update(title, done), upsert, pipeline(import|export)'
+			'create(title), update(title, done), upsert, sync sheet(file), sync erp(erp)'
 		);
 		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('done("2"|"10")');
 		// every source file by folder, + files included, so a read names the exact path
 		expect(
 			outline(m, [
-				'src/data/model/+jobs.model.ts',
-				'src/data/collection/jobs/+collection.ts',
+				'src/data/model/jobs/+model.ts',
+				'src/data/model/jobs/+representation.svelte',
 				'src/lib/util.ts',
 				'package.json'
 			])
 		).toContain(
-			'## Source files\n- src/data/collection/jobs/ +collection.ts\n- src/data/model/ +jobs.model.ts\n- src/lib/ util.ts'
+			'## Source files\n- src/data/model/jobs/ +model.ts +representation.svelte\n- src/lib/ util.ts'
 		);
 	});
 });
@@ -429,7 +429,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			expect(
 				yield* elapsed(json({ ...call, args: [{ prompt: 'q', output: { kind: 'json' } }] }), 21)
 			).toEqual({ ok: true, value: { n: 42 } });
-			// no step budget: a model that never finishes runs until the ceiling on the whole call (the run's signal) ends it
+			// no step budget and no time limit: a model that keeps streaming and never finishes runs until its caller's wall ends it
 			const never = inferFacility(port(Array.from({ length: 200 }, () => stalls('a'))).p, {
 				wallMs: 20
 			});
@@ -525,47 +525,6 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					role: 'tool',
 					content: { id: 's1', result: { error: expect.stringContaining('/n: is required') } }
 				});
-			})
-	);
-
-	it.effect(
-		'sys_2.infer: half its tool time gone with nothing written, the model is asked once to write what it has verified',
-		() =>
-			Effect.gen(function* () {
-				// a turn that only reads the draft, after 13 of the 24 minutes for tools
-				const late: Step = () =>
-					Stream.fromEffect(Effect.sleep('13 minutes')).pipe(
-						Stream.flatMap(() =>
-							response({
-								content: '',
-								toolCalls: [{ id: 'r', name: 'read', input: { path: '' } }],
-								finish: 'tool',
-								usage: { input: 1, output: 1 }
-							})
-						)
-					);
-				const { p, requests } = port([
-					late,
-					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
-					tool('submit', {}, 's1')
-				]);
-				expect(
-					yield* elapsed(
-						inferFacility(p, { wallMs: 30 * 60_000 })(at({ prompt: 'q', output })),
-						14 * 60_000
-					)
-				).toEqual({ ok: true, value: { n: 3 } });
-				expect(requests[1]!.messages.at(-1)).toMatchObject({
-					role: 'user',
-					content: expect.stringContaining('Half your time for tools is gone')
-				});
-				// once only: the next request carries no second nudge
-				expect(
-					requests[2]!.messages.filter(
-						(message) =>
-							typeof message.content === 'string' && message.content.startsWith('Half your time')
-					)
-				).toHaveLength(1);
 			})
 	);
 
@@ -892,6 +851,66 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				content: { id: 'r2', result: { value: 'keep' } }
 			});
 		})
+	);
+
+	it.effect(
+		'model calls honor a capacity retry hint without replaying partial output or a permanent credit refusal',
+		() =>
+			Effect.gen(function* () {
+				const asked = yield* Deferred.make<void>();
+				const limited: Step = () =>
+					Stream.unwrap(
+						Deferred.succeed(asked, undefined).pipe(
+							Effect.as(
+								Stream.fail(
+									Port.failure('ai')({
+										kind: 'rateLimited',
+										status: 402,
+										retryAfterMs: 120_000,
+										message: 'in-flight capacity'
+									})
+								)
+							)
+						)
+					);
+				const pending = port([limited, done('ready')]);
+				const fiber = yield* modelCall(pending.p, { model: 'default', messages: [] }).pipe(
+					Effect.forkChild
+				);
+				yield* Deferred.await(asked);
+				yield* TestClock.adjust(119_999);
+				expect(pending.requests).toHaveLength(1);
+				expect(fiber.pollUnsafe()).toBeUndefined();
+				yield* TestClock.adjust(1);
+				expect(yield* Fiber.join(fiber)).toMatchObject({ content: 'ready' });
+				expect(pending.requests).toHaveLength(2);
+				const partial = port([
+					() =>
+						Stream.concat(
+							Stream.succeed<AiEvent>({ _tag: 'Delta', text: 'kept' }),
+							limited({ model: 'default', messages: [] })
+						)
+				]);
+				expect(
+					yield* modelCall(partial.p, { model: 'default', messages: [] }).pipe(Effect.flip)
+				).toMatchObject({ kind: 'rateLimited' });
+				expect(partial.requests).toHaveLength(1);
+				const unpaid = port([
+					() =>
+						Stream.fail(
+							new FacilityFailure({
+								kind: 'upstream',
+								status: 402,
+								message: 'Insufficient credits'
+							})
+						)
+				]);
+				expect(yield* inferFacility(unpaid.p)(at({ prompt: 'research', output }))).toMatchObject({
+					ok: false,
+					error: { kind: 'upstream', status: 402 }
+				});
+				expect(unpaid.requests).toHaveLength(1);
+			})
 	);
 
 	it.effect(
@@ -1294,31 +1313,105 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer: near the time ceiling the tools end and the final turn answers, as when steps are spent',
+		'sys_2.infer: STALL_MS without progress ends it, with the answer its draft already holds',
 		() =>
 			Effect.gen(function* () {
-				// a long research: the first page takes the call past its answer-by time, 24 of its 30 minutes
-				const seen: Json[] = [];
-				const slow = {
+				// a page that never loads: no model token, reply or tool result for the stall window
+				const hangs = {
 					name: 'browse',
 					description: 'Read a page',
 					input: { type: 'object' },
-					call: (input: Json) =>
-						TestClock.adjust('25 minutes').pipe(
-							Effect.andThen(Effect.sync(() => seen.push(input))),
-							Effect.as({ text: 'rate is 3' })
-						)
+					call: () => Effect.never
 				};
-				const { p, requests } = port([tool('browse', { url: 'https://a' }, 'b1'), editAndSubmit]);
+				const held = port([
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
+					tool('browse', { url: 'https://a' }, 'b1')
+				]);
 				expect(
-					yield* inferFacility(p)(
-						at({ prompt: 'q', output, initial: {}, tools: ['browse'], steps: 1000 }),
-						[slow]
+					yield* elapsed(
+						inferFacility(held.p)(at({ prompt: 'q', output, tools: ['browse'] }), [hangs]),
+						STALL_MS + 1
 					)
 				).toEqual({ ok: true, value: { n: 3 } });
-				// with 999 steps left, the second turn is the final one: only the draft tools are offered
+				const empty = port([tool('browse', { url: 'https://a' }, 'b1')]);
+				expect(
+					yield* elapsed(
+						inferFacility(empty.p)(at({ prompt: 'q', output, tools: ['browse'] }), [hangs]),
+						STALL_MS + 1
+					)
+				).toEqual({
+					ok: false,
+					error: { kind: 'timeout', message: expect.stringContaining('no progress for 5 minutes') }
+				});
+			})
+	);
+
+	it.effect('sys_2.infer: progress keeps it alive past any wall, with no time limit', () =>
+		Effect.gen(function* () {
+			// three pages of four minutes each: twelve minutes, never five without progress
+			const slow = {
+				name: 'browse',
+				description: 'Read a page',
+				input: { type: 'object' },
+				call: () => Effect.sleep('4 minutes').pipe(Effect.as({ text: 'rate is 3' }))
+			};
+			const { p, requests } = port([
+				tool('browse', { url: 'https://a' }, 'b1'),
+				tool('browse', { url: 'https://b' }, 'b2'),
+				tool('browse', { url: 'https://c' }, 'b3'),
+				editAndSubmit
+			]);
+			expect(
+				yield* elapsed(
+					inferFacility(p)(at({ prompt: 'q', output, tools: ['browse'] }), [slow]),
+					12 * 60_000 + 1
+				)
+			).toEqual({ ok: true, value: { n: 3 } });
+			expect(requests).toHaveLength(4);
+		})
+	);
+
+	it.effect(
+		'sys_2.infer steps: each tool turn persists, and a resumed inference goes on after the last one',
+		() =>
+			Effect.gen(function* () {
+				const persisted: Json[] = [];
+				const persist = (index: number, step: Json) =>
+					Effect.sync(() => {
+						persisted[index] = step;
+					});
+				const { seen, browse } = browsing();
+				const lost = yield* Deferred.make<void>();
+				// the host is lost while the third model call is in flight
+				const first = port([
+					tool('browse', { url: 'https://a' }, 'b1'),
+					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
+					() => Stream.unwrap(Deferred.succeed(lost, undefined).pipe(Effect.as(Stream.never)))
+				]);
+				const running = yield* Effect.forkChild(
+					inferFacility(first.p, { steps: { done: [], persist } })(
+						at({ prompt: 'q', output, tools: ['browse'] }),
+						[browse]
+					)
+				);
+				yield* Deferred.await(lost);
+				yield* Fiber.interrupt(running);
+				expect(persisted).toHaveLength(2);
+				// the next host: one model call, from the persisted conversation and draft
+				const next = port([tool('submit', {}, 's1')]);
+				expect(
+					yield* inferFacility(next.p, { steps: { done: persisted, persist } })(
+						at({ prompt: 'q', output, tools: ['browse'] }),
+						[browse]
+					)
+				).toEqual({ ok: true, value: { n: 3 } });
 				expect(seen).toHaveLength(1);
-				expect(requests).toHaveLength(2);
+				expect(next.requests).toHaveLength(1);
+				expect(next.requests[0]!.messages).toEqual(first.requests[2]!.messages);
+				expect(next.requests[0]!.messages[0]).toEqual({
+					role: 'user',
+					content: expect.any(String)
+				});
 			})
 	);
 

@@ -11,7 +11,8 @@ const Thrown = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literals(FACILITY_KINDS),
 		message: Schema.String,
-		status: Schema.optional(Schema.Number)
+		status: Schema.optional(Schema.Number),
+		retryAfterMs: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)))
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('unavailable'),

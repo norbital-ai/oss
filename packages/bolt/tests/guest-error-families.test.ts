@@ -89,29 +89,58 @@ describe('canonical guest error families', () => {
 	it('the cold finalizer uses class identity rather than trusting failure tags', () => {
 		expect(finalOf(Cause.fail(new Refusal({ message: 'no', field: 'title' })))).toEqual({
 			kind: 'refused',
+			code: 'refused',
 			message: 'no',
-			field: 'title'
+			field: 'title',
+			row: undefined
 		});
 		expect(finalOf(Cause.fail(new Act.ActRefused({ code: 'unique', message: 'taken' })))).toEqual({
 			kind: 'refused',
+			code: 'unique',
 			message: 'taken',
-			field: undefined
+			field: undefined,
+			row: undefined,
+			rows: undefined,
+			rule: undefined,
+			data: undefined
 		});
 		expect(finalOf(Cause.fail(new Act.ActConflict({ records: [] })))).toEqual({
 			kind: 'refused',
-			message: '{"kind":"conflict","records":[]}',
-			field: undefined
+			code: 'conflict',
+			message: 'another write changed these records since they were read',
+			field: undefined,
+			row: undefined,
+			records: []
 		});
 		expect(finalOf(Cause.fail(new Act.ActUnknown({ invocation: 'i1' })))).toEqual({
 			kind: 'refused',
-			message: '{"kind":"unknown","invocation":"i1"}',
-			field: undefined
+			code: 'unknown',
+			message: 'the outcome of i1 could not be confirmed',
+			field: undefined,
+			row: undefined,
+			invocation: 'i1'
 		});
 		const spoof = finalOf(Cause.fail({ _tag: 'ActConflict', records: [], message: 'plain value' }));
 		expect(spoof).toBeInstanceOf(Error);
 		expect(spoof).toMatchObject({ name: 'ActConflict', message: 'plain value' });
 		const defect = new Error('native defect');
 		expect(finalOf(Cause.die(defect))).toBe(defect);
+	});
+
+	it('the cold finalizer retains native write refusal metadata', () => {
+		const details = {
+			code: 'locked',
+			message: 'held',
+			field: 'title',
+			row: 2,
+			rows: [2, 5],
+			rule: 'jobs.update',
+			data: { requestId: 'request-1' }
+		};
+		expect(finalOf(Cause.fail(new Act.ActRefused(details)))).toEqual({
+			kind: 'refused',
+			...details
+		});
 	});
 
 	it.effect(
@@ -135,7 +164,67 @@ describe('canonical guest error families', () => {
 						}),
 					catch: (error) => error
 				}).pipe(Effect.flip);
-				expect(rejection).toEqual({ kind: 'refused', message: 'no', field: 'title' });
+				expect(rejection).toEqual({
+					kind: 'refused',
+					code: 'refused',
+					message: 'no',
+					field: 'title',
+					row: undefined
+				});
+				const details = {
+					code: 'forbidden',
+					message: 'denied',
+					field: 'owner',
+					row: 1,
+					rows: [1, 3],
+					rule: 'jobs.create',
+					data: { requestId: 'request-2' }
+				};
+				const native = yield* Effect.flip(
+					Effect.tryPromise({
+						try: () =>
+							runBody(function* () {
+								return yield* Effect.fail(new Act.ActRefused(details));
+							}),
+						catch: (error) => error
+					})
+				);
+				expect(native).toEqual({ kind: 'refused', ...details });
+				const records = [{ collection: 'jobs', id: 'job-1', fields: ['owner'] }];
+				const conflict = yield* Effect.flip(
+					Effect.tryPromise({
+						try: () =>
+							runBody(function* () {
+								return yield* Effect.fail(new Act.ActConflict({ records }));
+							}),
+						catch: (error) => error
+					})
+				);
+				expect(conflict).toEqual({
+					kind: 'refused',
+					code: 'conflict',
+					message: 'another write changed these records since they were read',
+					field: undefined,
+					row: undefined,
+					records
+				});
+				const unknown = yield* Effect.flip(
+					Effect.tryPromise({
+						try: () =>
+							runBody(function* () {
+								return yield* Effect.fail(new Act.ActUnknown({ invocation: 'invocation-1' }));
+							}),
+						catch: (error) => error
+					})
+				);
+				expect(unknown).toEqual({
+					kind: 'refused',
+					code: 'unknown',
+					message: 'the outcome of invocation-1 could not be confirmed',
+					field: undefined,
+					row: undefined,
+					invocation: 'invocation-1'
+				});
 				const defect = new Error('native defect');
 				const rejectedDefect = yield* Effect.tryPromise({
 					try: () =>

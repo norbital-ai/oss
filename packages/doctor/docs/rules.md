@@ -1,6 +1,6 @@
 # Rule catalogue
 
-The four fixed packs `bolt check` runs. Allowances are described in the [package README](../README.md).
+The four workspace packs the audit runs; an organization's rule set sets each rule's state. Allowances are described in the [package README](../README.md).
 
 ## `boundaries`
 

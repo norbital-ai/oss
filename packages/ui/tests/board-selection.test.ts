@@ -169,7 +169,19 @@ async function show({
 		await unmount(app);
 		target.remove();
 	});
-	await settle();
+	await vi.waitFor(async () => {
+		flushSync();
+		await tick();
+		const rendered = [...target.querySelectorAll<HTMLElement>('[data-lane]')];
+		assert.ok(rendered.length > 0, 'the board has loaded its lanes');
+		for (const lane of rendered)
+			assert.ok(
+				lane.querySelector('[data-board-card], [data-lane-empty]'),
+				`lane ${lane.dataset['lane']} has loaded its first page`
+			);
+		const selectPage = target.querySelector<HTMLButtonElement>('[data-select-page]');
+		if (selectPage !== null) assert.equal(selectPage.disabled, false);
+	});
 	return { target, app, reads, acts };
 }
 const select = (target: ParentNode, id: string) =>

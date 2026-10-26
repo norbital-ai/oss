@@ -1,5 +1,9 @@
 // The workspace kit is a scoped Effect layer; its callers use the same routes as a real host.
 import { inputSchema, type Fields, type Kind } from '@norbital-ai/std/kind';
+import { auditFromAbi, auditShape } from '../engine/audit.ts';
+import { memoryAudit } from './audit.ts';
+import { Diagnostic } from '../protocol/diagnostic.ts';
+import type { AuditRecord } from '../protocol/audit.ts';
 import * as EffectVitest from '@effect/vitest';
 import * as NodeChildProcessSpawner from '@effect/platform-node/NodeChildProcessSpawner';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
@@ -9,13 +13,16 @@ import {
 	Clock,
 	Cache,
 	Context,
+	Cron,
 	type Crypto,
 	Duration,
 	Effect,
 	Exit,
 	FileSystem,
 	Layer,
+	type Path,
 	Option,
+	Predicate,
 	Redacted,
 	Schema,
 	SchemaGetter,
@@ -32,27 +39,34 @@ import { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
 import type { StartableName } from '../decl/access/policy.ts';
 import type {
 	Act,
+	ActBatch,
 	ActInput,
+	ActManyInput,
+	ActManyOutput,
 	ActOutput,
 	Callable,
+	CallerQuery,
 	Committed,
 	DeclaredQuery,
 	DeclaredRow,
+	Eff,
+	Hit,
+	IndexSearch,
 	ListResult,
 	Page,
 	Paged,
 	PendingApproval,
 	QueryCallable,
 	QueryInput,
+	QueryMember,
 	QueryOutput,
-	ReadMember,
-	ReadSet,
-	ReadSetAnswer,
+	QuerySet,
+	QuerySetAnswer,
 	ReadResult,
 	Select,
 	StoredAnswer,
 	StoredMember,
-	WorkspaceReads
+	WorkspaceQuery
 } from '../decl/ctx.ts';
 import {
 	type ActFailure,
@@ -62,15 +76,17 @@ import {
 	FacilityFailure,
 	ReadFailed
 } from '../decl/errors.ts';
-import type { Is, ReadableName, WorkspaceReadField } from '../decl/names.ts';
+import type { Is, ReadableName, StoredRow, WorkspaceReadField } from '../decl/names.ts';
 import { nullableOfExpr } from '../decl/model.ts';
-import type { StartInput } from '../decl/runtime/facilities.ts';
+import type { RunHandle, StartInput } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Json } from '../decl/values.ts';
 import type { ModelWhere, OrderBy, Where } from '../decl/where.ts';
 import { compileAuthority, type Holder } from '../engine/access/authority.ts';
-import { parseCallable } from '../engine/callables/index.ts';
+import { isBatchCallable, parseCallable } from '../engine/callables/index.ts';
+import { outputSchema } from '../engine/callables/decode.ts';
 import { AgentHost } from '../engine/agent/index.ts';
 import { withBrowser } from '../engine/agent/browser.ts';
+import { DOWNLOAD, mediaType } from '../engine/files/media.ts';
 import { EnvoyConfig } from '../engine/envoys/index.ts';
 import { RateWindows } from '../engine/access/rate.ts';
 import type {
@@ -83,13 +99,14 @@ import type {
 	LogRow,
 	Sql
 } from '../engine/contracts.ts';
-import { PgliteDb, Pristine } from '../engine/db/pglite.ts';
+import { PgliteDb, Pristine } from '../node/db/pglite.ts';
+import { nodePorts } from '../node/ports.ts';
 import type { Artifact } from '../engine/artifact/read.ts';
 import { TenantDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { DbError, type EngineError } from '../engine/errors.ts';
-import { BoltError } from '../protocol/errors.ts';
+import { BoltError, storeSync } from '../protocol/errors.ts';
 import { EngineLive, type EngineServices } from '../engine/host.ts';
-import { GuestConfig, type GuestOptions, type GuestProgram } from '../engine/guest/runner.ts';
+import type { GuestProgram } from '../engine/guest/runner.ts';
 import { memberColumn, memberValue, parseAddress } from '../engine/identity/address.ts';
 import { Authorities } from '../engine/identity/actor.ts';
 import {
@@ -109,7 +126,13 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	GuestIsolates,
+	Http,
+	Docs,
+	Images,
+	Keys,
 	Logs,
+	Mcp,
 	Metering,
 	Speech,
 	Transport,
@@ -118,8 +141,13 @@ import {
 	type AiEvent,
 	type TransportMessage
 } from '../engine/ports.ts';
-import { applyPlan, plan, readApplied, schemaSlice } from '../engine/schema/plan.ts';
-import { SchemaSliceSchema } from '../engine/schema/ddl.ts';
+import {
+	applyPlan,
+	plan,
+	readApplied,
+	schemaSlice,
+	SchemaSliceSchema
+} from '../engine/schema/plan.ts';
 import { lowerRead } from '../engine/query/engine.ts';
 import { lowerKeyedMember } from '../engine/query/keyed.ts';
 import {
@@ -128,26 +156,30 @@ import {
 	Conversations,
 	Envoys,
 	Reads,
+	RunHandlers,
 	Runs,
 	type ActsRequest,
 	type OutboundFile,
 	type ShapeOf
 } from '../engine/services.ts';
 import { duration } from '../engine/runs/time.ts';
-import { IDENTITY, loadPack, readPack, type Pack } from '../engine/write/pack.ts';
-import { seed as restore, type SeedPack } from '../engine/write/seed.ts';
+import { syncsOf } from '../engine/sync/index.ts';
+import { SYNC_DELIVER } from '../engine/sync/write.ts';
+import { IDENTITY, loadPack, readPack, sourceOf, type Pack } from '../engine/write/pack.ts';
+import { restoreSource, seed as restore, type SeedPack } from '../engine/write/seed.ts';
 import { BoltHost, BoltHostLive } from '../protocol/host.ts';
 import { PublicPages, publicPages } from '../protocol/pages.ts';
+import { catalog } from '../protocol/catalog.ts';
 import {
-	catalog,
 	collectionOf,
 	defaultFields,
+	select,
 	storedFields,
-	SYSTEM_COLUMNS
-} from '../protocol/catalog.ts';
+	SYSTEM_COLUMNS,
+	type SelectIR
+} from '@norbital-ai/store';
 import { bindings, RateLimits, SessionAuthority } from '../protocol/http.ts';
-import { declaredQuery, select } from '../protocol/ir.ts';
-import type { SelectIR } from '../protocol/ir-types.ts';
+import { declaredQuery } from '../protocol/reads.ts';
 import { ActReply, QReply, WireError } from '../protocol/schema.ts';
 import { HEADERS, PATHS, refusalOfStatus, uuidv7 } from '../protocol/wire.ts';
 import {
@@ -178,54 +210,42 @@ export type ActOptions = {
 	onConflict?: 'update' | 'keep';
 	observed?: { readonly [id: string]: number };
 };
-/** The workspace's generated and authored callables, including collection erase operations exercised by the test host. */
+/** The workspace's generated write callables, including collection erase operations exercised by the test host. */
 export type KitCallable = Callable | `${ReadableName}.erase`;
 /** A callable's native typed input; erase operations accept one or more collection ids and an optional replacement set. */
 export type KitInput<N> = N extends `${infer C}.erase`
 	? { target: Id<C> | readonly Id<C>[]; set?: Readonly<Record<string, Json>> }
 	: ActInput<N>;
-/** Reads, queries, writes, uploads and automation starts through the real host routes under one authority, with native decoded values and typed failures. */
+/**
+ * Reads, writes, approval decisions, uploads and automation starts through the real host routes under one authority, with
+ * native decoded values and typed failures. `query` is the one read API with the page's and `ctx.query`'s forms: a page of
+ * a model (`where`, `select`, `orderBy`, a text or index `search`), one record (`{ id }`, or `{ id, revision }`), a declared
+ * query (`'<model>.<query>'`) or a keyed set.
+ */
 export interface Caller {
-	read<C extends string>(
-		collection: Is<C, ReadableName>,
-		query: DeclaredQuery
-	): Effect.Effect<Page<DeclaredRow<C>>, ReadFailed>;
 	readonly authority: Authority;
+	readonly query: CallerQuery<ReadFailed>['query'];
 	act<const N extends string>(
 		callable: Is<N, KitCallable>,
 		input: NoInfer<KitInput<N>>,
 		options?: ActOptions
 	): Effect.Effect<Committed<ActOutput<N>, N> | PendingApproval<N>, ActFailure>;
-	query<const N extends string>(
-		name: Is<N, QueryCallable>,
-		input: NoInfer<QueryInput<N>>
-	): Effect.Effect<QueryOutput<N>, ReadFailed>;
 	start<const A extends string>(
 		automation: Is<A, StartableName>,
 		input: NoInfer<StartInput<A>>,
 		options?: { id?: string }
-	): Effect.Effect<Committed<unknown> | PendingApproval, ActFailure>;
+	): Effect.Effect<Committed<RunHandle<A>> | PendingApproval, ActFailure>;
 	upload(
 		field: `${string}.${string}`,
 		file: { name: string; mime: string; bytes: Uint8Array; id?: string }
 	): Effect.Effect<Committed<FileRef> | PendingApproval, ActFailure>;
-	read<C extends string, const S extends Select<C> = {}>(
-		collection: Is<C, ReadableName>,
-		q: {
-			where?: NoInfer<Where<C>>;
-			select?: S;
-			orderBy?: NoInfer<OrderBy<C>>;
-			search?: string;
-		} & Paged
-	): Effect.Effect<Page<ListResult<C, S>>, ReadFailed>;
-	read<const M extends ReadSet>(
-		set: M & { readonly [K in keyof M]: ReadMember<M[K]['collection']> }
-	): Effect.Effect<ReadSetAnswer<M>, ReadFailed>;
-	get<C extends string, const S extends Select<C> = {}>(
-		collection: Is<C, ReadableName>,
-		id: NoInfer<Id<C>>,
-		q?: { select?: S; revision?: number }
-	): Effect.Effect<ReadResult<C, S> | null, ReadFailed>;
+	/** `bolt.approvals.decide`: approve, reject or request changes on a request this caller may decide now (a reason for the last two). */
+	readonly approvals: {
+		decide(
+			requestId: string,
+			input: { decision: 'approve' | 'reject' | 'requestChanges'; reason?: string }
+		): Effect.Effect<void, ActFailure>;
+	};
 }
 /** Invalid test configuration, fixture input or compiler setup; these failures cannot be mistaken for a business refusal. */
 export class KitInvalid extends Schema.TaggedError<KitInvalid>()('KitInvalid', {
@@ -241,21 +261,30 @@ export type CassetteOptions = {
 	sys_1?: Ai['Service']['ask'];
 	firstPartMs?: number;
 };
-/** The default integration driver fake: inspect sent messages and typing notices, or supply native Effect handlers for requests and feed pages. */
+/**
+ * The default integration driver fake, a test's remote system: inspect sent messages and typing notices; `answer` is the
+ * remote a sync's `read` and `write` reach through `ctx.request` (a request driver's call: list pages, write acks,
+ * refusals), and `page` a pushing driver's page of items for a sync (`read`'s `items`, a calendar's events).
+ */
 export type FakeLinks = {
 	readonly sent: { instance: string; message: Json; attachments?: readonly OutboundFile[] }[];
 	readonly typed: { instance: string; to: string }[];
 	answer: (instance: string, op: Json) => Effect.Effect<Json, PortFailure>;
 	page: (
 		instance: string,
-		feed: string,
+		sync: string,
 		partition: string,
 		cursor: Json | null
 	) => Effect.Effect<DriverPage, PortFailure>;
 };
 /** Observations of the kit's default file, deadline, transport and integration ports, plus AI requests and remaining responses when cassette playback is enabled. */
 export type Fakes = {
-	readonly files: { readonly blobs: Map<string, Uint8Array> };
+	readonly audit: ReadonlyMap<string, AuditRecord>;
+	/** `origin` is what `download` fetches: a URL's body, or a 404 for a URL it lacks. */
+	readonly files: {
+		readonly blobs: Map<string, Uint8Array>;
+		readonly origin: Map<string, Uint8Array>;
+	};
 	readonly deadlines: { readonly announced: { scope: string; at: string }[] };
 	readonly sent: TransportMessage[];
 	readonly links: FakeLinks;
@@ -290,9 +319,12 @@ export const readLogRows = (rows: readonly LogRow[], x: LogQuery): readonly LogR
 		? kept.toReversed().slice(0, limit)
 		: kept.slice(0, limit).toReversed();
 };
-/** Host port service keys a test may replace with native Layers, including file storage, conversion, speech, web, geography, transport and AI. */
+/** Host port service keys a test may replace with native Layers, including file storage, conversion, speech, web, geography, transport, AI, outbound HTTP, images and MCP. */
 export type TestPorts =
 	| Files
+	| Http
+	| Images
+	| Mcp
 	| Convert
 	| Speech
 	| WebRead
@@ -303,7 +335,11 @@ export type TestPorts =
 	| DeadlinePort
 	| Drivers
 	| Ai;
-/** Workspace fixture and host configuration: use a verified release, check authored source, or supply a manifest/guest; choose seed data, control time, and native ports. */
+/**
+ * Workspace fixture and host configuration: use a verified release, check authored source, or supply a manifest/guest (with
+ * `transforms`, the write callbacks it carries per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`); choose
+ * seed data, control time, and native ports.
+ */
 export type TestOptions<P extends TestPorts = never> = {
 	seed?: 'base' | 'sample' | 'none' | SeedPack;
 	pack?: Pack;
@@ -317,7 +353,6 @@ export type TestOptions<P extends TestPorts = never> = {
 		envoys?: ShapeOf<typeof EnvoyConfig>;
 		agent?: ShapeOf<typeof AgentHost>;
 	};
-	cpu?: GuestOptions['cpu'];
 } & (
 	| {
 			/** A release verified by readArtifact; public HTTP requests execute its isolated server programs. */
@@ -326,7 +361,6 @@ export type TestOptions<P extends TestPorts = never> = {
 			manifest?: never;
 			guest?: never;
 			transforms?: never;
-			projections?: never;
 	  }
 	| {
 			artifact?: never;
@@ -334,7 +368,6 @@ export type TestOptions<P extends TestPorts = never> = {
 			manifest?: EngineManifest;
 			guest?: GuestProgram;
 			transforms?: Iterable<string>;
-			projections?: Iterable<string>;
 	  }
 );
 /** A scoped workspace's test controls: create callers, inspect native rows and port observations, advance its clock, run due work, and exercise real HTTP and integration entry points. */
@@ -343,11 +376,19 @@ export type Kit = {
 	/** The verified artifact hash, or the explicit in-memory test release. */
 	readonly release: string;
 	readonly db: TenantDbShape;
-	/** The transform's native, unmasked stored reader, scoped to this workspace. */
-	readonly storedRead: WorkspaceReads['read'];
-	/** An action/automation's native batch writer, under this caller's authority. */
-	bodyActs(who: Holder | Authority): Pick<Act, 'many'>;
+	/** A write callback's native, unmasked stored reader (`ctx.db.query`), scoped to this workspace. */
+	readonly storedQuery: WorkspaceQuery['query'];
+	/** An automation's native batch writer, under this caller's authority. */
+	bodyActs(who: Holder | Authority): Pick<Act, 'many' | 'checked'>;
 	readonly fakes: Fakes;
+	/** Runs a remote sync read or drains committed writes through the workspace's real sync engine. */
+	readonly syncs: {
+		read(
+			name: string,
+			options?: { readonly instance?: string; readonly partition?: string }
+		): Effect.Effect<{ readonly pages: number }, EngineError | KitInvalid>;
+		deliver(): Effect.Effect<{ readonly delivered: number }, EngineError | KitInvalid>;
+	};
 	readonly count: { readonly reads: number; readonly writes: number; reset(): void };
 	readonly clock: { now(): string; set(instant: string): void; advance(value: string): void };
 	readonly admin: Holder;
@@ -387,62 +428,69 @@ export type WorkspaceServices =
 	| DeadlinePort
 	| Drivers
 	| Ai
+	| Http
+	| Images
+	| Mcp
+	| Keys
+	| GuestIsolates
+	| Docs
+	| FileSystem.FileSystem
+	| Path.Path
 	| Activation
 	| ShellConfig
 	| HostIdentity
 	| Turnstile
 	| SessionAuthority;
 
-declare const storedReader: WorkspaceReads['read'];
-type StoredReadAnswer<
-	C extends string,
-	S extends { readonly [P in WorkspaceReadField<C>]?: true }
-> = Effect.Success<ReturnType<typeof storedReader<C, S>>>;
-type StoredSetAnswer<M extends ReadSet> = { readonly [K in keyof M]: StoredAnswer<M[K]> };
-type NativeMethod =
-	| 'read'
-	| 'declared'
-	| 'get'
-	| 'set'
-	| 'query'
-	| 'act'
-	| 'start'
-	| 'storedRead'
-	| 'storedDeclared'
-	| 'storedSet'
-	| 'many';
-type NativeAnswer<K extends NativeMethod, N extends string, S, M extends ReadSet> = K extends 'read'
-	? Page<ListResult<N, S>>
-	: K extends 'declared' | 'storedDeclared'
-		? Page<DeclaredRow<N>>
-		: K extends 'storedRead'
-			? S extends { readonly [P in WorkspaceReadField<N>]?: true }
-				? StoredReadAnswer<N, S>
-				: never
-			: K extends 'storedSet'
-				? StoredSetAnswer<M>
-				: K extends 'get'
-					? ReadResult<N, S> | null
-					: K extends 'set'
-						? ReadSetAnswer<M>
-						: K extends 'query'
-							? QueryOutput<N>
-							: K extends 'act'
-								? Committed<ActOutput<N>, N> | PendingApproval<N>
-								: K extends 'many'
-									? Committed<readonly unknown[]>
-									: Committed<unknown> | PendingApproval;
+/**
+ * One read as `query(...)` names it, told apart by its arguments: a declared read, one record (`{ id }`, or `{ id, revision }`),
+ * an index search, a page of a model, a declared query (`'<model>.<query>'`), or a keyed set.
+ */
+type ReadForm =
+	| { readonly kind: 'declared'; readonly model: string; readonly args: unknown }
+	| {
+			readonly kind: 'record';
+			readonly model: string;
+			readonly select: unknown;
+			readonly revision: boolean;
+	  }
+	| { readonly kind: 'search'; readonly model: string; readonly select: unknown }
+	| { readonly kind: 'list'; readonly model: string; readonly select: unknown }
+	| { readonly kind: 'query'; readonly name: string }
+	| { readonly kind: 'set'; readonly members: { readonly [key: string]: unknown } };
+type StoredSelect<C> = { readonly [P in WorkspaceReadField<C>]?: true };
+type StoredResult<C extends string, S> =
+	StoredAnswer<{ from: C; select: S }> extends Page<infer R> ? R : never;
+const field = (o: unknown, key: string): unknown =>
+	Predicate.hasProperty(o, key) ? o[key] : undefined;
+function formOf(first: unknown, second: unknown): ReadForm {
+	if (typeof first !== 'string')
+		return {
+			kind: 'set',
+			members: typeof first === 'object' && first !== null ? { ...first } : {}
+		};
+	// a model name has no dot; a declared query is `<model>.<query>`
+	if (first.includes('.')) return { kind: 'query', name: first };
+	const select = field(second, 'select');
+	if (field(second, 'mode') === 'declared') return { kind: 'declared', model: first, args: second };
+	if (field(second, 'id') !== undefined)
+		return {
+			kind: 'record',
+			model: first,
+			select,
+			revision: field(second, 'revision') !== undefined
+		};
+	const search = field(second, 'search');
+	return typeof search === 'object' && search !== null
+		? { kind: 'search', model: first, select }
+		: { kind: 'list', model: first, select };
+}
 
 /** Native results use the host's catalogue and kind codecs; only caller values admit masks. */
 const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' = 'caller') => {
 	const m = layered(manifest),
 		cat = catalog(m);
-	const absent = Schema.Null.pipe(
-		Schema.decodeTo(Schema.Undefined, {
-			decode: SchemaGetter.transform(() => undefined),
-			encode: SchemaGetter.transform(() => null)
-		})
-	);
+	const absent = Schema.Null;
 	const fields = (spec: Fields) =>
 		Schema.Struct(
 			Object.fromEntries(
@@ -544,8 +592,13 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 				: grant.value.fields;
 			return admitted !== undefined && admitted !== 'all' && !admitted.includes(field);
 		});
-	const row = (collection: string, selected: SelectIR, heavy = false): Schema.Decoder<unknown> => {
-		const info = collectionOf(cat, collection),
+	const row = (
+		collection: string,
+		selected: SelectIR,
+		heavy = false,
+		hit = false
+	): Schema.Decoder<unknown> => {
+		const info = storeSync(collectionOf(cat, collection)),
 			model = m.models[collection];
 		const columns: Record<string, Schema.Decoder<unknown>> = { id: identity(collection) };
 		for (const name of selected.fields ??
@@ -585,21 +638,15 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 			const member = row(relation.target, relation.select);
 			columns[name] = relation.many ? Schema.Array(member) : Schema.NullOr(member);
 		}
+		if (hit) columns['$distance'] = Schema.Number;
 		return Schema.Struct({
 			...columns,
-			$outbound: Schema.optionalKey(
+			$sync: Schema.optionalKey(
 				Schema.Record(
 					Schema.String,
 					Schema.Struct({
-						status: Schema.Literals([
-							'queued',
-							'sending',
-							'sent',
-							'skipped',
-							'failed',
-							'uncertain'
-						]),
-						error: Schema.NullOr(Schema.String)
+						status: Schema.Literals(['pending', 'ok', 'failed']),
+						message: Schema.optionalKey(Schema.String)
 					})
 				)
 			),
@@ -608,18 +655,29 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 					requestId: Schema.String,
 					state: Schema.Literals(['Pending', 'ChangesRequested']),
 					step: Schema.Number,
-					steps: Schema.Number,
-					requestedBy: Schema.String,
-					waitingOn: Schema.Array(Schema.String)
+					steps: Schema.Array(
+						Schema.Struct({
+							name: Schema.String,
+							teams: Schema.Array(Schema.String),
+							users: Schema.Array(Schema.String)
+						})
+					),
+					requestedBy: Schema.String
 				})
 			)
 		});
 	};
-	const read = (collection: string, selection: unknown, one: boolean) => {
-		const member = row(collection, select(cat, collection, selection), one);
-		return one
-			? Schema.NullOr(member)
-			: Schema.Struct({ rows: Schema.Array(member), next: Schema.NullOr(Schema.String) });
+	const page = (member: Schema.Decoder<unknown>) =>
+		Schema.Struct({ rows: Schema.Array(member), next: Schema.NullOr(Schema.String) });
+	/** One record (`{ id }`), nullable; or a page, of hits for an index search. */
+	const read = (collection: string, selection: unknown, shape: 'one' | 'page' | 'hits') => {
+		const member = row(
+			collection,
+			storeSync(select(cat, collection, selection)),
+			shape === 'one',
+			shape === 'hits'
+		);
+		return shape === 'one' ? Schema.NullOr(member) : page(member);
 	};
 	const records = Schema.Array(
 		Schema.Union(
@@ -632,95 +690,81 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 			)
 		)
 	);
-	const outputOf = (
-		method: 'act' | 'start',
-		name: string,
-		input: unknown
-	): Schema.Decoder<unknown> => {
+	const outputOf = (method: 'act' | 'start', name: string): Schema.Decoder<unknown> => {
 		const dot = name.lastIndexOf('.'),
 			collection = name.slice(0, dot),
 			callable = name.slice(dot + 1);
-		const action = m.collections[collection]?.actions?.[callable],
-			declared = action?.output;
-		const many =
-			action?.target === 'record' &&
-			Schema.is(Schema.Struct({ target: Schema.Array(Schema.Unknown) }))(input);
-		const actionOutput = declared === undefined ? absent : kind(declared);
 		return method === 'start'
-			? Schema.Struct({ id: Schema.String, automation: Schema.String })
-			: action !== undefined
-				? many
-					? Schema.Array(actionOutput)
-					: actionOutput
-				: callable === 'upsert'
-					? Schema.Array(Schema.NullOr(identity(collection)))
-					: callable === 'import'
-						? Schema.Struct({
-								rows: Schema.Array(
-									Schema.Struct({
-										index: Schema.NullOr(Schema.Int),
-										id: Schema.NullOr(identity(collection)),
-										action: Schema.Literals(['created', 'updated', 'kept', 'skipped', 'deleted'])
-									})
-								)
-							})
-						: absent;
+			? Schema.Struct({ id: identity('sys_run'), automation: Schema.String })
+			: callable === 'upsert'
+				? Schema.Array(Schema.NullOr(identity(collection)))
+				: callable === 'import'
+					? Schema.Struct({
+							rows: Schema.Array(
+								Schema.Struct({
+									index: Schema.NullOr(Schema.Int),
+									id: Schema.NullOr(identity(collection)),
+									action: Schema.Literals(['created', 'updated', 'kept', 'skipped', 'deleted'])
+								})
+							)
+						})
+					: absent;
 	};
-	const codec = (
-		method: NativeMethod,
-		name: string,
-		selection: unknown,
-		members: ReadSet,
-		input: unknown
-	): Schema.Decoder<unknown> => {
-		if (method === 'read' || method === 'storedRead' || method === 'get')
-			return read(name, selection, method === 'get');
-		if (method === 'declared' || method === 'storedDeclared')
-			return read(name, declaredQuery(cat, name, selection, readAs).select, false);
-		if (method === 'set' || method === 'storedSet')
-			return Schema.Struct(
-				Object.fromEntries(
-					Object.entries(members).map(([key, member]): [string, Schema.Decoder<unknown>] => [
-						key,
-						read(member.collection, 'select' in member ? member.select : undefined, 'id' in member)
-					])
-				)
-			);
-		if (method === 'many') {
-			const acts = Schema.decodeUnknownSync(
-				Schema.Array(Schema.Struct({ callable: Schema.String, input: Schema.Json }))
-			)(input);
-			return Schema.Struct({
-				kind: Schema.Literal('committed'),
-				output: Schema.Tuple(acts.map((act) => outputOf('act', act.callable, act.input))),
-				records
-			});
+	const readCodec = (form: ReadForm): Schema.Decoder<unknown> => {
+		switch (form.kind) {
+			case 'declared':
+				return read(form.model, declaredQuery(cat, form.model, form.args, readAs).select, 'page');
+			case 'record':
+				return read(form.model, form.select, 'one');
+			case 'search':
+				return read(form.model, form.select, 'hits');
+			case 'list':
+				return read(form.model, form.select, 'page');
+			case 'query': {
+				const dot = form.name.lastIndexOf('.');
+				const output =
+					m.collections[form.name.slice(0, dot)]?.queries?.[form.name.slice(dot + 1)]?.output;
+				if (output === undefined) throw new KitInvalid({ message: `unknown query '${form.name}'` });
+				return outputSchema(m, output);
+			}
+			case 'set':
+				return Schema.Struct(
+					Object.fromEntries(
+						Object.entries(form.members).map(([key, member]): [string, Schema.Decoder<unknown>] => [
+							key,
+							read(
+								String(field(member, 'from')),
+								field(member, 'select'),
+								field(member, 'id') === undefined ? 'page' : 'one'
+							)
+						])
+					)
+				);
 		}
-		const dot = name.lastIndexOf('.'),
-			collection = name.slice(0, dot),
-			callable = name.slice(dot + 1);
-		if (method === 'query') {
-			const output = m.collections[collection]?.queries?.[callable]?.output;
-			if (output === undefined) throw new KitInvalid({ message: `unknown query '${name}'` });
-			return kind(output);
-		}
-		const output = outputOf(method, name, input);
-		return Schema.Union([
+	};
+	const actCodec = (method: 'act' | 'start', name: string) =>
+		Schema.Union([
 			Schema.Struct({ kind: Schema.Literal('pendingApproval'), requestId: Schema.String, records }),
-			Schema.Struct({ kind: Schema.Literal('committed'), output, records })
+			Schema.Struct({
+				kind: Schema.Literal('committed'),
+				output: outputOf(method, name),
+				records
+			})
 		]);
-	};
-	return <K extends NativeMethod, N extends string, S = {}, M extends ReadSet = ReadSet>(
-		method: K,
-		name: string,
-		value: unknown,
-		selection?: S,
-		members?: M,
-		input?: unknown
-	) =>
+	const manyCodec = (acts: ActBatch) =>
+		Schema.Union([
+			Schema.Struct({ kind: Schema.Literal('pendingApproval'), requestId: Schema.String, records }),
+			Schema.Struct({
+				kind: Schema.Literal('committed'),
+				output: Schema.Tuple(acts.map((act) => outputOf('act', act.callable))),
+				records
+			})
+		]);
+	/** Decodes `value` with the codec `make` builds, then claims the native type `T` it proved. */
+	const native = <T>(make: () => Schema.Decoder<unknown>, value: unknown) =>
 		Effect.gen(function* () {
 			const schema = yield* Effect.try({
-				try: () => codec(method, name, selection, members ?? {}, input),
+				try: make,
 				catch: (error) =>
 					error instanceof KitInvalid
 						? error
@@ -733,19 +777,102 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 			});
 			const decoded = yield* Schema.decodeUnknownEffect(schema)(value);
 			// This is the sole static brand boundary: the exact native schema decoded and revived every claimed value above.
-			const branded = Schema.declare((answer: unknown): answer is NativeAnswer<K, N, S, M> =>
+			const branded = Schema.declare((answer: unknown): answer is T =>
 				Schema.is(Schema.toType(schema))(answer)
 			);
 			return yield* Schema.decodeUnknownEffect(branded)(decoded);
 		});
+	return {
+		read: (form: ReadForm, value: unknown) => native<unknown>(() => readCodec(form), value),
+		act: <N extends string>(name: Is<N, KitCallable>, value: unknown) =>
+			native<Committed<ActOutput<N>, N> | PendingApproval<N>>(() => actCodec('act', name), value),
+		start: <A extends string>(value: unknown) =>
+			native<Committed<RunHandle<A>> | PendingApproval>(() => actCodec('start', ''), value),
+		many: <const A extends ActBatch>(value: unknown, input: A) =>
+			native<
+				Committed<ActManyOutput<A>, A[number]['callable']> | PendingApproval<A[number]['callable']>
+			>(() => manyCodec(input), value),
+		checked: (value: unknown) =>
+			native<Effect.Success<ReturnType<Act['checked']>>>(
+				() =>
+					Schema.Union([
+						Schema.Struct({
+							kind: Schema.Literal('pendingApproval'),
+							requestId: Schema.String,
+							records
+						}),
+						Schema.Struct({
+							kind: Schema.Literal('committed'),
+							output: Schema.Array(Schema.Json),
+							records
+						})
+					]),
+				value
+			)
+	};
 };
 const invalid = (e: unknown) =>
 	new KitInvalid({ message: e instanceof Error ? e.message : String(e) });
+/** Explicit fixture callbacks activate the same per-verb markers that compiled model declarations carry. */
+function markedTransforms(manifest: EngineManifest, names: ReadonlySet<string>): EngineManifest {
+	if (names.size === 0) return manifest;
+	const collections = { ...manifest.collections };
+	for (const name of names) {
+		const dot = name.lastIndexOf('.'),
+			model = name.slice(0, dot),
+			verb = name.slice(dot + 1),
+			spec = collections[model];
+		if (dot < 1 || (verb !== 'create' && verb !== 'update' && verb !== 'delete'))
+			throw new KitInvalid({
+				message: `TestWorkspace transform '${name}' must name '<model>.create', '<model>.update' or '<model>.delete'.`
+			});
+		if (spec === undefined)
+			throw new KitInvalid({
+				message: `TestWorkspace transform '${name}' has no declared write verb.`
+			});
+		if (verb === 'create') {
+			if (spec.create === undefined)
+				throw new KitInvalid({
+					message: `TestWorkspace transform '${name}' has no declared write verb.`
+				});
+			collections[model] = { ...spec, create: { ...spec.create, transform: true } };
+		} else if (verb === 'update') {
+			if (spec.update === undefined)
+				throw new KitInvalid({
+					message: `TestWorkspace transform '${name}' has no declared write verb.`
+				});
+			collections[model] = { ...spec, update: { ...spec.update, transform: true } };
+		} else {
+			if (spec.delete === undefined)
+				throw new KitInvalid({
+					message: `TestWorkspace transform '${name}' has no declared write verb.`
+				});
+			collections[model] = { ...spec, delete: { ...spec.delete, check: true } };
+		}
+	}
+	return { ...manifest, collections };
+}
 const node = NodeChildProcessSpawner.layer.pipe(
 	Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeCrypto.layer))
 );
 type CheckResult = import('../compiler/check/index.ts').CheckResult;
 const compiled = new Map<string, Effect.Effect<CheckResult, KitInvalid>>();
+// Keep the cache's existing permissive base64 decoder.
+const CachedGuest = Schema.Struct({
+	source: Schema.String,
+	sourceMap: Schema.optionalKey(Schema.String),
+	assets: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.String.pipe(
+				Schema.decodeTo<typeof Schema.Uint8Array, typeof Schema.String>(Schema.Uint8Array, {
+					decode: SchemaGetter.transform((text) => new Uint8Array(Buffer.from(text, 'base64'))),
+					encode: SchemaGetter.transform((bytes) => Buffer.from(bytes).toString('base64'))
+				})
+			)
+		)
+	)
+});
 /** A check result as one run's processes share it: the guest's `?bytes` assets as base64, the manifest as its JSON. */
 const RunChecked = Schema.Struct({
 	stages: Schema.Array(
@@ -760,89 +887,41 @@ const RunChecked = Schema.Struct({
 			'rules'
 		])
 	),
-	errors: Schema.Array(
-		Schema.Struct({
-			code: Schema.String,
-			path: Schema.String,
-			line: Schema.optionalKey(Schema.Number),
-			message: Schema.String,
-			help: Schema.optionalKey(Schema.String)
-		})
-	),
+	errors: Schema.Array(Diagnostic),
 	manifest: Schema.optionalKey(Schema.Json),
-	guest: Schema.optionalKey(
-		Schema.Struct({
-			source: Schema.String,
-			sourceMap: Schema.optionalKey(Schema.String),
-			assets: Schema.optionalKey(Schema.Record(Schema.String, Schema.String))
-		})
-	),
+	guest: Schema.optionalKey(CachedGuest),
 	transforms: Schema.Array(Schema.String),
-	projections: Schema.Array(Schema.String),
 	seed: Schema.optionalKey(
 		Schema.Record(Schema.String, Schema.Array(Schema.Record(Schema.String, Schema.Json)))
 	)
 });
-const toRun = (c: CheckResult): typeof RunChecked.Encoded => ({
-	stages: c.stages,
-	errors: c.errors,
-	transforms: c.transforms,
-	projections: c.projections,
-	...(c.manifest === undefined
-		? {}
-		: { manifest: Schema.decodeUnknownSync(Schema.Json)(JSON.parse(JSON.stringify(c.manifest))) }),
-	...(c.seed === undefined ? {} : { seed: c.seed }),
-	...(c.guest === undefined
-		? {}
-		: {
-				guest: {
-					source: c.guest.source,
-					...(c.guest.sourceMap === undefined ? {} : { sourceMap: c.guest.sourceMap }),
-					...(c.guest.assets === undefined
-						? {}
-						: {
-								assets: Object.fromEntries(
-									Object.entries(c.guest.assets).map(([hash, bytes]) => [
-										hash,
-										Buffer.from(bytes).toString('base64')
-									])
-								)
-							})
-				}
-			})
-});
+const toRun = (c: CheckResult): typeof RunChecked.Encoded => {
+	const manifest: unknown =
+		c.manifest === undefined ? undefined : JSON.parse(JSON.stringify(c.manifest));
+	return {
+		stages: c.stages,
+		errors: c.errors,
+		transforms: c.transforms,
+		...(manifest === undefined
+			? {}
+			: { manifest: Schema.decodeUnknownSync(Schema.Json)(manifest) }),
+		...(c.seed === undefined ? {} : { seed: c.seed }),
+		...(c.guest === undefined ? {} : { guest: Schema.encodeSync(CachedGuest)(c.guest) })
+	};
+};
 const fromRun = (r: typeof RunChecked.Type) =>
 	Effect.gen(function* () {
 		const manifest =
 			r.manifest === undefined
 				? undefined
 				: yield* Effect.fromResult(decodeManifest(r.manifest)).pipe(Effect.mapError(invalid));
-		const assets = r.guest?.assets;
 		const result: CheckResult = {
 			stages: [...r.stages],
 			errors: r.errors.map((e) => ({ ...e })),
 			transforms: [...r.transforms],
-			projections: [...r.projections],
 			...(manifest === undefined ? {} : { manifest }),
 			...(r.seed === undefined ? {} : { seed: r.seed }),
-			...(r.guest === undefined
-				? {}
-				: {
-						guest: {
-							source: r.guest.source,
-							...(r.guest.sourceMap === undefined ? {} : { sourceMap: r.guest.sourceMap }),
-							...(assets === undefined
-								? {}
-								: {
-										assets: Object.fromEntries(
-											Object.entries(assets).map(([hash, text]) => [
-												hash,
-												new Uint8Array(Buffer.from(text, 'base64'))
-											])
-										)
-									})
-						}
-					})
+			...(r.guest === undefined ? {} : { guest: { ...r.guest } })
 		};
 		return result;
 	});
@@ -888,7 +967,7 @@ const checked = (root: string) =>
 	});
 /** Check a workspace root and return its diagnostics, manifest and guest program; compiler loading and tool failures become `KitInvalid`. */
 export const check = (root: string) => checked(root);
-// Only schema bytes are shared. Every workspace still applies its current source rows and owns its database.
+// Only unseeded images are shared. Every workspace owns its database and loads its own seed.
 type SchemaImageFailure = BoltError | DbError | KitInvalid;
 /** The schema image's key: its slice, and the workspace whose `.norbital/cache` keeps it across test processes. */
 const ImageKey = Schema.Struct({ dir: Schema.NullOr(Schema.String), slice: SchemaSliceSchema });
@@ -902,7 +981,7 @@ const freshImage = (slice: typeof SchemaSliceSchema.Type) =>
 		Effect.gen(function* () {
 			const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
 			const db = PgliteDb.make(pg);
-			yield* applyPlan(db, plan(yield* readApplied(db), slice), { accept: true });
+			yield* applyPlan(db, yield* plan(yield* readApplied(db), slice), { accept: true });
 			return yield* Effect.tryPromise({
 				try: () => pg.dumpDataDir('none'),
 				catch: invalid
@@ -964,9 +1043,10 @@ const images = Effect.suspend(() =>
 );
 const schemaDatabase = (manifest: EngineManifest, root: string | undefined) =>
 	Effect.gen(function* () {
+		const slice = schemaSlice(manifest);
 		const key = JSON.stringify({
 			dir: root === undefined ? null : join(root, '.norbital', 'cache', 'schema-images'),
-			slice: { ...schemaSlice(manifest), connections: {} }
+			slice: root === undefined ? slice : { ...slice, connections: {} }
 		});
 		return PgliteDb.layer(yield* Cache.get(yield* images, key));
 	});
@@ -993,15 +1073,33 @@ const namedPack = (root: string, manifest: EngineManifest, name: 'base' | 'sampl
 		});
 		const errors: import('../compiler/check/index.ts').CheckDiagnostic[] = [],
 			cache = join(root, '.norbital', 'cache');
-		const pack = yield* compiler.seedPack(root, errors);
-		yield* artifact.buildPacks(root, manifest, pack, join(cache, 'test-seed'), { cache }, errors);
-		if (errors.length > 0)
-			return yield* Effect.fail(
-				new KitInvalid({
-					message: `TestWorkspace: the base pack failed:\n${errors.map((d) => `  ${d.code} ${d.message}`).join('\n')}`
-				})
-			);
-		return yield* readPack(join(cache, 'test-seed', 'base'));
+		const build = (out: string) =>
+			Effect.gen(function* () {
+				const pack = yield* compiler.seedPack(root, errors);
+				yield* artifact.buildPacks(root, manifest, pack, out, { cache }, errors);
+				if (errors.length > 0)
+					return yield* Effect.fail(
+						new KitInvalid({
+							message: `TestWorkspace: the base pack failed:\n${errors.map((d) => `  ${d.code} ${d.message}`).join('\n')}`
+						})
+					);
+			});
+		// under `bolt test` the pack is built once per run (as `runChecked` checks once), into its own directory and then
+		// renamed, so a parallel test process never reads half a pack; the first rename wins
+		const run = process.env['BOLT_TEST_RUN_CACHE'];
+		if (run === undefined || run === '') {
+			yield* build(join(cache, 'test-seed'));
+			return yield* readPack(join(cache, 'test-seed', 'base'));
+		}
+		const shared = join(run, `seed-${createHash('sha256').update(root).digest('hex')}`);
+		if (!(yield* fs.exists(join(shared, 'base', 'pack.json')))) {
+			const temporary = `${shared}.${randomUUID()}`;
+			yield* build(temporary);
+			yield* fs
+				.rename(temporary, shared)
+				.pipe(Effect.catch(() => fs.remove(temporary, { recursive: true, force: true })));
+		}
+		return yield* readPack(join(shared, 'base'));
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 
 const ResponseCassette = Schema.Struct({
@@ -1112,6 +1210,13 @@ export const CassetteAi = (options: CassetteOptions) =>
 		};
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 
+/** A durable in-process audit facility for a bare engine context; `TestWorkspace.layer` builds its own. */
+export const memoryAuditLayer: Layer.Layer<never> = Layer.unwrap(
+	Effect.map(Effect.sync(memoryAudit), (store) =>
+		auditFromAbi(store.port).pipe(Layer.provide(NodeCrypto.layer))
+	)
+);
+
 /** A native test workspace service; its layer owns database and engine resources in scope and exposes the same host routes used by deployed workspaces. */
 export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 	'@norbital-ai/bolt/test/TestWorkspace'
@@ -1121,10 +1226,11 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 	): Layer.Layer<TestWorkspace | WorkspaceServices, KitFailure> =>
 		Layer.effectContext(
 			Effect.gen(function* () {
-				let { manifest, guest, transforms, projections } = options;
+				let { manifest, guest, transforms } = options;
 				const artifact = options.artifact;
-				if (artifact !== undefined) ({ manifest, guest, transforms, projections } = artifact);
-				const seed = options.seed ?? (options.root === undefined ? 'none' : 'base');
+				if (artifact !== undefined) ({ manifest, guest } = artifact);
+				// a suite writes the rows its mechanism needs; the base pack is a product seed, not a test fixture
+				const seed = options.seed ?? 'none';
 				if (options.root !== undefined) {
 					const built = yield* checked(options.root);
 					if (built.errors.length > 0 || built.manifest === undefined)
@@ -1133,7 +1239,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								message: `bolt check failed:\n${built.errors.map((d) => `  ${d.code} ${d.message}`).join('\n')}`
 							})
 						);
-					({ manifest, guest, transforms, projections } = built);
+					({ manifest, guest, transforms } = built);
 				}
 				if (manifest === undefined)
 					return yield* Effect.fail(
@@ -1143,7 +1249,14 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					return yield* Effect.fail(
 						new KitInvalid({ message: `TestWorkspace: seed '${seed}' needs a root` })
 					);
-				const m = layered(manifest),
+				const sourceManifest = manifest,
+					callbacks = new Set(transforms);
+				const m = layered(
+						yield* Effect.try({
+							try: () => markedTransforms(sourceManifest, callbacks),
+							catch: invalid
+						})
+					),
 					count = {
 						reads: 0,
 						writes: 0,
@@ -1160,6 +1273,27 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					pending: Sql[] = [];
 				let crashing: string | null = null,
 					crashed = false;
+				const crashBoundary = (statements: readonly Sql[]) =>
+					Effect.suspend(() => {
+						const target = crashing;
+						if (
+							target === null ||
+							!statements.some(
+								(statement) =>
+									/UPDATE sys_run s SET state = \$/.test(statement.text) &&
+									JSON.stringify(statement.params).includes(target)
+							)
+						)
+							return Effect.void;
+						crashing = null;
+						crashed = true;
+						return Effect.fail(
+							new DbError({
+								message: 'crash: the host died before the run recorded its end',
+								sqlstate: '08006'
+							})
+						);
+					});
 				const flush = Semaphore.withPermit(members)(
 					Effect.gen(function* () {
 						while (pending.length > 0) {
@@ -1180,26 +1314,21 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					write: (statement, lock) =>
 						Effect.gen(function* () {
 							yield* flush;
-							if (
-								crashing !== null &&
-								/UPDATE sys_run s SET state = \$/.test(statement.text) &&
-								JSON.stringify(statement.params).includes(crashing)
-							) {
-								crashing = null;
-								crashed = true;
-								return yield* Effect.fail(
-									new DbError({
-										message: 'crash: the host died before the run recorded its end',
-										sqlstate: '08006'
-									})
-								);
-							}
+							yield* crashBoundary([statement]);
 							count.writes++;
 							return yield* inner.write(statement, lock);
 						}),
-					transaction: (body, lock) => Effect.andThen(flush, inner.transaction(body, lock))
+					// one act commits as one native batch: it counts as one write, as a single statement always has
+					transaction: (batch) =>
+						Effect.andThen(flush, crashBoundary(batch.statements)).pipe(
+							Effect.andThen(Effect.sync(() => count.writes++)),
+							Effect.andThen(inner.transaction(batch))
+						),
+					session: () => Effect.andThen(flush, inner.session())
 				});
 				let now = options.now ?? '2026-09-25T10:00:00.000Z';
+				// the host's cron clock, stepped by `runDue`: a slot at or before this instant has had its turn
+				let cronsThrough = Date.parse(now);
 				const liveClock = Context.get(Context.empty(), Clock.Clock);
 				const clock: Clock.Clock = {
 					monotonicTimeNanosUnsafe: () => liveClock.monotonicTimeNanosUnsafe(),
@@ -1210,8 +1339,10 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					currentTimeNanosUnsafe: () => BigInt(Date.parse(now)) * 1_000_000n,
 					currentTimeNanos: Effect.sync(() => BigInt(Date.parse(now)) * 1_000_000n)
 				};
+				const auditStore = memoryAudit();
 				const f: Fakes = {
-					files: { blobs: new Map() },
+					audit: auditStore.records,
+					files: { blobs: new Map(), origin: new Map() },
 					deadlines: { announced: [] },
 					sent: [],
 					links: {
@@ -1263,6 +1394,37 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					remove: (key) =>
 						Effect.sync(() => {
 							f.files.blobs.delete(key);
+						}),
+					// the host's rule without the network: media by its first bytes, anything else refused
+					download: (url) =>
+						Effect.suspend(() => {
+							const bytes = f.files.origin.get(url);
+							if (bytes === undefined)
+								return Effect.fail(
+									new FacilityFailure({
+										kind: 'upstream',
+										message: 'The URL answered 404.',
+										status: 404
+									})
+								);
+							const mime = mediaType(bytes.subarray(0, DOWNLOAD.headBytes));
+							if (mime === undefined)
+								return Effect.fail(
+									new FacilityFailure({
+										kind: 'invalid',
+										message:
+											'The file is not media (an image, audio, video or a PDF); nothing was stored.'
+									})
+								);
+							const key = randomUUID();
+							f.files.blobs.set(key, bytes);
+							return Effect.succeed({
+								key,
+								bytes: bytes.byteLength,
+								sha256: createHash('sha256').update(bytes).digest('hex'),
+								mime,
+								name: url.split(/[?#]/)[0]?.split('/').at(-1) || 'download'
+							});
 						})
 				});
 				const links =
@@ -1284,13 +1446,24 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 										f.links.typed.push({ instance, to });
 									}),
 								request: (instance, op) => f.links.answer(instance, op),
-								read: (instance, feed, partition, cursor) =>
-									f.links.page(instance, feed, partition, cursor),
+								read: (instance, sync, partition, cursor) =>
+									f.links.page(instance, sync, partition, cursor),
 								changed: () => Effect.void
 							});
+				const native = yield* nodePorts({
+					...(artifact === undefined ? {} : { release: artifact.dir }),
+					...(options.secretsKey === undefined
+						? {}
+						: { secretsKey: Redacted.value(options.secretsKey) })
+				});
 				const ports = Layer.mergeAll(
+					auditFromAbi(auditStore.port).pipe(Layer.provide(NodeCrypto.layer)),
 					files,
 					links,
+					Http.fromAbi(native.http),
+					Images.fromAbi(native.images),
+					Docs.fromAbi(native.docs),
+					Mcp.fromAbi(native.mcp),
 					Layer.succeed(Logs, {
 						write: (event) =>
 							Effect.sync(() => {
@@ -1332,26 +1505,26 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const publicUrl = shellConfig.publicUrl ?? 'http://localhost';
 				const secure = hostSecure ?? new URL(publicUrl).protocol === 'https:';
 				const base = Layer.mergeAll(
-					NodeCrypto.layer,
+					node,
+					Keys.fromAbi(native.keys),
+					GuestIsolates.fromAbi(native.guestIsolates),
 					Layer.succeed(EnvoyConfig, envoyConfig ?? {}),
 					Layer.effect(AgentHost, withBrowser(agentConfig ?? {})).pipe(Layer.provide(hostPorts)),
 					hostPorts,
 					Layer.succeed(TenantDb, db),
 					Layer.succeed(Clock.Clock, clock),
-					Layer.succeed(GuestConfig, { cpu: options.cpu }),
 					Layer.succeed(Activation, {
 						scope: 'test',
 						epoch: '',
 						release: artifact?.artifact.hash ?? 'test',
 						publicUrl,
 						guest: Option.fromNullishOr(guest),
-						transforms: new Set(transforms),
-						projections: new Set(projections),
-						start: [],
-						secretsKey: Option.fromNullishOr(options.secretsKey)
+						start: []
 					})
 				);
-				yield* applyPlan(db, plan(yield* readApplied(db), m), { accept: true });
+				// In-process images already hold this exact slice; persistent and injected databases need reassertion.
+				if (options.db !== undefined || options.root !== undefined)
+					yield* applyPlan(db, yield* plan(yield* readApplied(db), m), { accept: true });
 				if (options.pack !== undefined || seed === 'base' || seed === 'sample') {
 					if (options.pack === undefined && options.root === undefined)
 						return yield* Effect.fail(
@@ -1366,7 +1539,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					});
 					const portContext = yield* Layer.build(hostPorts);
 					yield* artifact
-						.loadPackWithAssets(db, m, pack, Context.get(portContext, Files), now)
+						.loadPackWithAssets(db, m, sourceOf(pack), Context.get(portContext, Files), now)
 						.pipe(Effect.provide(node));
 				} else if (typeof seed === 'object' && Object.keys(seed).length > 0) {
 					if (IDENTITY.some((collection) => seed[collection] !== undefined)) {
@@ -1384,11 +1557,12 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								)
 							}
 						};
-						yield* loadPack(db, m, pack, now);
-					} else yield* restore(m, db, seed, now);
+						yield* loadPack(db, m, sourceOf(pack), now);
+					} else yield* restore(m, db, restoreSource(seed), now);
 				}
 				const engineContext = yield* Layer.build(EngineLive(m).pipe(Layer.provideMerge(base)));
 				const runs = Context.get(engineContext, Runs),
+					runHandlers = Context.get(engineContext, RunHandlers),
 					envoys = Context.get(engineContext, Envoys),
 					integration = Context.get(engineContext, Conversations);
 				const Mail = Schema.Struct({
@@ -1400,6 +1574,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				});
 				const Sms = Schema.Struct({ to: Schema.String, text: Schema.String });
 				const identityHost: IdentityHost = yield* makeIdentityHost({
+					audit: yield* auditShape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),
 					db,
 					now: Effect.sync(() => new Date(now)),
 					windows: new RateWindows(),
@@ -1429,7 +1604,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					Turnstile.dev,
 					Layer.succeed(ShellConfig, {
 						publicUrl,
-						workspace: { name: 'Test', handle: 'test' },
+						workspace: () => ({ name: 'Test', handle: 'test' }),
 						secure,
 						...shellConfig
 					}),
@@ -1462,10 +1637,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						: Option.some(
 								Context.get(
 									yield* Layer.build(
-										publicPages(artifact).pipe(
-											Layer.provide(Layer.succeedContext(hostContext)),
-											Layer.provide(NodeFileSystem.layer)
-										)
+										publicPages(artifact).pipe(Layer.provide(Layer.succeedContext(hostContext)))
 									).pipe(Effect.mapError(invalid)),
 									PublicPages
 								)
@@ -1488,7 +1660,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						Effect.provide(hostContext)
 					);
 				const responseJson = (response: Response) =>
-					Effect.tryPromise({ try: () => response.json(), catch: invalid });
+					Effect.tryPromise({ try: (): Promise<unknown> => response.json(), catch: invalid });
 				const answer = nativeAnswers(m),
 					storedAnswer = nativeAnswers(m, 'workspace');
 				const storedReads = Context.get(engineContext, Reads),
@@ -1518,36 +1690,52 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					Effect.try({ try: () => JSON.stringify(value), catch: decodeFailure }).pipe(
 						Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json)))
 					);
-				function storedRead<C extends string>(
-					collection: Is<C, ReadableName>,
-					query: DeclaredQuery
-				): Effect.Effect<Page<DeclaredRow<C>>, ReadFailed>;
-				function storedRead<
-					C extends string,
-					const S extends { readonly [P in WorkspaceReadField<C>]?: true } = {}
-				>(
-					collection: Is<C, ReadableName>,
-					q: { where?: NoInfer<ModelWhere<C>>; select?: S } & Paged
-				): Effect.Effect<StoredReadAnswer<C, S>>;
-				function storedRead<const M extends ReadSet>(
-					set: M & { readonly [K in keyof M]: StoredMember<M[K]['collection']> }
-				): Effect.Effect<StoredSetAnswer<M>>;
-				function storedRead(
-					collection: string | ReadSet,
-					q?: { readonly mode?: unknown; readonly select?: unknown }
-				): Effect.Effect<unknown, ReadFailed> {
-					const read = Effect.gen(function* () {
+				const decodeArgs = (args: readonly unknown[]) =>
+					Effect.flatMap(wireJson(args), Schema.decodeUnknownEffect(Schema.Array(Schema.Json)));
+				function storedQuery<C extends string>(
+					model: Is<C, ReadableName>,
+					args: DeclaredQuery
+				): Eff<Page<DeclaredRow<C>>, ReadFailed>;
+				function storedQuery<C extends string>(
+					model: Is<C, ReadableName>,
+					args: { id: NoInfer<Id<C>>; revision?: number }
+				): Eff<StoredRow<C> | null>;
+				function storedQuery<C extends string, const S extends StoredSelect<C> = {}>(
+					model: Is<C, ReadableName>,
+					args: {
+						search: NoInfer<IndexSearch<C>>;
+						where?: NoInfer<ModelWhere<C>>;
+						select?: S;
+						limit: number;
+					}
+				): Eff<Page<Hit<StoredResult<C, S>>>>;
+				function storedQuery<C extends string, const S extends StoredSelect<C> = {}>(
+					model: Is<C, ReadableName>,
+					args: {
+						where?: NoInfer<ModelWhere<C>>;
+						select?: S;
+						orderBy?: NoInfer<OrderBy<C>>;
+						search?: string;
+					} & Paged
+				): Eff<Page<StoredResult<C, S>>>;
+				function storedQuery<const N extends string>(
+					name: Is<N, QueryCallable>,
+					input: NoInfer<QueryInput<N>>
+				): Eff<QueryOutput<N>>;
+				function storedQuery<const M extends QuerySet>(
+					set: M & { readonly [K in keyof M]: StoredMember<M[K]['from']> }
+				): Eff<{ readonly [K in keyof M]: StoredAnswer<M[K]> }>;
+				function storedQuery(first: unknown, second?: unknown): Effect.Effect<unknown, ReadFailed> {
+					const form = formOf(first, second);
+					const query = Effect.gen(function* () {
 						const b = yield* bindings;
-						if (typeof collection === 'string') {
-							const args = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Json))(
-								yield* wireJson([collection, q])
-							);
+						if (form.kind !== 'set') {
+							const args = yield* decodeArgs(second === undefined ? [first] : [first, second]);
 							const ir = yield* Effect.try({
-								try: () => lowerRead(m, 'db.read', args),
+								try: () => lowerRead(m, 'db.query', args),
 								catch: decodeFailure
 							});
-							const values = yield* storedReads.run([ir], { as: 'workspace' }, b);
-							const value = values[0];
+							const value = (yield* storedReads.run([ir], { as: 'workspace' }, b))[0];
 							if (value === undefined)
 								return yield* Effect.fail(
 									new ReadFailed({
@@ -1555,20 +1743,18 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 										message: 'The host returned no stored read answer.'
 									})
 								);
-							return yield* q?.mode === 'declared'
-								? storedAnswer('storedDeclared', collection, value, q)
-								: storedAnswer('storedRead', collection, value, q?.select);
+							return yield* storedAnswer.read(form, value);
 						}
 						const set = yield* Schema.decodeUnknownEffect(
 							Schema.Record(Schema.String, Schema.Json)
-						)(yield* wireJson(collection));
+						)(yield* wireJson(first));
 						const earlier = new Set<string>(),
 							scope = randomUUID();
 						const batch = yield* Effect.try({
 							try: () =>
 								Object.entries(set).map(([key, spec]) => {
 									const ir = lowerKeyedMember(
-										'db.read',
+										'db.query',
 										key,
 										spec,
 										(method, args) => lowerRead(m, method, args),
@@ -1581,81 +1767,97 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							catch: decodeFailure
 						});
 						const values = yield* storedReads.run(batch, { as: 'workspace' }, b);
-						return yield* storedAnswer(
-							'storedSet',
-							'',
-							Object.fromEntries(Object.keys(set).map((key, index) => [key, values[index]])),
-							undefined,
-							collection
+						return yield* storedAnswer.read(
+							form,
+							Object.fromEntries(Object.keys(set).map((key, index) => [key, values[index]]))
 						);
 					});
 					return (
-						typeof collection === 'string' && q?.mode === 'declared'
-							? read.pipe(Effect.mapError(readFailure))
-							: read.pipe(Effect.orDie)
+						form.kind === 'declared'
+							? query.pipe(Effect.mapError(readFailure))
+							: query.pipe(Effect.orDie)
 					).pipe(Effect.provide(hostContext));
 				}
 				const bodyActs: Kit['bodyActs'] = (who) => {
 					const authority =
 						'collections' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`);
-					return {
-						many: (acts) =>
-							Effect.gen(function* () {
-								const input = yield* Schema.decodeUnknownEffect(
-									Schema.Array(Schema.Struct({ callable: Schema.String, input: Schema.Json })),
-									{ onExcessProperty: 'error' }
-								)(acts).pipe(
+					const batch = (acts: unknown) =>
+						Effect.gen(function* () {
+							const input = yield* Schema.decodeUnknownEffect(
+								Schema.Array(
+									Schema.Struct({
+										callable: Schema.String,
+										input: Schema.Json,
+										observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
+										onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
+									})
+								),
+								{ onExcessProperty: 'error' }
+							)(acts).pipe(
+								Effect.mapError(
+									(error) => new ActRefused({ code: 'invalidInput', message: error.message })
+								)
+							);
+							const native: ActsRequest['acts'][number][] = [];
+							for (const act of input) {
+								const callable = yield* Effect.fromResult(parseCallable(act.callable, m)).pipe(
 									Effect.mapError(
-										(error) => new ActRefused({ code: 'invalidInput', message: error.message })
+										(error) => new ActRefused({ code: error.code, message: error.message })
 									)
 								);
-								const native: ActsRequest['acts'][number][] = [];
-								for (const act of input) {
-									const callable = yield* Effect.fromResult(parseCallable(act.callable, m)).pipe(
-										Effect.mapError(
-											(error) => new ActRefused({ code: error.code, message: error.message })
-										)
-									);
-									if (callable._tag !== 'Verb')
-										return yield* Effect.fail(
-											new ActRefused({
-												code: 'invalidInput',
-												message: 'act.many takes generated verbs'
-											})
-										);
-									native.push({
-										collection: callable.collection,
-										verb: callable.verb,
-										input: act.input
-									});
-								}
-								const b = yield* bindings,
-									key = randomUUID();
-								const { outcome } = yield* calls
-									.acts({
-										name: 'act.many',
-										acts: native,
-										key,
-										issuedAt: b.now,
-										authority,
-										bindings: b,
-										invocationId: key,
-										from: 'Server'
-									})
-									.pipe(Effect.orDie);
-								const failure = actFailure(outcome);
-								if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
-								if (outcome.kind === 'pendingApproval')
+								if (!isBatchCallable(callable))
 									return yield* Effect.fail(
 										new ActRefused({
-											code: 'pendingApproval',
-											message: 'The batch is held for approval.',
-											data: { requestId: outcome.requestId }
+											code: 'invalidInput',
+											message: 'An act batch takes create, update, upsert or delete.'
 										})
 									);
-								return yield* answer('many', 'act.many', outcome, undefined, undefined, input).pipe(
-									Effect.orDie
-								);
+								if (
+									callable.verb === 'upsert'
+										? act.onConflict === undefined
+										: act.onConflict !== undefined
+								)
+									return yield* Effect.fail(
+										new ActRefused({
+											code: 'invalidInput',
+											message: 'A batch upsert requires onConflict; other verbs do not take it.'
+										})
+									);
+								native.push({
+									collection: callable.collection,
+									verb: callable.verb,
+									input: act.input,
+									...(act.observed === undefined ? {} : { observed: act.observed }),
+									...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
+								});
+							}
+							const b = yield* bindings,
+								key = randomUUID();
+							const { outcome } = yield* calls
+								.acts({
+									name: 'act.many',
+									acts: native,
+									key,
+									issuedAt: b.now,
+									authority,
+									bindings: b,
+									invocationId: key,
+									from: 'Server'
+								})
+								.pipe(Effect.orDie);
+							const failure = actFailure(outcome);
+							if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
+							return outcome;
+						}).pipe(Effect.provide(hostContext));
+					return {
+						checked: (acts) =>
+							batch(acts).pipe(
+								Effect.flatMap((outcome) => answer.checked(outcome).pipe(Effect.orDie))
+							),
+						many: <const A extends ActBatch>(acts: ActManyInput<A>) =>
+							Effect.gen(function* () {
+								const outcome = yield* batch(acts);
+								return yield* answer.many<A>(outcome, acts).pipe(Effect.orDie);
 							}).pipe(Effect.provide(hostContext))
 					};
 				};
@@ -1723,92 +1925,112 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							const reply = yield* Schema.decodeUnknownEffect(ActReply)(answer).pipe(Effect.orDie);
 							const failure = actFailure(reply.outcome);
 							if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
-							if (reply.outcome.kind === 'pendingApproval') return reply.outcome;
-							if (reply.outcome.kind === 'committed') return reply.outcome;
+							// past the person-wait the write runs on as its run: `running` is an outcome, not a defect
+							if (
+								reply.outcome.kind === 'pendingApproval' ||
+								reply.outcome.kind === 'committed' ||
+								reply.outcome.kind === 'running'
+							)
+								return reply.outcome;
 							return yield* Effect.die(reply.outcome);
 						}).pipe(Effect.catchTag('KitInvalid', Effect.die));
 					const readError = (error: { readonly message: string }) =>
 						new ReadFailed({ code: 'protocol', message: error.message });
-					function callerRead<C extends string>(
-						collection: Is<C, ReadableName>,
-						query: DeclaredQuery
-					): Effect.Effect<Page<DeclaredRow<C>>, ReadFailed>;
-					function callerRead<C extends string, const S extends Select<C> = {}>(
-						collection: Is<C, ReadableName>,
-						q: {
+					// `query(...args)` crosses as `{ m: 'query', a: args }`, as the page's and a body's do
+					function callerQuery<C extends string>(
+						model: Is<C, ReadableName>,
+						args: DeclaredQuery
+					): Eff<Page<DeclaredRow<C>>, ReadFailed>;
+					function callerQuery<C extends string>(
+						model: Is<C, ReadableName>,
+						args: { id: NoInfer<Id<C>>; revision: number }
+					): Eff<StoredRow<C> | null, ReadFailed>;
+					function callerQuery<C extends string, const S extends Select<C> = {}>(
+						model: Is<C, ReadableName>,
+						args: { id: NoInfer<Id<C>>; select?: S }
+					): Eff<ReadResult<C, S> | null, ReadFailed>;
+					function callerQuery<C extends string, const S extends Select<C> = {}>(
+						model: Is<C, ReadableName>,
+						args: {
+							search: NoInfer<IndexSearch<C>>;
+							where?: NoInfer<Where<C>>;
+							select?: S;
+							limit: number;
+						}
+					): Eff<Page<Hit<ListResult<C, S>>>, ReadFailed>;
+					function callerQuery<C extends string, const S extends Select<C> = {}>(
+						model: Is<C, ReadableName>,
+						args: {
 							where?: NoInfer<Where<C>>;
 							select?: S;
 							orderBy?: NoInfer<OrderBy<C>>;
 							search?: string;
 						} & Paged
-					): Effect.Effect<Page<ListResult<C, S>>, ReadFailed>;
-					function callerRead<const M extends ReadSet>(
-						set: M & { readonly [K in keyof M]: ReadMember<M[K]['collection']> }
-					): Effect.Effect<ReadSetAnswer<M>, ReadFailed>;
-					function callerRead(
-						collection: string | ReadSet,
-						q?: { readonly mode?: unknown; readonly select?: unknown }
+					): Eff<Page<ListResult<C, S>>, ReadFailed>;
+					function callerQuery<const N extends string>(
+						name: Is<N, QueryCallable>,
+						input: NoInfer<QueryInput<N>>
+					): Eff<QueryOutput<N>, ReadFailed>;
+					function callerQuery<const M extends QuerySet>(
+						set: M & { readonly [K in keyof M]: QueryMember<M[K]['from']> }
+					): Eff<QuerySetAnswer<M>, ReadFailed>;
+					function callerQuery(
+						first: unknown,
+						second?: unknown
 					): Effect.Effect<unknown, ReadFailed> {
-						return typeof collection === 'string'
-							? read('read', [collection, q]).pipe(
-									Effect.flatMap((value) =>
-										(q?.mode === 'declared'
-											? answer('declared', collection, value, q)
-											: answer('read', collection, value, q?.select)
-										).pipe(Effect.mapError(readError))
-									)
-								)
-							: read('read', [collection]).pipe(
-									Effect.flatMap((value) =>
-										answer('set', '', value, undefined, collection).pipe(Effect.mapError(readError))
-									)
-								);
+						const form = formOf(first, second);
+						// a record as of a revision is folded from its history: the stored row, unmasked
+						const decoder = form.kind === 'record' && form.revision ? storedAnswer : answer;
+						return read('query', second === undefined ? [first] : [first, second]).pipe(
+							Effect.flatMap((value) => decoder.read(form, value).pipe(Effect.mapError(readError)))
+						);
 					}
 					return {
 						authority,
+						query: callerQuery,
 						act: <const N extends string>(
 							name: Is<N, KitCallable>,
 							input: NoInfer<KitInput<N>>,
 							opts?: ActOptions
 						) =>
 							act(String(name), input, opts).pipe(
-								Effect.flatMap((value) =>
-									answer<'act', N>('act', String(name), value, undefined, undefined, input).pipe(
-										Effect.orDie
-									)
+								Effect.flatMap(
+									(value): Effect.Effect<Committed<ActOutput<N>, N> | PendingApproval<N>> =>
+										// a kit's write answers within its call (no person waits 60 s on a test): a hand-off is a broken fixture
+										value.kind === 'running'
+											? Effect.die(
+													new Error(
+														`${String(name)} was handed off to run ${value.run}; a kit write answers within its call`
+													)
+												)
+											: answer.act<N>(name, value).pipe(Effect.orDie)
 								)
 							),
-						query: <const N extends string>(
-							name: Is<N, QueryCallable>,
-							input: NoInfer<QueryInput<N>>
-						) => {
-							const callable = String(name),
-								dot = callable.lastIndexOf('.');
-							return read('query', [callable.slice(0, dot), callable.slice(dot + 1), input]).pipe(
-								Effect.flatMap((value) =>
-									answer<'query', N>('query', callable, value).pipe(Effect.mapError(readError))
-								)
-							);
-						},
-						start: (name, input, opts) =>
+						start: <const A extends string>(
+							name: Is<A, StartableName>,
+							input: NoInfer<StartInput<A>>,
+							opts?: { id?: string }
+						) =>
 							act('start', {
 								automation: name,
 								input,
 								id: opts?.id ?? uuidv7(Date.parse(now))
-							}).pipe(Effect.flatMap((value) => answer('start', '', value).pipe(Effect.orDie))),
-						read: callerRead,
-						get: <C extends string, const S extends Select<C> = {}>(
-							name: Is<C, ReadableName>,
-							id: NoInfer<Id<C>>,
-							q?: { select?: S; revision?: number }
-						) =>
-							read('get', [name, id, q ?? {}]).pipe(
+							}).pipe(
 								Effect.flatMap((value) =>
-									answer<'get', C, S>('get', String(name), value, q?.select).pipe(
-										Effect.mapError(readError)
-									)
+									// a start answers once the run is recorded, never past the person-wait
+									value.kind === 'running'
+										? Effect.die(value)
+										: answer.start<A>(value).pipe(Effect.orDie)
 								)
 							),
+						approvals: {
+							decide: (requestId, input) =>
+								act('approvals.decide', { requestId, ...input }).pipe(
+									Effect.flatMap((value) =>
+										value.kind === 'committed' ? Effect.void : Effect.die(value)
+									)
+								)
+						},
 						upload: (field, file) =>
 							Effect.gen(function* () {
 								const req = new Request(`http://localhost${PATHS.files}${field}`, {
@@ -1872,13 +2094,28 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					});
 					return { actor, id: actor.id, policies, admin: actor.admin };
 				};
+				const syncRun = <A>(name: string, input: Json, codec: Schema.Decoder<A>) =>
+					Effect.gen(function* () {
+						const handler = yield* runHandlers.handler(name);
+						if (Option.isNone(handler))
+							return yield* Effect.fail(new KitInvalid({ message: `No sync handler '${name}'.` }));
+						const value = yield* handler.value(input, { id: randomUUID(), starter: null });
+						return yield* Schema.decodeUnknownEffect(codec)(value).pipe(Effect.mapError(invalid));
+					}).pipe(Effect.provide(hostContext));
 				const kit: Kit = {
 					manifest: m,
 					release: artifact?.artifact.hash ?? 'test',
 					db,
-					storedRead,
+					storedQuery,
 					bodyActs,
 					fakes,
+					syncs: {
+						read: (name, options = {}) =>
+							syncsOf(m).get(name)?.read === true
+								? syncRun(name, options, Schema.Struct({ pages: Schema.Int }))
+								: Effect.fail(new KitInvalid({ message: `No remote read sync '${name}'.` })),
+						deliver: () => syncRun(SYNC_DELIVER, {}, Schema.Struct({ delivered: Schema.Int }))
+					},
 					count,
 					member,
 					get admin() {
@@ -1922,7 +2159,21 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								);
 							return authority;
 						}),
-					runDue: () => runs.tick.pipe(Effect.provide(hostContext)),
+					runDue: () =>
+						Effect.gen(function* () {
+							const at = Date.parse(now);
+							for (const entry of yield* runs.crons) {
+								const cron = yield* Effect.orDie(
+									Effect.fromResult(Cron.parse(entry.cron, entry.zone))
+								);
+								// the latest slot since the last step, once; slots skipped meanwhile are not replayed. `prev` is
+								// strict at whole seconds (as the host's clock): one second past finds a slot at `at` itself
+								const slot = Cron.prev(cron, at + 1000);
+								if (slot.getTime() > cronsThrough) yield* runs.fire(entry.id, slot.toISOString());
+							}
+							cronsThrough = at;
+							yield* runs.tick;
+						}).pipe(Effect.provide(hostContext)),
 					crash: (runId) =>
 						Effect.gen(function* () {
 							crashing = runId;

@@ -1,4 +1,4 @@
-// The runs area without a database: cron (rule 52), buckets (rule 52a), the in-process deadlines port, webhook
+// The runs area without a database: buckets (rule 52a), the in-process deadlines port, webhook
 // signatures per scheme (rule 56a), and what retries (rule 54).
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
@@ -8,44 +8,13 @@ import { DeadlinePort } from '../src/engine/ports.ts';
 import type { Unavailable } from '../src/decl/errors.ts';
 import { isTransient } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
-import { nextSlot, parseCron, periodAtLeast5Min } from '../src/engine/runs/cron.ts';
 import { dueAt } from '../src/engine/runs/time.ts';
 import { inProcessDeadlines } from '../src/engine/runs/deadlines.ts';
 import { verifySignature, type WebhookRequest } from '../src/engine/runs/webhook.ts';
+import type { WebhookScheme } from '../src/decl/runtime/automation.ts';
 
 const at = (s: string) => Date.parse(s);
 const iso = (ms: number) => new Date(ms).toISOString();
-
-describe('cron (rule 52)', () => {
-	it('parses 5 fields or a macro and refuses anything else', () => {
-		expect(parseCron('@daily')).toEqual(parseCron('0 0 * * *'));
-		expect(parseCron('*/15 9-17 * jan-mar mon-fri').minutes).toEqual([0, 15, 30, 45]);
-		for (const bad of ['* * * *', '60 * * * *', '*/0 * * * *', '5-1 * * * *'])
-			expect(() => parseCron(bad)).toThrow(BoltError);
-	});
-
-	it('computes slots in its zone: a nonexistent time fires at the next valid instant, a repeated one once', () => {
-		const ny = 'America/New_York';
-		// 2026-03-08: 02:30 does not exist in New York; the slot fires at 03:00 EDT
-		expect(iso(nextSlot(parseCron('30 2 * * *'), at('2026-03-08T05:00:00Z'), ny))).toBe(
-			'2026-03-08T07:00:00.000Z'
-		);
-		// 2026-11-01: 01:30 happens twice; the slot fires at the first (EDT) and not again
-		const first = nextSlot(parseCron('30 1 * * *'), at('2026-11-01T04:00:00Z'), ny);
-		expect(iso(first)).toBe('2026-11-01T05:30:00.000Z');
-		expect(iso(nextSlot(parseCron('30 1 * * *'), first, ny))).toBe('2026-11-02T06:30:00.000Z');
-		expect(
-			iso(nextSlot(parseCron('0 6 * * *'), at('2026-09-25T10:00:00Z'), 'Asia/Singapore'))
-		).toBe('2026-09-25T22:00:00.000Z');
-	});
-
-	it('knows when its period is 5 minutes or more', () => {
-		expect(periodAtLeast5Min(parseCron('*/15 * * * *'))).toBe(true);
-		expect(periodAtLeast5Min(parseCron('0 6 * * *'))).toBe(true);
-		expect(periodAtLeast5Min(parseCron('* * * * *'))).toBe(false);
-		expect(periodAtLeast5Min(parseCron('0,58 * * * *'))).toBe(false);
-	});
-});
 
 describe('buckets (rule 52a)', () => {
 	it('a due time under 5 minutes ahead is exact; 5 minutes or more rounds up to the bucket', () => {
@@ -138,7 +107,7 @@ describe('webhook signatures (rule 56a)', () => {
 		body
 	});
 	const svixKey = Buffer.from('svix-secret-bytes');
-	const cases: [string, string, WebhookRequest][] = [
+	const cases: [WebhookScheme, string, WebhookRequest][] = [
 		['bearer', secret, req({ authorization: 'Bearer shh' })],
 		['hmac-sha256', secret, req({ 'x-signature': `sha256=${hm(secret, body.toString(), 'hex')}` })],
 		[
@@ -160,7 +129,7 @@ describe('webhook signatures (rule 56a)', () => {
 			req({ 'stripe-signature': `t=${ts},v1=${hm(secret, `${ts}.${body}`, 'hex')}` })
 		],
 		[
-			'svix',
+			'standard',
 			`whsec_${svixKey.toString('base64')}`,
 			req({
 				'svix-id': 'msg_1',
@@ -174,15 +143,30 @@ describe('webhook signatures (rule 56a)', () => {
 		(scheme, key, r) => {
 			expect(verifySignature(scheme, key, r, now)).toBe(true);
 			expect(
-				verifySignature(scheme, scheme === 'svix' ? 'whsec_b3RoZXI=' : `${key}x`, r, now)
+				verifySignature(scheme, scheme === 'standard' ? 'whsec_b3RoZXI=' : `${key}x`, r, now)
 			).toBe(false);
 			expect(verifySignature(scheme, key, { ...r, body: Buffer.from('{"id":"evt_2"}') }, now)).toBe(
 				scheme === 'bearer'
 			);
-			if (['slack', 'stripe', 'svix'].includes(scheme))
+			if (['slack', 'stripe', 'standard'].includes(scheme))
 				expect(verifySignature(scheme, key, r, now + 600_000)).toBe(false);
 		}
 	);
+	it('standard accepts webhook headers with the same secret, raw-body and freshness checks as Svix headers', () => {
+		const key = `whsec_${svixKey.toString('base64')}`;
+		const r = req({
+			'webhook-id': 'msg_1',
+			'webhook-timestamp': ts,
+			'webhook-signature': `v1,${hm(svixKey, `msg_1.${ts}.${body}`, 'base64')}`
+		});
+		expect(verifySignature('standard', key, r, now)).toBe(true);
+		expect(verifySignature('standard', 'whsec_b3RoZXI=', r, now)).toBe(false);
+		expect(
+			verifySignature('standard', key, { ...r, body: Buffer.from('{"id":"evt_2"}') }, now)
+		).toBe(false);
+		expect(verifySignature('standard', key, r, now + 600_000)).toBe(false);
+		expect(verifySignature('svix', key, r, now)).toBe(false);
+	});
 	it("a scheme it does not declare verifies nothing (a provider's own push is its link's webhook)", () => {
 		const google = {
 			method: 'POST',
@@ -202,8 +186,7 @@ describe('webhook signatures (rule 56a)', () => {
 describe('attempts (rule 54)', () => {
 	const failed = (code: Code, message = '') => ({
 		kind: 'failed' as const,
-		error: BoltError.make(code, 'guest', message),
-		cpuMs: 0
+		error: BoltError.make(code, 'guest', message)
 	});
 	it('only Transient retries: facility upstream, timeout, rateLimited and an act conflict, thrown or coded', () => {
 		expect(isTransient(failed('upstream', '502').error)).toBe(true);

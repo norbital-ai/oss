@@ -55,7 +55,7 @@ A button (or a link, with `href`) in a variant and size.
 </script>
 
 <script lang="ts">
-	import { Tooltip } from '../tooltip/index.js';
+	import Tooltip from '../tooltip/tooltip.svelte';
 	import { haptic as tick } from '../utils.js';
 
 	let {

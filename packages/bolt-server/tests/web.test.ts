@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
-import { isPublicWebAddress, makeRequestPage, WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt/engine';
+import { isPublicWebAddress, makeRequestPage, WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt/node';
 import { readPublicPage } from '../src/web.ts';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';

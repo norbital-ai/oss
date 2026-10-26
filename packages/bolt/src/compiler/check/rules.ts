@@ -1,19 +1,25 @@
 // The build checks tsc cannot carry (§3.3.9 "Where each literal is checked", rules 6, 14, 33a, 38, 38d, 50, 52): numeric
-// ranges, `seq` patterns, labels naming an id, calendar days declared as instants, state names and reachability, cron strings, approval step counts, event inputs, rates, IP limits, visitor grants and
-// refs, masked search fields, write grants over child rows and unreachable internal callables. Each finding names the declaring file.
-import { Predicate, Result } from 'effect';
+// ranges, `seq` patterns, labels naming an id, calendar days declared as instants, state names and reachability, search
+// index widths, cron strings, event inputs, rates, IP limits, visitor grants and refs, masked search fields, write grants
+// over child rows, syncs (their connection, parsers, cadence and instance), embedding
+// origins; and, over the model sources, a write callback reading inside a loop and a notice sent through a connection that
+// carries no conversation. Each finding names the declaring file.
+import { Array, Predicate, Result } from 'effect';
+import ts from 'typescript';
 import { LIMITS } from '../../engine/contracts.ts';
-import type { EngineManifest } from '../../engine/manifest.ts';
-import { toPred } from '../../engine/access/pred.ts';
-import { Chain, ownPredSql } from '../../engine/write/sql.ts';
+import type { EngineManifest, GrantArm } from '../../engine/manifest.ts';
+import { scopeObject } from '../../engine/access/authority.ts';
 import { parseRate } from '../../engine/access/rate.ts';
 import { sizeBytes } from '../../engine/callables/upload.ts';
+import { DRIVERS, type IntegrationSpec } from '../../decl/runtime/integration.ts';
+import { SYSTEM } from '../../system/index.ts';
 
-export type Finding = { code: string; path: string; message: string };
-type Obj = { readonly [k: string]: unknown };
+export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);
 const list = <T>(v: T | readonly T[] | undefined): readonly T[] =>
 	v === undefined ? [] : isList<T>(v) ? v : [v];
+const OPS = ['create', 'update', 'delete'] as const;
+const isOp = (v: string): v is (typeof OPS)[number] => OPS.some((op) => op === v);
 const strings = (v: unknown): v is readonly string[] =>
 	Array.isArray(v) && v.every(Predicate.isString);
 
@@ -50,16 +56,6 @@ export function cronValid(s: string): boolean {
 		)
 	);
 }
-
-/** A grant value that is `{ where?, fields?, previous? }` (not a bare `Where` on a field of that name). */
-const scopeObject = (m: EngineManifest, c: string, g: unknown): Obj | undefined =>
-	Predicate.isObject(g) &&
-	Object.keys(g).length > 0 &&
-	Object.keys(g).every(
-		(k) => ['where', 'fields', 'previous'].includes(k) && m.models[c]?.fields[k] === undefined
-	)
-		? g
-		: undefined;
 
 /** The first many-relation a `Where` on `c` crosses, through `and`/`or`/`not`, one-relation `is` and polymorphic arms. */
 function manyIn(m: EngineManifest, c: string, w: unknown): string | undefined {
@@ -240,37 +236,25 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				model,
 				`search.semantic: dim is 1 to 2,000 (the embedding column's width, and the width every probe asks the model for)`
 			);
-	}
-}
-
-function integrationRules({ m, bodies, at }: RuleContext): void {
-	// a pulled feed runs on its cron (tsc counts the fields; this parses them)
-	for (const [name, d] of Object.entries(m.integrations))
-		for (const [feed, f] of Object.entries(d.feeds ?? {}))
-			if ((f.from ?? 'read') === 'read' && (f.cron === undefined || !cronValid(f.cron)))
-				at(
-					'integration/cron',
-					'integration_definition',
-					name,
-					`feed '${feed}': cron '${String(f.cron)}' is not 5 cron fields or a macro`
-				);
-	// an outbound `when` is decided inside the commit that writes the row, on that row alone: its own fields and literals
-	for (const [name, d] of Object.entries(m.integrations))
-		for (const [rule, o] of Object.entries(d.outbound ?? {}))
-			if (o.when !== undefined) {
-				const parsed = Result.try({
-					try: () => ownPredSql(toPred(m, o.from, o.when), 'row', new Chain()),
-					catch: (error) => (error instanceof Error ? error.message : String(error))
-				});
-				if (Result.isFailure(parsed)) {
-					at(
-						'integration/outbound-when',
-						'integration_definition',
-						name,
-						`outbound '${rule}': its when tests the written row of '${o.from}' alone: ${parsed.failure}`
-					);
-				}
+		// a custom index is a hidden vector column with an HNSW index: its width is pgvector's, its rerank page a small multiple
+		for (const [index, x] of Object.entries(spec.search?.indexes ?? {})) {
+			const range = (message: string) =>
+				at('model/range', 'model', model, `search.indexes.${index}: ${message}`);
+			if (index === 'semantic')
+				range("'semantic' is the platform's meaning search; name the index");
+			if (!(Number.isInteger(x.dim) && x.dim >= 1 && x.dim <= 2000)) range('dim is 1 to 2,000');
+			if (
+				x.candidates !== undefined &&
+				!(Number.isInteger(x.candidates) && x.candidates >= 1 && x.candidates <= 16)
+			)
+				range('candidates is 1 to 16');
+			if (x.field !== undefined) {
+				const v = spec.fields[x.field];
+				if (v?.kind !== 'vector' || v.dim !== x.dim)
+					range(`vector '${x.field}' is a vector field of dim ${x.dim}`);
 			}
+		}
+	}
 }
 
 function automationRules({ m, bodies, at }: RuleContext): void {
@@ -283,7 +267,7 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 			const grant = m.policies[declaration.policy]?.grants[collection];
 			const key = declaration.verb + '\0' + declaration.policy;
 			if (
-				!['create', 'update', 'delete'].includes(verb) ||
+				!isOp(verb) ||
 				m.collections[collection] === undefined ||
 				grant === undefined ||
 				grant[verb] === undefined ||
@@ -298,7 +282,12 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 			delegated.add(key);
 		}
 		if (!bodies.automations.includes(name))
-			at('automation/no-body', 'automation', name, 'attach the run body with a.run(…)');
+			at(
+				'automation/no-body',
+				'automation',
+				name,
+				`declare its run body inline: automation('${name}', { …, run: function* (input, ctx) { … } })`
+			);
 		for (const on of list(a.on)) {
 			if ('cron' in on && typeof on.cron === 'string' && !cronValid(on.cron))
 				at('automation/cron', 'automation', name, `'${on.cron}' is not 5 cron fields or a macro`);
@@ -329,7 +318,7 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 					`an automation with both on and input declares ids: { kind: 'list', of: { kind: 'id', of: '${c}' }, optional: true } in its input`
 				);
 			if (
-				Array.isArray(a.runAs) &&
+				Array.isArray<typeof a.runAs>(a.runAs) &&
 				!a.runAs.some((p) => {
 					const g = m.policies[p]?.grants[c];
 					return g !== undefined && (g.read !== undefined || g.via !== undefined);
@@ -361,43 +350,8 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 	}
 	for (const [p, spec] of Object.entries(m.policies)) {
 		for (const [c, g] of Object.entries(spec.grants)) {
-			for (const op of ['create', 'update', 'delete'] as const)
-				for (const route of list(
-					Predicate.isObject(g.approval) ? g.approval[op] : undefined
-				).filter((x) => Predicate.isObject(x))) {
-					const steps = list(route.steps);
-					if (
-						!Array.isArray(route.steps) ||
-						steps.length === 0 ||
-						steps.length > 8 ||
-						steps.some((s) => !strings(s) || s.length === 0)
-					)
-						at(
-							'approval/steps',
-							'policy',
-							p,
-							`${c}.${op}: an approval has 1 to 8 steps, each naming a source team handle`
-						);
-					for (const handle of [
-						...steps.filter(strings).flat(),
-						...(typeof route['superseded_by'] === 'string'
-							? [route['superseded_by']]
-							: Array.isArray(route['superseded_by'])
-								? route['superseded_by'].filter(
-										(value: unknown): value is string => typeof value === 'string'
-									)
-								: [])
-					])
-						if (!Object.hasOwn(m.teams, handle))
-							at(
-								'approval/team',
-								'policy',
-								p,
-								`${c}.${op}: approval names unknown source team '${handle}'`
-							);
-				}
 			// a write is judged on the rows it names, in the act: its grant cannot scope through child rows (`write/act.ts` refuses it)
-			for (const op of ['create', 'update', 'delete'] as const) {
+			for (const op of OPS) {
 				const s = scopeObject(m, c, g[op]),
 					rel = manyIn(m, c, s === undefined ? g[op] : s.where) ?? manyIn(m, c, s?.previous);
 				if (rel !== undefined)
@@ -405,13 +359,11 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 						'access/write-many',
 						'policy',
 						p,
-						`${c}.${op}: a write grant cannot scope through the many-relation '${rel}'; refuse it in the collection's transform`
+						`${c}.${op}: a write grant cannot scope through the many-relation '${rel}'; refuse it in the model's ${op === 'delete' ? 'delete.check' : `${op}.transform`}`
 					);
 			}
-			const read = scopeObject(m, c, g.read),
+			const fields = scopeObject(m, c, g.read)?.fields,
 				search = m.models[c]?.search?.text ?? [];
-			const declared = read?.fields;
-			const fields = strings(declared) ? declared : undefined;
 			const hidden = fields === undefined ? undefined : search.find((f) => !fields.includes(f));
 			if (hidden !== undefined)
 				at(
@@ -487,12 +439,10 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 		if (Object.keys(s.pages ?? {}).length === 0)
 			at('kiosk/pages', 'kiosk', kiosk, 'a kiosk has at least one page');
 		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every read,
-		// history, create and update lists its fields, and nothing deletes — a removal is an action whose
-		// transform refuses outside its scope. Broad grants are unrepresentable here by construction.
-		const explicit = (c: string, g: unknown): boolean => {
-			const fields = scopeObject(m, c, g)?.fields;
-			return strings(fields) && fields.length > 0;
-		};
+		// history, create and update lists its fields, and nothing deletes. Broad grants are
+		// unrepresentable here by construction.
+		const explicit = (c: string, g: GrantArm | undefined): boolean =>
+			(scopeObject(m, c, g)?.fields?.length ?? 0) > 0;
 		for (const p of policies) {
 			const held = m.policies[p];
 			if (held === undefined) continue;
@@ -503,7 +453,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 				for (const op of ['read', 'history', 'create', 'update'] as const)
 					if (g[op] !== undefined && !explicit(c, g[op]))
 						narrow(`${c}.${op} lists its fields explicitly; a kiosk takes no open grant`);
-				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes; write an action instead`);
+				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes`);
 			}
 		}
 		// auth 'none': the kiosk is open with no requestor policy, so its assigned policies run
@@ -526,36 +476,125 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 	}
 }
 
-function internalRules({ m, bodies, at }: RuleContext): void {
-	for (const [c, spec] of Object.entries(m.collections))
-		for (const part of ['queries', 'actions'] as const) {
-			for (const [name, x] of Object.entries(spec[part] ?? {})) {
-				if (!('internal' in x) || x.internal !== true) continue;
-				if (
-					!Object.values(m.policies).some((p) => {
-						const granted = p.grants[c]?.[part];
-						return strings(granted) && granted.includes(name);
-					})
-				)
-					at(
-						'access/internal-unreachable',
-						'collection',
-						c,
-						`internal ${part === 'queries' ? 'query' : 'action'} '${name}' is listed by no policy's grants.${c}.${part}`
+/** A definition by name: the workspace's, or one of bolt's conversation definitions. */
+const definition = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
+	m.integrations[name] ?? SYSTEM.integrations[name];
+const conversational = (d: IntegrationSpec | undefined): boolean =>
+	d !== undefined && 'conversation' in DRIVERS[d.driver];
+const BUILTIN_PARSERS = ['xlsx', 'csv', 'tsv', 'json', 'ics'];
+const MEDIA_TOPS = [
+	'application',
+	'audio',
+	'font',
+	'haptics',
+	'image',
+	'message',
+	'model',
+	'multipart',
+	'text',
+	'video'
+];
+/** The FK value a ref's `where` pins its `sys_integration` target to (`{ integration: { eq: '<definition>' } }`). */
+const pinnedTo = (where: unknown): unknown =>
+	Predicate.isObject(where) && Predicate.isObject(where['integration'])
+		? where['integration']['eq']
+		: undefined;
+
+function syncRules({ m, at }: RuleContext): void {
+	for (const [model, c] of Object.entries(m.collections))
+		for (const [name, sync] of Object.entries(c.syncs ?? {})) {
+			const bad = (code: string, message: string) =>
+				at(`sync/${code}`, 'model', model, `syncs.${name}: ${message}`);
+			if (sync.with === 'file') {
+				if (sync.every !== undefined || sync.partitions !== undefined)
+					bad(
+						'file',
+						"a file sync runs on upload and export; every and partitions are a remote sync's"
 					);
+				for (const p of sync.parser ?? [])
+					if (typeof p === 'string') {
+						if (!BUILTIN_PARSERS.includes(p))
+							bad('parser', `'${p}' is no built-in parser (${BUILTIN_PARSERS.join(', ')})`);
+					} else {
+						const [top = '', sub] = p.type.split('/');
+						if (!MEDIA_TOPS.includes(top) || sub === undefined || !/^[\w.+-]+$/.test(sub))
+							bad('parser', `'${p.type}' is no registered media type (type/subtype)`);
+						if (p.extensions.length === 0 || p.extensions.some((e) => !/^\.[a-z0-9]+$/i.test(e)))
+							bad('parser', `a custom parser lists its file extensions ('.ofx')`);
+					}
+				continue;
 			}
+			const d = definition(m, sync.with);
+			if (d === undefined) {
+				bad('with', `with '${sync.with}' is 'file' or an integration definition`);
+				continue;
+			}
+			if (sync.parser !== undefined || sync.schema !== undefined || sync.context !== undefined)
+				bad(
+					'file',
+					"parser, schema and context are a file sync's; a remote read returns rows itself"
+				);
+			if (sync.every !== undefined && !/^[1-9]\d*(s|min|h|d)$/.test(sync.every))
+				bad('every', `'${sync.every}' is not a duration ('15min', '1h')`);
+			if (sync.partitions !== undefined && d.configuration?.[sync.partitions] === undefined)
+				bad('partitions', `'${sync.partitions}' is no configuration field of '${sync.with}'`);
+			// an FK pinned to the definition picks the instance per row; else a write goes through its one named connection
+			const pinned = Object.entries(m.relationships).some(
+				([key, r]) =>
+					key.startsWith(`${model}.`) &&
+					r.to === 'sys_integration' &&
+					pinnedTo(r.where) === sync.with
+			);
+			const slots = Object.values(m.connections).filter((x) => x.integration === sync.with).length;
+			if (sync.write === true && !pinned && slots !== 1)
+				bad(
+					'instance',
+					`a write goes through one instance of '${sync.with}': pin an FK to sys_integration (where: { integration: { eq: '${sync.with}' } }) or declare exactly one connection of it (there are ${slots})`
+				);
+		}
+}
+
+const ORIGIN = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*(:\d{1,5})?$/i;
+function embedRules({ m, at }: RuleContext): void {
+	const origins = (
+		code: string,
+		role: string,
+		name: string,
+		list: readonly string[] | undefined
+	) => {
+		for (const o of list ?? [])
+			if (!ORIGIN.test(o))
+				at(
+					code,
+					role,
+					name,
+					`embed: '${o}' is an origin, https://host[:port] (no path, no wildcard)`
+				);
+	};
+	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {}))
+		origins('kiosk/embed', 'kiosk', kiosk, spec.embed);
+	for (const [app, spec] of Object.entries(m.apps))
+		for (const [page, p] of Object.entries(spec.pages ?? {})) {
+			origins('app/embed', 'app', app, p.embed);
+			if (p.embed !== undefined && p.portal !== true)
+				at(
+					'app/embed',
+					'app',
+					app,
+					`page '${page}': only a portal page (portal: true) may be embedded`
+				);
 		}
 }
 
 const RULES = [
 	workspaceRules,
 	modelRules,
-	integrationRules,
 	automationRules,
 	policyRules,
 	visitorRules,
 	kioskRules,
-	internalRules
+	syncRules,
+	embedRules
 ] as const;
 
 export function checkRules(
@@ -609,8 +648,7 @@ function visitorShape(
 				if (k !== 'read' && k !== 'create')
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			if (g.read !== undefined) {
-				const declared = scopeObject(m, c, g.read)?.fields;
-				const fields = strings(declared) ? declared : undefined;
+				const fields = scopeObject(m, c, g.read)?.fields;
 				const label = list(m.models[c]?.label);
 				if (fields === undefined) bad(`${c}: a ${options.title} read grant lists its fields`);
 				else if (label.some((l) => !fields.includes(l)))
@@ -627,4 +665,133 @@ function visitorShape(
 				}
 		}
 	}
+}
+
+const LOOPS = new Set([
+	ts.SyntaxKind.ForStatement,
+	ts.SyntaxKind.ForOfStatement,
+	ts.SyntaxKind.ForInStatement,
+	ts.SyntaxKind.WhileStatement,
+	ts.SyntaxKind.DoStatement
+]);
+const ITERATORS = new Set([
+	'map',
+	'flatMap',
+	'forEach',
+	'filter',
+	'reduce',
+	'some',
+	'every',
+	'find'
+]);
+/** The property a function literal is the value of (`transform: function* …`, `*transform(…)`), and its object. */
+function slot(fn: ts.Node): { name: string; object: ts.Node } | undefined {
+	const at = ts.isMethodDeclaration(fn) ? fn : fn.parent;
+	if (at === undefined || !(ts.isPropertyAssignment(at) || ts.isMethodDeclaration(at)))
+		return undefined;
+	return ts.isIdentifier(at.name) || ts.isStringLiteral(at.name)
+		? { name: at.name.text, object: at.parent }
+		: undefined;
+}
+/** The property an object literal is the value of (`create: { … }`). */
+const owner = (object: ts.Node): string | undefined =>
+	ts.isObjectLiteralExpression(object) &&
+	ts.isPropertyAssignment(object.parent) &&
+	(ts.isIdentifier(object.parent.name) || ts.isStringLiteral(object.parent.name))
+		? object.parent.name.text
+		: undefined;
+/** `create.transform`, `update.transform` or `delete.check`. */
+const writeCallback = (fn: ts.Node): boolean => {
+	const s = slot(fn);
+	if (s === undefined) return false;
+	const verb = owner(s.object);
+	return s.name === 'check'
+		? verb === 'delete'
+		: s.name === 'transform' && (verb === 'create' || verb === 'update');
+};
+/** `ctx.db.query(…)` or `ctx.db.after(…)`. */
+const workspaceRead = (node: ts.Expression): boolean => {
+	while (ts.isParenthesizedExpression(node)) node = node.expression;
+	if (!ts.isCallExpression(node)) return false;
+	const callee = node.expression;
+	return (
+		ts.isPropertyAccessExpression(callee) &&
+		(callee.name.text === 'query' || callee.name.text === 'after') &&
+		ts.isPropertyAccessExpression(callee.expression) &&
+		callee.expression.name.text === 'db'
+	);
+};
+/** A function passed to an array iteration (`rows.map(…)`, `forEach`, …). */
+const iteration = (fn: ts.Node): boolean =>
+	ts.isCallExpression(fn.parent) &&
+	fn.parent.arguments.some((a) => a === fn) &&
+	ts.isPropertyAccessExpression(fn.parent.expression) &&
+	ITERATORS.has(fn.parent.expression.name.text);
+
+/**
+ * The checks over the model sources (`src/data/model/<m>/+model.ts`), which see what the evaluated literal cannot:
+ * `write/read-in-loop`, a `yield*` of `ctx.db.query`/`ctx.db.after` inside a loop or an array iteration in a write callback
+ * (a write callback reads at most twice per call, whatever the batch: read once with `{ in }` or a keyed batch, then map);
+ * and `notify/via`, a notice's `via` naming anything but a connection of a conversation definition.
+ */
+export function sourceRules(
+	m: EngineManifest,
+	sources: readonly { path: string; text: string }[]
+): Finding[] {
+	const out: Finding[] = [];
+	for (const { path, text } of sources) {
+		const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		const report = (code: string, node: ts.Node, message: string) => {
+			const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+			out.push({ code, path, line, message: `${path}:${line}: ${message}` });
+		};
+		const visit = (node: ts.Node): void => {
+			if (
+				ts.isYieldExpression(node) &&
+				node.asteriskToken !== undefined &&
+				node.expression !== undefined &&
+				workspaceRead(node.expression)
+			) {
+				let looped = false;
+				for (let at: ts.Node | undefined = node.parent; at !== undefined; at = at.parent) {
+					if (LOOPS.has(at.kind)) looped = true;
+					if (!ts.isFunctionLike(at)) continue;
+					if (writeCallback(at)) {
+						if (looped)
+							report(
+								'write/read-in-loop',
+								node,
+								"a write callback reads inside a loop over its rows, and a call reads at most twice: read every row's data once (`{ in }` or a keyed batch), then map"
+							);
+						break;
+					}
+					if (iteration(at)) looped = true;
+				}
+			}
+			if (
+				ts.isPropertyAssignment(node) &&
+				ts.isIdentifier(node.name) &&
+				node.name.text === 'via' &&
+				ts.isArrayLiteralExpression(node.initializer)
+			) {
+				let notify = false;
+				for (let at: ts.Node | undefined = node.parent; at !== undefined && !notify; at = at.parent)
+					notify = ts.isFunctionLike(at) && slot(at)?.name === 'notify';
+				if (notify)
+					for (const e of node.initializer.elements)
+						if (
+							ts.isStringLiteralLike(e) &&
+							!conversational(definition(m, m.connections[e.text]?.integration ?? ''))
+						)
+							report(
+								'notify/via',
+								e,
+								`a notice goes through a connection of a conversation definition (the inbox always gets it); '${e.text}' is not one`
+							);
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(file);
+	}
+	return out;
 }

@@ -1,8 +1,8 @@
 // Conversations and messages (§5.9, rules 57–63): the transcript, the queue and an instance's message history are the same
 // `sys_message` rows, the system models `src/system/data/model/+sys_{conversation,message}.model.ts`.
-import { Effect, Predicate, Schema } from 'effect';
+import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
-import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
+import { STUDIO_ROLES } from '../../protocol/schema.ts';
 import { Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
@@ -22,15 +22,9 @@ export type As =
 	| { policies: readonly string[]; run: string };
 
 /** `verdicts` counts incomplete verdicts; the verifier runs again after each, with no stall (rule 63a, today's behaviour). */
-export type Plan = {
-	revision: number;
-	body: string;
-	status: 'draft' | 'active' | 'verified';
-	checkpoint: number;
-	verdicts: number;
-};
+export type Plan = Types.Mutable<typeof PlanSchema.Type>;
 /** The conversation's checklist (today's `todo`): unique ids, at most one `doing`, `done` is terminal with its text unchanged. */
-export type Goal = { id: string; text: string; status: 'pending' | 'doing' | 'done' };
+export type Goal = Types.Mutable<typeof GoalSchema.Type>;
 const PlanSchema = Schema.Struct({
 	revision: Schema.Number,
 	body: Schema.String,
@@ -81,7 +75,7 @@ export type Meta =
 export type Usage = {
 	-readonly [K in keyof typeof UsageSchema.Type]: (typeof UsageSchema.Type)[K];
 };
-export type ToolCall = { id: string; name: string; input: Json; invalid?: string };
+export type ToolCall = Types.Mutable<typeof ToolCallSchema.Type>;
 /** Rule 59: one per write outcome of a turn. */
 export type Receipt = {
 	outcome: 'committed' | 'pendingApproval';
@@ -149,12 +143,57 @@ const MetaSchema = Schema.Union([
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
 	Schema.Struct({ tag: Schema.Literal('note') })
 ]);
-export const Message = Schema.Struct({
+/** Unnamed keys a content or file object carries stay as written. */
+const Rest = [Schema.Record(Schema.String, Schema.Json)] as const;
+/** A file a message carries or a step made (a FileRef `{ id, name, mime, bytes }`; no `id` when its bytes never arrived). */
+export const FileRef = Schema.StructWithRest(
+	Schema.Struct({
+		id: Schema.optionalKey(Schema.String),
+		name: Schema.optionalKey(Schema.String),
+		mime: Schema.optionalKey(Schema.String),
+		bytes: Schema.optionalKey(Schema.Number),
+		caption: Schema.optionalKey(Schema.String),
+		text: Schema.optionalKey(Schema.String)
+	}),
+	Rest
+);
+export type FileRef = typeof FileRef.Type;
+/**
+ * A tool step's content (`role: 'tool'`): its call id and tool, the input as the panel shows it, the result once it
+ * answered, the tool's Studio role and how long it ran.
+ */
+export const StepContent = Schema.StructWithRest(
+	Schema.Struct({
+		id: Schema.String,
+		name: Schema.String,
+		args: Schema.optionalKey(Schema.String),
+		result: Schema.optionalKey(Schema.Json),
+		studio: Schema.optionalKey(Schema.String),
+		ms: Schema.optionalKey(Schema.Number)
+	}),
+	Rest
+);
+/**
+ * Every other row's content: a message's text and the zone it was sent from, a reply's reasoning and tool calls. An
+ * inference's prompt is a bare string; an inbound row the agent never received has none.
+ */
+export const SaidContent = Schema.Union([
+	Schema.Null,
+	Schema.String,
+	Schema.StructWithRest(
+		Schema.Struct({
+			text: Schema.optionalKey(Schema.String),
+			tz: Schema.optionalKey(Schema.String),
+			reasoning: Schema.optionalKey(Schema.String),
+			toolCalls: Schema.optionalKey(Schema.Array(ToolCallSchema))
+		}),
+		Rest
+	)
+]);
+const MessageFields = {
 	id: Schema.String,
 	conversation: Schema.String,
 	seq: Schema.Number,
-	role: Schema.NullOr(Schema.Literals(['user', 'assistant', 'tool', 'system'])),
-	content: Schema.Json,
 	text: Schema.NullOr(Schema.String),
 	state: Schema.NullOr(
 		Schema.Literals([
@@ -177,7 +216,7 @@ export const Message = Schema.Struct({
 	addressed: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 	sender: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	sender_name: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	files: Schema.optionalKey(Schema.Json),
+	files: Schema.optionalKey(Schema.Array(FileRef)),
 	delivered_turn: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	provider_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	reply_to: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -188,7 +227,16 @@ export const Message = Schema.Struct({
 	deleted_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	read_by: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	about: Schema.optionalKey(Schema.Json)
-}).annotate({ identifier: 'sys_message' });
+};
+/** A `sys_message` row, its `content` decoded by `role`: a tool step, or what a person, the agent or the engine said. */
+export const Message = Schema.Union([
+	Schema.Struct({ ...MessageFields, role: Schema.Literal('tool'), content: StepContent }),
+	Schema.Struct({
+		...MessageFields,
+		role: Schema.NullOr(Schema.Literals(['user', 'assistant', 'system'])),
+		content: SaidContent
+	})
+]).annotate({ identifier: 'sys_message' });
 export type MessageRow = typeof Message.Type;
 export const ambient = (r: MessageRow): boolean => r.addressed === false;
 /** Who wrote a row, for the transcript and `read_messages`. */
@@ -274,7 +322,6 @@ export const clip = (v: Json | undefined, max = 600): string => {
 };
 /** A step's declared Studio role (`HostTool.studio`), as the engine recorded it with the step. */
 const StudioRoleSchema = Schema.Literals(STUDIO_ROLES);
-const isPhase = Schema.is(Schema.Literals(STUDIO_PHASES));
 /** What a Studio result says it shows, for the panel's caption: these facts, at its top level. */
 const ABOUT = [
 	'environment',
@@ -301,6 +348,36 @@ function aboutOf(result: { readonly [k: string]: unknown }): Record<string, stri
 	return Object.keys(out).length === 0 ? undefined : out;
 }
 
+const isStudio = Schema.is(StudioRoleSchema);
+const isFileRef = Schema.is(FileRef);
+/** The runs one `act` write started (`run`) and queued (`runs`); a write of another shape started none. */
+const ranOf = Schema.decodeUnknownOption(
+	Schema.Struct({
+		run: Schema.optionalKey(Schema.String),
+		runs: Schema.optionalKey(
+			Schema.Array(Schema.Struct({ run: Schema.optionalKey(Schema.String) }))
+		)
+	})
+);
+/**
+ * What the panel reads of a step's result: its `error`, the `files` it stored or collected, the run a `wait` `settled`
+ * (whose answer may be a file), a sub-agent's `conversation`, an `act`'s writes (`results`, else the one), a
+ * `preview` URL and a held `approval`. A result of any other shape shows none of them.
+ */
+const Outcome = Schema.Struct({
+	results: Schema.optionalKey(Schema.Array(Schema.Json)),
+	error: Schema.optionalKey(Schema.Json),
+	files: Schema.optionalKey(Schema.Array(Schema.Json)),
+	settled: Schema.optionalKey(
+		Schema.NullOr(Schema.Struct({ result: Schema.optionalKey(Schema.Json) }))
+	),
+	conversation: Schema.optionalKey(Schema.String),
+	preview: Schema.optionalKey(Schema.String),
+	approval: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
+});
+const outcomeOf = Schema.decodeUnknownOption(Outcome);
+const NO_OUTCOME: typeof Outcome.Type = {};
+
 /** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
 export const isStaff = (a: Authority) =>
 	a.admin || (a.actor.kind === 'member' && !a.actor.external);
@@ -309,46 +386,42 @@ export const isStaff = (a: Authority) =>
  * for a row the panel leaves out (a cancelled input, and outside an instance's thread an ambient row no member posted).
  */
 export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): AgentRow | null {
+	if ((!thread && ambient(r) && r.as === null) || r.state === 'cancelled') return null;
 	const meta = r.meta,
-		step: RowData = Schema.is(Schema.Record(Schema.String, Schema.Json))(r.content)
-			? r.content
-			: {},
-		// a tool step offers the files it stored or collected: a document's or sandbox output's `files`, and the file a
-		// finished run answered (an export collected with `wait`)
-		result = r.role === 'tool' && Predicate.isObject(step.result) ? step.result : {},
-		settled = Predicate.isObject(result['settled']) ? result['settled']['result'] : undefined,
-		// a run answers its file itself or under a key (`{ file }`)
-		ran = Predicate.isObject(settled) ? [settled, ...Object.values(settled)] : [],
-		made = (Array.isArray(result['files']) ? result['files'] : ran).filter(
-			(f) => Predicate.isObject(f) && typeof f['id'] === 'string' && typeof f['mime'] === 'string'
+		step = r.role === 'tool' ? r.content : null,
+		said = r.role !== 'tool' && typeof r.content === 'object' ? r.content : null,
+		outcome =
+			step === null ? NO_OUTCOME : Option.getOrElse(outcomeOf(step.result), () => NO_OUTCOME);
+	// a tool step offers the files it stored or collected: a document's or sandbox output's `files`, and the file a
+	// finished run answered (an export collected with `wait`), itself or under a key (`{ file }`)
+	const answer = outcome.settled?.result,
+		ran = Predicate.isObject(answer) ? [answer, ...Object.values(answer)] : [],
+		offered: readonly unknown[] = outcome.files ?? ran,
+		made = offered.filter(
+			(f): f is FileRef => isFileRef(f) && f.id !== undefined && f.mime !== undefined
 		),
-		files = Array.isArray(r.files) && r.files.length > 0 ? r.files : made;
-	const child =
-		step.name === 'subagent'
-			? Predicate.isObject(step.result)
-				? step.result['conversation']
-				: undefined
-			: undefined; // a `spawn` answers its conversation
-	// an `act` answers the run it started (`run`) and the runs its writes queued (`runs`), one write or `results` of them
+		files = r.files !== undefined && r.files.length > 0 ? r.files : made;
+	// a `spawn` answers its conversation; an `act` the runs it started, one write or `results` of them
+	const child = step?.name === 'subagent' ? outcome.conversation : undefined;
 	const runs =
-		step.name === 'act' && Predicate.isObject(step.result)
+		step?.name === 'act'
 			? [
 					...new Set(
-						[step.result, ...(Array.isArray(step.result['results']) ? step.result['results'] : [])]
-							.filter(Predicate.isObject)
-							.flatMap((o) => [
-								o['run'],
-								...(Array.isArray(o['runs'])
-									? o['runs'].map((x) => (Predicate.isObject(x) ? x['run'] : undefined))
-									: [])
-							])
-							.filter((x): x is string => typeof x === 'string')
+						[step.result, ...(outcome.results ?? [])]
+							.flatMap((o) => Option.toArray(ranOf(o)))
+							.flatMap((o) => [o.run, ...(o.runs ?? []).map((x) => x.run)])
+							.filter((x): x is string => x !== undefined)
 					)
 				]
 			: [];
-	const studio = Schema.is(StudioRoleSchema)(step.studio) ? step.studio : undefined,
-		about = studio !== undefined || step.name === 'preview_show' ? aboutOf(result) : undefined;
-	if ((!thread && ambient(r) && r.as === null) || r.state === 'cancelled') return null;
+	const role = step?.studio,
+		studio = isStudio(role) ? role : undefined,
+		about =
+			step !== null && (studio !== undefined || step.name === 'preview_show')
+				? aboutOf(Predicate.isObject(step.result) ? step.result : {})
+				: undefined,
+		// a live change the host holds for the person (`approval.decide`): its id, never clipped
+		approval = outcome.approval?.id;
 	return {
 		id: r.id,
 		seq: Number(r.seq),
@@ -362,49 +435,38 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		...(files.length === 0
 			? {}
 			: {
-					files: files.map((f) => {
-						const x = Predicate.isObject(f) ? f : {};
-						return {
-							...(typeof x.id === 'string' ? { id: x.id } : {}),
-							name: String(x.name ?? 'file'),
-							mime: String(x.mime ?? '')
-						};
-					})
+					files: files.map((f) => ({
+						...(f.id === undefined ? {} : { id: f.id }),
+						name: f.name ?? 'file',
+						mime: f.mime ?? ''
+					}))
 				}),
 		...(staff && meta?.tag === 'failed' && meta.detail !== undefined
 			? { detail: meta.detail }
 			: {}), // hook:agent-ui — rule 59: the reason reaches staff, never a sender
 		...(meta?.tag === 'confirm'
 			? {
-					call: {
-						name: meta.call.name,
-						input: meta.call.input,
-						...(studio === undefined ? {} : { studio })
-					}
+					call: { name: meta.call.name, input: meta.call.input }
 				}
 			: {}),
-		...(r.state === 'approved' && isPhase(step.progress) ? { progress: step.progress } : {}),
 		// a confirmation card once settled (state cleared) is a step like any other: its outcome shows outside the fold
-		...(r.role === 'tool' && (meta?.tag !== 'confirm' || r.state === null)
+		...(step !== null && (meta?.tag !== 'confirm' || r.state === null)
 			? {
 					tool: {
-						name: String(step.name ?? 'tool'),
-						failed:
-							typeof step.result === 'object' &&
-							step.result !== null &&
-							!Array.isArray(step.result) &&
-							'error' in step.result,
-						...(typeof child === 'string' ? { child } : {}),
+						name: step.name,
+						failed: outcome.error !== undefined,
+						...(child === undefined ? {} : { child }),
 						...(runs.length === 0 ? {} : { runs }),
 						...(r.state === 'running' ? { running: true } : {}),
-						...(typeof step.args === 'string' ? { args: step.args } : {}),
+						...(step.args === undefined ? {} : { args: step.args }),
 						...(step.result === undefined
 							? {}
 							: { result: clip(step.result, studio === 'logs' ? 20000 : 600) }),
-						...(typeof result['preview'] === 'string' ? { preview: result['preview'] } : {}),
+						...(outcome.preview === undefined ? {} : { preview: outcome.preview }),
+						...(approval === undefined ? {} : { approval }),
 						...(about === undefined ? {} : { about }),
 						...(studio === undefined ? {} : { studio }),
-						...(typeof step.ms === 'number' ? { ms: step.ms } : {})
+						...(step.ms === undefined ? {} : { ms: step.ms })
 					}
 				}
 			: {}),
@@ -418,8 +480,8 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 					}
 				}
 			: {}),
-		...(r.role === 'assistant' && typeof step.reasoning === 'string' && step.reasoning !== ''
-			? { reasoning: step.reasoning }
+		...(r.role === 'assistant' && said?.reasoning !== undefined && said.reasoning !== ''
+			? { reasoning: said.reasoning }
 			: {}), // L-BOLT-548
 		...(meta?.tag === 'compact'
 			? {

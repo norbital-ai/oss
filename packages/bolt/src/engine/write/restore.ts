@@ -8,7 +8,7 @@ import type { ActRequest, ActResult } from '../services.ts';
 import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
-import { q, SYSTEM_COLUMNS } from '../../protocol/catalog.ts';
+import { q, SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { lowerRead, readEngine } from '../query/engine.ts';
 import { readHistory } from '../query/history.ts';
 import { decodeValue } from './flatten.ts';
@@ -37,13 +37,15 @@ const Probe = Schema.Struct({ kept: Row, differs: Schema.Array(Schema.String) })
 
 /**
  * What restoring `target` writes and leaves. `authority` null is the engine's own rollback of an approval request
- * (rules 44–46): the workspace's stored past, every own stored field, no grant or state edge to honour.
+ * (rules 44–46): the workspace's stored past, every own stored field, no grant or state edge to honour. Only that
+ * internal rollback may count targets its same plan will recreate as present.
  */
 export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 	e: Pick<WriteEngine, 'manifest' | 'db'>,
 	target: RestoreTarget,
 	authority: Authority | null,
-	bindings: Bindings
+	bindings: Bindings,
+	prospectiveTargets?: ReadonlySet<string>
 ): Effect.fn.Return<Previewed, EngineError> {
 	const m = e.manifest,
 		cat = catalogOf(m),
@@ -213,9 +215,7 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 			}
 			const reasons = cap.reasons;
 			if (
-				reasons.some(
-					(r) => r === 'integrationOwned' || r === 'ownedParent' || r === 'ownedParentLocked'
-				)
+				reasons.some((r) => r === 'syncOwned' || r === 'ownedParent' || r === 'ownedParentLocked')
 			) {
 				skip('readOnly');
 				continue;
@@ -232,7 +232,7 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 				approval = true;
 			}
 		}
-		// a to-one link is restored only while its target exists; the target itself is never written
+		// ordinary restore never writes the target; rollback can recreate it in the same decision
 		if (restored !== null && c.model.one.has(name)) {
 			const ref: readonly [string, string] | null =
 				typeof restored === 'string'
@@ -242,7 +242,11 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 						  typeof restored['id'] === 'string'
 						? [restored['collection'], restored['id']]
 						: null;
-			if (ref === null || !(yield* readRows(e.db, cat, [ref])).has(k(...ref))) {
+			if (
+				ref === null ||
+				(!(authority === null && prospectiveTargets?.has(k(...ref)) === true) &&
+					!(yield* readRows(e.db, cat, [ref])).has(k(...ref)))
+			) {
 				skip('deletedTarget');
 				continue;
 			}

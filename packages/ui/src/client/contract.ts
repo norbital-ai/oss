@@ -2,32 +2,36 @@
 import type { Effect, Stream } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Value, FileRef, FileUrlOptions } from '@norbital-ai/std/kind';
-import type { Page, Row, Values } from '../collection/types.js';
+import type { Page, Values } from '../collection/types.js';
 import type { RecordCapabilities, RecordParentContext, RestorePreview } from '../record/types.js';
 import type { Offer } from '../filter/filter.js';
 export type { Json } from '@norbital-ai/std/wire';
 export type { FileRef } from '@norbital-ai/std/kind';
-export type WireRead = {
-	m:
-		| 'read'
-		| 'inbox'
-		| 'get'
-		| 'aggregate'
-		| 'similar'
-		| 'history'
-		| 'query'
-		| 'transcript'
-		| 'conversations';
-	a: readonly Json[];
-};
+/** A read's wire form (`Query<T>['read']`): the host's method and its arguments. */
+export type WireRead = { m: string; a: readonly Json[] };
 export type ReadError = Error &
 	(
 		| { readonly _tag: 'ReadFailed'; readonly code: string; readonly message: string }
 		| { readonly _tag: 'TransportFailed'; readonly status: number; readonly message: string }
 	);
-export type Q<T> = Effect.Effect<T, ReadError> & { readonly read: WireRead };
+/**
+ * A read (`query`, `aggregate`, `history`), as bolt's `Query<T>`: read in a component (`.current`, `.loading`, `.error`)
+ * it is live, subscribing on the first reactive read and unsubscribing 30 s after its last reader is destroyed; awaited
+ * outside a reactive context it reads once; and it is an Effect to `yield*`. `read` is its wire form.
+ */
+export interface Query<T> extends Effect.Effect<T, ReadError>, PromiseLike<T> {
+	/** The latest answer; `undefined` until the first arrives. */
+	readonly current: T | undefined;
+	/** `true` until the first answer, and while the arguments' new answer is on its way. */
+	readonly loading: boolean;
+	readonly error: ReadError | undefined;
+	readonly read: WireRead;
+}
 export type LiveError = Error & { code: string; message: string };
+/** A host Stream a view follows (the run rows of `runs`). */
 export type Live<T> = Stream.Stream<T, LiveError | ReadError>;
+/** The page's clock (`clock(unit)`): today in the workspace zone (`YYYY-MM-DD`) and the instant (ISO). */
+export type Clock = { readonly today: string; readonly now: string };
 export type Outcome =
 	| {
 			kind: 'committed';
@@ -44,9 +48,11 @@ export type Outcome =
 			kind: 'conflict';
 			records: readonly { collection: string; id: string; fields: readonly string[] }[];
 	  }
-	| { kind: 'unknown'; invocation: string };
+	| { kind: 'unknown'; invocation: string }
+	/** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`runs`). */
+	| { kind: 'running'; run: string };
 /** Fields needed to present an outcome; actions may return any typed output. */
-export type ActSuccess = Extract<Outcome, { kind: 'committed' | 'pendingApproval' }>;
+export type ActSuccess = Extract<Outcome, { kind: 'committed' | 'pendingApproval' | 'running' }>;
 export type ActFailure = Error &
 	(
 		| {
@@ -66,7 +72,7 @@ export type ActFailure = Error &
 export type OutcomeFeedback =
 	| { kind: Exclude<Outcome['kind'], 'refused'> }
 	| Pick<Extract<Outcome, { kind: 'refused' }>, 'kind' | 'message'>;
-/** `start`'s answer: the run's id and automation at once, its start's outcome when awaited. */
+/** A queued run's ids immediately and its admission outcome when awaited; `runs` follows execution. */
 export type RunHandle = Effect.Effect<Outcome> & {
 	readonly id: string;
 	/** Every run a bulk start queued (`id` is the first). */
@@ -86,17 +92,14 @@ export type RunRow = {
 	started?: string | null;
 };
 
-/** An approval move as `approvals.process` names it (the host's state machine decides which a viewer may take). */
-export type ApprovalStatus =
-	| 'APPROVED'
-	| 'REJECTED'
-	| 'REQUEST_FOR_CHANGE'
-	| 'RESUBMITTED'
-	| 'WITHDRAWN'
-	| 'SUPERSEDED'
-	| 'COMMENT'
-	/** An administrator closes a request whose collection or record a release removed (it ends Withdrawn). */
-	| 'CLOSED';
+/** A decision on a request's current step (`approvals.decide`); a superseder's `approve` supersedes. */
+export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges';
+/** One step of a request's flow as it was snapshotted when the request opened (or was resubmitted): decided by any of its teams or users. */
+export type ApprovalStep = {
+	readonly name: string;
+	readonly teams: readonly string[];
+	readonly users: readonly string[];
+};
 type ApprovalWho = { ref: string; name: string | null };
 /** One approval request as its participants and authorized record readers see it; the host decides every move. */
 export type ApprovalView = {
@@ -105,75 +108,66 @@ export type ApprovalView = {
 	record: string;
 	action: string;
 	at: string;
-	/** ONGOING, CHANGES_REQUESTED, APPROVED, REJECTED, WITHDRAWN or SUPERSEDED. */
+	/** Pending, ChangesRequested, Approved, Rejected or Superseded. */
 	status: string;
+	/** The current step (from 0). */
 	step: number;
-	steps: readonly (readonly string[])[];
+	steps: readonly ApprovalStep[];
 	superseded_by: readonly string[];
-	/** Current source labels; captured handles and native eligibility remain authoritative. */
+	/** Current labels of the steps' team handles and user ids; captured handles and native eligibility remain authoritative. */
 	teamNames: Readonly<Record<string, string>>;
+	userNames: Readonly<Record<string, string>>;
 	requestor: ApprovalWho;
-	/** Every interaction, oldest first: the request, each transition, each comment, with what a rollback did. */
+	/** Every move, oldest first, each on the step it was taken at, with what a rollback did. */
 	log: readonly {
-		move:
-			| 'request'
-			| 'approve'
-			| 'reject'
-			| 'requestChanges'
-			| 'resubmit'
-			| 'withdraw'
-			| 'supersede'
-			| 'comment'
-			| 'close';
+		move: 'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede';
 		by: ApprovalWho;
 		at: string;
 		from: string | null;
 		to: string;
 		step: number;
 		reason: string | null;
+		/** A resubmission's changed fields. */
+		changed?: readonly string[] | undefined;
 		rolledBack?:
 			| readonly { collection: string; id: string; action: 'restored' | 'removed' | 'recreated' }[]
 			| undefined;
 		skipped?:
 			readonly { collection: string; id: string; field: string; reason: string }[] | undefined;
 	}[];
-	/** The records the provisional change holds: committed already, rolled back on rejection or withdrawal. */
+	/** The records the provisional change holds: committed already, rolled back on rejection. */
 	records: readonly { collection: string; id: string; op: 'create' | 'update' | 'delete' }[];
-	/** The moves this viewer may take now, straight from the host's transition table. */
-	moves: readonly { status: ApprovalStatus; reason: 'required' | 'optional' }[];
+	/** The decisions this viewer may take now, straight from the host's transition table. */
+	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 	mine: boolean;
 	participant: boolean;
 };
-/** A row an open approval request holds carries it as `$approval` (step counts from 0). */
+/** A row an open approval request holds carries it as `$approval` (step counts from 0; `steps[step]` decides now). */
 export type RowApproval = {
 	readonly requestId: string;
 	readonly state: 'Pending' | 'ChangesRequested';
 	readonly step: number;
-	readonly steps: number;
+	readonly steps: readonly ApprovalStep[];
 	readonly requestedBy: string;
-	readonly waitingOn: readonly string[];
 };
-/** The client a view reads and acts through (the page's `$bolt`), as `provideBolt` hands it to the views. */
+/**
+ * The client a view reads and acts through (the page's `$bolt`, as bolt's `PageBolt`), as `provideBolt` hands it to the
+ * views. Reads are `query`, `aggregate` and `history`, each a `Query<T>` of the answer the caller types (a view types
+ * `Page<RowOf<C>>` by the collection it names).
+ */
 export type ViewBolt = {
-	read<T = Page>(collection: string, options: Value): Q<T>;
-	/** `{ revision }`: the record as of that revision (L-BOLT-181), for the record shell's scrubber. */
-	get<T = Row | null>(
-		collection: string,
-		id: string,
-		select?: Json,
-		options?: { revision?: number }
-	): Q<T>;
-	aggregate<T = readonly Values[]>(collection: string, options: Value): Q<T>;
-	history<T = Json>(collection: string, id: string, options?: { at?: Json }): Q<T>;
-	query<T = Json>(name: string, input: Value): Q<T>;
-	/** A named similarity search (§3.3.4): `similar(c, '<name>', input, { where?, select?, limit })`, nearest first. */
-	similar?<T = readonly Row[]>(
-		collection: string,
-		search: string,
-		input: Value,
-		options: Value
-	): Q<T>;
-	live<T>(q: Q<T>, options?: { every?: string; on?: readonly string[] }): Live<T>;
+	/**
+	 * A model's rows (`{ where?, select?, orderBy?, search?, limit | all, after? }`), one record (`{ id, select? }`, or
+	 * `{ id, revision }` as of that revision), the nearest rows of a search index (`{ search: { <index>: input }, where?,
+	 * select?, limit }`), or a declared query (`'<model>.<query>'` and its input).
+	 */
+	query<T = Page>(target: string, args: Value): Query<T>;
+	/** Without `by`, one row over the scope; with `by`, a page of buckets. */
+	aggregate<T = readonly Values[]>(model: string, args: Value): Query<T>;
+	/** A record's revisions, newest first, or from `at` (`{ instant } | { revision } | { before }`). */
+	history<T = Json>(model: string, id: string, options?: { at?: Json }): Query<T>;
+	/** With a unit, reactive (it changes at each minute, hour or day in the workspace zone); without, the page's open. */
+	clock(unit?: 'minute' | 'hour' | 'day'): Clock;
 	recordCapabilities?(
 		collection: string,
 		id: string,
@@ -234,15 +228,15 @@ export type ViewBolt = {
 		}[]
 	): Effect.Effect<{ fields: readonly Offer[] }, Error>;
 	approvals: {
-		/** One move of the request's state machine; `reason` is the decision's reason, the comment or the resubmit note. */
-		process(
+		/** Decides the request's current step; `reason` is required for `reject` and `requestChanges` (and a superseder's approve). */
+		decide(
 			requestId: string,
-			decision: { status: ApprovalStatus; reason?: string }
+			decision: { decision: ApprovalDecision; reason?: string }
 		): Effect.Effect<ActSuccess, ActFailure>;
-		/** The approval view (§3.8): the request, its flow and decisions, and what the viewer may do; `null` when not visible. */
-		get?(requestId: string): Effect.Effect<ApprovalView | null, Error>;
+		/** The approval view: the request, its steps and timeline, and what the viewer may do; `null` when not visible. */
+		get(requestId: string): Effect.Effect<ApprovalView | null, Error>;
 		/** The approval views the caller may see, open ones unless `all`, by `collection`, `records` or request `ids`. */
-		list?(filter?: {
+		list(filter?: {
 			collection?: string;
 			records?: readonly string[];
 			ids?: readonly string[];

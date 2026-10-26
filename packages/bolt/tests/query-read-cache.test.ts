@@ -22,6 +22,8 @@ describe('planning-scoped SQL answer cache', () => {
 							return statements.map((s) => ({ rows: [{ n: s.params[0]! }], affected: 1 }));
 						}),
 					write: unused,
+					session: () =>
+						Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 					transaction: unused
 				});
 				const cached = yield* memoReads(yield* coalescing(db));
@@ -52,6 +54,8 @@ describe('planning-scoped SQL answer cache', () => {
 								return Effect.fail(failure);
 							}),
 						write: unused,
+						session: () =>
+							Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 						transaction: unused
 					})
 				);
@@ -78,6 +82,8 @@ describe('planning-scoped SQL answer cache', () => {
 						return statements.map(() => ({ rows: [], affected: 0 }));
 					}),
 				write: unused,
+				session: () =>
+					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 				transaction: unused
 			});
 			const first = yield* memoReads(db),

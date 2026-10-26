@@ -3,14 +3,17 @@
 // (`modelCall`) cuts a long generation into a continued step instead of a `timeout` (rule 63); tool calls assemble from
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
-import { Effect, Option, Predicate, Queue, Schema, Stream } from 'effect';
+import { Clock, Effect, Option, Predicate, Queue, Schema, Stream } from 'effect';
 import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/unstable/http';
+import { csvOf } from '@norbital-ai/std/csv';
 import { FacilityFailure } from '../../decl/errors.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { AiEvent } from '../ports.ts';
 import type { Json } from '../../decl/values.ts';
 import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
-import { csvOf, xlsxCells, xlsxSheets } from '../files/xlsx.ts';
+import { xlsxCells, xlsxSheets } from '../files/xlsx.ts';
+import { toBase64 } from '../crypto.ts';
+import { SaidContent, StepContent } from './schema.ts';
 
 export type OpenAiChatConfig = {
 	/** The API base, e.g. `https://openrouter.ai/api/v1`. */
@@ -27,6 +30,18 @@ export type OpenAiChatConfig = {
 };
 
 type Wire = { [k: string]: unknown };
+const inFlightBudget = Schema.decodeUnknownOption(
+	Schema.fromJsonString(
+		Schema.Struct({
+			error: Schema.Struct({
+				metadata: Schema.Struct({
+					reason: Schema.Literal('in_flight_budget_exhausted'),
+					headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String))
+				})
+			})
+		})
+	)
+);
 const textOf = (c: Json): string =>
 	typeof c === 'string'
 		? c
@@ -36,37 +51,40 @@ const textOf = (c: Json): string =>
 const TEXT = /^(text\/|application\/(json|csv|xml|[\w.-]+\+(json|xml))$)/;
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const dataUrl = (f: { mime: string; bytes: Uint8Array }) =>
-	`data:${f.mime};base64,${Buffer.from(f.bytes).toString('base64')}`;
+	`data:${f.mime};base64,${toBase64(f.bytes)}`;
 
+/** The engine's messages decoded as its transcript rows hold them, by role. */
+const stepOf = Schema.decodeUnknownOption(StepContent),
+	saidOf = Schema.decodeUnknownOption(SaidContent);
 /** Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages; files ride the last user message. */
 function messagesOf(r: AiRequest): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
 	for (const m of r.messages) {
-		const c = Predicate.isObject(m.content) ? m.content : {};
-		if (m.role === 'tool')
+		if (m.role === 'tool') {
+			const step = Option.getOrUndefined(stepOf(m.content));
 			out.push({
 				role: 'tool',
-				tool_call_id: String(c['id'] ?? ''),
-				content: JSON.stringify(c['result'] ?? null)
+				tool_call_id: step?.id ?? '',
+				content: JSON.stringify(step?.result ?? null)
 			});
-		else if (m.role === 'assistant') {
-			const calls = Array.isArray(c['toolCalls'])
-				? c['toolCalls'].filter((x) => Predicate.isObject(x))
-				: [];
+		} else if (m.role === 'assistant') {
+			const said = Option.getOrUndefined(saidOf(m.content)),
+				reply = typeof said === 'object' ? said : null,
+				calls = reply?.toolCalls ?? [];
 			// L-BOLT-412: the stored reasoning goes back with its reply (OpenRouter's `reasoning` on an assistant message)
 			out.push({
 				role: 'assistant',
 				content: textOf(m.content),
-				...(typeof c['reasoning'] === 'string' && c['reasoning'] !== ''
-					? { reasoning: c['reasoning'] }
-					: {}),
+				...(reply?.reasoning === undefined || reply.reasoning === ''
+					? {}
+					: { reasoning: reply.reasoning }),
 				...(calls.length === 0
 					? {}
 					: {
 							tool_calls: calls.map((t) => ({
-								id: t['id'],
+								id: t.id,
 								type: 'function',
-								function: { name: t['name'], arguments: JSON.stringify(t['input'] ?? {}) }
+								function: { name: t.name, arguments: JSON.stringify(t.input ?? {}) }
 							}))
 						})
 			});
@@ -216,10 +234,26 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 					const tooLarge =
 						res.status === 413 ||
 						(res.status === 400 && /maximum context|context[_ ](?:length|window)/i.test(detail));
+					const budget = res.status === 402 ? inFlightBudget(detail) : Option.none();
+					const limited = res.status === 429 || Option.isSome(budget);
+					const hint =
+						res.headers['retry-after'] ??
+						(Option.isSome(budget)
+							? Object.entries(budget.value.error.metadata.headers ?? {}).find(
+									([name]) => name.toLowerCase() === 'retry-after'
+								)?.[1]
+							: undefined);
+					const delay =
+						hint === undefined
+							? Number.NaN
+							: /^\d+(?:\.\d+)?$/.test(hint.trim())
+								? Number(hint) * 1000
+								: Date.parse(hint) - (yield* Clock.currentTimeMillis);
 					return yield* Effect.fail(
 						new FacilityFailure({
-							kind: tooLarge ? 'tooLarge' : 'upstream',
+							kind: tooLarge ? 'tooLarge' : limited ? 'rateLimited' : 'upstream',
 							status: res.status,
+							...(Number.isFinite(delay) && delay >= 0 ? { retryAfterMs: delay } : {}),
 							message: `the model provider refused the request (HTTP ${res.status}): ${detail.slice(0, 500)}`
 						})
 					);

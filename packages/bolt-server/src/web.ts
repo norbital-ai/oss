@@ -1,13 +1,12 @@
 import { Effect } from 'effect';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
+import { WebRead, type PortFailure } from '@norbital-ai/bolt/engine';
 import {
 	makeRequestPage,
 	publicAddresses,
-	WebRead,
 	WEB_PAGE_BYTE_LIMIT,
-	type PortFailure,
 	type Address
-} from '@norbital-ai/bolt/engine';
+} from '@norbital-ai/bolt/node';
 import { extractDocumentText } from './documents.ts';
 const requestPage = makeRequestPage();
 export type PublicPage = {

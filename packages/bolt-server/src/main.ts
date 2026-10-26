@@ -9,7 +9,6 @@ const command = Command.make(
 	'bolt-server',
 	{
 		port: Flag.integer('port').pipe(Flag.optional),
-		accept: Flag.boolean('accept').pipe(Flag.withDefault(false)),
 		dev: Flag.boolean('dev').pipe(Flag.withDefault(false)),
 		trustProxy: Flag.string('trust-proxy').pipe(Flag.optional),
 		founder: Flag.string('founder').pipe(Flag.optional),
@@ -19,7 +18,6 @@ const command = Command.make(
 		Effect.gen(function* () {
 			const config = yield* BoltConfig({
 				...(Option.isNone(flags.port) ? {} : { port: flags.port.value }),
-				accept: flags.accept,
 				dev: flags.dev,
 				...(Option.isNone(flags.trustProxy) ? {} : { trustProxy: flags.trustProxy.value }),
 				...(Option.isNone(flags.founder) ? {} : { founder: flags.founder.value }),

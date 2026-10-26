@@ -19,22 +19,22 @@ import type { LocaleErrors } from '../../src/decl/verify.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── team(): keys are TeamName, values name policies ──
-team({ Sales: ['sales_rep'], Finance: [] });
+team({ sales: ['sales_rep'], finance: [] });
 // @ts-expect-error T1 an unknown policy
 // prettier-ignore
-team({ Sales: ['sales_rap'] });
+team({ sales: ['sales_rap'] });
 // @ts-expect-error T2 a team holds a list of policies, not one
 // prettier-ignore
-team({ Sales: 'sales_rep' });
+team({ sales: 'sales_rep' });
 
 // Source handles are case-sensitive and labels do not merge them.
-team({ Sales: ['sales_rep'], sales: ['sales_rep'] });
+team({ sales: ['sales_rep'], Sales: ['sales_rep'] });
 // @ts-expect-error T3 an unknown source parent
 // prettier-ignore
-team({ Sales: { policies: ['sales_rep'], parent: 'missing' } });
+team({ sales: { policies: ['sales_rep'], parent: 'missing' } });
 
 // ── messages(): a locale's keys ⊆ the base, checked by the __verify line ──
 messages({ hello: 'Hello' });
@@ -50,7 +50,7 @@ is<
 >();
 
 // ── model search: the semantic model is one +workspace.ts declares, at the width it declares ──
-model({
+model('semantic_case', {
 	description: 'x',
 	label: 'body',
 	fields: { body: { kind: 'text' } },
@@ -58,10 +58,10 @@ model({
 });
 // @ts-expect-error S1 an embedding model +workspace.ts does not declare
 // prettier-ignore
-model({ description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } });
+model('semantic_case', { description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } });
 // @ts-expect-error the embedding column's width is stated, never guessed
 // prettier-ignore
-model({ description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small' } } });
+model('semantic_case', { description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small' } } });
 
 // ── signature helpers ──
 is<Eq<State<'orders'>, 'draft' | 'submitted' | 'ordered'>>();

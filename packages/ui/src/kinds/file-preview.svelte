@@ -8,7 +8,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 	import Icon from '@iconify/svelte';
 	import { Effect, Stream } from 'effect';
 	import { FetchHttpClient, HttpClient } from 'effect/unstable/http';
-	import { query } from '../effect/index.js';
+	import { observeOnce } from '../effect/index.js';
 	import type { ReadError } from '../client/contract.js';
 	import type { Row } from '../collection/types.js';
 	import Button from '../primitives/button/button.svelte';
@@ -29,7 +29,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 		id: string,
 		fields: readonly string[]
 	): Effect.Effect<Row | undefined, ReadError> => {
-		const read = host.read;
+		const read = host.query;
 		return read === undefined
 			? Effect.succeed(undefined)
 			: read(collection, {
@@ -38,8 +38,8 @@ when the host reads), Download, and Remove when `onRemove` is given.
 					where: { id: { eq: id } }
 				}).pipe(Effect.map((page) => page.rows[0]));
 	};
-	const meta = query(() =>
-		host.read === undefined
+	const meta = observeOnce(() =>
+		host.query === undefined
 			? null
 			: Effect.gen(function* () {
 					const row = yield* one('sys_file', file.id, [
@@ -79,7 +79,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 				}).format(d);
 	};
 	// Reading one chunk closes the response stream when its preview leaves.
-	const content = query(() =>
+	const content = observeOnce(() =>
 		url === undefined || !text
 			? null
 			: HttpClient.get(url).pipe(

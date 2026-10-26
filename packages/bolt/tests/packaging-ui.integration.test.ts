@@ -49,7 +49,6 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		collections: { jobs: { read: { fields: 'all' } } },
 		integrations: {},
-		pipelines: {},
 		policies: {},
 		apps: {},
 		teams: {},
@@ -169,11 +168,11 @@ describe('the page organization', () => {
 						host: {
 							publicUrl: 'https://acme.example',
 							ai: false,
-							workspace: {
+							workspace: () => ({
 								name: 'Acme',
 								handle: 'acme',
 								icons: [{ src: '/assets/logo.svg', sizes: 'any', type: 'image/svg+xml' }]
-							}
+							})
 						}
 					})
 				);
@@ -227,7 +226,7 @@ describe('testWorkspace seed', () => {
 					`export default { bank: 'acme',
 	rows: (bank) => ({ customers: [{ id: '0199a000-0000-4000-8000-0000000000c1', name: bank.has('customers.json') ? 'Bank' : 'Public' }] }) };`
 				);
-				const base = yield* Layer.build(TestWorkspace.layer({ root })),
+				const base = yield* Layer.build(TestWorkspace.layer({ root, seed: 'base' })),
 					bt = Context.get(base, TestWorkspace),
 					br = yield* routeFixture(base);
 				const read = (
@@ -235,7 +234,7 @@ describe('testWorkspace seed', () => {
 					authority: Authority
 				) =>
 					qReply(route, authority, {
-						reads: [{ m: 'read', a: ['customers', { limit: 10 }] }]
+						reads: [{ m: 'query', a: ['customers', { limit: 10 }] }]
 					}).pipe(
 						Effect.flatMap((reply) =>
 							Schema.decodeUnknownEffect(
@@ -323,7 +322,9 @@ export default app('public', { title: 'Public', description: 'Public pages', ico
 						agent: {
 							internal: privateText.internal,
 							external: privateText.external,
-							skills: { private_skill: privateText.skill }
+							skills: {
+								private_skill: { text: privateText.skill, digest: '', files: ['SKILL.md'] }
+							}
 						}
 					},
 					out,
@@ -362,7 +363,10 @@ export default app('public', { title: 'Public', description: 'Public pages', ico
 				expect(registry).toMatch(/erp:\{load:\(\)=>/);
 				expect(registry).toMatch(/mail:\{load:\(\)=>/);
 				expect(js).not.toContain('connects:');
-				const chunks = readdirSync(join(out, 'assets')).filter((f) => f.endsWith('.js'));
+				// the workspace's chunks and its platform layer's (`assets/platform/`)
+				const chunks = readdirSync(join(out, 'assets'), { recursive: true })
+					.map(String)
+					.filter((f) => f.endsWith('.js'));
 				for (const file of readdirSync(out, { recursive: true }).map(String)) {
 					if (!/\.(?:html|js|map)$/.test(file)) continue;
 					const payload = readFileSync(join(out, file), 'utf8');

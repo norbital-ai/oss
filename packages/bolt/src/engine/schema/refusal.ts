@@ -3,7 +3,7 @@
 import type { Refused } from '../../decl/ctx.ts';
 import { type DbError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import type { ConstraintMeta } from './ddl.ts';
+import type { ConstraintMeta } from '@norbital-ai/store';
 
 const quoted = (message: string, before: string): string | undefined =>
 	new RegExp(`${before} "([^"]+)"`).exec(message)?.[1];
@@ -13,7 +13,8 @@ export function refusalOf(
 	constraints: ReadonlyMap<string, ConstraintMeta>
 ): Refused | 'conflict' | BoltError {
 	const meta = e.constraint === undefined ? undefined : constraints.get(e.constraint);
-	const field = meta?.fields.length === 1 ? { field: meta.fields[0] as string } : {};
+	const column = (meta?.fields.length === 1 ? meta.fields[0] : undefined) ?? e.column;
+	const field = column === undefined ? {} : { field: column };
 	const names = meta === undefined ? '' : `${meta.model}: ${meta.rule ?? meta.fields.join(', ')}`;
 	const refused = (
 		code: Refused['code'],
@@ -23,6 +24,12 @@ export function refusalOf(
 	switch (e.sqlstate) {
 		case '23505':
 			return refused('unique', `another record already has this ${names || 'value'}`);
+		case '23001':
+			return refused(
+				'restricted',
+				`other records still refer to this one (${names || e.constraint})`,
+				{}
+			);
 		case '23503':
 			return /^update or delete on table/.test(e.message)
 				? refused(
@@ -31,19 +38,25 @@ export function refusalOf(
 						{}
 					)
 				: refused('missingRef', `the referenced record does not exist (${names || e.constraint})`);
-		case '23514':
+		case '23514': {
+			const rule = names || e.constraint;
 			return refused(
 				'check',
 				meta?.message ??
-					`the record breaks ${meta?.rule === undefined ? `the rules of ${names || e.constraint}` : `the rule '${meta.rule}'`}`
+					(meta?.rule === undefined
+						? rule === undefined
+							? 'a native rule refused the record'
+							: `the record breaks the rules of ${rule}`
+						: `the record breaks the rule '${meta.rule}'`)
 			);
+		}
 		// a partial `unique` is an EXCLUDE, so it reports 23P01 under its declared kind
 		case '23P01':
 			return meta?.kind === 'unique'
 				? refused('unique', `another record already has this ${names}`)
 				: refused('overlap', `the period overlaps another record's (${names || e.constraint})`);
 		case '23502': {
-			const column = quoted(e.message, 'column');
+			const column = e.column ?? quoted(e.message, 'column');
 			return refused(
 				'required',
 				`${column ?? 'a field'} is required`,

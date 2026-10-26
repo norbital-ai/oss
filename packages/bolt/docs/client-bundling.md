@@ -45,18 +45,17 @@ The loader receives only the workspace-relative `pathname`, `search`, and a read
 context containing caller-scoped reads, actor and clock. It has no writes, device, credentials
 or Node capabilities. Existing session, public-app and kiosk admission chooses the authority;
 the loader never substitutes workspace authority. Visitor restrictions still apply, including
-the restriction to admitted `read`/`get` operations. After hydration, interactive actions use
+the restriction to admitted model queries. After hydration, interactive actions use
 the normal browser protocol and its existing authorization and challenge checks.
 
 Load the initial content in `pageServer.load`. Svelte rendering is synchronous: no asynchronous
 component rendering, browser APIs or `$bolt` workflow execution during SSR. The server `$bolt`
-facade supplies synchronous display metadata, translation, links and file URLs; attempting a
-direct `bolt.read`/`bolt.live` or `run`/`fork`/`attach` there fails. The shared `query` and `live`
-state factories are SSR-safe: pass a deferred source factory and `{ initial: data }` with the
-matching loader answer. They do not evaluate sources on the server, and begin interactive work
-after client mount. Render their available initial value even while `loading` is true, so server
-HTML and hydration agree. Keep device effects on client-owned attachments; do not issue a second
-read before hydration or copy the loaded answer into a separate query state machine.
+facade supplies synchronous display metadata, translation, links and file URLs. Read initial data
+in the loader and render that codec-typed data during SSR. The unified `bolt.query` owns browser
+live reads after hydration; use `$derived` to capture its reactive inputs. Do not execute page
+mutations, device work or mounted resource effects while rendering on the server. Preserve the
+loader answer through hydration instead of issuing a second read before mount or copying it into
+a separate loading/error state machine.
 
 Loader execution, schema encoding and Svelte rendering run in one bounded source-only guest
 invocation with the existing CPU, heap, crossing and read-byte limits. Hosts never import tenant
@@ -95,16 +94,21 @@ upload (posted in the agent panel, which uploads to `/__bolt/files/sys_conversat
 received from an integration), each entry naming its `message`; a message's `files` are read back
 from those inputs (`filesOf`, `src/engine/conversations/store.ts`). `sys_conversation.outputs` holds
 files tools made: `browser_download` (a file fetched in the browser session, at most 20 MiB, through
-the `Browser` port's `download`), screenshots and sandbox outputs. The panel's session rail shows them
-as the Inputs and Outputs cards. Reading one follows the conversation (`readableFile`,
+the `Browser` port's `download`), `download` (a public media URL the host fetches and stores through
+the `Files` port's `download`, kept only if its first bytes are media, at most 100 MiB; no bytes
+enter the engine), screenshots, and the files a `run_js` script returns (classified by their bytes:
+media, text, PDF and office documents, archives; an executable or an unrecognized binary is refused).
+The panel's session rail shows them as
+the Inputs and Outputs cards. Reading one follows the conversation (`readableFile`,
 `src/engine/decisions/index.ts`): its uploader, the conversation's owner, a member who posted in it,
 administrators for an in-app conversation, staff for a `public` envoy's thread, and whoever reads a
 record it was filed into.
 
-The document's CSP allows framing for `portal: true` app pages and all kiosk pages through
-`frame-ancestors *`; other pages use `frame-ancestors 'self'`. Portal presentation and framing
-do not change audience, SSR eligibility or data authority. An embedding site remains responsible
-for the browser permissions it delegates.
+Kiosks and portal pages declare `embed: ['https://partner.example']` to allow specific framing
+origins; the default admits no embedding origins. Other pages remain same-origin. Audience and
+policies still control data access. Embedded session cookies use `SameSite=None; Secure; Partitioned`,
+so each embedding site has its own session. The embedding site's iframe `allow` attribute delegates
+browser permissions such as camera and geolocation; it confers no data authority.
 
 The native device belongs to the current document: the host may inject `window.boltDevice`,
 or pass an explicit `device` to `mountShell`. Public hydration detects that same document's

@@ -43,7 +43,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {
 		desk: {
 			description: 'What the envoys may do',
@@ -189,7 +188,9 @@ const setup = Effect.gen(function* () {
 			return present(o.records[0]).id;
 		});
 	const status = (id: string) =>
-		qReply(route, t.as(t.admin).authority, { reads: [{ m: 'get', a: ['jobs', id] }] }).pipe(
+		qReply(route, t.as(t.admin).authority, {
+			reads: [{ m: 'query', a: ['jobs', { id: id }] }]
+		}).pipe(
 			Effect.flatMap((reply) =>
 				Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(reply.answers[0])
 			),
@@ -630,6 +631,8 @@ describe('admission limits and the human in the loop', () => {
 					yield* say('sales_tg', '9102', 'next hour');
 					expect(ai.requests).toHaveLength(101);
 				})
-			)
+			),
+		// 101 sequential admissions: the per-test default cannot hold this volume beside other integration workers.
+		60_000
 	);
 });

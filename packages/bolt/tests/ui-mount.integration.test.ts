@@ -51,7 +51,6 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -213,7 +212,7 @@ it.live(
 				yield* until(() => !text('table').includes('Brand new'));
 				yield* until(() => target.querySelector('[data-test="form"] [role="alert"]') !== null);
 				const reply = yield* qReply(route, admin, {
-					reads: [{ m: 'read', a: ['tasks', { all: true }] }]
+					reads: [{ m: 'query', a: ['tasks', { all: true }] }]
 				});
 				const rows = yield* Schema.decodeUnknownEffect(
 					Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })

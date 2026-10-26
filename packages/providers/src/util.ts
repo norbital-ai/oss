@@ -14,6 +14,19 @@ export const same = (got: string, want: string): boolean => {
 		b = Buffer.from(want);
 	return want !== '' && a.length === b.length && timingSafeEqual(a, b);
 };
+/** Decode the instance's stored credential; a missing or obsolete shape requires pairing again. */
+export const storedCredential = <A>(
+	ctx: Pick<DriverOpen, 'credentials'>,
+	schema: Schema.Decoder<A>,
+	key = 'credential'
+): Effect.Effect<Option.Option<A>, ProviderUnavailable> =>
+	Effect.tryPromise({
+		try: () => ctx.credentials.load(),
+		catch: (e) =>
+			new ProviderUnavailable({
+				message: `the stored credentials could not be read: ${e instanceof Error ? e.message : 'the host refused'}`
+			})
+	}).pipe(Effect.map((stored) => Schema.decodeUnknownOption(schema)(stored.get(key))));
 /** A setup field the operator must fill, or the refusal the shell shows verbatim. */
 export const field = (
 	input: Json,

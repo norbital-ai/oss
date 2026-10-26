@@ -1,8 +1,21 @@
-import type { FileRef, Id } from '../decl/values.ts';
-import type { FileUrlOptions } from '@norbital-ai/std/kind';
+import type { FileRef } from '../decl/values.ts';
+import { IdValue, type FileUrlOptions } from '@norbital-ai/std/kind';
+import { Schema } from 'effect';
 import { PATHS } from '../protocol/wire.ts';
 
 type FileUrlScope = { readonly app: string } | { readonly kiosk: string };
+
+const StoredFile = Schema.Struct({
+	id: IdValue,
+	name: Schema.String,
+	mime: Schema.String,
+	size: Schema.optionalKey(Schema.Int)
+});
+/** A stored handle is branded only after the host's id, file metadata and optional size validate. */
+export const FileRefSchema: Schema.Codec<FileRef> = Schema.declare(
+	(value: unknown): value is FileRef => Schema.is(StoredFile)(value),
+	{ identifier: 'FileRef' }
+);
 
 /** Stored files keep the caller's public surface when fetched directly by the browser. */
 export function storedFileUrl(
@@ -26,10 +39,7 @@ export function fileRef(file: {
 	readonly id: string;
 	readonly name: string;
 	readonly mime: string;
+	readonly size?: number;
 }): FileRef {
-	return {
-		id: file.id as Id<'sys_file'>,
-		name: file.name,
-		mime: file.mime
-	} as FileRef;
+	return Schema.decodeUnknownSync(FileRefSchema)(file);
 }

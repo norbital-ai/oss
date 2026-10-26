@@ -4,8 +4,16 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstab
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';
-import { storedCredential } from '../link.ts';
-import { blobOf, field, hostCall, linkOf, same, withFetch, type Obj } from '../util.ts';
+import {
+	blobOf,
+	field,
+	hostCall,
+	linkOf,
+	same,
+	storedCredential,
+	withFetch,
+	type Obj
+} from '../util.ts';
 
 const API = 'https://api.weixin.qq.com';
 const IMAGE = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/bmp']);

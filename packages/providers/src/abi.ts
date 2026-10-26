@@ -45,7 +45,7 @@ export type LinkDef = {
 	readonly request?: ((op: Json) => Effect.Effect<Json, ProviderFailure>) | undefined;
 	readonly read?:
 		| ((
-				feed: string,
+				sync: string,
 				partition: string,
 				cursor: Json | null
 		  ) => Effect.Effect<DriverPage, ProviderFailure>)
@@ -84,7 +84,7 @@ function link(def: LinkDef, scope: Scope.Closeable, run: Run): Link {
 	if (typing !== undefined) out.typing = (to, signal) => call(typing(to), signal);
 	if (request !== undefined) out.request = (op, signal) => call(request(op), signal);
 	if (read !== undefined)
-		out.read = (feed, partition, cursor, signal) => call(read(feed, partition, cursor), signal);
+		out.read = (sync, partition, cursor, signal) => call(read(sync, partition, cursor), signal);
 	if (discover !== undefined) out.discover = () => call(discover());
 	if (renew !== undefined) out.renew = () => call(renew());
 	if (webhook !== undefined) out.webhook = (r) => call(webhook(r));

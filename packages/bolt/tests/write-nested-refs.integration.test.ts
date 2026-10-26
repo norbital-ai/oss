@@ -6,7 +6,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import { toPred } from '../src/engine/access/pred.ts';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
+import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { act } from '../src/engine/write/act.ts';
 import { admin, arm, authority, grants, manifest, NOW, TODAY } from './write-fixture.ts';
@@ -84,7 +84,7 @@ let allowed: string, hidden: string;
 const setup = Effect.fnUntraced(function* () {
 	pg = yield* PgliteDb.open();
 	db = PgliteDb.make(pg);
-	yield* applyPlan(db, plan(null, m), { accept: true });
+	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	const tags = yield* act(
 		{ manifest: m, db },
 		{

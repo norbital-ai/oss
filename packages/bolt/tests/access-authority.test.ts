@@ -15,6 +15,7 @@ import {
 import type { EngineActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
+import { approvalFlow, snapshotOf } from '../src/decl/access/policy.ts';
 
 const state = {
 	kind: 'state',
@@ -55,7 +56,6 @@ const m: EngineManifest = {
 		employees: { read: { fields: 'all' } }
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {
 		qty: { description: '', grants: { lines: { read: { fields: ['qty'] } } } },
 		rep: {
@@ -64,8 +64,7 @@ const m: EngineManifest = {
 			grants: {
 				orders: {
 					read: { where: { region: { eq: 'north' } }, fields: ['status', 'region', 'amount'] },
-					update: { where: 'read', fields: ['note', 'status'] },
-					approval: { update: { steps: [['Finance']] } },
+					update: { where: 'read', fields: ['note', 'status'], approval: true },
 					moves: { status: ['draft->submitted'] }
 				},
 				lines: { via: 'order' }
@@ -155,10 +154,10 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		expect(auth(['qty']).collections.lines!.masks).toEqual({ order: { t: 'const', value: false } });
 	});
 
-	it("`where: 'read'` is the read grant; a source approval route compiles beside the direct grant; an administrator holds every write arm but identity's", () => {
+	it("`where: 'read'` is the read grant; approval stays on its write arm; an administrator holds every write arm but identity's", () => {
 		const rep = auth(['rep']).collections.orders!;
 		expect(rep.update[0]!.where).toEqual(rep.read[0]!.where);
-		expect(rep.approval.update).toEqual([{ steps: [['Finance']] }]);
+		expect(rep.update[0]!.approval).toBe(true);
 		const admin = auth([], { admin: true, actor: member({ admin: true }) });
 		expect(admin.collections.orders!.create).toHaveLength(1);
 		expect(admin.collections.sys_user!.update).toHaveLength(0); // identity is written by admin verbs only (38c)
@@ -225,6 +224,28 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		const a = auth(['nope']);
 		expect(a.policies).toEqual([]);
 		expect(Object.keys(a.collections).filter((c) => !c.startsWith('sys_'))).toEqual([]);
+	});
+
+	it('an approval marker grants only its write verb; an empty callback flow is invalid', () => {
+		const empty: EngineManifest = {
+			...m,
+			policies: {
+				...m.policies,
+				open: {
+					description: '',
+					grants: { orders: { read: true, update: { approval: true } } }
+				}
+			}
+		};
+		const granted = compileAuthority(
+			empty,
+			{ actor: member(), admin: false, policies: ['open'] },
+			'k'
+		).collections.orders!;
+		expect(granted.update).toMatchObject([{ policy: 'open', approval: true }]);
+		expect(granted.create).toEqual([]);
+		expect(granted.delete).toEqual([]);
+		expect(() => snapshotOf(approvalFlow())).toThrow('add a step');
 	});
 
 	it('the kernel directory: staff read staff (id, name); externals themselves and their party (rule 35a)', () => {

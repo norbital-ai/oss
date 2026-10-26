@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FacilitiesLive, localFiles } from '../src/engine/facilities.ts';
+import { FacilitiesLive } from '../src/engine/facilities.ts';
+import { localFiles } from '../src/node/files.ts';
 import {
 	DecisionsLive,
 	DecisionTrace,
@@ -14,18 +15,103 @@ import {
 } from '../src/engine/decisions/index.ts';
 import { Facilities, Manifest, Decisions } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Ai, Convert, Files, Geo, Logs, Metering, Speech, WebRead } from '../src/engine/ports.ts';
-import type { LogEvent } from '../src/engine/contracts.ts';
+import {
+	Ai,
+	Convert,
+	Files,
+	Geo,
+	Images,
+	Logs,
+	Metering,
+	Speech,
+	WebRead
+} from '../src/engine/ports.ts';
+import type { EmbedInput, LogEvent } from '../src/engine/contracts.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
+
+it.effect(
+	'embedding files cross as authoritative stored references without loading their media into the Cell',
+	() => {
+		const stored = {
+			id: 'photo',
+			key: 'tenant/photo',
+			name: 'actual.jpg',
+			mime: 'image/jpeg',
+			size: 90 * 1024 * 1024,
+			sha256: 'digest',
+			field: 'photos.image'
+		};
+		const db = TenantDb.typed({
+			read: () => Effect.succeed([{ rows: [stored], affected: 1 }]),
+			write: () => Effect.fail(DbError.make('XX000', 'embedding writes no database rows')),
+			session: () => Effect.fail(DbError.make('0A000', 'embedding opens no session')),
+			transaction: () => Effect.fail(DbError.make('XX000', 'embedding opens no transaction'))
+		});
+		const received: (readonly EmbedInput[])[] = [];
+		const ai = Layer.effect(
+			Ai,
+			Effect.gen(function* () {
+				const absent = yield* Ai;
+				return Ai.of({
+					...absent,
+					embed: (inputs) =>
+						Effect.sync(() => {
+							received.push(inputs);
+							return inputs.map(() => [0.5]);
+						})
+				});
+			})
+		).pipe(Layer.provide(Ai.unavailable));
+		const ports = Layer.mergeAll(
+			Layer.succeed(TenantDb, db),
+			Layer.succeed(Manifest, manifest),
+			Layer.succeed(Decisions, { decide: () => Port.unavailable('ai') }),
+			ai,
+			Files.unavailable,
+			Images.unavailable,
+			Convert.unavailable,
+			Speech.unavailable,
+			Geo.unavailable,
+			WebRead.unavailable
+		);
+		return Effect.gen(function* () {
+			const facilities = yield* Facilities;
+			expect(
+				yield* facilities.dispatch({
+					_tag: 'ai.embed',
+					args: [
+						[
+							'text',
+							{ id: stored.id, name: 'caller.jpg', mime: 'caller/mime' },
+							{ id: stored.id, name: 'caller.jpg', mime: 'caller/mime' }
+						]
+					]
+				})
+			).toEqual({ ok: true, value: [[0.5], [0.5], [0.5]] });
+			const file = {
+				$stored: {
+					key: stored.key,
+					name: stored.name,
+					mime: stored.mime,
+					sha256: stored.sha256,
+					bytes: stored.size
+				}
+			};
+			expect(received).toEqual([['text', file, file]]);
+		}).pipe(Effect.provide(FacilitiesLive.pipe(Layer.provide(ports))));
+	}
+);
 
 it.effect('web.read keeps raw options across the facility dispatch boundary', () => {
 	const calls: unknown[] = [];
 	const db = TenantDb.typed({
 		read: () => Effect.succeed([]),
 		write: () => Effect.succeed({ rows: [], affected: 0 }),
+		session: () =>
+			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 		transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 	});
 	const ports = Layer.mergeAll(
@@ -33,6 +119,7 @@ it.effect('web.read keeps raw options across the facility dispatch boundary', ()
 		Layer.succeed(Manifest, manifest),
 		Layer.succeed(Decisions, { decide: () => Port.unavailable('ai') }),
 		Files.unavailable,
+		Images.unavailable,
 		Convert.unavailable,
 		Speech.unavailable,
 		Ai.unavailable,
@@ -143,6 +230,8 @@ it.effect(
 				TenantDb.typed({
 					read: () => Effect.fail(DbError.make('XX000', 'Decisions read no database rows')),
 					write: () => Effect.fail(DbError.make('XX000', 'Decisions write no database rows')),
+					session: () =>
+						Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 					transaction: () => Effect.fail(DbError.make('XX000', 'Decisions open no transaction'))
 				})
 			),
@@ -155,6 +244,7 @@ it.effect(
 			}),
 			ai,
 			Files.unavailable,
+			Images.unavailable,
 			Convert.unavailable,
 			Speech.unavailable,
 			Geo.unavailable,

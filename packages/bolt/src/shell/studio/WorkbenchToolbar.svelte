@@ -1,73 +1,51 @@
 <!--
-	The workbench's toolbar : what the workbench is on (the viewer's draft or a merge request), how far behind live it is,
+	The workbench's toolbar : the change the viewer works on (or Live, with no change open), how far behind live it is,
 	a status badge (working, the running phase, a failure, conflicts) and the unsaved count; then Save, Preview and the
-	primary action last (Update from Live when behind, else Publish for an administrator). Everything else — a new file, a
-	merge request, the branch and the commit it is based on — is behind "…".
+	primary action last (Merge for an administrator with a change open, else New change). Everything else — a new file,
+	the branch and the commit it is on — is behind "…".
 -->
 <script lang="ts">
-	import { Badge, Button, Combobox, Icon, Popover, type BadgeVariant } from '@norbital-ai/ui';
+	import { Badge, Button, Icon, Popover, type BadgeVariant } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
-	import {
-		PHASES,
-		type PhaseState,
-		type StudioMergeRequest,
-		type StudioPhase,
-		type StudioView
-	} from './model.ts';
+	import { PHASES, type PhaseState, type StudioPhase, type StudioView } from './model.ts';
 
 	let {
 		view,
-		targets,
 		admin,
 		busy,
 		drafts,
 		phases,
 		error,
 		previewing,
-		onswitch,
 		onnew,
 		onsave,
 		onpreview,
-		onrebase,
-		onopenmr,
-		onpublish,
+		onopen,
+		onmerge,
 		onreview,
+		oninstall,
 		t
 	}: {
 		view: StudioView;
-		targets: readonly StudioMergeRequest[];
 		admin: boolean;
 		busy: boolean;
 		drafts: number;
 		phases: { readonly [p in StudioPhase]?: PhaseState };
 		error: string | null;
 		previewing: boolean;
-		onswitch: (target: string) => void;
 		onnew: () => void;
 		onsave: () => void;
 		onpreview: () => void;
-		onrebase: () => void;
-		onopenmr: () => void;
-		onpublish: () => void;
+		onopen: () => void;
+		onmerge: () => void;
 		onreview: () => void;
+		oninstall: () => void;
 		t: (key: string) => string;
 	} = $props();
 
-	const target = $derived(view.target ?? 'workbench');
+	const change = $derived(view.changeSets?.find((c) => c.id === view.change));
 	const behind = $derived(view.behind ?? 0);
-	const STAGE = {
-		draft: 'Draft',
-		ready: 'Ready for review',
-		merged: 'Merged',
-		closed: 'Closed'
-	} as const;
-	const options = $derived([
-		{
-			value: 'workbench',
-			label: `${t('My draft')}${view.branch === undefined ? '' : ` · ${view.branch}`}`
-		},
-		...targets.map((m) => ({ value: m.id, label: `!${m.id} ${m.title} · ${t(STAGE[m.state])}` }))
-	]);
+	const merging = $derived(change?.merge?.state === 'running');
 	const phaseTitle = (p: StudioPhase) =>
 		t(
 			p === 'diagnose'
@@ -89,9 +67,12 @@
 		} | null => {
 			const running = PHASES.find((p) => phases[p] === 'running');
 			const failed = PHASES.find((p) => phases[p] === 'failed');
-			if (busy || running !== undefined)
+			if (busy || running !== undefined || merging)
 				return {
-					label: running === undefined ? t('Working…') : `${phaseTitle(running)}…`,
+					label:
+						running === undefined
+							? t(merging ? 'Merging…' : 'Working…')
+							: `${phaseTitle(running)}…`,
 					icon: 'lucide:loader-2',
 					variant: 'outline',
 					loading: true
@@ -100,6 +81,13 @@
 				return {
 					label: t('Action failed'),
 					detail: error,
+					icon: 'lucide:circle-alert',
+					variant: 'destructive'
+				};
+			if (change?.merge?.state === 'failed')
+				return {
+					label: t('Merge failed'),
+					...(change.merge.error === undefined ? {} : { detail: change.merge.error }),
 					icon: 'lucide:circle-alert',
 					variant: 'destructive'
 				};
@@ -152,23 +140,11 @@
 
 <Inline gap="xs" shrink={false} class="h-10 min-w-0 border-b border-border/60 sm:h-9">
 	<Scroll name={t('Workbench')} axis="x" layout="inline" gap="xs" grow class="min-w-0 items-center">
-		{#if view.mergeRequests !== undefined && view.mergeRequests.length > 0}
-			<div class="w-64 max-w-[min(16rem,60vw)] shrink-0">
-				<Combobox
-					variant="ghost"
-					size="sm"
-					aria-label={t('Target')}
-					{options}
-					value={target}
-					disabled={busy}
-					onChange={(next) => {
-						if (next !== null && next !== target) onswitch(next);
-					}}
-				/>
-			</div>
-		{:else}
-			<span class="shrink-0 text-xs font-medium text-foreground">{t('My draft')}</span>
-		{/if}
+		<span
+			class="max-w-64 shrink-0 truncate text-xs font-medium text-foreground"
+			data-change={change?.id}
+			>{change === undefined ? t('Live') : `!${change.id} ${change.title}`}</span
+		>
 		{#if behind > 0}
 			<Badge variant="warning" class="h-5 max-w-48 shrink-0 px-2 py-0 text-micro"
 				>{behind} {t('behind live')}</Badge
@@ -195,9 +171,9 @@
 	</Scroll>
 	<Inline gap="xs" shrink={false}>
 		{@render action('lucide:save', t('Save'), onsave, busy || drafts === 0)}
-		{@render action('lucide:scan-eye', t('Preview'), onpreview, busy, previewing)}
-		{#if target !== 'workbench'}
-			{@render action('lucide:git-pull-request', t('Review'), onreview, busy)}
+		{#if change !== undefined}
+			{@render action('lucide:scan-eye', t('Preview'), onpreview, busy || drafts > 0, previewing)}
+			{@render action('lucide:git-compare', t('Review'), onreview, busy)}
 		{/if}
 		<Popover.Root bind:open={more}>
 			<Popover.Trigger
@@ -217,32 +193,46 @@
 				>
 					<Icon name="lucide:file-plus" class="size-3.5" />{t('New file')}
 				</Button>
-				{#if target === 'workbench' && view.mergeRequests !== undefined}
+				{#if change !== undefined}
 					<Button
 						size="sm"
 						variant="ghost"
 						class="justify-start"
-						disabled={busy || view.changes.length === 0}
-						onclick={pick(onopenmr)}
+						disabled={busy}
+						onclick={pick(onopen)}
 					>
-						<Icon name="lucide:git-pull-request" class="size-3.5" />{t('Open merge request')}
+						<Icon name="lucide:git-branch-plus" class="size-3.5" />{t('New change')}
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						class="justify-start"
+						disabled={busy}
+						onclick={pick(oninstall)}
+					>
+						<Icon name="lucide:package-plus" class="size-3.5" />{t('Install package')}
 					</Button>
 				{/if}
 				<p class="border-t border-border/60 px-2 pt-1.5 pb-1 text-micro text-muted-foreground">
 					{#if view.branch !== undefined}<code class="block truncate font-mono">{view.branch}</code
 						>{/if}
-					{t(target === 'workbench' ? 'against Live' : 'against MR head')} ·
+					{t(change === undefined ? 'Live' : 'against Live')} ·
 					<code class="font-mono">{view.commit.slice(0, 8)}</code>
 				</p>
 			</Popover.Content>
 		</Popover.Root>
-		{#if behind > 0}
-			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onrebase}>
-				<Icon name="lucide:arrow-up-from-line" class="size-3.5" />{t('Update from Live')}
+		{#if change === undefined}
+			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onopen}>
+				<Icon name="lucide:git-branch-plus" class="size-3.5" />{t('New change')}
 			</Button>
-		{:else if admin && target === 'workbench'}
-			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onpublish}>
-				<Icon name="lucide:upload" class="size-3.5" />{t('Publish')}
+		{:else if admin}
+			<Button
+				size="sm"
+				class="{ACTION} font-semibold"
+				disabled={busy || merging || view.changes.length === 0}
+				onclick={onmerge}
+			>
+				<Icon name="lucide:git-merge" class="size-3.5" />{t('Merge')}
 			</Button>
 		{/if}
 	</Inline>

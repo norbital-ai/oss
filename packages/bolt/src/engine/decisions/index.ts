@@ -11,32 +11,30 @@ import {
 	Schema,
 	Stream
 } from 'effect';
+import * as EffectArray from 'effect/Array';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
 import type { Json } from '../../decl/values.ts';
 import type { DecisionQuestion, DecisionState } from '../../decl/runtime/facilities.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import {
-	LIMITS,
 	type Authority,
 	type Bindings,
-	type CrossAnswer,
 	type FacilityError,
 	type EmbedInput
 } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
-import { Ai, Files, Metering, type AiEvent } from '../ports.ts';
+import { Ai, Logs, Metering, type AiEvent } from '../ports.ts';
 import { Decisions, type DecisionUse, type ReadsShape, type ShapeOf } from '../services.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
-import { q } from '../../protocol/catalog.ts';
+import { q } from '@norbital-ai/store';
 import { clip } from '../agent/schema.ts';
 import { provideHttp, type HttpOptions, type OpenAiChat } from '../agent/openai-chat.ts';
 import { Port } from '../port.ts';
 import { RunOutputRow, readsRunResult } from '../runs/index.ts';
 import { outputFiles } from '../runs/output-files.ts';
-import * as ir from '../../protocol/ir.ts';
-import { logged } from '../guest/telemetry.ts';
+import * as ir from '../../protocol/reads.ts';
 
 export type { DecisionQuestion, DecisionState };
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
@@ -91,7 +89,7 @@ export const DecisionResultSchema = Schema.Struct({
 	tokens: Schema.optionalKey(Schema.Struct({ input: Schema.Number, output: Schema.Number }))
 });
 export type DecisionResult = typeof DecisionResultSchema.Type;
-export type DecisionFile = Exclude<EmbedInput, string>;
+export type DecisionFile = Extract<EmbedInput, { readonly $file: unknown }>;
 export type System1Request = DecisionRequest;
 /** Provider ABI contract stays Promise/AbortSignal at the host adapter only. */
 export interface System1Port {
@@ -120,7 +118,7 @@ const isDecisionFile = (v: unknown): v is DecisionFile =>
 const walk = (v: unknown, leaf: (x: unknown) => unknown): unknown => {
 	const r = leaf(v);
 	if (r !== undefined) return r;
-	if (Array.isArray(v)) return v.map((x) => walk(x, leaf));
+	if (EffectArray.isArray(v)) return v.map((x) => walk(x, leaf));
 	return Predicate.isObject(v) && !(v instanceof Uint8Array)
 		? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, leaf)]))
 		: v;
@@ -312,6 +310,7 @@ export const DecisionsLive = Layer.effect(
 		const ai = yield* Ai,
 			crypto = yield* Crypto.Crypto,
 			db = yield* TenantDb,
+			logs = yield* Logs,
 			metering = yield* Metering;
 		return Decisions.of({
 			decide: Effect.fn('Decisions.decide')(function* (use, request) {
@@ -324,7 +323,7 @@ export const DecisionsLive = Layer.effect(
 						(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
 					)
 				);
-				yield* logged({
+				yield* logs.write({
 					at: now,
 					severity: Result.isSuccess(result) ? 'info' : 'warn',
 					event: 'decision.made',
@@ -557,7 +556,7 @@ export const storedFiles = Effect.fn('Decisions.storedFiles')(function* (
  * its collection's file field that the caller reads with that field unmasked.
  * A conversation's file (`sys_conversation.inputs` / `outputs`) is its uploader's, and then the conversation's: its owner, a member who
  * posted in it (in the app or as a linked envoy sender), and staff for an instance's conversation. Filed into a record (an
- * envoy's photo, a sandbox output), it is also that record's: whoever reads it there, as for any file field.
+ * envoy's photo), it is also that record's: whoever reads it there, as for any file field.
  */
 export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 	o: {
@@ -570,6 +569,13 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 	id: string,
 	owner: string
 ) {
+	if (o.authority.actor.kind === 'member') {
+		const notified = yield* o.db.one(Schema.Struct({ found: Schema.Boolean }), {
+			text: `SELECT true AS found FROM sys_notification WHERE member = $1 AND attachments @> $2::jsonb LIMIT 1`,
+			params: [o.authority.actor.id, JSON.stringify([{ id }])]
+		});
+		if (Option.isSome(notified)) return true;
+	}
 	/** A row of `collection` holding the file in `field` that the caller reads with that field unmasked. ponytail: ≤ 20 holders are tried. */
 	const held = Effect.fn('Decisions.body')(function* (collection: string, field: string) {
 		if (o.authority.collections[collection] === undefined) return false;
@@ -635,16 +641,19 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 			if (Option.isNone(row)) return false;
 			if (
 				readsRunResult(o.authority, row.value) &&
-				outputFiles(automation.output, row.value.output, o.manifest.customFields).some(
-					(file) => file.id === id
-				)
+				outputFiles(
+					automation.output,
+					row.value.output,
+					o.manifest.customFields,
+					o.manifest.models
+				).some((file) => file.id === id)
 			)
 				return true;
 			after = row.value.id;
 		}
 	}
 	const [collection, field] = owner.split('.');
-	// a pipeline's import upload and export file (`<c>.$import`, `<c>.$export`): the member who ran it
+	// An import upload or export file belongs to the member who ran its file sync or conversion.
 	if (field === '$import' || field === '$export') {
 		if (o.authority.actor.kind !== 'member') return false;
 		const r = yield* o.db.one(Schema.Struct({ found: Schema.Boolean }), {
@@ -662,13 +671,6 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 	return yield* held(collection, field);
 });
 
-export type AuthorDecideConfig = {
-	readonly db: TenantDbShape;
-	readonly files: ShapeOf<typeof Files>;
-	readonly ai: ShapeOf<typeof Ai>;
-	readonly metering: ShapeOf<typeof Metering>;
-	readonly clock: Effect.Effect<string>;
-};
 const wireFailure = (error: FacilityFailure | Unavailable): FacilityError =>
 	error._tag === 'Unavailable'
 		? { kind: 'unavailable', facility: error.facility, reason: error.reason }
@@ -677,98 +679,3 @@ const wireFailure = (error: FacilityFailure | Unavailable): FacilityError =>
 				message: error.message,
 				...(error.status === undefined ? {} : { status: error.status })
 			};
-export const authorDecide = Effect.fn('Decisions.authorDecide')(function* (
-	config: AuthorDecideConfig,
-	input: Json,
-	run: { id: string; automation: string }
-): Effect.fn.Return<CrossAnswer, import('../errors.ts').EngineError> {
-	const request = yield* Schema.decodeUnknownEffect(DecisionRequestSchema)(input).pipe(
-		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
-	);
-	const result = yield* Effect.result(ask(config.ai, request));
-	const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
-	yield* logged({
-		at: yield* config.clock,
-		severity: Result.isSuccess(result) ? 'info' : 'warn',
-		event: 'decision.made',
-		invocation: run.id,
-		run: null,
-		conversation: null,
-		turn: null,
-		attributes: {
-			...decisionEvent('author', request, event),
-			automation: run.automation,
-			run: run.id
-		}
-	});
-	yield* meter(config.metering, event, run.id);
-	if (Result.isFailure(result)) return { ok: false, error: wireFailure(result.failure) };
-	const answers = Object.fromEntries(
-		Object.entries(result.success.answers).map(([id, answer]) => {
-			const question = request.questions[id];
-			return [
-				id,
-				answer.type === 'score' && question?.type === 'score'
-					? { ...answer, level: question.criteria[answer.level] ?? '' }
-					: answer
-			];
-		})
-	);
-	return { ok: true, value: { answers, costUsd: result.success.costUsd } };
-});
-const FileRef = Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String });
-export const authorEmbed = Effect.fn('Decisions.authorEmbed')(function* (
-	config: AuthorDecideConfig,
-	args: readonly Json[],
-	readable: (
-		id: string,
-		field: string
-	) => Effect.Effect<boolean, import('../errors.ts').EngineError>
-): Effect.fn.Return<CrossAnswer, import('../errors.ts').EngineError> {
-	const inputs = yield* Schema.decodeUnknownEffect(
-		Schema.Array(Schema.Union([Schema.String, FileRef]))
-	)(args[0]).pipe(
-		Effect.mapError((error) =>
-			BoltError.make('invalidInput', 'decode', 'embed takes a list of strings and FileRefs', error)
-		)
-	);
-	const options = yield* Schema.decodeUnknownEffect(
-		Schema.Struct({
-			model: Schema.optionalKey(Schema.String),
-			dimensions: Schema.optionalKey(Schema.Number)
-		})
-	)(args[1] ?? {}).pipe(
-		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
-	);
-	const stored = yield* storedFiles(config.db, inputs),
-		resolved: EmbedInput[] = [];
-	for (const input of inputs) {
-		if (typeof input === 'string') {
-			resolved.push(input);
-			continue;
-		}
-		const file = stored.get(input.id);
-		if (file === undefined || !(yield* readable(input.id, file.field)))
-			return {
-				ok: false,
-				error: { kind: 'invalid', message: `this run cannot read file ${input.id}` }
-			};
-		const content = yield* Effect.result(
-			config.files
-				.get(file.key, LIMITS.storedFileBytes)
-				.pipe(Port.call('files', LIMITS.callMs.other))
-		);
-		if (Result.isFailure(content)) return { ok: false, error: wireFailure(content.failure) };
-		resolved.push({
-			$file: { name: file.name, mime: file.mime, sha256: file.sha256, bytes: content.success }
-		});
-	}
-	const result = yield* Effect.result(
-		config.ai
-			.embed(resolved, options.model ?? 'default', options.dimensions)
-			.pipe(Port.call('ai.embed', LIMITS.callMs.ai))
-	);
-	return Result.isFailure(result)
-		? { ok: false, error: wireFailure(result.failure) }
-		: { ok: true, value: result.success };
-});

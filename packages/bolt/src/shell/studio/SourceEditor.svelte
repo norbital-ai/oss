@@ -1,6 +1,7 @@
 <!--
 	Studio's editor pane : the open file's path as a breadcrumb over a flush CodeEditor, or an
-	empty state. With the baseline shown, the target's baseline (Before) sits beside the edited file (After); the two stack
+	empty state. A `note` (still loading, not text, cut at the host's bound) shows beside the path and makes the file
+	read-only, so a save never writes back what was not shown. With the baseline shown, the target's baseline (Before) sits beside the edited file (After); the two stack
 	on a narrow screen.
 -->
 <script lang="ts">
@@ -14,6 +15,7 @@
 		baseline,
 		diff,
 		deleted,
+		note,
 		fileCount,
 		against,
 		onChange,
@@ -26,6 +28,7 @@
 		baseline: string | undefined;
 		diff: boolean;
 		deleted: boolean;
+		note?: string | undefined;
 		fileCount: number;
 		against: string;
 		onChange: (value: string) => void;
@@ -34,6 +37,7 @@
 		t: (key: string) => string;
 	} = $props();
 	const segments = $derived(path.split('/').filter(Boolean));
+	const locked = $derived(deleted || note !== undefined);
 	const EDITOR = 'h-full min-h-0 w-full rounded-none border-0 shadow-none';
 </script>
 
@@ -67,6 +71,11 @@
 					{/each}
 				</ol>
 			</Scroll>
+			{#if note !== undefined}<span
+					role="status"
+					data-file-note
+					class="shrink-0 text-micro text-muted-foreground">{note}</span
+				>{/if}
 			<span class="hidden shrink-0 text-micro text-muted-foreground sm:inline">{against}</span>
 			{#if baseline !== undefined}
 				<Button
@@ -111,7 +120,7 @@
 							aria-label={path}
 							{value}
 							language={languageOf(path)}
-							readonly={deleted}
+							readonly={locked}
 							minHeight="100%"
 							class={EDITOR}
 							{onChange}
@@ -123,7 +132,7 @@
 					aria-label={path}
 					{value}
 					language={languageOf(path)}
-					readonly={deleted}
+					readonly={locked}
 					minHeight="100%"
 					class={EDITOR}
 					{onChange}

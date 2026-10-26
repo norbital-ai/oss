@@ -30,11 +30,16 @@ import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import type { Artifact, Pack } from '../compiler/artifact/index.ts';
-import { loadPackWithAssets, readPack, workspaceFiles } from '../compiler/artifact/index.ts';
-import { PgliteDb } from '../engine/db/pglite.ts';
+import { loadPackWithAssets, workspaceFiles, type Artifact } from '../engine/artifact/read.ts';
+import { readPackSource, type PackSource } from '../engine/write/pack.ts';
+import { PgliteDb } from '../node/db/pglite.ts';
+import { localFiles } from '../node/files.ts';
+import { localAudit } from '../node/audit.ts';
+import { nodePorts } from '../node/ports.ts';
+import { cronClock } from '../node/cron-clock.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { EngineLive, type EngineServices } from '../engine/host.ts';
+import { Audit, auditShape, type AuditShape } from '../engine/audit.ts';
 import { Activation, Live, Runs } from '../engine/services.ts';
 import {
 	Ai,
@@ -43,6 +48,12 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	GuestIsolates,
+	Http,
+	Docs,
+	Images,
+	Keys,
+	Mcp,
 	Metering,
 	Speech,
 	Transport,
@@ -53,7 +64,7 @@ import { AgentHost } from '../engine/agent/index.ts';
 import { withBrowser } from '../engine/agent/browser.ts';
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
-import { localFiles, loggedTransport } from '../engine/facilities.ts';
+import { loggedTransport } from '../engine/facilities.ts';
 import { documentConverter } from '../engine/convert.ts';
 import { inProcessDeadlines } from '../engine/runs/deadlines.ts';
 import { credentials } from '../engine/integrations/credentials.ts';
@@ -68,7 +79,7 @@ import {
 	signupOf
 } from '../engine/identity/session.ts';
 import { RateWindows } from '../engine/access/rate.ts';
-import { applyPlan, plan, readApplied } from '../engine/schema/plan.ts';
+import { applyMigrations } from '../engine/schema/migrations.ts';
 import { BoltHost, BoltHostLive } from '../protocol/host.ts';
 import { PublicPages, publicPages } from '../protocol/pages.ts';
 import { IntegrationManager } from '../protocol/integrations.ts';
@@ -91,7 +102,9 @@ export type DevOptions = {
 };
 export type DevHostOptions = {
 	port: number;
-	pack?: Pack;
+	/** The host-supplied durable mutation-audit facility; normal dev owns a separate local database. */
+	audit?: AuditShape;
+	pack?: PackSource;
 	founder?: string;
 	files: Files['Service'];
 	convert?: Convert['Service'];
@@ -222,9 +235,9 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 				)
 			)
 		);
-		const acquire = Effect.fn('dev.activate')(function* (next: Artifact, pack?: Pack) {
+		const acquire = Effect.fn('dev.activate')(function* (next: Artifact, pack?: PackSource) {
 			yield* masterKey(keyFile, next.dir);
-			yield* applyPlan(db, plan(yield* readApplied(db), next.manifest), { accept: true });
+			yield* applyMigrations(db, next.manifest, next.migrations);
 			if (pack !== undefined)
 				options.log(
 					(yield* loadPackWithAssets(
@@ -237,9 +250,11 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 						? `seeded pack ${pack.meta.name}`
 						: `pack ${pack.meta.name} not loaded: the database has rows`
 				);
+			const native = yield* nodePorts({ release: next.dir, secretsKey: Redacted.value(key) }),
+				keys = Keys.fromAbi(native.keys);
 			const secretContext = yield* Layer.build(
-				Secrets.layer(declaredSecrets(next.manifest), Option.some(key)).pipe(
-					Layer.provide(Layer.succeed(TenantDb, db))
+				Secrets.layer(declaredSecrets(next.manifest)).pipe(
+					Layer.provide(Layer.mergeAll(Layer.succeed(TenantDb, db), keys))
 				)
 			);
 			const codec = Context.get(secretContext, Secrets);
@@ -261,14 +276,25 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 				enter: (effect) =>
 					Deferred.await(ready).pipe(
 						Effect.flatMap((context) => effect.pipe(Effect.provide(context)))
+					),
+				admit: (effect) =>
+					Deferred.await(ready).pipe(
+						Effect.flatMap((context) => effect.pipe(Effect.provide(context)))
 					)
 			});
 			const workspace = yield* workspaceFiles(next.dir);
 			const ports = Layer.mergeAll(
+				options.audit === undefined ? Layer.empty : Layer.succeed(Audit, options.audit),
 				Layer.effect(AgentHost, withBrowser(workspace === undefined ? {} : { workspace })).pipe(
 					Layer.provide(Browser.unavailable)
 				),
 				Layer.succeed(TenantDb, db),
+				keys,
+				GuestIsolates.fromAbi(native.guestIsolates),
+				Http.fromAbi(native.http),
+				Images.fromAbi(native.images),
+				Docs.fromAbi(native.docs),
+				Mcp.fromAbi(native.mcp),
 				Layer.succeed(Files, options.files),
 				Layer.succeed(Transport, mail),
 				options.convert === undefined
@@ -288,16 +314,15 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 					release: next.artifact.hash,
 					publicUrl,
 					guest: Option.some(next.guest),
-					transforms: new Set(next.transforms),
-					projections: new Set(next.projections),
-					start: pack?.meta.start ?? [],
-					secretsKey: Option.some(key)
+					start: pack?.meta.start ?? []
 				})
 			);
 			const engineContext = yield* Layer.build(
 				EngineLive(next.manifest).pipe(Layer.provideMerge(ports))
 			);
 			yield* Deferred.succeed(ready, engineContext);
+			const runs = Context.get(engineContext, Runs);
+			yield* cronClock({ crons: runs.crons, fire: runs.fire });
 			const engine = Layer.succeedContext(engineContext);
 			const hostIdentity = Layer.effect(
 				HostIdentity,
@@ -337,7 +362,7 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 						hostIdentity,
 						Layer.succeed(ShellConfig, {
 							publicUrl,
-							workspace: { name: next.artifact.name, handle: next.artifact.handle },
+							workspace: () => ({ name: next.artifact.name, handle: next.artifact.handle }),
 							secure: false,
 							ai: false
 						}),
@@ -352,7 +377,7 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 			yield* Effect.addFinalizer(() => Context.get(context, Live).close(next.artifact.hash));
 			return { context, artifact: next, manager };
 		});
-		const swap = (next: Artifact, pack?: Pack) =>
+		const swap = (next: Artifact, pack?: PackSource) =>
 			serial.withPermit(
 				Effect.gen(function* () {
 					yield* ScopedRef.set(
@@ -429,7 +454,7 @@ export const DevHostLive = (artifact: Artifact, options: DevHostOptions) =>
 const packOf = Effect.fn('dev.packOf')(function* (root: string, name: string) {
 	if (name === 'none') return undefined;
 	const path = yield* Path.Path;
-	return yield* readPack(
+	return yield* readPackSource(
 		name === 'base' || name === 'sample'
 			? path.join(root, '.norbital', 'seed', name)
 			: path.resolve(name)
@@ -440,12 +465,24 @@ export const dev = Effect.fn('bolt.dev')(function* (root: string, options: DevOp
 		convert = yield* devConverter;
 	const initial = yield* buildWorkspace(root, {
 		...(options.bank === undefined ? {} : { bank: options.bank }),
-		types: false,
 		log: options.log
 	});
 	const pack = yield* packOf(root, options.seed ?? 'base');
+	const fs = yield* FileSystem.FileSystem,
+		auditDirectory = path.join(root, '.norbital', 'data', 'audit');
+	yield* fs.makeDirectory(auditDirectory, { recursive: true });
+	if (
+		options.db !== undefined &&
+		(yield* fs.exists(options.db)) &&
+		(yield* fs.realPath(options.db)) === (yield* fs.realPath(auditDirectory))
+	)
+		return yield* new ToolFailure({
+			message: 'The tenant database must be separate from the development audit database.'
+		});
+	const audit = yield* auditShape(yield* localAudit(auditDirectory));
 	const hostLayer = DevHostLive(initial.artifact, {
 		port: options.port ?? 5180,
+		audit,
 		files: localFiles(path.join(root, '.norbital', 'cache', 'dev-files')),
 		keyFile:
 			options.db === undefined
@@ -471,15 +508,19 @@ export const dev = Effect.fn('bolt.dev')(function* (root: string, options: DevOp
 	if (options.watch !== false) {
 		const fs = yield* FileSystem.FileSystem,
 			dirs = yield* Effect.filter(
-				['src', 'seed'].map((dir) => path.join(root, dir)),
-				(dir) => fs.exists(dir)
+				['src', 'seed', 'migrations'].map((name) => ({ name, directory: path.join(root, name) })),
+				({ directory }) => fs.exists(directory)
 			);
 		const changes = Stream.callback<void, ToolFailure>((queue) =>
 			Effect.acquireRelease(
 				Effect.try({
 					try: () =>
-						dirs.map((dir) =>
-							watch(dir, { recursive: true }, () => Queue.offerUnsafe(queue, undefined))
+						dirs.map(({ name, directory }) =>
+							watch(directory, { recursive: true }, (_event, file) => {
+								// A build rewrites migration metadata; only editable SQL starts another build.
+								if (name !== 'migrations' || file?.endsWith('.sql') === true)
+									Queue.offerUnsafe(queue, undefined);
+							})
 						),
 					catch: (cause) =>
 						new ToolFailure({ message: 'The development watcher could not open.', cause })
@@ -493,7 +534,7 @@ export const dev = Effect.fn('bolt.dev')(function* (root: string, options: DevOp
 		yield* changes.pipe(
 			Stream.debounce('150 millis'),
 			Stream.runForEach(() =>
-				buildWorkspace(root, { types: false }).pipe(
+				buildWorkspace(root).pipe(
 					Effect.flatMap((next) => host.swap(next.artifact)),
 					Effect.tap(() => Effect.sync(() => options.log('reloaded'))),
 					Effect.catch((error) =>

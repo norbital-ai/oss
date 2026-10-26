@@ -2,8 +2,10 @@
 // an integration instance's status, the session and host-operation bodies, and `norbital.template.json`. A body is
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';
+import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
+import { CONVERT_TARGETS } from '../engine/contracts.ts';
 
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
@@ -17,7 +19,7 @@ export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
  * A Studio result's caption facts (`environment`, `release`, `commit`, `message`, `branch`, `url`, `viewport`,
  * `capturedAt`) are read at its top level.
  */
-export const STUDIO_ROLES = ['preview', 'view', 'logs', 'publish', 'rollback'] as const;
+export const STUDIO_ROLES = ['preview', 'view', 'logs', 'merge', 'rollback'] as const;
 
 /** An optional key whose value is dropped, not fatal, when it does not decode: one stray member never hides the rest. */
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
@@ -29,9 +31,7 @@ const listOf = <A>(item: Schema.Codec<A, unknown>): Schema.Codec<ReadonlyArray<A
 			Schema.Array(Schema.toType(item)),
 			SchemaTransformation.transform<ReadonlyArray<A>, unknown>({
 				decode: (u) =>
-					Array.isArray(u)
-						? u.flatMap((x) => Option.toArray(Schema.decodeUnknownOption(item)(x)))
-						: [],
+					isArray(u) ? u.flatMap((x) => Option.toArray(Schema.decodeUnknownOption(item)(x))) : [],
 				encode: (xs) => xs
 			})
 		)
@@ -39,10 +39,7 @@ const listOf = <A>(item: Schema.Codec<A, unknown>): Schema.Codec<ReadonlyArray<A
 
 // ── reads, acts, live (rules 31, 32, 64–67) ──
 const READ_METHODS = [
-	'read',
-	'get',
 	'aggregate',
-	'similar',
 	'history',
 	'query',
 	'transcript',
@@ -50,7 +47,7 @@ const READ_METHODS = [
 	'conversations'
 ] as const;
 /**
- * One read as the guest names it (`ctx.db.read('c', q)` → `{ m: 'read', a: ['c', q] }`); `lowerRead` decodes `a`.
+ * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`); `lowerRead` decodes `a`.
  * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own) are the agent panel's, live only:
  * `/live` checks the caller may read them, `/q` refuses them.
  */
@@ -81,6 +78,8 @@ const REFUSAL_CODES = [
 	'refused',
 	'locked',
 	'sourceChanged',
+	'timeout',
+	'unsupported',
 	'readBudgetExceeded',
 	'forbidden',
 	'notFound',
@@ -106,8 +105,8 @@ const REFUSAL_CODES = [
 const Written = Schema.Array(
 	Schema.Struct({ collection: Schema.String, id: Schema.String, revision: Schema.Number })
 );
-/** Every result of a write (rule 32), told apart by `kind`. */
-export const Outcome = Schema.Union([
+/** A write's outcome (rule 32), told apart by `kind`: what the engine stores and replays for an idempotency key. */
+export const WriteOutcome = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal('committed'), output: Schema.Json, records: Written }),
 	Schema.Struct({
 		kind: Schema.Literal('pendingApproval'),
@@ -137,7 +136,13 @@ export const Outcome = Schema.Union([
 	}),
 	Schema.Struct({ kind: Schema.Literal('unknown'), invocation: Schema.String })
 ]);
+/** Every answer of an act on the wire: a write's outcome, or `running` past the person-wait. */
+export const Outcome = Schema.Union([
+	...WriteOutcome.members,
+	Schema.Struct({ kind: Schema.Literal('running'), run: Schema.String })
+]);
 export type Outcome = typeof Outcome.Type;
+export type WriteOutcome = typeof WriteOutcome.Type;
 /** `v`: the lane sequence of the act's last commit (rule 66). */
 export const ActReply = Schema.Struct({ outcome: Outcome, v: Schema.Number });
 export type ActReply = typeof ActReply.Type;
@@ -147,12 +152,10 @@ export const WireError = Schema.Struct({
 });
 export type WireError = typeof WireError.Type;
 
-/** A live registration: `every` (a `Duration`) re-answers a clock view; `on` re-runs a collection query (rule 64). */
+/** A live registration. Declared-query dependencies are recorded while answering it. */
 export const LiveAdd = Schema.Struct({
 	view: Schema.String,
-	read: WireRead,
-	every: Schema.optionalKey(Schema.String),
-	on: Schema.optionalKey(Schema.Array(Schema.String))
+	read: WireRead
 });
 export type LiveAdd = typeof LiveAdd.Type;
 export const LiveBody = Schema.Struct({
@@ -275,15 +278,7 @@ export const AgentRow = Schema.Struct({
 	/** When it was written. */
 	at: Schema.optionalKey(Schema.String),
 	tag: Schema.NullOr(Schema.String),
-	call: Schema.optionalKey(
-		Schema.Struct({
-			name: Schema.String,
-			input: Schema.Json,
-			studio: Schema.optionalKey(Schema.Literals(STUDIO_ROLES))
-		})
-	),
-	/** An `approved` call's latest Studio phase, as the host reports it; the card words it. */
-	progress: Schema.optionalKey(Schema.Literals(STUDIO_PHASES)),
+	call: Schema.optionalKey(Schema.Struct({ name: Schema.String, input: Schema.Json })),
 	receipts: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
@@ -332,6 +327,8 @@ export const AgentRow = Schema.Struct({
 			result: Schema.optionalKey(Schema.String),
 			/** The preview URL the result names in full (a `preview` role's, `preview_show`'s), never clipped. */
 			preview: Schema.optionalKey(Schema.String),
+			/** The held request the result names (a `publish` or `rollback` role's): the person approves it on the card. */
+			approval: Schema.optionalKey(Schema.String),
 			/** What a Studio result says it shows (environment, release, commit, message, branch, url, viewport, capturedAt), for its caption. */
 			about: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 			/** The tool's declared Studio role (`HostTool.studio`). */
@@ -408,20 +405,23 @@ const Start = Schema.Union([
 	Schema.Struct({ automation: Schema.String, ...StartRun.fields }),
 	Schema.Struct({ automation: Schema.String, runs: Schema.NonEmptyArray(StartRun) })
 ]);
-const Decide = Schema.Struct({
+export const Decide = Schema.Struct({
 	requestId: Schema.String,
-	/** The move (approvals/machine.ts): approve, reject, request changes, resubmit, withdraw, supersede, comment, close. */
-	status: Schema.Literals([
-		'APPROVED',
-		'REJECTED',
-		'REQUEST_FOR_CHANGE',
-		'RESUBMITTED',
-		'WITHDRAWN',
-		'SUPERSEDED',
-		'COMMENT',
-		'CLOSED'
-	]),
+	decision: Schema.Literals(['approve', 'reject', 'requestChanges']),
 	reason: tolerant(Schema.String)
+});
+const ConvertDocument = Schema.Struct({
+	source: Schema.Union([
+		Schema.Struct({ html: Schema.String }),
+		Schema.Struct({ markdown: Schema.String })
+	]),
+	request: Schema.Struct({
+		to: Schema.Literals(CONVERT_TARGETS),
+		name: Schema.String,
+		page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
+		landscape: Schema.optionalKey(Schema.Boolean),
+		reference: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
+	})
 });
 const Describe = Schema.Struct({
 	collection: Schema.String,
@@ -475,7 +475,8 @@ const own = <C extends string, I extends Schema.Constraint>(callable: C, input: 
 /** An own callable's call, decoded by `callable`. */
 export const OwnCall = Schema.Union([
 	own('start', Start),
-	own('approvals.process', Decide),
+	own('approvals.decide', Decide),
+	own('convert.document', ConvertDocument),
 	own('filter.describe', Describe),
 	own('filter.options', Options),
 	/** Never refused: what does not decode starts a conversation with the defaults. */
@@ -514,7 +515,10 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 	start: [
 		[Start, 'start takes { automation, input, id } or { automation, runs: [{ input, id }] }']
 	],
-	'approvals.process': [[Decide, 'approvals.process takes { requestId, status, reason? }']],
+	'approvals.decide': [[Decide, 'approvals.decide takes { requestId, decision, reason? }']],
+	'convert.document': [
+		[ConvertDocument, 'convert.document takes { source, request: { to, name } }']
+	],
 	'filter.describe': [
 		[
 			Schema.Struct({ collection: Schema.String, text: Schema.String }),
@@ -832,7 +836,7 @@ export const TemplateManifest = Schema.Struct({
 	description: Copy,
 	visibility: Schema.Literals(['public', 'unlisted']),
 	/** Matches the source (the gate counts models, apps and automations). */
-	counts: Schema.Struct({ collections: Count, apps: Count, automations: Count }),
+	counts: Schema.Struct({ models: Count, apps: Count, automations: Count }),
 	tags: Schema.Array(Schema.String),
 	name_zh: Schema.optionalKey(Schema.NonEmptyString),
 	description_zh: Schema.optionalKey(Schema.NonEmptyString),

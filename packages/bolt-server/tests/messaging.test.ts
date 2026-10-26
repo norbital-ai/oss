@@ -17,6 +17,7 @@ const config = (over: { [k: string]: string } = {}) =>
 				ConfigProvider.fromUnknown({
 					BOLT_ARTIFACT: '/a',
 					BOLT_PGLITE_DIR: '/d',
+					BOLT_AUDIT_DIR: '/audit',
 					BOLT_PUBLIC_URL: 'https://acme.example',
 					...over
 				})

@@ -1,5 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
+import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
+import * as NodePath from '@effect/platform-node/NodePath';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from 'effect';
 import { Activation, Live } from '../src/engine/services.ts';
 import {
@@ -9,12 +11,19 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	GuestIsolates,
+	Http,
+	Docs,
+	Images,
+	Keys,
+	Mcp,
 	Metering,
 	Speech,
 	Transport,
 	WebRead
 } from '../src/engine/ports.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { nodePorts } from '../src/node/ports.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { EngineLive } from '../src/engine/host.ts';
@@ -25,12 +34,20 @@ const database = Layer.effect(
 	TenantDb,
 	Effect.gen(function* () {
 		const db = yield* TenantDb;
-		yield* applyPlan(db, plan(null, manifest));
+		yield* applyPlan(db, yield* plan(null, manifest));
 		return db;
 	})
 ).pipe(Layer.provide(PgliteDb.layer()));
 const host = Layer.mergeAll(
 	NodeCrypto.layer,
+	NodeFileSystem.layer,
+	NodePath.layer,
+	Layer.unwrap(Effect.map(nodePorts(), (ports) => GuestIsolates.fromAbi(ports.guestIsolates))),
+	Keys.unavailable,
+	Http.unavailable,
+	Images.unavailable,
+	Docs.unavailable,
+	Mcp.unavailable,
 	database,
 	Ai.unavailable,
 	Convert.unavailable,
@@ -48,10 +65,7 @@ const host = Layer.mergeAll(
 		release: 'test',
 		publicUrl: 'http://localhost',
 		guest: Option.none(),
-		transforms: new Set<string>(),
-		projections: new Set<string>(),
-		start: [],
-		secretsKey: Option.none()
+		start: []
 	})
 );
 it.effect('builds the native graph and ends connection streams when its generation closes', () =>

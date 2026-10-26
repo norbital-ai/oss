@@ -3,7 +3,7 @@
 // dropped); the transcript and the model context read that one shape. A `messages` feed's map reads it as stored
 // (conversations.integration.test.ts).
 import { expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Result, Schema } from 'effect';
+import { Context, Effect, Layer, Result } from 'effect';
 import { messages } from '../src/engine/agent/context.ts';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import { MSG } from '../src/engine/conversations/store.ts';
@@ -17,7 +17,6 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		collections: {},
 		integrations: {},
-		pipelines: {},
 		policies: {},
 		teams: {},
 		connections: { desk_wa: { integration: 'whatsapp' } },
@@ -59,17 +58,7 @@ it.live(
 			if (result === undefined) throw new Error('inbound statement returned no result');
 			const [row] = yield* rowsOf(result.rows);
 			if (row === undefined) throw new Error('inbound message missing');
-			const files = yield* Schema.decodeUnknownEffect(
-				Schema.Array(
-					Schema.Struct({
-						id: Schema.optionalKey(Schema.String),
-						name: Schema.String,
-						mime: Schema.String,
-						bytes: Schema.Number
-					})
-				)
-			)(row.files);
-			const id = files[0]?.id;
+			const id = row.files?.[0]?.id;
 			if (id === undefined) throw new Error('received attachment has no file id');
 			expect(row.files).toEqual([
 				{ id, name: 'form.pdf', mime: 'application/pdf', bytes: pdf.byteLength },

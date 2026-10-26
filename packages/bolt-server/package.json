@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
 	"type": "module",
 	"sideEffects": false,
@@ -25,6 +25,7 @@
 		"@effect/platform-node": "catalog:",
 		"@norbital-ai/bolt": "workspace:*",
 		"@norbital-ai/providers": "workspace:*",
+		"@norbital-ai/store": "workspace:*",
 		"effect": "catalog:",
 		"exceljs": "4.4.0",
 		"mammoth": "1.12.2",

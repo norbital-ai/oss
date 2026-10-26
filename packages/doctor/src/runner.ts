@@ -355,11 +355,9 @@ function execute(options: RunOptions): Readonly<{
 			if (applicable.length === 0) continue;
 			const allowed = new Set(applicable);
 
-			const parsed = Result.try({
-				try: () => ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind),
-				catch: (cause) => new DoctorFailure(cause)
-			});
-			const sourceFile = Result.getOrElse(parsed, () => undefined);
+			const sourceFile = Result.getOrUndefined(
+				Result.try(() => ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind))
+			);
 			if (sourceFile === undefined) continue;
 
 			let importCache: Map<string, Set<string>> | undefined;

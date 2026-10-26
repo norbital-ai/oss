@@ -2,7 +2,7 @@
 // row is rewritten at most every STREAM_FLUSH_MS and each flush arrives as a `patch` of the conversation's live
 // transcript (the text growing, `streaming` until the final write); a tool call is a `running` row finished in place;
 // the conversation list patches `running` then `idle`. Nothing re-reads: each view has one `answer`, then patches. A stop
-// keeps the partial reply, marked interrupted. `/__bolt/agent/stream` and `/__bolt/agent/conversations` are gone.
+// keeps the partial reply, marked interrupted.
 import { describe, expect, it } from '@effect/vitest';
 import { Clock, Context, Effect, FiberSet, Layer, Queue, Result, Schema, Stream } from 'effect';
 import { Ai, type AiEvent } from '../src/engine/ports.ts';
@@ -25,7 +25,6 @@ const manifest = Result.getOrThrow(
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -138,7 +137,7 @@ const setup = (infer: Infer) =>
 				while (!frames.some((frame) => frame.t === 'v' && frame.v >= version))
 					yield* Queue.take(received);
 			});
-		return { t, api, c, fetch, request, frames, upserts, settled, close: () => source.close() };
+		return { t, api, c, fetch, frames, upserts, settled, close: () => source.close() };
 	});
 
 describe('the agent turn over the live stream', () => {
@@ -282,7 +281,7 @@ describe('the agent turn over the live stream', () => {
 			)
 	);
 
-	it.live('the old progress stream and the polled conversation list are gone', () =>
+	it.live('the model selector reads the current catalogue', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const s = yield* setup(() =>
@@ -291,9 +290,6 @@ describe('the agent turn over the live stream', () => {
 					])
 				);
 				try {
-					expect((yield* s.request(`/__bolt/agent/stream?conversation=${s.c}`)).status).toBe(404);
-					expect((yield* s.request('/__bolt/agent/conversations')).status).toBe(404);
-					// the models the selector offers are a plain one-shot read
 					const models = yield* s.api.agent.models();
 					expect(models.default).toBe('default');
 				} finally {

@@ -1,15 +1,14 @@
 <script lang="ts" generics="C extends CollectionKey">
 	import type { CollectionKey, Page, Row, RowOf } from '../collection/types.js';
 	import type { Json } from '../client/contract.js';
-	import { untrack } from 'svelte';
 	import { watch as watchSource } from 'runed';
+	import { untrack } from 'svelte';
 	import { useKinds } from '../kinds/context.js';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
-	import { Checkbox } from '../primitives/checkbox/index.js';
+	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import type { BoardProps } from './Board.svelte';
-	import { watch } from '../read/live.svelte.js';
 	import { compact } from '../filter/scope.js';
 	import { label, msg } from '../text/messages.js';
 	import { listSelect, refOf, unref } from '../relations/select.js';
@@ -17,6 +16,7 @@
 	import { pageRead } from '../read/paging.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import ReadGate from '../read/ReadGate.svelte';
+	import { queryState } from '../read/state.js';
 	import Value from '../cell/Value.svelte';
 	import ApprovalAccent from '../approval/ApprovalAccent.svelte';
 	import { approvalOf, approvalText } from '../approval/row.js';
@@ -62,13 +62,14 @@
 	const query = $derived(
 		JSON.stringify({ of, where, orderBy, search, select, pageSize, index, after })
 	);
-	const page = watch(() => {
-		query;
+	// hook:agent-ui — later pages stay live
+	const page = $derived.by(() => {
+		// Count metadata can rebuild an equivalent lane filter; keep its existing query and pages.
+		void query;
 		return untrack(() =>
 			pageRead(
-				bolt,
 				(limit, at) =>
-					bolt.read<Page<RowOf<C> & Row>>(
+					bolt.query<Page<RowOf<C> & Row>>(
 						of,
 						compact({ where, orderBy, search, select, limit, after: at })
 					),
@@ -77,9 +78,10 @@
 				after
 			)
 		);
-	}); // hook:agent-ui — later pages stay live
+	});
+	const state = $derived(queryState(page));
 	watchSource(
-		() => ({ query, value: page.value }),
+		() => ({ query, value: page.current }),
 		(current, previous) => {
 			if (
 				previous?.query === current.query &&
@@ -91,11 +93,11 @@
 		}
 	);
 	$effect(() => {
-		if (page.state.kind === 'ready') onNext(nextOf(page.state.value));
+		if (state.kind === 'ready') onNext(nextOf(state.value));
 	});
 	const cards = $derived(
-		page.state.kind === 'ready'
-			? page.state.value.rows.filter((row) => typeof row.id === 'string' && row.id.trim() !== '')
+		state.kind === 'ready'
+			? state.value.rows.filter((row) => typeof row.id === 'string' && row.id.trim() !== '')
 			: []
 	);
 	const pageKey = Symbol();
@@ -115,7 +117,7 @@
 </script>
 
 <span hidden {@attach reportRows}></span>
-<ReadGate state={page.state} what={label(bolt, of)}>
+<ReadGate {state} what={label(bolt, of)}>
 	{#snippet skeleton()}
 		<div class="flex flex-col gap-2">
 			{#each [0, 1, 2] as i (i)}

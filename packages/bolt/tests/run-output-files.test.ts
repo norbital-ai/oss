@@ -99,3 +99,21 @@ it('stops recursive custom aliases without treating their contents as undeclared
 		)
 	).toEqual([]);
 });
+
+it('finds files only in declared model fields of nested row outputs', () => {
+	const kind = {
+		kind: 'object',
+		fields: { rows: { kind: 'list', of: { kind: 'row', of: 'reports' } } }
+	} as const;
+	const models = {
+		reports: {
+			description: 'Report',
+			label: 'title',
+			fields: { title: { kind: 'text' }, attachment: file }
+		}
+	} satisfies Parameters<typeof outputFiles>[3];
+	const value = { rows: [{ title: 'Report', attachment: ref('report'), forged: ref('forged') }] };
+	expect(outputFiles(kind, value, {}, models)).toEqual([ref('report')]);
+	expect(outputFiles(kind, value)).toEqual([]);
+	expect(outputFiles({ kind: 'row', of: 'reports' }, value.rows, {}, models)).toEqual([]);
+});

@@ -101,7 +101,10 @@ const decodeDevice = Schema.decodeUnknownExit(
 );
 const installedDevice = (): DeviceApi | undefined => {
 	if (typeof window === 'undefined') return undefined;
-	const descriptor = Object.getOwnPropertyDescriptor(window, 'boltDevice');
+	const descriptor: TypedPropertyDescriptor<unknown> | undefined = Object.getOwnPropertyDescriptor(
+		window,
+		'boltDevice'
+	);
 	const value: unknown = descriptor?.value;
 	const decoded = decodeDevice(value);
 	return Exit.isSuccess(decoded) ? decoded.value : undefined;
@@ -110,7 +113,10 @@ const installedDevice = (): DeviceApi | undefined => {
 /** Await only this document's own native startup promise, without invoking getters or trusting thenables. */
 export function awaitDevice(): Promise<void> {
 	if (typeof window === 'undefined') return Promise.resolve();
-	const descriptor = Object.getOwnPropertyDescriptor(window, 'boltDeviceReady');
+	const descriptor: TypedPropertyDescriptor<unknown> | undefined = Object.getOwnPropertyDescriptor(
+		window,
+		'boltDeviceReady'
+	);
 	const value: unknown = descriptor?.value;
 	return value instanceof Promise ? value.then(() => undefined) : Promise.resolve();
 }

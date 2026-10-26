@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Reader } from '../contracts.ts';
-import type { ReadIR } from '../../protocol/ir-types.ts';
+import type { ReadIR } from '../../protocol/reads.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { publicEnvoys, type EngineManifest } from '../manifest.ts';

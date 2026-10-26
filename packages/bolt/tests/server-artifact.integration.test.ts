@@ -8,7 +8,7 @@ import { cp, readdir, realpath, symlink } from 'node:fs/promises';
 import { scratchRoot } from '../../../scripts/lib/scratch.ts';
 import { buildServerPages } from '../src/compiler/artifact/server.ts';
 import { discover } from '../src/compiler/discover.ts';
-import { sha256Hex } from '../src/engine/write/sql.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
 const manifest: EngineManifest = {
@@ -17,7 +17,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	collections: {},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},

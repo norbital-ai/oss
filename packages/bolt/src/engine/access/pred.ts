@@ -1,9 +1,11 @@
 // Grant predicates: a grant's `Where` literal → `Pred` through the query area's normalizer (one K3 decode for reads and
 // grants), the little Pred algebra the Authority compiler needs, and the JS judge of pre/post-images.
 import type { EngineManifest } from '../manifest.ts';
-import type { Pred } from '../../protocol/ir-types.ts';
-import { catalog, type Catalog } from '../../protocol/catalog.ts';
-import { where } from '../../protocol/ir.ts';
+import { storeSync } from '../../protocol/errors.ts';
+import type { Pred } from '@norbital-ai/store';
+import { catalog } from '../../protocol/catalog.ts';
+import { type Catalog } from '@norbital-ai/store';
+import { where } from '@norbital-ai/store';
 
 export const TRUE: Pred = { t: 'const', value: true };
 const FALSE: Pred = { t: 'const', value: false };
@@ -17,5 +19,6 @@ export function catalogOf(m: EngineManifest): Catalog {
 	if (cat === undefined) catalogs.set(m, (cat = catalog(m)));
 	return cat;
 }
+/** A declared predicate (a grant, a route, a trigger's `where`), which `bolt check` proved, as the IR. */
 export const toPred = (m: EngineManifest, model: string, w: unknown): Pred =>
-	where(catalogOf(m), model, w);
+	storeSync(where(catalogOf(m), model, w));

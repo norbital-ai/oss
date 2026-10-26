@@ -1,8 +1,8 @@
 <script lang="ts">
-	// One page read awaited on the ui edge (`{#await run(bolt.read(…))}`).
-	import type { Read } from '../../src/page/page-bolt.ts';
+	// One page read awaited on the ui edge (`{#await run(bolt.query(…))}`).
+	import type { Query } from '../../src/page/page-bolt.ts';
 	import { run } from '../../../ui/src/effect/index.js';
-	let { read }: { read: () => Read<{ rows: readonly { title: string }[] }> } = $props();
+	let { read }: { read: () => Query<{ rows: readonly { title: string }[] }> } = $props();
 </script>
 
 {#await run(read())}

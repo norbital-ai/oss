@@ -3,26 +3,24 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result, Schema } from 'effect';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { BoltError } from '../src/protocol/errors.ts';
-import { inline } from '../src/engine/db/postgres.ts';
+import { BoltError, storeSync } from '../src/protocol/errors.ts';
+import { tableOf } from '../src/protocol/catalog.ts';
+import { inline } from '../src/engine/db/wire.ts';
 import { parse } from '../src/engine/db/wire.ts';
-import {
-	constraintIndex,
-	schemaObjects,
-	SchemaSliceSchema,
-	type SchemaSlice
-} from '../src/engine/schema/ddl.ts';
-import { applyPlan, fingerprint, plan } from '../src/engine/schema/plan.ts';
+import { SchemaSliceSchema, type SchemaSlice } from '../src/engine/schema/plan.ts';
+import { constraintIndex, schemaObjects } from '@norbital-ai/store';
+import { applyPlan, engineBeside, fingerprint, plan } from '../src/engine/schema/plan.ts';
+import { SYSTEM } from '../src/system/index.ts';
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
 
 const withModel = (
 	s: SchemaSlice,
 	name: string,
-	m: SchemaSlice['models'][string]
-): SchemaSlice => ({ ...s, models: { ...s.models, [name]: m } });
+	m: SchemaSlice['tables'][string]
+): SchemaSlice => ({ ...s, tables: { ...s.tables, [name]: m } });
 const classes = (from: SchemaSlice, to: SchemaSlice) =>
-	Object.fromEntries(plan(from, to).steps.map((s) => [s.id, s.class]));
+	Object.fromEntries(storeSync(plan(from, to)).steps.map((s) => [s.id, s.class]));
 
 describe('next schema: fingerprint and plan', () => {
 	it('fingerprints the canonical slice: key order is irrelevant, a json shape is not', () => {
@@ -38,7 +36,7 @@ describe('next schema: fingerprint and plan', () => {
 		const reordered = Schema.decodeUnknownSync(SchemaSliceSchema)(reverse(s));
 		expect(JSON.stringify(reordered)).not.toBe(JSON.stringify(s));
 		expect(fingerprint(reordered)).toBe(fingerprint(s));
-		const notes = s.models.notes!;
+		const notes = s.tables.notes!;
 		expect(
 			fingerprint(
 				withModel(s, 'notes', {
@@ -56,31 +54,35 @@ describe('next schema: fingerprint and plan', () => {
 		);
 	});
 
-	it('plans nothing against its own slice with keys reordered, as jsonb returns it; an unrelated field is one step', () => {
+	it('plans nothing with keys reordered; adding a field also refreshes its native row guard', () => {
 		// jsonb orders keys by length: the applied slice comes back with `states` and predicate fields in another order
-		const s = withModel(slice(), 'signings', {
-			description: 'signings',
-			label: 'status',
-			fields: {
-				status: {
-					kind: 'state',
-					initial: 'unstamped',
-					states: {
-						unstamped: { to: ['voided'] },
-						counterparty_stamped: {},
-						acknowledged: {},
-						voided: {}
-					}
+		const s = withModel(
+			slice(),
+			'signings',
+			tableOf({
+				description: 'signings',
+				label: 'status',
+				fields: {
+					status: {
+						kind: 'state',
+						initial: 'unstamped',
+						states: {
+							unstamped: { to: ['voided'] },
+							counterparty_stamped: {},
+							acknowledged: {},
+							voided: {}
+						}
+					},
+					reason: { kind: 'text', optional: true }
 				},
-				reason: { kind: 'text', optional: true }
-			},
-			check: {
-				void_needs_reason: {
-					status: { ne: 'voided', in: ['unstamped', 'voided'] },
-					reason: { isNull: false }
+				check: {
+					void_needs_reason: {
+						status: { ne: 'voided', in: ['unstamped', 'voided'] },
+						reason: { isNull: false }
+					}
 				}
-			}
-		});
+			})
+		);
 		const reverse = (v: unknown): unknown =>
 			v !== null && typeof v === 'object' && !Array.isArray(v)
 				? Object.fromEntries(
@@ -92,8 +94,8 @@ describe('next schema: fingerprint and plan', () => {
 					? v.map(reverse)
 					: v;
 		const applied = Schema.decodeUnknownSync(SchemaSliceSchema)(reverse(s));
-		expect(plan(applied, s).steps).toEqual([]);
-		const signings = s.models.signings!;
+		expect(storeSync(plan(applied, s)).steps).toEqual([]);
+		const signings = s.tables.signings!;
 		expect(
 			classes(
 				applied,
@@ -102,24 +104,31 @@ describe('next schema: fingerprint and plan', () => {
 					fields: { ...signings.fields, nickname: { kind: 'text', optional: true } }
 				})
 			)
-		).toEqual({ 'create:column:signings.nickname': 'additive' });
+		).toEqual({
+			'create:column:signings.nickname': 'additive',
+			'replace:trigger:signings.store_row_rules': 'additive'
+		});
 		// the refusal map names what the plan created
-		expect([...constraintIndex(applied).keys()].sort()).toEqual(
-			[...constraintIndex(s).keys()].sort()
+		expect([...storeSync(constraintIndex(applied)).keys()].sort()).toEqual(
+			[...storeSync(constraintIndex(s)).keys()].sort()
 		);
 	});
 
 	it('a money field with a declared scale checks that many places instead of the minor unit (a unit price)', () => {
-		const s = withModel(slice(), 'prices', {
-			description: 'prices',
-			label: 'code',
-			fields: {
-				code: { kind: 'text' },
-				unit: { kind: 'money', currency: 'SGD', scale: 4 },
-				total: { kind: 'money', currency: 'JPY' }
-			}
-		});
-		const sql = schemaObjects(s)
+		const s = withModel(
+			slice(),
+			'prices',
+			tableOf({
+				description: 'prices',
+				label: 'code',
+				fields: {
+					code: { kind: 'text' },
+					unit: { kind: 'money', currency: 'SGD', scale: 4 },
+					total: { kind: 'money', currency: 'JPY' }
+				}
+			})
+		);
+		const sql = storeSync(schemaObjects(s))
 			.filter((o) => o.table === 'prices')
 			.flatMap((o) => o.create)
 			.join('\n');
@@ -128,15 +137,15 @@ describe('next schema: fingerprint and plan', () => {
 	});
 
 	it('an empty database plans every object as additive', () => {
-		const steps = plan(null, slice()).steps;
+		const steps = storeSync(plan(null, slice())).steps;
 		expect(steps.length).toBeGreaterThan(50);
 		expect(new Set(steps.map((s) => s.class))).toEqual(new Set(['additive']));
 	});
 
 	it('classifies each change: additive, backfill, validating, destructive', () => {
 		const s = slice();
-		const notes = s.models.notes!;
-		const orders = s.models.orders!;
+		const notes = s.tables.notes!;
+		const orders = s.tables.orders!;
 		expect(
 			classes(
 				s,
@@ -145,21 +154,34 @@ describe('next schema: fingerprint and plan', () => {
 					fields: { ...notes.fields, tag: { kind: 'text', optional: true } }
 				})
 			)
-		).toEqual({ 'create:column:notes.tag': 'additive' });
+		).toEqual({
+			'create:column:notes.tag': 'additive',
+			'replace:trigger:notes.store_row_rules': 'additive'
+		});
 		expect(
 			classes(
 				s,
 				withModel(s, 'notes', { ...notes, fields: { ...notes.fields, tag: { kind: 'text' } } })
 			)
-		).toEqual({ 'create:column:notes.tag': 'additive', 'create:notNull:notes.tag': 'validating' });
+		).toEqual({
+			'create:column:notes.tag': 'additive',
+			'create:notNull:notes.tag': 'validating',
+			'replace:trigger:notes.store_row_rules': 'additive'
+		});
 		expect(
 			classes(
 				s,
-				withModel(s, 'notes', { ...notes, fields: { body: { kind: 'text', optional: true } } })
+				withModel(s, 'notes', {
+					...notes,
+					fields: { ...notes.fields, body: { kind: 'text', optional: true } }
+				})
 			)
 		).toEqual({ 'drop:notNull:notes.body': 'additive' });
 		expect(
-			classes(s, withModel(s, 'notes', { ...notes, fields: { body: { kind: 'int' } } }))
+			classes(
+				s,
+				withModel(s, 'notes', { ...notes, fields: { ...notes.fields, body: { kind: 'int' } } })
+			)
 		).toMatchObject({
 			'replace:column:notes.body': 'destructive',
 			'replace:notNull:notes.body': 'validating'
@@ -188,32 +210,29 @@ describe('next schema: fingerprint and plan', () => {
 			})
 		);
 		expect(Object.values(st)).not.toContain('destructive');
-		const { notes: _, ...models } = s.models;
-		const { 'notes.about': __, ...relationships } = s.relationships;
-		expect(classes(s, { ...s, models, relationships })).toMatchObject({
+		const { notes: _, ...tables } = s.tables;
+		expect(classes(s, { ...s, tables })).toMatchObject({
 			'drop:table:notes': 'destructive'
 		});
 	});
 
 	it('names constraints <table>__<kind>__<hash8> and refuses an identifier over 63 bytes', () => {
-		const names = schemaObjects(slice()).flatMap((o) =>
+		const names = storeSync(schemaObjects(slice())).flatMap((o) =>
 			o.meta === undefined ? [] : [o.meta.name]
 		);
 		expect(names.every((n) => /^[a-z_]{1,40}__(uq|key|ck|ex|fk)__[0-9a-f]{8}$/.test(n))).toBe(true);
 		const s = slice();
 		const long = 'x'.repeat(55);
 		expect(() =>
-			schemaObjects(
-				withModel(
-					{
-						...s,
-						relationships: {
-							...s.relationships,
-							[`notes.${long}`]: { to: ['customers', 'orders'] }
+			storeSync(
+				schemaObjects(
+					withModel(s, 'notes', {
+						...s.tables.notes!,
+						fields: {
+							...s.tables.notes!.fields,
+							[long]: { kind: 'ref', to: ['customers', 'orders'] }
 						}
-					},
-					'notes',
-					s.models.notes!
+					})
 				)
 			)
 		).toThrow(/over 63 bytes/);
@@ -223,14 +242,20 @@ describe('next schema: fingerprint and plan', () => {
 		const s: SchemaSlice = {
 			tz: 'UTC',
 			currency: null,
-			relationships: {
-				'notes.owner_id': { to: 'sys_user' },
-				'notes.parent_id': { to: 'notes', optional: true }
-			},
-			models: { notes: { description: 'n', label: 'body', fields: { body: { kind: 'text' } } } }
+			tables: {
+				sys_user: tableOf(SYSTEM.models.sys_user!),
+				notes: {
+					fields: {
+						body: { kind: 'text' },
+						owner_id: { kind: 'ref', to: 'sys_user' },
+						parent_id: { kind: 'ref', to: 'notes', optional: true }
+					},
+					audit: true
+				}
+			}
 		};
 		const col = (c: string) =>
-			schemaObjects(s).find((o) => o.id === `column:notes.${c}`)!.create[0];
+			storeSync(schemaObjects(s)).find((o) => o.id === `column:notes.${c}`)!.create[0];
 		expect(col('owner_id')).toMatch(/"owner_id" text$/);
 		expect(col('parent_id')).toMatch(/"parent_id" uuid$/);
 	});
@@ -239,17 +264,16 @@ describe('next schema: fingerprint and plan', () => {
 		const s: SchemaSlice = {
 			tz: 'UTC',
 			currency: null,
-			relationships: { 'notes.owner_id': { to: 'sys_user' } },
-			models: {
+			tables: {
+				sys_user: tableOf(SYSTEM.models.sys_user!),
 				notes: {
-					description: 'n',
-					label: 'body',
-					fields: { body: { kind: 'text' } },
+					fields: { body: { kind: 'text' }, owner_id: { kind: 'ref', to: 'sys_user' } },
+					audit: true,
 					index: ['owner_id']
 				}
 			}
 		};
-		const ids = schemaObjects(s).map((o) => o.id);
+		const ids = storeSync(schemaObjects(s)).map((o) => o.id);
 		expect(ids.filter((id) => id.startsWith('index:notes.'))).toHaveLength(1);
 		expect(new Set(ids).size).toBe(ids.length);
 	});
@@ -258,10 +282,11 @@ describe('next schema: fingerprint and plan', () => {
 		const s: SchemaSlice = {
 			tz: 'UTC',
 			currency: null,
-			relationships: {},
-			models: { notes: { description: 'n', label: 'body', fields: { body: { kind: 'text' } } } }
+			tables: {
+				notes: tableOf({ description: 'n', label: 'body', fields: { body: { kind: 'text' } } })
+			}
 		};
-		const objects = schemaObjects(s);
+		const objects = storeSync(schemaObjects(s));
 		expect(objects.flatMap((object) => object.create).join('\n')).not.toMatch(
 			/approval_id|__approval__/
 		);
@@ -272,7 +297,7 @@ describe('next schema: fingerprint and plan', () => {
 
 	it("the built-in layer plans like a workspace; the engine's private objects are never dropped and re-asserted", () => {
 		const s = slice();
-		const objects = schemaObjects(s);
+		const objects = storeSync(schemaObjects(s, engineBeside(s)));
 		for (const t of [
 			'sys_user',
 			'sys_run',
@@ -298,27 +323,26 @@ describe('next schema: fingerprint and plan', () => {
 			'bolt_seq',
 			'bolt_idem',
 			'bolt_approvals',
-			'bolt_credential',
-			'bolt_feed',
-			'bolt_feed_row'
+			'bolt_credential'
 		])
 			expect(creates).toContain(`create table if not exists ${t} (`);
 		expect(engine.every((o) => o.drop === null)).toBe(true);
 		expect(new Set(engine.map((o) => o.id)).size).toBe(engine.length);
-		expect(plan(null, s).steps.filter((x) => x.id.startsWith('create:engine:'))).toHaveLength(
-			engine.length
-		);
-		expect(plan(s, s).steps).toEqual([]);
+		expect(
+			storeSync(plan(null, s)).steps.filter((x) => x.id.startsWith('create:engine:'))
+		).toHaveLength(engine.length);
+		expect(storeSync(plan(s, s)).steps).toEqual([]);
 	});
 
 	it.effect('refuses an unaccepted destructive step before touching the database', () =>
 		Effect.gen(function* () {
 			const s = slice();
-			const { notes: _, ...models } = s.models;
-			const { 'notes.about': __, ...relationships } = s.relationships;
+			const { notes: _, ...tables } = s.tables;
 			const untouched = TenantDb.typed({
 				read: () => Effect.die('touched'),
 				write: () => Effect.die('touched'),
+				session: () =>
+					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 				transaction: () => Effect.die('touched')
 			});
 			const untouchable = new Proxy(untouched, {
@@ -327,7 +351,7 @@ describe('next schema: fingerprint and plan', () => {
 				}
 			});
 			const refusal = yield* Effect.result(
-				applyPlan(untouchable, plan(s, { ...s, models, relationships }))
+				applyPlan(untouchable, yield* plan(s, { ...s, tables }))
 			);
 			expect(Result.isFailure(refusal) && refusal.failure).toMatchObject({
 				code: 'destructiveNotAccepted'
@@ -337,11 +361,15 @@ describe('next schema: fingerprint and plan', () => {
 });
 
 describe('next schema: SQLSTATE → refusal (§5.2, every row)', () => {
-	const idx = constraintIndex(slice());
+	const idx = storeSync(constraintIndex(slice()));
 	const name = (model: string, kind: string) =>
 		[...idx].find(([, m]) => m.model === model && m.kind === kind)?.[0];
 	const cases: [DbError, object][] = [
 		[DbError.make('23505', 'dup', name('customers', 'unique')), { code: 'unique' }],
+		[
+			DbError.make('23001', 'delete restricted by a foreign key', name('orders', 'fk')),
+			{ code: 'restricted' }
+		],
 		[
 			DbError.make(
 				'23503',

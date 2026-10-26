@@ -15,8 +15,7 @@ it.live(
 			const temporary = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-client-boundary-' });
 			const root = yield* fs.realPath(temporary);
 			const files: readonly Discovered[] = [
-				{ role: 'collection', name: 'private', path: 'src/data/collection/private/+collection.ts' },
-				{ role: 'model', name: 'private', path: 'src/data/model/+private.model.ts' },
+				{ role: 'model', name: 'private', path: 'src/data/model/private/+model.ts' },
 				{ role: 'secrets', name: '', path: 'src/+secrets.ts' },
 				{ role: 'automation', name: 'private', path: 'src/automation/+private.automation.ts' },
 				{ role: 'policy', name: 'private', path: 'src/access_control/policy/+private.policy.ts' },
@@ -71,7 +70,7 @@ it.live(
 			);
 			yield* write(
 				'src/lib/shared.ts',
-				'import type { PrivateShape } from "../data/model/+private.model.ts"; import messages from "../i18n/+messages.ts"; import { tree } from "folder-dependency"; import { helper } from "folder-dependency/direct"; const input: PrivateShape = { name: messages.title }; export const value = [input.name, tree, helper].join(" ");'
+				'import type { PrivateShape } from "../data/model/private/+model.ts"; import messages from "../i18n/+messages.ts"; import { tree } from "folder-dependency"; import { helper } from "folder-dependency/direct"; const input: PrivateShape = { name: messages.title }; export const value = [input.name, tree, helper].join(" ");'
 			);
 			yield* write(
 				'entry.ts',
@@ -108,7 +107,7 @@ it.live(
 			expect(code).toContain('Dependency server filename allowed');
 			expect(code).not.toContain('SERVER_ONLY_CANARY');
 			yield* fs.symlink(
-				path.join(root, 'src/data/collection/private/+collection.ts'),
+				path.join(root, 'src/data/model/private/+model.ts'),
 				path.join(root, 'src/lib/ordinary.ts')
 			);
 			yield* fs.symlink(
@@ -116,7 +115,7 @@ it.live(
 				path.join(root, 'node_modules/folder-dependency/dist/browser.ts')
 			);
 			yield* fs.symlink(
-				path.join(root, 'src/data/collection/private/+collection.ts'),
+				path.join(root, 'src/data/model/private/+model.ts'),
 				path.join(root, 'node_modules/folder-dependency/dist/declared.ts')
 			);
 			yield* write(
@@ -124,8 +123,8 @@ it.live(
 				'import value from "./src/lib/bridge.ts"; globalThis.boundary = value;'
 			);
 			for (const target of [
-				'../data/collection/private/+collection.ts?raw',
-				'../data/model/+private.model.ts',
+				'../data/model/private/+model.ts?raw',
+				'../data/model/private/+model.ts',
 				'../+secrets.ts?url',
 				'../automation/+private.automation.ts',
 				'../access_control/policy/+private.policy.ts?raw',

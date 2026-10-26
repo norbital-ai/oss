@@ -6,18 +6,18 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { afterAll, describe, expect, it } from '@effect/vitest';
 import type { IntegrationSpec } from '../src/decl/runtime/integration.ts';
 import type { Json } from '../src/decl/values.ts';
-import { httpRequest } from '../src/engine/integrations/http.ts';
+import { httpRequest, type HttpInstance } from '../src/engine/integrations/http.ts';
 import { Deferred, Effect, Fiber, FiberSet, Result } from 'effect';
 import { TestClock } from 'effect/testing';
 import { Port } from '../src/engine/port.ts';
-import { Drivers } from '../src/engine/ports.ts';
+import { Drivers, Http } from '../src/engine/ports.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { instanceRequest } from '../src/engine/integrations/instances.ts';
-import { publicFetch, type Address, type PageWrite } from '../src/engine/net.ts';
+import { httpPort, publicFetch, type Address, type PageWrite } from '../src/node/net.ts';
 const servers: HttpServer[] = [];
 afterAll(() => {
 	for (const s of servers) s.close();
@@ -70,6 +70,33 @@ const seen =
 		calls.push({ url: String(u), headers: new Headers(init.headers) });
 		return new Response('{"ok":true}');
 	};
+/** One request through `fetcher` standing in for the host's http port. */
+const request = (
+	spec: IntegrationSpec,
+	instance: HttpInstance,
+	op: Json,
+	fetcher: typeof fetch,
+	secrets?: Readonly<Record<string, string>>
+) =>
+	httpRequest(spec, instance, op, secrets === undefined ? {} : { secrets }).pipe(
+		Effect.provide(
+			Http.fromAbi({
+				fetch: async (r, _options, signal) => {
+					const response = await fetcher(r.url, {
+						method: r.method,
+						headers: Object.fromEntries(r.headers),
+						...(r.body === undefined ? {} : { body: new TextDecoder().decode(r.body) }),
+						signal
+					});
+					return {
+						status: response.status,
+						headers: [...response.headers],
+						body: new Uint8Array(await response.arrayBuffer())
+					};
+				}
+			})
+		)
+	);
 describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 	const api = def({ baseUrl: 'https://api.example.test/v3', auth: { bearer: 'key' } });
 	let reads = 0;
@@ -104,12 +131,7 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 					'%zz'
 				])
 					yield* Effect.flip(
-						httpRequest(
-							api,
-							{ configuration: {}, credentials },
-							{ method: 'GET', path },
-							{ fetch: seen(calls) }
-						)
+						request(api, { configuration: {}, credentials }, { method: 'GET', path }, seen(calls))
 					).pipe(
 						Effect.tap((error) =>
 							Effect.sync(() =>
@@ -132,11 +154,11 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 					headers: Headers;
 				}[] = [];
 				expect(
-					yield* httpRequest(
+					yield* request(
 						api,
 						{ configuration: {}, credentials },
 						{ method: 'GET', path: '/calendars/a%40b/events', query: { pageToken: 'a+b/c=' } },
-						{ fetch: seen(calls) }
+						seen(calls)
 					)
 				).toEqual({ status: 200, body: { ok: true } });
 				expect(calls.map((c) => [c.url, c.headers.get('authorization')])).toEqual([
@@ -160,14 +182,14 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 					{ baseUrl: 'base', auth: { header: { name: 'X-Goog-Api-Key', value: 'key' } } },
 					{ base: { kind: 'text' } }
 				);
-				yield* httpRequest(
+				yield* request(
 					routes,
 					{
 						configuration: { base: 'https://routes.example.test/' },
 						credentials: new Map([['credential', { key: 'k1' }]])
 					},
 					{ method: 'POST', path: 'distanceMatrix/v2:computeRouteMatrix', body: {} },
-					{ fetch: seen(calls) }
+					seen(calls)
 				);
 				expect(
 					calls.map((c) => [c.url, c.headers.get('x-goog-api-key'), c.headers.get('content-type')])
@@ -179,11 +201,11 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 					]
 				]);
 				yield* Effect.flip(
-					httpRequest(
+					request(
 						routes,
 						{ configuration: {}, credentials: new Map() },
 						{ method: 'GET', path: 'x' },
-						{ fetch: seen(calls) }
+						seen(calls)
 					)
 				).pipe(
 					Effect.tap((error) =>
@@ -192,7 +214,7 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 				);
 			})
 	);
-	it.effect('a host that binds no fetch gets the public guard: a loopback base is refused', () =>
+	it.effect("the host's http port keeps the public guard: a loopback base is refused", () =>
 		Effect.gen(function* () {
 			yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
 			yield* Effect.flip(
@@ -200,7 +222,7 @@ describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
 					def({ baseUrl: 'base' }, { base: { kind: 'text' } }),
 					{ configuration: { base: 'http://127.0.0.1:9/v1' }, credentials: new Map() },
 					{ method: 'GET', path: 'x' }
-				)
+				).pipe(Effect.provide(Http.fromAbi(httpPort)))
 			).pipe(
 				Effect.tap((error) =>
 					Effect.sync(() =>
@@ -259,17 +281,19 @@ describe('an http instance on OAuth: its token refreshed before expiry and writt
 						})
 				});
 				const d = yield* oauthDef();
-				yield* httpRequest(
+				yield* request(
 					d,
 					inst({ access: 'a1', refresh: 'r1', exp: now + 600000 }),
 					{ method: 'GET', path: 'me' },
-					{ fetch: f, secrets }
+					f,
+					secrets
 				);
-				yield* httpRequest(
+				yield* request(
 					d,
 					inst({ access: 'a1', refresh: 'r1', exp: now + 30000 }),
 					{ method: 'GET', path: 'me' },
-					{ fetch: f, secrets }
+					f,
+					secrets
 				);
 				expect(calls.map((c) => c.headers.get('authorization'))).toEqual([
 					'Bearer a1',
@@ -280,11 +304,12 @@ describe('an http instance on OAuth: its token refreshed before expiry and writt
 				now += 1;
 				yield* TestClock.setTime(now);
 				yield* Effect.flip(
-					httpRequest(
+					request(
 						d,
 						inst({ access: 'a1', refresh: 'r1', exp: now }),
 						{ method: 'GET', path: 'me' },
-						{ fetch: f, secrets }
+						f,
+						secrets
 					)
 				).pipe(
 					Effect.tap((error) =>
@@ -317,11 +342,12 @@ describe('a token endpoint that fails, or a refresh that loses a race', () => {
 		Effect.gen(function* () {
 			const f: typeof fetch = async (u, init = {}) =>
 				String(u).endsWith('/token') ? answer : seen(calls)(u, init);
-			return yield* httpRequest(
+			return yield* request(
 				def0,
 				{ configuration: {}, credentials: new Map([['token', expiring]]), write },
 				{ method: 'GET', path: 'me' },
-				{ fetch: f, secrets }
+				f,
+				secrets
 			);
 		});
 	it.effect('an outage, a throttle or an error other than a refused grant keeps the token', () =>
@@ -412,6 +438,8 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 					}
 				]),
 			write: () => Effect.succeed({ rows: [], affected: 0 }),
+			session: () =>
+				Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 			transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 		});
 	const absent: Drivers['Service'] = {
@@ -468,7 +496,7 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 		})
 	);
 	it.effect(
-		'a 429 is rateLimited, another non-2xx is upstream with its status, a body that is not the output is upstream',
+		'a 429 is rateLimited, permanent 4xx is invalid, and retryable statuses or a body outside the output are upstream',
 		() =>
 			Effect.gen(function* () {
 				yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
@@ -484,8 +512,13 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 				});
 				expect(yield* call(403, 'no key', { kind: 'json' })).toMatchObject({
 					ok: false,
-					error: { kind: 'upstream', status: 403, message: expect.stringMatching(/403: no key/) }
+					error: { kind: 'invalid', status: 403, message: expect.stringMatching(/403: no key/) }
 				});
+				for (const status of [408, 503])
+					expect(yield* call(status, 'try later', { kind: 'json' })).toMatchObject({
+						ok: false,
+						error: { kind: 'upstream', status, message: expect.stringContaining('try later') }
+					});
 				expect(
 					yield* call(200, 'text', { kind: 'object', fields: { n: { kind: 'int' } } })
 				).toMatchObject({ ok: false, error: { kind: 'upstream' } });
@@ -650,7 +683,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 							accept: 'application/json',
 							'content-type': 'application/json'
 						},
-						write: { method: 'POST', body: '{}' }
+						write: { method: 'POST', body: new TextEncoder().encode('{}') }
 					},
 					{ url: 'https://cdn.example.test/done', headers: { accept: 'application/json' } }
 				]);
@@ -755,7 +788,7 @@ describe('publicFetch: the hardened connector (L-BOLT-366)', () => {
 					Effect.sync(() =>
 						expect(() => {
 							throw error;
-						}).toThrow(/five redirects/)
+						}).toThrow(/exceeded 5 redirects/)
 					)
 				)
 			);

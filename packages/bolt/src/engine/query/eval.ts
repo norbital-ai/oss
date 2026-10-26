@@ -5,23 +5,24 @@ import type { Authority, Bindings, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';
 import type { Json } from '../../decl/values.ts';
-import type { Operand, Pred } from '../../protocol/ir-types.ts';
+import {
+	argumentList,
+	comparable,
+	inverted,
+	isOperand,
+	isTaggedOperand,
+	taggedOperand,
+	type Catalog,
+	type FieldInfo,
+	type Operand,
+	type Pred
+} from '@norbital-ai/store';
 import { operandValue } from '../access/authority.ts';
-import { duration, offsetMs } from '../runs/time.ts';
-import { databaseValue } from '../write/sql.ts';
-import { argumentList, isOperand, isTaggedOperand, taggedOperand } from '../../protocol/ir.ts';
-import type { Catalog, FieldInfo } from '../../protocol/catalog.ts';
 
 const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
-/** Normalize numeric wire values at comparison/SQL boundaries; dates stay ISO strings. */
-export function comparable(v: Json | undefined, f?: FieldInfo): Json {
-	if (f?.kind === 'duration' && typeof v === 'string' && /^\d+(s|min|h|d)$/.test(v))
-		return duration(v) / 1000;
-	return databaseValue(v ?? null);
-}
-
+const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 const day = (d: string) => new Date(`${d}T00:00:00Z`);
-/** `{ startOf, shift? }` as a date: the first day of the unit holding `today` (weeks start Monday), moved `shift` units. */
+/** The first day of the calendar unit holding `today` (weeks start Monday), moved `shift` units: a filter's literal bound. */
 export function startOfDate(
 	o: { unit: string; shift?: number | undefined },
 	today: string
@@ -66,24 +67,13 @@ export function midnight(date: string, tz: string): string {
 export function operand(
 	o: Operand,
 	bindings: Bindings,
-	authority: Authority | null | undefined,
-	kind?: string
+	authority: Authority | null | undefined
 ): Json {
 	switch (o._tag) {
-		case 'StartOf': {
-			const date = startOfDate(o, bindings.today);
-			return kind === 'instant' ? midnight(date, bindings.tz) : date;
-		}
 		case 'Param': {
 			if (!Object.hasOwn(bindings.params, o.name)) throw invalid(`no parameter '${o.name}'`);
 			return bindings.params[o.name] ?? null;
 		}
-		case 'Now':
-			return new Date(Date.parse(bindings.now) + offsetMs(o.offset)).toISOString();
-		case 'Today':
-			return new Date(Date.parse(`${bindings.today}T00:00:00Z`) + offsetMs(o.offset))
-				.toISOString()
-				.slice(0, 10);
 		case 'Actor': {
 			if (authority == null) throw invalid('an actor operand needs a caller');
 			return operandValue(o, authority);
@@ -198,16 +188,6 @@ function range(f: FieldInfo, v: Json | undefined): Range | null {
 	return { lo: Date.parse(p.start!), hi: p.end == null ? null : Date.parse(p.end) };
 }
 const below = (x: number | string, hi: number | string | null) => hi === null || x < hi;
-/** A period argument whose ends cross (a dynamic end past the other): matches nothing, in SQL too. */
-export const inverted = (f: FieldInfo, lo: unknown, hi: unknown): boolean =>
-	hi !== null &&
-	hi !== undefined &&
-	lo !== null &&
-	lo !== undefined &&
-	(f.periodOf === 'date'
-		? String(lo) >= String(hi)
-		: Date.parse(String(lo)) > Date.parse(String(hi)));
-
 /** Whether `row` of `collection` satisfies `p`. */
 export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolean {
 	switch (p.t) {
@@ -228,12 +208,25 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 					? p.arg.value
 					: p.arg._tag === 'Field'
 						? field(env, c, row, p.arg.field)
-						: operand(p.arg, env.bindings, env.authority, f.kind);
+						: operand(p.arg, env.bindings, env.authority);
 			return cmp(p.op, norm(f, field(env, c, row, p.field)), norm(f, rhs));
 		}
 		case 'like': {
 			const v = field(env, c, row, p.field);
 			return typeof v === 'string' && likeRegex(p.pattern).test(v);
+		}
+		case 'text': {
+			const value = field(env, c, row, p.field);
+			const normalize = (value: string) =>
+				p.mode === 'folded' ? value.toLowerCase() : value.replace(/[^0-9]/g, '');
+			return typeof value === 'string' && normalize(value) === normalize(p.value);
+		}
+		case 'age': {
+			const value = field(env, c, row, p.field);
+			return (
+				typeof value === 'string' &&
+				Date.parse(value) < Date.parse(env.bindings.now) - p.seconds * 1000
+			);
 		}
 		case 'in': {
 			const f = info(env, c, p.field);
@@ -245,7 +238,7 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 					: operand(p.args, env.bindings, env.authority);
 			const found =
 				a !== null &&
-				(Array.isArray(list) ? list : list === null ? [] : [list]).some((x) => norm(f, x) === a);
+				(jsonArray(list) ? list : list === null ? [] : [list]).some((x) => norm(f, x) === a);
 			return p.negated ? !found : found;
 		}
 		case 'list': {
@@ -267,7 +260,7 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 					? p.arg.value
 					: p.arg._tag === 'Field'
 						? field(env, c, row, p.arg.field)
-						: operand(p.arg, env.bindings, env.authority, f.periodOf);
+						: operand(p.arg, env.bindings, env.authority);
 			if (arg === null) return false;
 			if (p.op === 'contains') {
 				const x =
@@ -276,7 +269,7 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 						: Date.parse(comparable(arg) as string);
 				return r.lo <= x && below(x, r.hi);
 			}
-			const o = range(f, periodEnds(f, arg, env.bindings, env.authority))!;
+			const o = range(f, periodEnds(arg, env.bindings, env.authority))!;
 			if (inverted(f, o.lo, o.hi)) return false;
 			if (p.op === 'overlaps')
 				return below(r.lo, o.hi) && below(o.lo, r.hi) && r.lo !== r.hi && o.lo !== o.hi;
@@ -308,6 +301,10 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			}
 			return inside;
 		}
+		// Inline paths use PostgreSQL's JSON casts: only a read decides them.
+		case 'path':
+		case 'each':
+			throw invalid(`${p.t} is decided by a read, not in memory`);
 		// the search document and the embedding live in the database: only a read decides them
 		case 'search':
 		case 'similar':
@@ -356,8 +353,8 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			const v = field(env, c, row, p.field);
 			if ('isEmpty' in p)
 				return p.isEmpty
-					? v === null || (Array.isArray(v) && v.length === 0)
-					: Array.isArray(v) && v.length > 0;
+					? v === null || (jsonArray(v) && v.length === 0)
+					: jsonArray(v) && v.length > 0;
 			return contains(v, p.contains, true);
 		}
 	}
@@ -365,38 +362,37 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 /** jsonb `@>`: objects by key, arrays by any element, scalars by equality; a top-level array holds a bare scalar. */
 export function contains(a: Json | undefined, b: Json, top = false): boolean {
 	if (a === null || a === undefined) return !top && a === null && b === null;
-	if (Array.isArray(a)) {
-		if (!Array.isArray(b)) return top && typeof b !== 'object' && a.some((value) => value === b);
+	if (jsonArray(a)) {
+		if (!jsonArray(b)) return top && typeof b !== 'object' && a.some((value) => value === b);
 		return b.every((x) => a.some((y) => contains(y, x)));
 	}
 	if (typeof a === 'object')
 		return (
 			typeof b === 'object' &&
 			b !== null &&
-			!Array.isArray(b) &&
+			!jsonArray(b) &&
 			Object.entries(b).every(
 				([k, x]) => Object.hasOwn(a, k) && contains((a as { [k: string]: Json })[k]!, x)
 			)
 		);
 	return a === b;
 }
-/** A period argument's ends, each a literal or a date operand (`{ startOf }`, `{ today }`). */
+/** A period argument's ends, each a literal or a `{ param }` operand. */
 export function periodEnds(
-	f: FieldInfo,
 	v: Json,
 	bindings: Bindings,
 	authority: Authority | null | undefined
 ): Json {
 	const r = comparable(v);
-	if (typeof r !== 'object' || r === null || Array.isArray(r)) return r;
+	if (typeof r !== 'object' || r === null || jsonArray(r)) return r;
 	return Object.fromEntries(
-		Object.entries(r).map(([k, x]) => [
+		Object.entries(r).map(([k, x]): [string, Json] => [
 			k,
-			typeof x === 'object' && x !== null && !Array.isArray(x) && !Object.hasOwn(x, '$dec')
+			typeof x === 'object' && x !== null && !jsonArray(x) && !Object.hasOwn(x, '$dec')
 				? isOperand(x)
-					? operand(taggedOperand(x), bindings, authority, f.periodOf)
+					? operand(taggedOperand(x), bindings, authority)
 					: isTaggedOperand(x)
-						? operand(x, bindings, authority, f.periodOf)
+						? operand(x, bindings, authority)
 						: x
 				: x
 		])

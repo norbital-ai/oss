@@ -1,7 +1,7 @@
 <!-- Administrators manage members and invitations; teams, policies and approval routes belong to source. -->
 <script lang="ts">
-	import { live, fork } from '@norbital-ai/ui/effect';
-	import { Effect, Queue, Stream } from 'effect';
+	import { observe, fork } from '@norbital-ai/ui/effect';
+	import { Effect, Option, Queue, Schema, Stream } from 'effect';
 	import type { Value } from '@norbital-ai/std/kind';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
@@ -65,7 +65,7 @@
 		secrets: 'Secrets'
 	};
 	let invalidate: (() => void) | undefined;
-	const settings = live(() => {
+	const settings = observe(() => {
 		const owner = api,
 			source = bolt;
 		const requested = Stream.callback<void>((queue) =>
@@ -87,8 +87,8 @@
 		return Stream.merge(
 			requested,
 			source
-				.live(
-					source.read('sys_integration', {
+				.observe(
+					source.query('sys_integration', {
 						select: { id: true, revision: true },
 						all: true
 					})
@@ -142,71 +142,47 @@
 		typeof v === 'string' && v !== ''
 			? format({ kind: 'instant' }, v, { locale: bolt.locale })
 			: '—';
-	const named = (rows: readonly { readonly [k: string]: Json }[]) =>
-		rows.map((r) => ({
-			value: str(r['id']),
-			label: str(r['name']) || str(r['email']) || str(r['phone'])
-		}));
-	const TABLES: { readonly [table: string]: string } = {
-		sys_user: 'member',
-		sys_invitation: 'invitation'
-	};
+	const named = (rows: readonly { readonly id: string; readonly name: string }[]) =>
+		rows.map((r) => ({ value: r.id, label: r.name }));
 
 	// ── rows: the settings read projected per table  ──
-	const teamName = (id: Json | undefined) => str(s?.teams.find((x) => x['id'] === id)?.['name']);
+	const teamName = (id: string | null) => s?.teams.find((x) => x.id === id)?.name ?? '';
 	const members = $derived(
 		(s?.members ?? []).map((u) => ({
-			id: str(u['id']),
-			name: str(u['name']),
-			email: str(u['email']),
-			phone: str(u['phone']),
-			telegram: str(u['telegram']),
-			kind: u['kind'] === 'external' ? t('External') : t('Staff'),
-			external: u['kind'] === 'external',
-			team: teamName(u['team']),
-			team_id: str(u['team']) || null,
-			admin: u['admin'] === true,
-			active: u['active'] === true,
-			last_seen: str(u['last_seen']) || null
+			id: u.id,
+			name: u.name ?? '',
+			email: u.email ?? '',
+			phone: u.phone ?? '',
+			telegram: u.telegram ?? '',
+			kind: u.kind === 'external' ? t('External') : t('Staff'),
+			external: u.kind === 'external',
+			team: teamName(u.team),
+			team_id: u.team || null,
+			admin: u.admin,
+			active: u.active,
+			last_seen: u.last_seen || null
 		}))
 	);
 	const invitations = $derived(
 		(s?.invitations ?? []).map((i) => ({
-			id: str(i['id']),
-			email: str(i['email']) || str(i['phone']),
-			team: teamName(i['team']),
-			external: i['external'] === true,
-			status: t(str(i['status'])),
-			state: str(i['status']),
-			expires_at: str(i['expires_at'])
+			id: i.id,
+			email: i.email || i.phone || '',
+			team: teamName(i.team),
+			external: i.external,
+			status: t(i.status),
+			state: i.status,
+			expires_at: i.expires_at
 		}))
 	);
 	const keys = $derived(
 		(s?.keys ?? []).map((k) => ({
-			id: str(k['id']),
-			name: str(k['name']),
-			prefix: `nbk_${str(k['prefix'])}_…`,
-			team: teamName(k['team']),
-			created_at: str(k['created_at']),
-			last_used_at: str(k['last_used_at']) || null,
-			revoked: k['revoked_at'] !== null && k['revoked_at'] !== undefined
-		}))
-	);
-	const audit = $derived(
-		(s?.audit ?? []).map((e) => ({
-			id: `${e.collection}/${e.record}/${e.revision}`,
-			at: e.at,
-			who: e.actor?.startsWith('member:')
-				? str(s?.members.find((u) => u['id'] === e.actor!.slice(7))?.['name']) || e.actor
-				: (e.actor ?? t('host')),
-			change: `${t(e.op)} · ${t(TABLES[e.collection] ?? e.collection)}`,
-			fields:
-				typeof e.changes === 'object' && e.changes !== null
-					? Object.keys(e.changes)
-							.filter((k) => k !== 'revision')
-							.join(', ')
-					: '',
-			changes: e.changes
+			id: k.id,
+			name: k.name,
+			prefix: `nbk_${k.prefix}_…`,
+			team: teamName(k.team),
+			created_at: k.created_at,
+			last_used_at: k.last_used_at || null,
+			revoked: k.revoked_at !== null
 		}))
 	);
 	const remotes = $derived(
@@ -274,7 +250,7 @@
 			: [];
 
 	// ── the open row (one sheet at a time) and the create dialog ──
-	type Open = { kind: 'member' | 'invitation' | 'key' | 'audit' | 'remote' | 'secret'; id: string };
+	type Open = { kind: 'member' | 'invitation' | 'key' | 'remote' | 'secret'; id: string };
 	let open = $state<Open | null>(null);
 	const show = (kind: Open['kind']) => (row: { id: string }) => {
 		open = { kind, id: row.id };
@@ -300,10 +276,12 @@
 	});
 	/** A new or rotated key, shown once in the dialog. */
 	let issued = $state<string | null>(null);
-	const keyOf = (v: Json | undefined) => {
-		const k = typeof v === 'object' && v !== null && 'key' in v ? v.key : null;
-		return typeof k === 'string' ? k : null;
-	};
+	const Issued = Schema.Struct({ key: Schema.String });
+	/** `inviteMany` answers the invitations whose delivery failed (`invite` refuses instead). */
+	const Invited = Schema.Struct({ failed: Schema.Array(Schema.String) });
+	/** `issueKey` and `rotateKey` answer the new key, shown once. */
+	const keyOf = (v: Json | undefined) =>
+		Option.getOrNull(Option.map(Schema.decodeUnknownOption(Issued)(v), (answer) => answer.key));
 	function create(): void {
 		if (submitting) return;
 		submitting = true;
@@ -336,13 +314,7 @@
 				else {
 					creating = null;
 					bulkAddresses = '';
-					if (
-						typeof v === 'object' &&
-						v !== null &&
-						'failed' in v &&
-						Array.isArray(v.failed) &&
-						v.failed.length > 0
-					)
+					if (Option.exists(Schema.decodeUnknownOption(Invited)(v), (i) => i.failed.length > 0))
 						mutationError = t(
 							'Invitations were saved, but some could not be delivered. Resend them from Invitations.'
 						);
@@ -757,23 +729,6 @@
 					assistantForm
 				)}
 			{/if}
-		{:else if tab === 'audit'}
-			<Table
-				of={audit}
-				key="audit"
-				onOpen={show('audit')}
-				toolbar={{ description: t('Identity changes, newest first.'), export: true }}
-				columns={[
-					{ field: 'at', label: t('When'), cell: at },
-					{ field: 'who', label: t('Who') },
-					{ field: 'change', label: t('Change') },
-					{ field: 'fields', label: t('Fields') }
-				]}
-			>
-				{#snippet empty()}<p class="text-sm text-muted-foreground">
-						{t('No identity changes yet.')}
-					</p>{/snippet}
-			</Table>
 		{:else if tab === 'integrations'}
 			<Integrations
 				{api}
@@ -945,19 +900,6 @@
 					{ label: t('Created'), value: when(k.created_at) },
 					{ label: t('Last used'), value: when(k.last_used_at) },
 					{ label: t('Status'), value: k.revoked ? t('revoked') : t('active') }
-				]}
-			/>
-		{/if}
-	{:else if open.kind === 'audit'}
-		{@const e = audit.find((x) => x.id === open?.id)}
-		{#if e !== undefined}
-			<DetailSheet
-				title={e.change}
-				onClose={close}
-				fields={[
-					{ label: t('When'), value: when(e.at) },
-					{ label: t('Who'), value: e.who },
-					{ label: t('Changes'), value: e.changes }
 				]}
 			/>
 		{/if}

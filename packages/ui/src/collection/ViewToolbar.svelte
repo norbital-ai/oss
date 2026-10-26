@@ -4,7 +4,7 @@
 	import type { Json } from '../client/contract.js';
 	import type { Row, Values } from './types.js';
 	import type { Fields, Value } from '../kinds/kind.js';
-	import type { CollectionExposure } from '../kinds/context.js';
+	import type { CollectionExposure, ParserExposure } from '../kinds/context.js';
 	import { formSpec } from '../form/draft.js';
 	import { presentation } from '../kinds/registry.js';
 	import { edgesFrom } from '../kinds/kind.js';
@@ -76,7 +76,7 @@
 				filter?: boolean;
 				/** Author items in the actions menu, in a group of their own; `false` hides the menu. */
 				actions?: readonly ToolbarItem<R>[] | false;
-				/** "Export CSV" of the rows in view. Default on; replaced by "Export" when the collection declares an export pipeline. */
+				/** "Export CSV" of the rows in view. Default on; replaced by "Export" when the model's file sync exports. */
 				export?: boolean;
 				/** "Delete selected records" when the collection declares delete and the viewer may delete (turns selection on). Default on. */
 				delete?: boolean;
@@ -89,8 +89,8 @@
 				/** Compact task controls at the right edge, before New. */
 				trailing?: Snippet;
 				/**
-				 * What the view is scoped to (`{ company_id, period }`), handed to the collection's pipeline: the import and
-				 * its template decode it against the pipeline's `context` fields. It narrows and defaults; it never authorizes.
+				 * What the view is scoped to (`{ company_id, period }`), handed to the model's file syncs: the import, its
+				 * template and the export decode it against the sync's `context` fields. It narrows and defaults; it never authorizes.
 				 */
 				context?: { readonly [field: string]: Json };
 		  };
@@ -105,12 +105,23 @@
 			(config?.delete !== false && exposure?.delete === true) ||
 			editableFields(exposure).length > 0 ||
 			editableRelations(exposure).length > 0 ||
-			Object.values(exposure?.actions ?? {}).some((action) => action.target === 'record') ||
 			(config?.actions ?? []).some(
 				(item) => item.requiresSelection || typeof item.disabled === 'function'
 			)
 		);
 	}
+	const ACCEPT: { readonly [parser: string]: readonly string[] } = {
+		xlsx: ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+		csv: ['.csv', 'text/csv'],
+		tsv: ['.tsv', 'text/tab-separated-values'],
+		json: ['.json', 'application/json'],
+		ics: ['.ics', 'text/calendar']
+	};
+	/** A file sync's picker `accept`: exactly its parsers' extensions and media types (default `xlsx`, `csv`). */
+	export const acceptOf = (parser: readonly ParserExposure[] = ['xlsx', 'csv']): string =>
+		parser
+			.flatMap((p) => (typeof p === 'string' ? (ACCEPT[p] ?? []) : [p.type, ...p.extensions]))
+			.join(',');
 	type Exporter = {
 		fields: readonly string[];
 		labels: readonly string[];
@@ -128,7 +139,6 @@
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { useKinds } from '../kinds/context.js';
-	import FormView from '../form/form.svelte';
 	import BulkRelation, { childFields, NO_LINKS, type Links } from './BulkRelation.svelte';
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
@@ -141,16 +151,17 @@
 	import { CSV_BOM, csvCell } from '../table/csv.js';
 	import { filesOf } from '../cell/value.js';
 	import { humanize, label, msg } from '../text/messages.js';
-	import { isRow, objectsOf, rowsOf } from '../read/results.js';
-	import { actOutcome, outcomeText } from '../actions/outcome.js';
-	import { searchIndexes, SEMANTIC_SEARCH, SLASH, type SearchIndex } from '../table/model.js';
+	import { isRow, objectsOf } from '../read/results.js';
+	import { actOutcome, notify, outcomeText } from '../actions/outcome.js';
+	import { searchIndexes, SLASH, type SearchIndex } from '../table/model.js';
+	import { and } from '../filter/scope.js';
 	import { unref } from '../relations/select.js';
 	import type { ViewState } from '../filter/view-state.svelte.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import RunStatus from '../runs/RunStatus.svelte';
 	import ViewPopover from '../filter/ViewPopover.svelte';
-	import { notify } from '../actions/notify.js';
+	import ToolbarSearch from './toolbar/ToolbarSearch.svelte';
 	import { downloadTextFiles } from '../utilities/download.js';
 	import { toast } from '../toast/toast.svelte.js';
 	import Spinner from '../primitives/spinner/spinner.svelte';
@@ -192,8 +203,8 @@
 		exporter?: Exporter;
 		/** A local array's "Add row", in New's place. */
 		onAdd?: () => void;
-		/** A typed index's search (`/<similarity>` or `/<query>` and its input), or `null` back to the box's text; absent: the view shows no ranked rows. */
-		onProbe?: (probe: { name: string; via: 'similar' | 'query'; input: Json } | null) => void;
+		/** A search index's search (`/<index>` and its input, `/semantic` and its text), or `null` back to the box's text; absent: the view shows no ranked rows. */
+		onProbe?: (probe: { index: string; input: Json } | null) => void;
 	} = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
@@ -206,9 +217,9 @@
 		cfg?.description === false ? '' : (cfg?.description ?? x?.description ?? '')
 	);
 	const offered = $derived(searchable && cfg?.search !== false);
-	// L-BOLT-495: `/` at the start of the box lists the collection's search indexes; the picked one is a chip. `semantic`
-	// keeps the box as its text (`/semantic <text>`, rule 16); a typed similarity swaps the box for its input's editors and
-	// hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the lexical search.
+	// L-BOLT-495: `/` at the start of the box lists the model's search modes; the picked one is a chip. `semantic` keeps
+	// the box as its text, searched on Enter; a search index swaps the box for its input's editors (custom datatypes in
+	// their own renderers) and hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the text search.
 	const t = uiText();
 	// the collection's declared search fields, else its label's text fields (the Table searches those by `like`)
 	const lexicalFields = $derived(
@@ -238,8 +249,8 @@
 				)
 			: lexicalFields.map((s) => pathLabel(catalog, collection, s, humanize))
 	);
-	let index = $state<string | null>(untrack(() => (SEMANTIC_SEARCH.test(q) ? 'semantic' : null)));
-	let text = $state(untrack(() => q.replace(SEMANTIC_SEARCH, '')));
+	let index = $state<string | null>(null);
+	let text = $state(untrack(() => q));
 	let values = $state<Values>({});
 	let box = $state<HTMLInputElement>();
 	const chosen = $derived(indexes.find((i) => i.name === index));
@@ -250,16 +261,11 @@
 		chosen?.input !== undefined &&
 			Object.entries(chosen.input).every(([f, k]) => problems(k, values[f] ?? null).size === 0)
 	);
-	// what the view reads: the text, `/semantic <text>`, or nothing while a typed index or the `/` list holds the box
-	const send = () =>
-		(q =
-			index === 'semantic'
-				? text.trim() === ''
-					? ''
-					: `/semantic ${text}`
-				: index === null && lexical && !SLASH.test(text)
-					? text
-					: '');
+	// what the view reads: the text, or nothing while a search mode or the `/` list holds the box
+	const send = () => (q = index === null && lexical && !SLASH.test(text) ? text : '');
+	/** `/semantic`: the box's text, nearest in meaning, on Enter. */
+	const meaning = () =>
+		onProbe?.(text.trim() === '' ? null : { index: 'semantic', input: text.trim() });
 	// repository-health:allow EFF3 -- D13: this selection helper only updates presentation state and focuses the rendered input.
 	async function pick(i: SearchIndex) {
 		if (i.why !== null) return;
@@ -272,7 +278,7 @@
 		box?.focus();
 	}
 	function clear() {
-		if (chosen?.input !== undefined) onProbe?.(null);
+		if (index !== null) onProbe?.(null);
 		index = null;
 		send();
 	}
@@ -317,26 +323,39 @@
 			: msg(bolt, 'table.searchIn', 'Search {fields}', { fields: f.join(', ') });
 	});
 
-	// ── the actions menu: callables, the integration's run, the pipeline's import and export, export, delete-selected, the author's items ──
-	const callables = $derived(
-		cfg?.actions === false
-			? []
-			: Object.entries(x?.actions ?? {}).flatMap(([name, a]) =>
-					a.target === 'record' && selected === undefined ? [] : [{ name, ...a }]
-				)
-	);
+	// ── the actions menu: the model's syncs (Sync now; Import, Download template, Export), export, delete-selected, the author's items ──
 	const picked = $derived(selected ?? []);
 	const items = $derived(cfg?.actions === false || cfg?.actions === undefined ? [] : cfg.actions);
-	const sync = $derived(cfg?.actions === false ? undefined : x?.integration);
-	// the collection's `+pipeline.ts` import and export the viewer may run, each a `<c>.pipeline` run (§3.3.5)
-	const pipeline = $derived(cfg?.actions === false ? undefined : x?.pipeline);
-	const canImport = $derived(pipeline?.import !== undefined && kinds.upload !== undefined);
+	// the model's syncs the viewer may run, each a `<c>.sync.<name>` run: a remote read's Sync now; a file sync's import
+	// (its picker accepting exactly its parsers), template and export in each declared format
+	const syncs = $derived(cfg?.actions === false ? [] : Object.entries(x?.syncs ?? {}));
+	const remotes = $derived(
+		syncs.flatMap(([name, s]) => (s.kind === 'remote' ? [{ name, with: s.with }] : []))
+	);
+	const files = $derived(
+		syncs.flatMap(([name, s]) =>
+			s.kind === 'file'
+				? [
+						{
+							name,
+							accept: acceptOf(s.parser),
+							import: s.import === true && kinds.upload !== undefined,
+							export: s.export ?? []
+						}
+					]
+				: []
+		)
+	);
 	const canExport = $derived(
 		cfg?.actions !== false &&
 			cfg?.export !== false &&
 			exporter !== undefined &&
-			pipeline?.export === undefined
+			!files.some((f) => f.export.length > 0)
 	);
+	// two syncs of one kind are told apart by name
+	const told = (text: string, name: string, of: readonly unknown[]) =>
+		of.length > 1 ? `${text} · ${humanize(name)}` : text;
+	const importKey = (sync: string) => `import:${sync}`;
 	const canDelete = $derived(
 		selected !== undefined && cfg?.actions !== false && cfg?.delete !== false && x?.delete === true
 	);
@@ -400,7 +419,7 @@
 			: Object.fromEntries(Object.entries(editLinks).filter(([rel]) => rel !== name));
 	}
 	type Group = 'bulk' | 'actions' | 'import' | 'general';
-	// every row of the menu, each in its group: an icon, its words, and the button that runs `act` (a callable's opens its form inline)
+	// Every menu row carries its words and handler; bulk update opens its native editor inline.
 	type Entry = {
 		key: string;
 		group: Group;
@@ -413,33 +432,15 @@
 		act: () => Effect.Effect<unknown, Error> | void;
 		saved?: string;
 		danger?: true;
-		form?: { callable: string; target: string | undefined };
+		form?: { callable: string };
+		/** A file sync's import: its run's progress and findings show on this row. */
+		sync?: string;
 	};
 	const entries = $derived.by((): Entry[] => {
 		const ids = [...picked];
-		const integration = sync;
 		const selectFirst = msg(bolt, 'view.selectRows', 'Select records first');
 		const run = msg(bolt, 'view.run', 'Run');
 		return [
-			...callables.map((c): Entry => {
-				const callable = `${collection}.${c.name}`;
-				return {
-					key: callable,
-					group: c.target === 'record' ? 'bulk' : 'general',
-					glyph: 'play',
-					text: humanize(c.name),
-					hint: c.description,
-					why:
-						c.target === 'record' && picked.length !== 1
-							? msg(bolt, 'view.selectOne', 'Select one row')
-							: null,
-					button: run,
-					act: () => {
-						form = form === callable ? null : callable;
-					},
-					form: { callable, target: c.target }
-				};
-			}),
 			...items.map((item): Entry => ({
 				key: `item:${item.name}`,
 				group: 'actions',
@@ -453,63 +454,70 @@
 				act: () => item.run([...picked]),
 				...(item.description === undefined ? {} : { hint: item.description })
 			})),
-			...(integration !== undefined
-				? [
-						{
-							key: 'sync',
-							group: 'import',
-							glyph: 'sync',
-							text: msg(bolt, 'view.sync', 'Sync now'),
-							hint: msg(bolt, 'view.syncHint', 'Pull the latest records from the source'),
-							why: null,
-							button: msg(bolt, 'view.syncButton', 'Sync'),
-							act: () => bolt.start(integration, {})
-						} satisfies Entry
-					]
-				: []),
-			...(canImport
-				? [
-						{
-							key: 'import',
-							group: 'import',
-							glyph: 'upload',
-							text: msg(bolt, 'view.import', 'Import…'),
-							hint: pipeline?.import,
-							why: null,
-							button: msg(bolt, 'view.upload', 'Upload'),
-							act: () => void picker?.click()
-						} satisfies Entry
-					]
-				: []),
-			// the import's sheet, from its declared fields (and its template rows): a run whose file RunStatus links
-			...(canImport
-				? [
-						{
-							key: 'template',
-							group: 'import',
-							glyph: 'download',
-							text: msg(bolt, 'view.template', 'Download template'),
-							hint: msg(bolt, 'view.templateHint', "The import's columns as a spreadsheet"),
-							why: null,
-							button: msg(bolt, 'view.download', 'Download'),
-							act: () => bolt.start(`${collection}.pipeline`, { mode: 'template', ...scoped() })
-						} satisfies Entry
-					]
-				: []),
-			...(pipeline?.export !== undefined
-				? [
-						{
-							key: 'export-pipeline',
-							group: 'import',
-							glyph: 'download',
-							text: msg(bolt, 'view.exportPipeline', 'Export'),
-							hint: pipeline.export,
-							why: null,
-							button: msg(bolt, 'view.download', 'Download'),
-							act: () => bolt.start(`${collection}.pipeline`, { mode: 'export' })
-						} satisfies Entry
-					]
-				: []),
+			...remotes.map((r): Entry => ({
+				key: `sync:${r.name}`,
+				group: 'import',
+				glyph: 'sync',
+				text: told(msg(bolt, 'view.sync', 'Sync now'), r.name, remotes),
+				hint: msg(bolt, 'view.syncFrom', 'Pull the latest records from {source}', {
+					source: humanize(r.with)
+				}),
+				why: null,
+				button: msg(bolt, 'view.syncButton', 'Sync'),
+				act: () => bolt.start(`${collection}.sync.${r.name}`, {})
+			})),
+			...files.flatMap((f): Entry[] => [
+				...(f.import
+					? [
+							{
+								key: importKey(f.name),
+								group: 'import',
+								glyph: 'upload',
+								text: told(msg(bolt, 'view.import', 'Import…'), f.name, files),
+								why: null,
+								button: msg(bolt, 'view.upload', 'Upload'),
+								act: () => void pickers[f.name]?.click(),
+								sync: f.name
+							} satisfies Entry,
+							// the import's sheet: an export of what the page shows, a run whose file RunStatus links
+							{
+								key: `template:${f.name}`,
+								group: 'import',
+								glyph: 'download',
+								text: told(msg(bolt, 'view.template', 'Download template'), f.name, files),
+								hint: msg(bolt, 'view.templateHint', "The import's columns as a spreadsheet"),
+								why: null,
+								button: msg(bolt, 'view.download', 'Download'),
+								act: () =>
+									bolt.start(`${collection}.sync.${f.name}`, { mode: 'template', ...scoped() })
+							} satisfies Entry
+						]
+					: []),
+				...f.export.map((to): Entry => ({
+					key: `export:${f.name}:${to}`,
+					group: 'import',
+					glyph: 'download',
+					text: told(
+						f.export.length > 1
+							? msg(bolt, 'view.exportAs', 'Export as {format}', { format: to.toUpperCase() })
+							: msg(bolt, 'view.export', 'Export'),
+						f.name,
+						files
+					),
+					hint: msg(bolt, 'view.exportHint', 'The rows in view, as shown'),
+					why: null,
+					button: msg(bolt, 'view.download', 'Download'),
+					act: () => {
+						const where = shown();
+						return bolt.start(`${collection}.sync.${f.name}`, {
+							mode: 'export',
+							to,
+							...scoped(),
+							...(where === undefined ? {} : { where })
+						});
+					}
+				}))
+			]),
 			...(canExport
 				? [
 						{
@@ -546,7 +554,7 @@
 									form = `${collection}.update`;
 								}
 							},
-							form: { callable: `${collection}.update`, target: 'selection' }
+							form: { callable: `${collection}.update` }
 						} satisfies Entry
 					]
 				: []),
@@ -584,7 +592,7 @@
 		menuOpen = $state(false);
 	// the icon reads as on while a search holds the view
 	const searching = $derived(text !== '' || index !== null);
-	let picker = $state<HTMLInputElement>();
+	let pickers = $state<{ [sync: string]: HTMLInputElement | undefined }>({});
 	let form = $state<string | null>(null);
 	watch(
 		() => JSON.stringify([collection, picked]),
@@ -627,7 +635,9 @@
 		typeof v === 'object' &&
 		v !== null &&
 		'kind' in v &&
-		['committed', 'pendingApproval', 'refused', 'conflict', 'unknown'].includes(String(v.kind));
+		['committed', 'pendingApproval', 'refused', 'conflict', 'unknown', 'running'].includes(
+			String(v.kind)
+		);
 	const isRun = (value: unknown): value is RunHandle =>
 		Effect.isEffect(value) &&
 		'id' in value &&
@@ -694,7 +704,8 @@
 					Effect.sync(() => {
 						if (isOutcome(value)) {
 							say(value, saved);
-							if (!ok(value)) {
+							// a running act is not a failure: its toast says it goes on in the background
+							if (!ok(value) && value.kind !== 'running') {
 								mark(key, { state: 'failed', message: outcomeText(bolt, value) });
 								return;
 							}
@@ -722,19 +733,18 @@
 		fork(FiberSet.run(owned, work));
 	}
 
-	// ── the import: the file is uploaded to `<c>.$import` (the member's own), then the run reads it back as the import's input.
-	// Its run is watched to its end: pending, done with its counts, its findings to review (warnings to accept), or its error.
-	type Finding = {
-		row: number | null;
-		column: string;
-		message: string;
-		severity: 'warn' | 'refuse';
-	};
-	let imported = $state<{ id: string; file: string } | null>(null);
+	// ── a file sync's import: the file is uploaded to `<c>.sync.<s>` (refused unless one of its parsers reads it), then the
+	// run reads it back. Its run is watched to its end: pending, done with its counts, its findings to review (warnings to
+	// accept), or its error. A finding's `at` is the record's sheet row or line; 0 is the file as a whole.
+	type Finding = { at: number; field: string | null; message: string; severity: 'warn' | 'refuse' };
+	let imported = $state<{ sync: string; id: string; file: string } | null>(null);
 	const importRun = live(() =>
 		imported === null || bolt.runs === undefined
 			? null
-			: bolt.runs(`${collection}.pipeline`, { where: { id: { eq: imported.id } }, limit: 1 })
+			: bolt.runs(`${collection}.sync.${imported.sync}`, {
+					where: { id: { eq: imported.id } },
+					limit: 1
+				})
 	);
 	const importRow = $derived(
 		imported === null ? undefined : importRun.value?.rows.find((r) => r.id === imported?.id)
@@ -744,11 +754,11 @@
 	);
 	const findings = $derived(
 		(Array.isArray(importOut?.['findings']) ? importOut['findings'] : []).flatMap((f): Finding[] =>
-			typeof f === 'object' && f !== null && !Array.isArray(f)
+			isRow(f)
 				? [
 						{
-							row: typeof f['row'] === 'number' ? f['row'] : null,
-							column: String(f['column'] ?? ''),
+							at: typeof f['at'] === 'number' ? f['at'] : 0,
+							field: typeof f['field'] === 'string' ? f['field'] : null,
 							message: String(f['message'] ?? ''),
 							severity: f['severity'] === 'warn' ? 'warn' : 'refuse'
 						}
@@ -780,6 +790,8 @@
 				: { state: 'review' };
 		return { state: 'done' };
 	});
+	/** The row the watched import shows on. */
+	const watching = (e: Entry) => imported !== null && e.sync === imported.sync;
 	const pending = $derived(
 		Object.values(status).some((s) => s.state === 'pending') || importStatus?.state === 'pending'
 	);
@@ -806,8 +818,10 @@
 	);
 	const scoped = (): { readonly [k: string]: Json } =>
 		cfg?.context === undefined ? {} : { context: cfg.context };
-	function startImport(file: string, accept: boolean) {
-		const h = bolt.start(`${collection}.pipeline`, {
+	/** What the page shows: the author's scope and the viewer's filter. */
+	const shown = () => and(author, view?.where);
+	function startImport(sync: string, file: string, accept: boolean) {
+		const h = bolt.start(`${collection}.sync.${sync}`, {
 			mode: 'import',
 			file,
 			...(accept ? { accept } : {}),
@@ -817,20 +831,21 @@
 		return h.pipe(
 			Effect.map((outcome) => {
 				if (!ok(outcome)) return outcome;
-				imported = { id: h.id, file };
+				imported = { sync, id: h.id, file };
 				return undefined;
 			})
 		);
 	}
-	function importFile(file: File | undefined) {
+	function importFile(sync: string, file: File | undefined) {
 		const upload = kinds.upload;
 		if (file === undefined || upload === undefined) return;
 		imported = null;
-		perform('import', () =>
-			upload(file, `${collection}.$import`).pipe(
-				Effect.flatMap((ref) => startImport(ref.id, false)),
+		perform(importKey(sync), () =>
+			upload(file, `${collection}.sync.${sync}`).pipe(
+				Effect.flatMap((ref) => startImport(sync, ref.id, false)),
 				Effect.ensuring(
 					Effect.sync(() => {
+						const picker = pickers[sync];
 						if (picker) picker.value = '';
 					})
 				)
@@ -838,7 +853,8 @@
 		);
 	}
 
-	const accept = (file: string) => perform('import', () => startImport(file, true));
+	const accept = (sync: string, file: string) =>
+		perform(importKey(sync), () => startImport(sync, file, true));
 	/**
 	 * Asks in-app first, then deletes each record on its own so one refusal keeps only that record: the outcome says how
 	 * many were deleted and why the first kept one was refused ("3 deleted, 1 kept: …").
@@ -972,7 +988,7 @@
 <span hidden {@attach lifetime}></span>
 {#snippet menuRow(e: Entry)}
 	{@const st =
-		e.key === 'import' && importStatus !== undefined && status['import']?.state !== 'failed'
+		watching(e) && importStatus !== undefined && status[e.key]?.state !== 'failed'
 			? importStatus
 			: status[e.key]}
 	{@const open = e.form !== undefined && form === e.form.callable}
@@ -1001,14 +1017,14 @@
 					class="text-destructive block text-xs"
 					data-menu-error>{st.message}</span
 				>
-			{:else if e.key === 'import' && st?.state === 'review'}<span
+			{:else if watching(e) && st?.state === 'review'}<span
 					class="text-warning-foreground dark:text-warning block text-xs"
 					data-menu-review
 					>{msg(bolt, 'view.importReview', 'Review {n} warnings before importing', {
 						n: findings.length
 					})}</span
 				>
-			{:else if e.key === 'import' && st?.state === 'done' && counts !== ''}<span
+			{:else if watching(e) && st?.state === 'done' && counts !== ''}<span
 					class="text-muted-foreground block text-xs">{counts}</span
 				>
 			{:else if e.why ?? e.hint}<span class="text-muted-foreground block text-xs"
@@ -1034,14 +1050,14 @@
 			{st?.state === 'done' ? msg(bolt, 'view.done', 'Done') : e.button}
 		</Button>
 	</div>
-	{#if e.key === 'import' && imported !== null && findings.length > 0 && (st?.state === 'review' || st?.state === 'failed')}
+	{#if watching(e) && imported !== null && findings.length > 0 && (st?.state === 'review' || st?.state === 'failed')}
 		<!-- the import's findings: each sheet row's problem; with only warnings, accepting re-submits the same file -->
 		<div class="border-border mx-2 mb-1 grid gap-2 rounded-md border p-2" data-import-findings>
 			<ul class="grid max-h-48 gap-1 overflow-y-auto text-xs">
 				{#each findings as f, i (i)}
 					{@const at = [
-						f.row === null ? '' : msg(bolt, 'view.row', 'Row {row}', { row: f.row }),
-						f.column
+						f.at === 0 ? '' : msg(bolt, 'view.row', 'Row {row}', { row: f.at }),
+						f.field === null ? '' : pathLabel(catalog, collection, f.field, humanize)
 					]
 						.filter((x) => x !== '')
 						.join(' · ')}
@@ -1062,7 +1078,7 @@
 				<Button
 					size="sm"
 					class="justify-self-end"
-					onclick={() => accept(imported?.file ?? '')}
+					onclick={() => imported !== null && accept(imported.sync, imported.file)}
 					data-import-accept>{msg(bolt, 'view.acceptImport', 'Accept and import')}</Button
 				>
 			{/if}
@@ -1072,14 +1088,14 @@
 
 {#if cfg !== null}
 	<div class="@container flex min-w-0 flex-col gap-1.5" data-view-toolbar>
-		{#if canImport}<input
-				bind:this={picker}
+		{#each files.filter((f) => f.import) as f (f.name)}<input
+				bind:this={pickers[f.name]}
 				type="file"
-				accept=".json,.xlsx,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+				accept={f.accept}
 				class="hidden"
-				data-view-import
-				onchange={(e) => importFile(e.currentTarget.files?.[0])}
-			/>{/if}
+				data-view-import={f.name}
+				onchange={(e) => importFile(f.name, e.currentTarget.files?.[0])}
+			/>{/each}
 		<div class="flex min-w-0 flex-wrap items-center gap-1">
 			{#if title}<h2 class="min-w-0 truncate text-sm font-semibold" data-view-title>
 					{title}
@@ -1109,169 +1125,147 @@
 			{#if canSearch}
 				<!-- the search is an icon: its popover opens with the box focused, and says what it searches and which
 				     `/` commands the collection offers -->
-				<Popover.Root bind:open={searchOpen}>
-					<Popover.Trigger>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								size="icon"
-								variant="ghost"
-								class={searching ? 'bg-accent' : ''}
-								hint={searchHint}
-								aria-label={searchHint}
-								data-search-toggle
-							>
-								<Glyph name="search" />
-							</Button>
-						{/snippet}
-					</Popover.Trigger>
-					<Popover.Content
-						align="start"
-						class="flex {chosen?.input === undefined
-							? 'w-[min(26rem,calc(100vw-1rem))]'
-							: 'w-[min(36rem,calc(100vw-1rem))]'} flex-col gap-2 p-2"
-						data-search-panel
-						onOpenAutoFocus={(e) => {
-							e.preventDefault();
-							box?.focus();
-						}}
+				<ToolbarSearch
+					bind:open={searchOpen}
+					active={searching}
+					label={searchHint}
+					panelClass={chosen?.input === undefined
+						? 'w-[min(26rem,calc(100vw-1rem))]'
+						: 'w-[min(36rem,calc(100vw-1rem))]'}
+					onOpenAutoFocus={(e) => {
+						e.preventDefault();
+						box?.focus();
+					}}
+				>
+					<div
+						class="border-input bg-background focus-within:ring-ring/50 flex min-h-8 flex-wrap items-center gap-1 rounded-sm border px-2 shadow-xs focus-within:ring-[3px]"
 					>
-						<div
-							class="border-input bg-background focus-within:ring-ring/50 flex min-h-8 flex-wrap items-center gap-1 rounded-sm border px-2 shadow-xs focus-within:ring-[3px]"
-						>
-							<Glyph name="search" class="text-muted-foreground size-4 shrink-0" />
-							{#if index !== null}
-								<span
-									class="bg-accent inline-flex h-6 shrink-0 items-center gap-1 rounded-full pr-1 pl-2 text-xs"
-									title={chosen?.hint}
-									data-search-index={index}
+						<Glyph name="search" class="text-muted-foreground size-4 shrink-0" />
+						{#if index !== null}
+							<span
+								class="bg-accent inline-flex h-6 shrink-0 items-center gap-1 rounded-full pr-1 pl-2 text-xs"
+								title={chosen?.hint}
+								data-search-index={index}
+							>
+								/{index}<button
+									type="button"
+									class="hover:bg-background grid size-4 place-items-center rounded-full"
+									aria-label={t('searchClear')}
+									onclick={clear}><Glyph name="x" class="size-3" /></button
 								>
-									/{index}<button
-										type="button"
-										class="hover:bg-background grid size-4 place-items-center rounded-full"
-										aria-label={t('searchClear')}
-										onclick={clear}><Glyph name="x" class="size-3" /></button
+							</span>
+						{/if}
+						{#if chosen?.input !== undefined}
+							<!-- a search index: its input fields' own editors under the chip, two to a row (a custom datatype's editor
+								     takes the row), run on submit as the view's `{ search: { <index>: input } }` read -->
+							<form
+								class="grid basis-full grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] items-start gap-2 pt-1 pb-2"
+								data-similar-input={index}
+								onsubmit={(e) => {
+									e.preventDefault();
+									if (ready) onProbe?.({ index: index ?? '', input: encodeWire(values) });
+								}}
+							>
+								{#each Object.entries(chosen.input) as [f, k] (f)}
+									<div
+										class="grid min-w-0 gap-1 text-xs {k.kind === 'custom' ? 'col-span-full' : ''}"
+										data-similar-field={f}
 									>
-								</span>
-							{/if}
-							{#if chosen?.input !== undefined}
-								<!-- a typed similarity: its input fields' own editors under the chip, two to a row (a custom editor takes
-								     the row), run on submit through the view's similar read -->
-								<form
-									class="grid basis-full grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] items-start gap-2 pt-1 pb-2"
-									data-similar-input={index}
-									onsubmit={(e) => {
-										e.preventDefault();
-										if (ready)
-											onProbe?.({
-												name: index ?? '',
-												via: chosen?.via ?? 'similar',
-												input: encodeWire(values)
-											});
-									}}
+										<span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
+										<Editor
+											kind={k}
+											value={values[f] ?? null}
+											onChange={(v) => (values = { ...values, [f]: v })}
+											name={f}
+										/>
+									</div>
+								{/each}
+								<Button
+									type="submit"
+									size="sm"
+									class="col-span-full justify-self-end"
+									disabled={!ready}
+									data-similar-run><Glyph name="search" />{t('searchRun')}</Button
 								>
-									{#each Object.entries(chosen.input) as [f, k] (f)}
-										<div
-											class="grid min-w-0 gap-1 text-xs {k.kind === 'custom'
-												? 'col-span-full'
-												: ''}"
-											data-similar-field={f}
-										>
-											<span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
-											<Editor
-												kind={k}
-												value={values[f] ?? null}
-												onChange={(v) => (values = { ...values, [f]: v })}
-												name={f}
-											/>
-										</div>
-									{/each}
-									<Button
-										type="submit"
-										size="sm"
-										class="col-span-full justify-self-end"
-										disabled={!ready}
-										data-similar-run><Glyph name="search" />{t('searchRun')}</Button
+							</form>
+						{:else}
+							<input
+								bind:this={box}
+								class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm"
+								type="search"
+								placeholder={index === 'semantic'
+									? t('searchMeaning')
+									: lexical
+										? `${searchHint}${indexes.length > 0 ? ` · ${t('searchCommands')}` : ''}`
+										: t('searchPick')}
+								aria-label={searchHint}
+								value={text}
+								oninput={(e) => typing(e.currentTarget.value)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' && index === 'semantic') meaning();
+									if (e.key === 'Enter' && !picking) searchOpen = false;
+									else key(e);
+								}}
+								data-search
+							/>
+						{/if}
+					</div>
+					{#if picking}
+						<div class="grid min-w-0 gap-0.5" role="listbox" data-search-indexes>
+							{#if menuOf.length === 0}<p
+									class="text-muted-foreground px-2 py-1.5 text-sm"
+									data-search-none
+								>
+									{indexes.length === 0 ? t('searchNone') : t('noResults')}
+								</p>{/if}
+							{#each menuOf as i (i.name)}
+								<button
+									type="button"
+									role="option"
+									aria-selected="false"
+									class="hover:bg-accent min-w-0 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
+									disabled={i.why !== null}
+									title={i.why ?? i.hint}
+									onclick={() => pick(i)}
+									data-search-option={i.name}
+								>
+									<span class="block font-medium">/{i.name}</span><span
+										class="text-muted-foreground block truncate text-xs">{i.why ?? i.hint}</span
 									>
-								</form>
-							{:else}
-								<input
-									bind:this={box}
-									class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm"
-									type="search"
-									placeholder={index === 'semantic'
-										? t('searchMeaning')
-										: lexical
-											? `${searchHint}${indexes.length > 0 ? ` · ${t('searchCommands')}` : ''}`
-											: t('searchPick')}
-									aria-label={searchHint}
-									value={text}
-									oninput={(e) => typing(e.currentTarget.value)}
-									onkeydown={(e) => {
-										if (e.key === 'Enter' && !picking) searchOpen = false;
-										else key(e);
-									}}
-									data-search
-								/>
-							{/if}
+								</button>
+							{/each}
 						</div>
-						{#if picking}
-							<div class="grid min-w-0 gap-0.5" role="listbox" data-search-indexes>
-								{#if menuOf.length === 0}<p
-										class="text-muted-foreground px-2 py-1.5 text-sm"
-										data-search-none
-									>
-										{indexes.length === 0 ? t('searchNone') : t('noResults')}
-									</p>{/if}
-								{#each menuOf as i (i.name)}
+					{:else if index === null && text === ''}
+						<!-- what this box searches, and the commands `/` offers -->
+						<div
+							class="text-muted-foreground grid min-w-0 gap-1.5 px-1 pb-1 text-xs"
+							data-search-help
+						>
+							{#if lexical && fieldsSearched.length > 0}
+								<p data-search-fields>
+									{t('searchFields').replace('{fields}', fieldsSearched.join(', '))}
+								</p>
+							{/if}
+							{#if indexes.length > 0}
+								<p class="font-medium">{t('searchCommands')}</p>
+								{#each indexes as i (i.name)}
 									<button
 										type="button"
-										role="option"
-										aria-selected="false"
-										class="hover:bg-accent min-w-0 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
+										class="hover:bg-accent hover:text-foreground -mx-1 flex min-w-0 items-baseline gap-2 rounded-sm px-1 py-0.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
 										disabled={i.why !== null}
 										title={i.why ?? i.hint}
 										onclick={() => pick(i)}
-										data-search-option={i.name}
+										data-search-command={i.name}
 									>
-										<span class="block font-medium">/{i.name}</span><span
-											class="text-muted-foreground block truncate text-xs">{i.why ?? i.hint}</span
+										<span class="text-foreground shrink-0 font-mono">/{i.name}</span><span
+											class="min-w-0 flex-1 truncate">{i.why ?? i.hint}</span
 										>
 									</button>
 								{/each}
-							</div>
-						{:else if index === null && text === ''}
-							<!-- what this box searches, and the commands `/` offers -->
-							<div
-								class="text-muted-foreground grid min-w-0 gap-1.5 px-1 pb-1 text-xs"
-								data-search-help
-							>
-								{#if lexical && fieldsSearched.length > 0}
-									<p data-search-fields>
-										{t('searchFields').replace('{fields}', fieldsSearched.join(', '))}
-									</p>
-								{/if}
-								{#if indexes.length > 0}
-									<p class="font-medium">{t('searchCommands')}</p>
-									{#each indexes as i (i.name)}
-										<button
-											type="button"
-											class="hover:bg-accent hover:text-foreground -mx-1 flex min-w-0 items-baseline gap-2 rounded-sm px-1 py-0.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
-											disabled={i.why !== null}
-											title={i.why ?? i.hint}
-											onclick={() => pick(i)}
-											data-search-command={i.name}
-										>
-											<span class="text-foreground shrink-0 font-mono">/{i.name}</span><span
-												class="min-w-0 flex-1 truncate">{i.why ?? i.hint}</span
-											>
-										</button>
-									{/each}
-								{/if}
-							</div>
-						{/if}
-					</Popover.Content>
-				</Popover.Root>
+							{/if}
+						</div>
+					{/if}
+				</ToolbarSearch>
 			{/if}
 			{#if canFilter && view !== undefined}<ViewPopover
 					{view}
@@ -1318,144 +1312,129 @@
 								{@render menuRow(e)}
 								{#if e.form !== undefined && form === e.form.callable}
 									<div class="border-border mx-1 mb-1 rounded-md border p-2">
-										{#if e.form.target === 'selection'}
-											<form
-												class="grid gap-3"
-												data-bulk-update
-												onsubmit={(event) => {
-													event.preventDefault();
-													if (event.currentTarget.querySelector('[aria-invalid="true"]') === null)
-														updateSelected();
-												}}
+										<form
+											class="grid gap-3"
+											data-bulk-update
+											onsubmit={(event) => {
+												event.preventDefault();
+												if (event.currentTarget.querySelector('[aria-invalid="true"]') === null)
+													updateSelected();
+											}}
+										>
+											<p class="text-meta" data-bulk-update-count>
+												{msg(bolt, 'table.selected', '{n} selected', { n: picked.length })}.
+												{msg(bolt, 'view.editOnlyChosen', 'Only checked fields will change.')}
+											</p>
+											{#each editFields as field (field.name)}
+												{@const chosen = Object.hasOwn(editValues, field.name)}
+												<div class="grid min-w-0 gap-1.5" data-bulk-update-field={field.name}>
+													<div
+														class="flex min-h-11 items-center gap-2 text-sm font-medium @xl:min-h-8"
+													>
+														<Checkbox
+															id={`${editorId}-${field.name}-choose`}
+															checked={chosen}
+															disabled={status['update']?.state === 'pending'}
+															onCheckedChange={(checked) => chooseEdit(field, checked)}
+															data-bulk-update-choose={field.name}
+														/>
+														<label
+															class="flex min-h-11 flex-1 items-center @xl:min-h-8"
+															for={`${editorId}-${field.name}-choose`}
+															id={`${editorId}-${field.name}-label`}
+														>
+															{field.kind.label ??
+																pathLabel(catalog, collection, field.name, humanize)}
+														</label>
+													</div>
+													{#if chosen}
+														<label class="sr-only" for={`${editorId}-${field.name}`}
+															>{field.kind.label ??
+																pathLabel(catalog, collection, field.name, humanize)}</label
+														>
+														<Editor
+															kind={field.kind}
+															value={editValues[field.name] ?? null}
+															onChange={(value) =>
+																(editValues = { ...editValues, [field.name]: value })}
+															name={field.name}
+															id={`${editorId}-${field.name}`}
+															labelledby={`${editorId}-${field.name}-label`}
+															row={editSet}
+															relation={field.relation}
+															errors={editProblems}
+															disabled={status['update']?.state === 'pending'}
+														/>
+														{#if field.kind.optional}
+															<Button
+																type="button"
+																size="sm"
+																variant="ghost"
+																class="justify-self-start"
+																disabled={status['update']?.state === 'pending'}
+																onclick={() => (editValues = { ...editValues, [field.name]: null })}
+															>
+																{msg(bolt, 'view.clearValue', 'Clear value')}
+															</Button>
+														{/if}
+														{#if editProblems.get(field.name)}
+															<p role="alert" class="text-destructive text-xs">
+																{bolt.t(editProblems.get(field.name) ?? '')}
+															</p>
+														{/if}
+													{/if}
+												</div>
+											{/each}
+											{#each editRelations as { name, child } (name)}
+												{@const chosen = Object.hasOwn(editLinks, name)}
+												<div class="grid min-w-0 gap-1.5" data-bulk-update-field={name}>
+													<div
+														class="flex min-h-11 items-center gap-2 text-sm font-medium @xl:min-h-8"
+													>
+														<Checkbox
+															id={`${editorId}-${name}-choose`}
+															checked={chosen}
+															disabled={status['update']?.state === 'pending'}
+															onCheckedChange={(checked) => chooseLinks(name, checked)}
+															data-bulk-update-choose={name}
+														/>
+														<label
+															class="flex min-h-11 flex-1 items-center @xl:min-h-8"
+															for={`${editorId}-${name}-choose`}
+														>
+															{pathLabel(catalog, collection, name, humanize)}
+														</label>
+													</div>
+													{#if chosen}
+														<BulkRelation
+															{name}
+															{child}
+															parentId={editParent}
+															value={editLinks[name] ?? NO_LINKS}
+															onChange={(next) => (editLinks = { ...editLinks, [name]: next })}
+															id={`${editorId}-${name}`}
+															errors={editProblems}
+															disabled={status['update']?.state === 'pending'}
+														/>
+													{/if}
+												</div>
+											{/each}
+											<Button
+												type="submit"
+												size="sm"
+												class="justify-self-end"
+												disabled={!editReady || status['update']?.state === 'pending'}
+												aria-busy={status['update']?.state === 'pending'}
+												data-bulk-update-submit
 											>
-												<p class="text-meta" data-bulk-update-count>
-													{msg(bolt, 'table.selected', '{n} selected', { n: picked.length })}.
-													{msg(bolt, 'view.editOnlyChosen', 'Only checked fields will change.')}
-												</p>
-												{#each editFields as field (field.name)}
-													{@const chosen = Object.hasOwn(editValues, field.name)}
-													<div class="grid min-w-0 gap-1.5" data-bulk-update-field={field.name}>
-														<div
-															class="flex min-h-11 items-center gap-2 text-sm font-medium @xl:min-h-8"
-														>
-															<Checkbox
-																id={`${editorId}-${field.name}-choose`}
-																checked={chosen}
-																disabled={status['update']?.state === 'pending'}
-																onCheckedChange={(checked) => chooseEdit(field, checked)}
-																data-bulk-update-choose={field.name}
-															/>
-															<label
-																class="flex min-h-11 flex-1 items-center @xl:min-h-8"
-																for={`${editorId}-${field.name}-choose`}
-																id={`${editorId}-${field.name}-label`}
-															>
-																{field.kind.label ??
-																	pathLabel(catalog, collection, field.name, humanize)}
-															</label>
-														</div>
-														{#if chosen}
-															<label class="sr-only" for={`${editorId}-${field.name}`}
-																>{field.kind.label ??
-																	pathLabel(catalog, collection, field.name, humanize)}</label
-															>
-															<Editor
-																kind={field.kind}
-																value={editValues[field.name] ?? null}
-																onChange={(value) =>
-																	(editValues = { ...editValues, [field.name]: value })}
-																name={field.name}
-																id={`${editorId}-${field.name}`}
-																labelledby={`${editorId}-${field.name}-label`}
-																row={editSet}
-																relation={field.relation}
-																errors={editProblems}
-																disabled={status['update']?.state === 'pending'}
-															/>
-															{#if field.kind.optional}
-																<Button
-																	type="button"
-																	size="sm"
-																	variant="ghost"
-																	class="justify-self-start"
-																	disabled={status['update']?.state === 'pending'}
-																	onclick={() =>
-																		(editValues = { ...editValues, [field.name]: null })}
-																>
-																	{msg(bolt, 'view.clearValue', 'Clear value')}
-																</Button>
-															{/if}
-															{#if editProblems.get(field.name)}
-																<p role="alert" class="text-destructive text-xs">
-																	{bolt.t(editProblems.get(field.name) ?? '')}
-																</p>
-															{/if}
-														{/if}
-													</div>
-												{/each}
-												{#each editRelations as { name, child } (name)}
-													{@const chosen = Object.hasOwn(editLinks, name)}
-													<div class="grid min-w-0 gap-1.5" data-bulk-update-field={name}>
-														<div
-															class="flex min-h-11 items-center gap-2 text-sm font-medium @xl:min-h-8"
-														>
-															<Checkbox
-																id={`${editorId}-${name}-choose`}
-																checked={chosen}
-																disabled={status['update']?.state === 'pending'}
-																onCheckedChange={(checked) => chooseLinks(name, checked)}
-																data-bulk-update-choose={name}
-															/>
-															<label
-																class="flex min-h-11 flex-1 items-center @xl:min-h-8"
-																for={`${editorId}-${name}-choose`}
-															>
-																{pathLabel(catalog, collection, name, humanize)}
-															</label>
-														</div>
-														{#if chosen}
-															<BulkRelation
-																{name}
-																{child}
-																parentId={editParent}
-																value={editLinks[name] ?? NO_LINKS}
-																onChange={(next) => (editLinks = { ...editLinks, [name]: next })}
-																id={`${editorId}-${name}`}
-																errors={editProblems}
-																disabled={status['update']?.state === 'pending'}
-															/>
-														{/if}
-													</div>
-												{/each}
-												<Button
-													type="submit"
-													size="sm"
-													class="justify-self-end"
-													disabled={!editReady || status['update']?.state === 'pending'}
-													aria-busy={status['update']?.state === 'pending'}
-													data-bulk-update-submit
-												>
-													{#if status['update']?.state === 'pending'}<Spinner
-															label={msg(bolt, 'view.running', 'Running')}
-														/>{/if}
-													{msg(bolt, 'view.applySelected', 'Apply to {n} selected', {
-														n: picked.length
-													})}
-												</Button>
-											</form>
-										{:else}
-											<FormView
-												of={{ action: e.form.callable }}
-												{...e.form.target === 'record' ? { id: picked[0] } : {}}
-												onOutcome={(o) => {
-													say(o);
-													if (o.kind === 'committed') {
-														form = null;
-														menuOpen = false;
-													}
-												}}
-											/>
-										{/if}
+												{#if status['update']?.state === 'pending'}<Spinner
+														label={msg(bolt, 'view.running', 'Running')}
+													/>{/if}
+												{msg(bolt, 'view.applySelected', 'Apply to {n} selected', {
+													n: picked.length
+												})}
+											</Button>
+										</form>
 									</div>
 								{/if}
 							{/each}

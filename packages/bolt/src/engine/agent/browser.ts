@@ -32,10 +32,10 @@ const Navigate = Schema.Struct({
 	find: OptionalString
 });
 
-/** A person browses as themself; an automation run in a profile of its own. */
+/** One browser session per agent conversation; an automation run keeps its own profile too. */
 const profileOf = (context: HostToolContext): string | undefined =>
 	context.actor.kind === 'member'
-		? context.actor.id
+		? `person:${context.actor.id}:${context.conversation}`
 		: context.actor.kind === 'system'
 			? `${BROWSER_RUN_PROFILE}${context.conversation}`
 			: undefined;
@@ -122,7 +122,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 	tool({
 		name: 'browser_download',
 		description:
-			"Save a file (an image, a video, a document) at an http(s) URL, fetched in your own browser (its sign-ins), as the person's file: it is offered on this step and a file field or a post takes its reference. At most 20 MiB.",
+			"Save a media file (an image, audio, video or a PDF) at an http(s) URL, fetched in your own browser (its sign-ins), as the person's file: it is kept only if its bytes are media, at most 100 MiB, and offered on this step; a file field or a post takes its reference. A public file is saved with download instead.",
 		input: Schema.Struct({ url: Schema.String }),
 		call: ({ url }, profile, context) =>
 			context.keep === undefined
@@ -130,7 +130,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 				: browser.download(profile, url).pipe(
 						Effect.map((file) => {
 							context.keep?.(file);
-							return { saved: file.name, mime: file.mime, bytes: file.bytes.byteLength };
+							return { saved: file.name, mime: file.mime, bytes: file.bytes };
 						})
 					)
 	})

@@ -1,6 +1,8 @@
 // One flat, Effect-native engine surface. Hosts activate EngineLive and own the runtime edge.
 // ── exports: db ──
 export * from './contracts.ts';
+export * from '../protocol/audit.ts';
+export { Audit, auditFromAbi, auditShape, type AuditShape } from './audit.ts';
 export * from './errors.ts';
 export { BoltError, CODE, CODES, PHASES, type Code, type Phase } from '../protocol/errors.ts';
 export * from './services.ts';
@@ -8,48 +10,48 @@ export * from './ports.ts';
 export { Port, type PortFailure } from './port.ts';
 export * from './host.ts';
 export { Secrets, type SecretsCodec, type SecretsShape } from './secrets.ts';
-export { TenantDb, TenantTx, type TenantDbShape, type RawDb } from './db/tenant-db.ts';
-export { PostgresDb, type PgClient, type PgPool } from './db/postgres.ts';
-export { PgliteDb, Pristine, type PgliteClient, type PgliteSource } from './db/pglite.ts';
+export {
+	TenantDb,
+	type DbBatch,
+	type DbSession,
+	type TenantDbShape,
+	type RawDb
+} from './db/tenant-db.ts';
 export * from './manifest.ts';
 export type { Json } from '../decl/values.ts';
 // ── exports: query ──
-export * as ir from '../protocol/ir.ts';
 export {
 	ReadsLive,
 	readEngine,
 	memoReads,
 	coalescing,
 	readComposed,
-	lowerRead,
-	type SimilarityBodies
+	lowerRead
 } from './query/engine.ts';
-export { historyAt } from '../protocol/ir.ts';
-export { readProjector, projectionContext } from './query/read-projector.ts';
+export { historyAt } from '../protocol/reads.ts';
 export { readHistory, pruneHistory } from './query/history.ts';
 // ── exports: guest ──
-export {
-	GuestConfig,
-	GuestLive,
-	IsolatesLive,
-	PreparedIsolates,
-	type GuestOptions,
-	type GuestProgram
-} from './guest/runner.ts';
-export { TelemetryLive, logged } from './guest/telemetry.ts';
+export { GuestConfig, GuestLive, type GuestOptions, type GuestProgram } from './guest/runner.ts';
+export { TelemetryLive } from './guest/telemetry.ts';
 // ── exports: writes ──
 export { WritesLive, act, recordCapabilities, mayUpdate, type WriteEngine } from './write/act.ts';
+export { minter, fingerprinting, Chain } from './write/sql.ts';
 export {
-	canonical,
-	sha256Hex,
-	minter,
-	databaseValue,
-	fingerprinting,
-	ownPredSql,
-	Chain
-} from './write/sql.ts';
-export { decodeSeed, seed, type SeedPack } from './write/seed.ts';
-export { loadPack, readPack, type Pack, type PackJson } from './write/pack.ts';
+	decodeSeed,
+	restoreSource,
+	seed,
+	type RestoreSource,
+	type SeedPack
+} from './write/seed.ts';
+export {
+	loadPack,
+	readPack,
+	readPackSource,
+	sourceOf,
+	type Pack,
+	type PackJson,
+	type PackSource
+} from './write/pack.ts';
 // ── exports: callables ──
 export {
 	CallablesLive,
@@ -67,7 +69,6 @@ export {
 	type DecideInput,
 	type Decision
 } from './approvals/approvals.ts';
-export { PipelinesLive, csv } from './pipelines/pipeline.ts';
 export {
 	DecisionsLive,
 	DecisionRequestSchema,
@@ -107,7 +108,6 @@ export {
 	mint,
 	signupOf,
 	type IdentityHost,
-	type Keys,
 	type PhoneVerifier,
 	type Session,
 	type Signup,
@@ -116,6 +116,13 @@ export {
 export { assignTeam, membershipRun } from './identity/members.ts'; // Source-team affiliation; hosts bind membershipRun as runs.platform['bolt.membership'].
 export { MEMBERSHIP } from './identity/session.ts';
 export { applyPlan, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
+export {
+	applyMigrations,
+	migrationSchema,
+	readMigrations,
+	statusMigrations,
+	type MigrationBundle
+} from './schema/migrations.ts';
 export { catalogOf } from './access/pred.ts';
 // ── exports: live ──
 export { LiveHubLive, LIVE, INBOX_LIMIT, noticeRow } from './live/hub.ts';
@@ -140,7 +147,6 @@ export {
 	triggersOf,
 	type Triggers,
 	type EventTrigger,
-	type CronTrigger,
 	type WebhookTrigger
 } from './runs/queue.ts';
 export { duration, offsetMs, dueAt, backoffMs, BUCKET_MS, iso } from './runs/time.ts';
@@ -164,21 +170,9 @@ export {
 	type RunView
 } from './runs/index.ts';
 export { NOTICE_PUSH, noticePush, subscribe } from './runs/push.ts';
-export { imageFacts, imageJpeg, type ImageFacts } from './files/image.ts';
+export { imageFacts, imageJpeg } from './files/image.ts';
+export { DOWNLOAD, mediaType } from './files/media.ts';
 // ── exports: links ──
-export {
-	isPublicWebAddress,
-	publicDestination,
-	pinnedLookup,
-	connectPublic,
-	makeRequestPage,
-	publicAddresses,
-	publicFetch,
-	WEB_PAGE_BYTE_LIMIT,
-	type Address,
-	type Resolve,
-	type PageWrite
-} from './net.ts'; // hook:hosting — the outbound guard (L-BOLT-366)
 export {
 	HOOKS,
 	integrationLinks,
@@ -198,16 +192,15 @@ export type {
 } from './integrations/driver.ts'; // the one contract every provider implements
 export { oauthClientOf } from './integrations/driver.ts';
 export { credentials, type Credentials, type InstanceRow } from './integrations/credentials.ts'; // hook:hosting — a host's credential port
-// ── exports: feeds ──
+// ── exports: facilities and syncs ──
 export {
 	FacilitiesLive,
 	facilityDispatch,
 	fileLoader,
-	localFiles,
 	loggedTransport,
 	type FacilityPorts
 } from './facilities.ts';
-export { FeedsLive, feedsOf, fedOf } from './integrations/feeds.ts';
+export { Syncs, SyncsLive, SyncHealth } from './sync/index.ts';
 export { OutboundLive, sendInputSchema } from './integrations/outbound.ts';
 export { documentConverter, type DocumentConverterConfig } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
 export {
@@ -222,10 +215,10 @@ export {
 	DatabaseResult,
 	validateDatabaseRequest,
 	validateDatabaseResult,
-	DATABASE_MAX_PARAMETERS,
 	DATABASE_MAX_ROWS,
 	DATABASE_MAX_BYTES,
-	type DatabaseDriver
+	type DatabaseDriver,
+	type DatabaseProjection
 } from './integrations/database.ts';
 // ── exports: conversations ──
 export { ConversationsLive } from './conversations/index.ts';
@@ -260,9 +253,9 @@ export { inferFacility } from './agent/ai.ts';
 export { openAiChat, type OpenAiChat, type OpenAiChatConfig } from './agent/openai-chat.ts';
 export type {
 	AttachmentPort,
+	HostSkill,
 	HostTool,
 	HostToolContext,
-	SandboxPort,
 	WorkspacePort
 } from './agent/index.ts'; // hook:wiring — hosts bind the agent's options
 export { page } from './agent/context.ts'; // hook:wiring — a host's file-reading tool pages like `workspace_search` (rule 62)
@@ -275,6 +268,7 @@ export {
 } from './agent/index.ts';
 export { BROWSER_RUN_PROFILE } from './agent/browser.ts'; // hook:wiring — the profile a host discards after a run
 export { fileAttachments } from './agent/attachments.ts'; // hook:wiring — `read_attachment` over the files port
+export { REFERENCE, ReferenceIndex } from './agent/run-js.ts'; // hook:wiring — a host's `reference` tool writes the index `run_js { file }` reads
 // ── exports: protocol ──
 export { BoltHost, BoltHostLive, ORDER, type Handler } from '../protocol/host.ts';
 export { PublicPages, publicPages, renderMode } from '../protocol/pages.ts';
@@ -319,16 +313,29 @@ export {
 	type TurnstileShape
 } from '../shell/host.ts';
 export { COOKIES, cookieSite, framePolicy } from '../shell/nav.ts';
+export { StudioInspectInput, StudioInspection } from '../shell/studio/inspection.ts';
 export {
 	StudioOp,
 	studioView,
+	type StudioApproval,
 	type StudioBuild,
 	type StudioBuildRecord,
+	type StudioFile,
 	type StudioUsage,
-	type StudioMergeRequest,
+	type StudioChangeSet,
 	type StudioPort,
 	type StudioState
 } from '../shell/studio/model.ts';
+export type {
+	AuditRuleSet,
+	AuditRuleState,
+	StudioAudit,
+	StudioAuditFinding,
+	StudioAuditPort,
+	StudioAuditRule,
+	StudioAuditRuleError,
+	StudioAuditRules
+} from '../shell/studio/audit.ts';
 // ── exports: decl ──
 export type {
 	GeoHit,

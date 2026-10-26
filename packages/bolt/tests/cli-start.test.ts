@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { expect, it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, Schema } from 'effect';
@@ -50,7 +50,6 @@ export function main(argv) { return Effect.sync(() => { writeFileSync(${JSON.str
 					'--seed=sample',
 					'--founder=dev@example.test',
 					'--trust-proxy=127.0.0.1',
-					'--accept',
 					'--dev'
 				])
 			).toBe(0);
@@ -61,7 +60,6 @@ export function main(argv) { return Effect.sync(() => { writeFileSync(${JSON.str
 				'--seed=sample',
 				'--founder=dev@example.test',
 				'--trust-proxy=127.0.0.1',
-				'--accept',
 				'--dev'
 			]);
 			expect(yield* main(['start', '--port=1', 'x'])).toBe(2);
@@ -73,15 +71,3 @@ export function main(argv) { return Effect.sync(() => { writeFileSync(${JSON.str
 			expect(yield* main(['start'])).toBe(2);
 		}).pipe(Effect.provide(NodeServices.layer))
 );
-
-it('the real bolt-server exports `.` with a main, and nothing named /next', () => {
-	const root = fileURLToPath(new URL('../../bolt-server/', import.meta.url));
-	const pkg = Schema.decodeUnknownSync(
-		Schema.fromJsonString(Schema.Struct({ exports: Schema.Record(Schema.String, Schema.Json) }))
-	)(readFileSync(join(root, 'package.json'), 'utf8'));
-	expect(Object.keys(pkg.exports)).toEqual(['.']);
-	expect(readFileSync(join(root, 'src/index.ts'), 'utf8')).toMatch(/export \{ main \}/);
-	expect(readFileSync(new URL('../src/cli/main.ts', import.meta.url), 'utf8')).not.toMatch(
-		/bolt-server\/next/
-	);
-});

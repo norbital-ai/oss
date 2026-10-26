@@ -1,6 +1,6 @@
 // The workspace and its navigation (§3.3.1, X-19): `workspace()`, `app()` with its page files, `group()`.
-// An app or group literal is typed against its own folder's children, so, like `collection`, it takes its name (the
-// folder path); the build checks the name against the folder.
+// An app or group literal is typed against its own folder's children, so, like `model`, it takes its name (the folder
+// path); the build checks the name against the folder.
 import type { Checked, Exact } from '../fields.ts';
 import type { AppName, CollectionName, EnvoyName, IntegrationName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
@@ -35,7 +35,10 @@ type WorkspaceBase = {
 	apps?: readonly string[];
 	/** The model classes agents may use, the default one, and the embedding models. */
 	ai?: { models: readonly AiModelClass[]; default: AiModelClass; embeddings?: readonly string[] };
-	/** The document formats automations convert Markdown or HTML to (`ctx.convert.document`); the host must serve each. */
+	/**
+	 * The document formats Markdown or HTML converts to (`bolt.convert`, `ctx.convert.document`, notice attachments, a
+	 * file sync's document export); the host must serve each.
+	 */
 	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may connect to beyond the workspace. */
 	csp?: { connect?: readonly `https://${string}`[] };
@@ -74,7 +77,7 @@ type WorkspaceFor<S> = {
 		default: Part<Part<S, 'ai'>, 'models'> extends readonly (infer M)[] ? M : AiModelClass;
 		embeddings?: readonly string[];
 	};
-	/** The document formats `ctx.convert.document` produces; each is a type-checked target with its own options. */
+	/** The document formats the converter produces; each is a type-checked target with its own options. */
 	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may fetch (model weights); scripts stay same-origin. */
 	csp?: { connect?: readonly `https://${string}`[] };
@@ -83,9 +86,9 @@ type WorkspaceFor<S> = {
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;
 	/**
-	 * Named instances: the slot name is the instance id (`ctx.send('mail', …)`, an outbound `via`). The row's existence is
-	 * source's; its pairing, configuration, envoy and `active` are run-time. `envoy` is the default deployment on a
-	 * conversation instance (`__verify` refuses one on any other).
+	 * Named instances: the slot name is the instance id (`ctx.send('mail', …)`, a notice's `via`, the instance a remote
+	 * sync writes through). The row's existence is source's; its pairing, configuration, envoy and `active` are run-time.
+	 * `envoy` is the default deployment on a conversation instance (`__verify` refuses one on any other).
 	 */
 	connections?: {
 		[K in keyof Part<S, 'connections'>]: { integration: IntegrationName; envoy?: EnvoyName };
@@ -108,17 +111,27 @@ export function workspace<const S extends WorkspaceBase>(
 type Audience =
 	'members' | 'external' | 'all' | { public: NonEmpty<string>; challenge?: 'turnstile' };
 /**
- * `portal`: the page renders alone — no sidebar, banner, tabs or agent — and another website may embed it in a frame. A
- * device kiosk in a members app, or a customer-facing page in an external or public app; the app's audience decides who
- * opens it. Portals are listed under the account menu's Portals, never as sidebar rows or tabs.
+ * A site that may frame a kiosk or portal page in an iframe, as an origin (`https://host[:port]`, no path, no `*`). The
+ * page is served with `frame-ancestors 'self' <origins…>`; without `embed` only the workspace itself may frame it. The
+ * session cookie is `SameSite=None; Secure; Partitioned`, so a signed-in embed keeps its own session per embedding site;
+ * the embedding site decides only the device permissions it delegates (`allow`), never data authority.
  */
-type Page = { title: Msg; icon?: IconName; section?: Msg; portal?: true };
+export type EmbedOrigin = `https://${string}`;
+/**
+ * `portal`: the page renders alone — no sidebar, banner, tabs or agent. A device kiosk in a members app, or a
+ * customer-facing page in an external or public app; the app's audience decides who opens it. Portals are listed under
+ * the account menu's Portals, never as sidebar rows or tabs. `embed` (portal pages only) names the sites that may frame it.
+ */
+type Page = { title: Msg; icon?: IconName; section?: Msg } & (
+	{ portal?: never; embed?: never } | { portal: true; embed?: readonly EmbedOrigin[] }
+);
 /**
  * Device access an app cannot work without. Until each is granted the shell shows a wall in place of the app's pages,
  * saying what is missing and how to allow it (the browser's prompt, or the phone's settings on a native host).
  * `location:background` needs always-on location on a native host; a browser can only share while the page is open.
  */
 export type DeviceRequirement = 'location' | 'location:background' | 'notifications' | 'camera';
+/** An app literal's general shape (the manifest's app part). */
 export type AppSpec = {
 	title: Msg;
 	description: Msg;
@@ -165,6 +178,7 @@ export function app<const A extends AppName, const S extends AppSpec>(
 	return { name, spec };
 }
 
+/** A group literal: its label, description, icon and the child it opens. */
 export type GroupSpec = { label: Msg; description?: Msg; icon: IconName; defaultChild: string };
 /**
  * `src/app/<g>/+group.ts`: a folder of apps shown as one entry in the nav, opening `defaultChild`; a policy's

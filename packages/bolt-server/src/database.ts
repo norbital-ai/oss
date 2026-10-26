@@ -1,16 +1,17 @@
 // Optional trusted TDS transport: no source polling, CDC or business submission behavior.
 import { Effect, FiberSet, Result, Scope } from 'effect';
 import mssql from 'mssql';
+import { compileSqlServer } from '@norbital-ai/store/sqlserver';
 import {
 	BoltError,
 	DATABASE_MAX_BYTES,
 	DATABASE_MAX_ROWS,
-	connectPublic,
 	validateDatabaseRequest,
 	type DatabaseDriver,
 	type DatabaseResult,
 	type Json
 } from '@norbital-ai/bolt/engine';
+import { connectPublic } from '@norbital-ai/bolt/node';
 
 const QUERY_MS = 8_000;
 const failure = (message: string) => (cause: unknown) =>
@@ -33,7 +34,7 @@ export function sqlServerDatabase() {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const request = yield* Effect.try({
-						try: () => validateDatabaseRequest(given),
+						try: () => compileSqlServer(validateDatabaseRequest(given)),
 						catch: (cause) =>
 							cause instanceof BoltError
 								? cause
@@ -239,7 +240,10 @@ export function sqlServerDatabase() {
 						}
 					});
 					yield* Effect.tryPromise({
-						try: () => query.query(request.statement),
+						try: () =>
+							request.procedure === undefined
+								? query.query(request.statement)
+								: query.execute(request.procedure),
 						catch: (cause) => failure('Database request failed.')(refusal ?? cause)
 					}).pipe(Effect.onInterrupt(() => Effect.sync(cancel)));
 					if (refusal !== undefined)

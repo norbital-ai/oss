@@ -9,22 +9,31 @@ export * as Dialog from './dialog/index.js';
 export { confirmAction, type ConfirmOptions } from './dialog/confirm.js';
 /** Floating content anchored to a trigger: `Popover.Root`, `Popover.Trigger`, `Popover.Content`. */
 export * as Popover from './popover/index.js';
-export { Drawer, Sheet, type DrawerProps, type SheetProps } from './sheet/index.js';
-export { Badge, type BadgeVariant } from './badge/index.js';
+export { default as Drawer, type DrawerProps } from './sheet/drawer.svelte';
+export { default as Sheet, type SheetProps } from './sheet/sheet.svelte';
+export { default as Badge, type BadgeVariant } from './badge/badge.svelte';
 export { Button, type ButtonProps } from './button/index.js';
-export { Checkbox } from './checkbox/index.js';
-export { Combobox, type ComboboxOption, type ComboboxProps } from './combobox/index.js';
-export { IconWrapper as Icon } from './icon/index.js';
+export { default as Checkbox } from './checkbox/checkbox.svelte';
+export {
+	default as Combobox,
+	type ComboboxOption,
+	type ComboboxProps
+} from './combobox/combobox.svelte';
+export { default as Icon } from './icon/icon-wrapper.svelte';
 export { default as Image, type ImageProps } from './image/image.svelte';
-export { Input } from './input/index.js';
-export { Label } from './label/index.js';
-export { Progress } from './progress/index.js';
-export { Qr } from './qr/index.js';
-export { Spinner } from './spinner/index.js';
+export { default as Input } from './input/input.svelte';
+export { default as Label } from './label/label.svelte';
+export { default as Progress } from './progress/progress.svelte';
+export { default as Qr } from './qr/qr.svelte';
+export { default as Spinner } from './spinner/spinner.svelte';
 export { TAB_LEVEL, Tabs, type TabItem, type TabsProps } from './tabs/index.js';
-export { Textarea } from './textarea/index.js';
-export { Tooltip } from './tooltip/index.js';
-export { virtualList, type Virtual, type VirtualOptions } from './virtual/index.js';
+export { default as Textarea } from './textarea/textarea.svelte';
+/**
+ * Public tooltip API is the single Provider-backed wrapper only.
+ * Do not import bits-ui Tooltip (or Root/Provider/Trigger) at call sites.
+ */
+export { default as Tooltip } from './tooltip/tooltip.svelte';
+export { virtualList, type Virtual, type VirtualOptions } from './virtual/virtual.svelte.js';
 export {
 	cn,
 	formatFileSize,

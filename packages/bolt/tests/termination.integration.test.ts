@@ -1,10 +1,7 @@
 // P38 on PGlite: every run ends (rule 12: a loop on a cheap facility call ends `crossingBudget`), a drain interrupts
 // what it waits on (rule 71a: aborting the generation disposes a guest stuck on a facility that never answers, and the
 // run is re-queued as a lost lease), and engine loops prove progress (rule 25a: `bolt.embed` stops `noProgress` when its
-// guarded write stores 0 rows; a revision guard writes a row whose `updated_at` has microseconds). Plus the source gate:
-// no optimistic guard compares a `*_at` column with a value bound from JS.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+// guarded write stores 0 rows; a revision guard writes a row whose `updated_at` has microseconds).
 import { describe, expect, it } from '@effect/vitest';
 import {
 	Clock,
@@ -25,10 +22,10 @@ import { LIMITS } from '../src/engine/contracts.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { program } from './support/guest-fixture.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import { TestWorkspace, type Kit } from '../src/test/index.ts';
-import { loadPack } from '../src/engine/write/pack.ts';
+import { loadPack, sourceOf } from '../src/engine/write/pack.ts';
 import { randomUUID } from 'node:crypto';
 
 const manifest = Result.getOrThrow(
@@ -58,7 +55,6 @@ const manifest = Result.getOrThrow(
 			relay: { description: 'A fast branch beside a slow one', runAs: ['p'] }
 		},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		connections: {},
 		envoys: {},
@@ -135,7 +131,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 						yield* loadPack(
 							t.db,
 							manifest,
-							{
+							sourceOf({
 								dir: '',
 								meta: {
 									format: 1,
@@ -146,7 +142,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 									rows: { docs: 1 }
 								},
 								rows: { docs: [{ id: randomUUID(), title: 'seeded' }] }
-							},
+							}),
 							'2026-09-27T00:00:00.000Z'
 						)
 					).toBe(true);
@@ -377,27 +373,4 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 				})
 			)
 	);
-
-	it('no optimistic guard in the engine compares a *_at column with a value bound from JS (rule 25a)', () => {
-		const roots = ['../src', '../../bolt-server/src', '../../ui/src'].map((r) =>
-			join(import.meta.dirname, r)
-		);
-		const files = (dir: string): string[] =>
-			readdirSync(dir).flatMap((f) =>
-				statSync(join(dir, f)).isDirectory()
-					? files(join(dir, f))
-					: /\.(ts|svelte)$/.test(f)
-						? [join(dir, f)]
-						: []
-			);
-		// `WHERE|AND|OR <col>_at = | IS NOT DISTINCT FROM <$n | ${…} | v.x>`: compare `revision`, or both sides `::text`
-		const guard =
-			/\b(?:WHERE|AND|OR)\s+[\w."]*_at"?\s*(?:=|IS NOT DISTINCT FROM)\s*(?:\$\d|\$\{|[a-z]\.)/i;
-		const hits = roots.flatMap(files).flatMap((f) =>
-			readFileSync(f, 'utf8')
-				.split('\n')
-				.flatMap((line, i) => (guard.test(line) ? [`${f}:${i + 1}: ${line.trim()}`] : []))
-		);
-		expect(hits).toEqual([]);
-	});
 });

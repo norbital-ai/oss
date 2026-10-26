@@ -3,7 +3,7 @@
 // row carries it, shown by name in the transcript.
 import './setup-happy-dom.js';
 import { flushSync, mount, unmount } from 'svelte';
-import { expect, it } from '@effect/vitest';
+import { expect, it, vi } from '@effect/vitest';
 import { Clock, Context, Effect, FiberSet, Layer, ManagedRuntime, Result } from 'effect';
 import { mountEdge } from '@norbital-ai/ui/effect';
 import { decodeManifest } from '../src/engine/manifest.ts';
@@ -22,7 +22,6 @@ const manifest = Result.getOrThrow(
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -39,7 +38,7 @@ const until = (ok: () => boolean, n = 600) =>
 		expect(ok()).toBe(true);
 	});
 
-it.live('a picked file uploads on send and the posted row carries it', () =>
+it.live('Input opens the picker; sending uploads and posts the file', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const context = yield* Layer.build(
@@ -102,6 +101,13 @@ it.live('a picked file uploads on send and the posted row carries it', () =>
 			});
 			try {
 				const input = target.querySelector<HTMLInputElement>('input[type="file"]')!;
+				const pick = vi.spyOn(input, 'click');
+				target.querySelector<HTMLButtonElement>('[data-rail-toggle]')!.click();
+				flushSync();
+				const rail = target.querySelector('[data-agent-rail]')!;
+				expect(rail.querySelector('[data-rail="inputs"]')?.textContent).toContain('Input');
+				rail.querySelector<HTMLButtonElement>('[data-rail-attach]')!.click();
+				expect(pick).toHaveBeenCalledOnce();
 				Object.defineProperty(input, 'files', {
 					configurable: true,
 					value: [new File([new Uint8Array([1, 2, 3])], 'pump.png', { type: 'image/png' })]

@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
-	import { query } from '@norbital-ai/ui/effect';
+	import { observeOnce } from '@norbital-ai/ui/effect';
 	import { Button } from '@norbital-ai/ui';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import type { IntegrationOffer } from '../../protocol/instance-status.ts';
@@ -36,7 +36,7 @@
 		reload: () => Effect.Effect<void>;
 	} = $props();
 
-	const offers = query(() =>
+	const offers = observeOnce(() =>
 		api.integrationOffers().pipe(Effect.map((all) => all.filter((o) => o.conversation)))
 	);
 	const channelsOf = (envoy: string) => settings.instances.filter((i) => i.envoy === envoy);

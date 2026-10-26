@@ -19,15 +19,7 @@ const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
 
 /** Parse and decode a manifest object at its boundary. */
 export const decodeJsonObject = (text: string): Readonly<Record<string, unknown>> | undefined =>
-	Result.getOrElse(
-		Schema.decodeUnknownResult(Schema.fromJsonString(jsonObject))(text),
-		() => undefined
-	);
-
-function decodeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
-	const decoded = Schema.decodeUnknownResult(jsonObject)(value);
-	return Result.getOrElse(decoded, () => undefined);
-}
+	Result.getOrUndefined(Schema.decodeUnknownResult(Schema.fromJsonString(jsonObject))(text));
 
 /**
  * A JSON record read out of an already-parsed manifest value.
@@ -37,7 +29,7 @@ function decodeObject(value: unknown): Readonly<Record<string, unknown>> | undef
  * asks for a record gets a record or an explicit absence.
  */
 export function jsonRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-	return decodeObject(value);
+	return Result.getOrUndefined(Schema.decodeUnknownResult(jsonObject)(value));
 }
 
 /** A nested object field, or an empty object when the field is absent or another type. */
@@ -45,7 +37,7 @@ export function recordField(
 	source: Readonly<Record<string, unknown>>,
 	name: string
 ): Readonly<Record<string, unknown>> {
-	return decodeObject(source[name]) ?? {};
+	return jsonRecord(source[name]) ?? {};
 }
 
 /** A string field, or `undefined` when the field is absent or another type. */

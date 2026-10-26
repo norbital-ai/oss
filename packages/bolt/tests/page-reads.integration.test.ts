@@ -1,5 +1,4 @@
-// Page reads over `/__bolt/q` as migrated templates make them: a collection query and a named similarity by name, a
-// browser `history`, a single-record `get` with its heavy fields, and `sys_user` read by its text id.
+// The unified page query wire: declared queries, index search, record/list projections and text ids; history stays explicit.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -24,7 +23,23 @@ const manifest = Result.getOrThrow(
 					color: { kind: 'vector', dim: 3, metric: 'l2', optional: true },
 					code: { kind: 'seq', pattern: 'O-{0000}' }
 				},
-				search: { text: ['code', 'title'] }
+				search: {
+					text: ['code', 'title'],
+					indexes: {
+						hue: {
+							description: 'Hue',
+							dim: 3,
+							metric: 'l2',
+							field: 'color',
+							input: {
+								r: { kind: 'decimal', scale: 2 },
+								window: { kind: 'custom', of: 'probe_window', optional: true }
+							},
+							candidates: 2,
+							rerank: true
+						}
+					}
+				}
 			}
 		},
 		relationships: {},
@@ -39,12 +54,10 @@ const manifest = Result.getOrThrow(
 						input: { prefix: { kind: 'text' } },
 						output: { kind: 'json' }
 					}
-				},
-				similarity: { hue: { description: 'Hue', input: { r: { kind: 'number' } }, candidates: 2 } }
+				}
 			}
 		},
 		integrations: {},
-		pipelines: {},
 		policies: {
 			rep: {
 				description: 'Rep',
@@ -58,18 +71,28 @@ const manifest = Result.getOrThrow(
 		connections: {},
 		envoys: {},
 		mcp: {},
-		customFields: {},
+		customFields: {
+			probe_window: {
+				description: 'A synthetic probe window',
+				shape: {
+					kind: 'object',
+					fields: { samples: { kind: 'list', of: { kind: 'number' }, min: 1, max: 2 } }
+				},
+				check: true
+			}
+		},
 		agent: { skills: {} },
 		apps: {}
 	})
 );
 
-const guest = program(`export default { collection: { orders: { bodies: {
-	queries: { titled: function* (input, ctx) { return (yield* ctx.read('orders', { all: true, orderBy: 'title' })).rows.map((r) => r.title).filter((t) => t.startsWith(input.prefix)); } },
-	similarity: { hue: {
-		probe: (q) => ({ field: 'color', vector: [q.r, 0, 0] }),
+const guest =
+	program(`export default { custom_field: { probe_window: { check: (window) => window.samples.some((value) => value < 0) ? 'Probe samples cannot be negative.' : undefined } }, collection: { orders: { bodies: {
+	queries: { titled: function* (input, ctx) { return (yield* ctx.query('orders', { all: true, orderBy: 'title' })).rows.map((r) => r.title).filter((t) => t.startsWith(input.prefix)); } },
+	indexes: { hue: {
+		probe: (q) => ({ vector: [q.r.toNumber(), 0, 0] }),
 		// the exact score: nearest to 0.5 on the first channel, whatever the probe
-		rerank: (q, row) => Math.abs(row.color[0] - 0.5),
+		rerank: (q, row) => Math.abs(row.color[0] - (0.5 + q.r.toNumber())),
 	} },
 } } } };`);
 
@@ -129,7 +152,7 @@ describe('/q page reads', () => {
 	it.live('serves a collection query by name as the caller', () =>
 		Effect.gen(function* () {
 			const { q } = yield* setup();
-			const r = yield* q([{ m: 'query', a: ['orders', 'titled', { prefix: 'al' }] }]);
+			const r = yield* q([{ m: 'query', a: ['orders.titled', { prefix: 'al' }] }]);
 			expect(r.status).toBe(200);
 			expect(answers(r.body)).toEqual([['alder', 'alpha 2']]);
 		})
@@ -138,7 +161,7 @@ describe('/q page reads', () => {
 	it.live('a query with invalid input is a 400 naming the problem, not a 500', () =>
 		Effect.gen(function* () {
 			const { q } = yield* setup();
-			const r = yield* q([{ m: 'query', a: ['orders', 'titled', {}] }]);
+			const r = yield* q([{ m: 'query', a: ['orders.titled', {}] }]);
 			expect(r.status).toBe(400);
 			expect('error' in r.body ? r.body.error : undefined).toMatchObject({
 				code: 'invalidInput',
@@ -148,17 +171,54 @@ describe('/q page reads', () => {
 	);
 
 	it.live(
-		'serves a named similarity: probe through the index, rerank by the exact score, nearest first',
+		'serves an indexed query: probe through the index, rerank by the exact score, nearest first',
 		() =>
 			Effect.gen(function* () {
 				const { q } = yield* setup();
-				const r = yield* q([
-					{ m: 'similar', a: ['orders', 'hue', { r: 0 }, { limit: 1, select: { title: true } }] }
+				const missing = yield* q([
+					{ m: 'query', a: ['orders', { search: { hue: {} }, limit: 1 }] }
 				]);
-				expect(r.status).toBe(200);
+				expect(missing.status).toBe(400);
+				expect('error' in missing.body ? missing.body.error.message : undefined).toContain('r:');
+				const malformed = yield* q([
+					{
+						m: 'query',
+						a: ['orders', { search: { hue: { r: 0, window: { samples: [] } } }, limit: 1 }]
+					}
+				]);
+				expect(malformed.status).toBe(400);
+				expect('error' in malformed.body ? malformed.body.error.message : undefined).toContain(
+					'samples'
+				);
+				const refused = yield* q([
+					{
+						m: 'query',
+						a: ['orders', { search: { hue: { r: 0, window: { samples: [-1] } } }, limit: 1 }]
+					}
+				]);
+				expect(refused.status).toBe(400);
+				expect('error' in refused.body ? refused.body.error.message : undefined).toContain(
+					'Probe samples cannot be negative.'
+				);
+				const r = yield* q([
+					{
+						m: 'query',
+						a: [
+							'orders',
+							{
+								search: { hue: { r: 0, window: { samples: [1] } } },
+								limit: 1,
+								select: { title: true }
+							}
+						]
+					}
+				]);
+				expect(r.status, JSON.stringify(r.body)).toBe(200);
 				// the index pages 2 candidates nearest r=0 (alpha 2, alder); the rerank keeps the one nearest 0.5
 				expect(
-					(yield* Schema.decodeUnknownEffect(Titles)(answers(r.body)[0])).map((x) => x.title)
+					(yield* Schema.decodeUnknownEffect(
+						Schema.Struct({ rows: Titles, next: Schema.NullOr(Schema.String) })
+					)(answers(r.body)[0])).rows.map((x) => x.title)
 				).toEqual(['alder']);
 			})
 	);
@@ -182,13 +242,13 @@ describe('/q page reads', () => {
 	);
 
 	it.live(
-		'a single-record get carries json, file and custom fields; a list read leaves them out (X-33)',
+		'a record query carries json, file and custom fields; a list read leaves them out (X-33)',
 		() =>
 			Effect.gen(function* () {
 				const { q, id } = yield* setup();
 				const r = yield* q([
-					{ m: 'get', a: ['orders', id(1)] },
-					{ m: 'read', a: ['orders', { where: { id: { eq: id(1) } }, limit: 1 }] }
+					{ m: 'query', a: ['orders', { id: id(1) }] },
+					{ m: 'query', a: ['orders', { where: { id: { eq: id(1) } }, limit: 1 }] }
 				]);
 				expect(r.status).toBe(200);
 				expect(answers(r.body)[0]).toMatchObject({ title: 'alder', doc: { lines: ['alder'] } });
@@ -197,10 +257,10 @@ describe('/q page reads', () => {
 						answers(r.body)[1]
 					)).rows[0]
 				).not.toHaveProperty('doc');
-				// two gets of one shape merge into one statement and keep the same projection
+				// two record queries of one shape merge into one statement and keep the same projection
 				const two = yield* q([
-					{ m: 'get', a: ['orders', id(1)] },
-					{ m: 'get', a: ['orders', id(2)] }
+					{ m: 'query', a: ['orders', { id: id(1) }] },
+					{ m: 'query', a: ['orders', { id: id(2) }] }
 				]);
 				expect(
 					(yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ doc: Schema.Json })))(
@@ -215,7 +275,7 @@ describe('/q page reads', () => {
 			const { q } = yield* setup();
 			const r = yield* q([
 				{
-					m: 'read',
+					m: 'query',
 					a: ['orders', { search: '0002', limit: 5, select: { title: true, code: true } }]
 				}
 			]);
@@ -230,18 +290,18 @@ describe('/q page reads', () => {
 		})
 	);
 
-	it.live('reads sys_user by its text id, filtered and by get', () =>
+	it.live('reads sys_user by its text id, filtered and by record query', () =>
 		Effect.gen(function* () {
 			const { t, q } = yield* setup();
 			const admin = t.as(t.admin).authority;
 			const r = yield* q(
 				[
 					{
-						m: 'read',
+						m: 'query',
 						a: ['sys_user', { where: { id: { eq: 'ada' } }, limit: 1, select: { name: true } }]
 					},
-					{ m: 'get', a: ['sys_user', 'ada'] },
-					{ m: 'read', a: ['sys_user', { where: { id: { in: ['ada', 'nobody'] } }, limit: 5 }] }
+					{ m: 'query', a: ['sys_user', { id: 'ada' }] },
+					{ m: 'query', a: ['sys_user', { where: { id: { in: ['ada', 'nobody'] } }, limit: 5 }] }
 				],
 				admin
 			);

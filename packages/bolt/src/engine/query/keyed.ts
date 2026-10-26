@@ -1,10 +1,15 @@
 import { Option, Result, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import type { Pred, ReadIR, SelectIR } from '../../protocol/ir-types.ts';
+import type { Pred, SelectIR } from '@norbital-ai/store';
+import type { ReadIR } from '../../protocol/reads.ts';
 import { BoltError } from '../../protocol/errors.ts';
 
 const Spec = Schema.Record(Schema.String, Schema.Json);
-/** Guest crossings and native /q groups share the same member scope and dependency validation. */
+/**
+ * One member of a keyed `query({ <key>: { from, … } })`: `from` names its model and the rest is that model's `query`
+ * arguments (a page, or `{ id }`), lowered through `read` with the set's own member (`query` or `db.query`). Guest
+ * crossings and native /q groups share the same member scope and dependency validation.
+ */
 export function lowerKeyedMember(
 	method: string,
 	key: string,
@@ -24,17 +29,14 @@ export function lowerKeyedMember(
 			const decoded = Schema.decodeUnknownOption(Spec)(spec);
 			if (Option.isNone(decoded))
 				throw BoltError.make('invalid', 'decode', 'a keyed read member is an object');
-			const { collection, id, ...query } = decoded.value;
-			if (typeof collection !== 'string')
-				throw BoltError.make('invalid', 'decode', 'a keyed read member names its collection');
-			if (id !== undefined && typeof id !== 'string')
+			const { from, ...query } = decoded.value;
+			if (typeof from !== 'string')
+				throw BoltError.make('invalid', 'decode', 'a keyed read member names its model in from');
+			if (query['id'] !== undefined && typeof query['id'] !== 'string')
 				throw BoltError.make('invalid', 'decode', 'a keyed read member id is a string');
-			const ir =
-				id === undefined
-					? read(method, [collection, query])
-					: read(method.replace('read', 'get'), [collection, id, query]);
+			const ir = read(method, [from, query]);
 			if (ir.kind !== 'read' && ir.kind !== 'get')
-				throw BoltError.make('invalid', 'decode', 'a keyed read member is a read or get');
+				throw BoltError.make('invalid', 'decode', 'a keyed read member is a page or one record');
 			const scoped = (pred: Pred): Pred => {
 				switch (pred.t) {
 					case 'and':
@@ -68,6 +70,16 @@ export function lowerKeyedMember(
 						{
 							...value,
 							select: arms(value.select),
+							...(value.targetSelects === undefined
+								? {}
+								: {
+										targetSelects: Object.fromEntries(
+											Object.entries(value.targetSelects).map(([target, selection]) => [
+												target,
+												arms(selection)
+											])
+										)
+									}),
 							...(value.where === undefined ? {} : { where: scoped(value.where) })
 						}
 					])

@@ -5,7 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { actFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiResponse, Outcome } from '../src/engine/contracts.ts';
+import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { AgentRow } from '../src/protocol/schema.ts';
@@ -24,15 +24,7 @@ const manifest = Result.getOrThrow(
 		collections: {
 			quotes: {
 				read: { fields: 'all' },
-				create: { input: { columns: ['title'] } },
-				actions: {
-					mark: {
-						description: 'Mark a quote',
-						input: { title: { kind: 'text' } },
-						output: { kind: 'text' },
-						agent: 'confirm'
-					}
-				}
+				create: { input: { columns: ['title'] } }
 			},
 			logs: { read: { fields: 'all' }, create: { input: { columns: ['line'] } } }
 		},
@@ -40,12 +32,20 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				grants: {
-					quotes: { read: true, create: true, actions: ['mark'] },
+					quotes: { read: true, create: true },
 					logs: { read: true, create: true }
-				}
+				},
+				automations: ['quotes_mark']
 			}
 		},
 		automations: {
+			quotes_mark: {
+				description: 'Mark a quote',
+				input: { title: { kind: 'text' } },
+				output: { kind: 'text' },
+				runAs: 'trigger',
+				agent: 'confirm'
+			},
 			log: { description: 'Log each new quote', on: { created: 'quotes' }, runAs: ['rep'] }
 		},
 		envoys: {
@@ -61,7 +61,6 @@ const manifest = Result.getOrThrow(
 		},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: { rep: ['rep'] },
 		connections: { field: { integration: 'whatsapp', envoy: 'field' } },
 		mcp: {},
@@ -71,10 +70,11 @@ const manifest = Result.getOrThrow(
 );
 const guest = {
 	source: `export default {
-	collection: { quotes: { bodies: { actions: { mark: function* (input, ctx) { return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id; } } } } },
-	automation: { log: { body: function* (input, ctx) {
+	automation: {
+	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id; } },
+	log: { body: function* (input, ctx) {
 		for (const id of input.ids) yield* ctx.act('logs.create', { line: 'quote ' + id });
-		yield* ctx.notify({ to: { policy: 'rep' }, title: 'Logged' });
+		yield* ctx.notify({ to: [{ policy: 'rep' }], title: 'Logged' });
 	} } },
 };`
 };
@@ -198,67 +198,69 @@ const quotes = (t: Kit) =>
 	});
 
 describe('the in-app agent over /__bolt (§5.9)', () => {
-	it.live(
-		'starts a conversation, posts, holds a confirm call on a card, and runs it when its person confirms',
-		() =>
-			Effect.gen(function* () {
-				const { t, bolt, user, act, transcript } = yield* setup([
-					use('act', { callable: 'quotes.mark', input: { title: 'Chair' } }, 'k1'),
-					say('Marked.')
-				]);
-				const ann = yield* user('ann'),
-					bob = yield* user('bob');
-				const c = output(yield* act(ann, 'sys_conversation.start', { title: 'Help' })).id;
-				const posted = yield* act(ann, 'sys_message.post', {
-					conversation: c,
-					text: 'mark a chair'
-				});
-				expect(posted.kind).toBe('committed');
-				yield* bolt.settled;
-				const held = required(
-					required((yield* transcript(ann, c)).rows).find((r) => r.state === 'confirm')
-				);
-				expect(held).toMatchObject({
-					tag: 'confirm',
-					call: { name: 'act', input: { callable: 'quotes.mark' } }
-				});
-				expect(yield* quotes(t)).toEqual([]);
-				// another member sees neither the transcript nor the card
-				expect((yield* transcript(bob, c)).status).toBe(404);
-				expect(
-					yield* act(bob, 'sys_message.confirm', { message: held.id, approve: true }).pipe(
-						Effect.flip
-					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
-				expect(
-					yield* act(bob, 'sys_message.post', { conversation: c, text: 'hi' }).pipe(Effect.flip)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
-				expect(
-					(yield* act(ann, 'sys_message.confirm', { message: held.id, approve: true })).kind
-				).toBe('committed');
-				yield* bolt.settled;
-				expect(yield* quotes(t)).toEqual([{ title: 'Chair' }]);
-				const reply = required(required((yield* transcript(ann, c)).rows).at(-1));
-				expect(reply).toMatchObject({
-					role: 'assistant',
-					text: 'Marked.',
-					receipts: [{ outcome: 'committed', callable: 'quotes.mark' }]
-				});
-			})
-	);
-
-	it.live(
-		'has no second stream: the turn reaches the panel only through the live transcript (agent-live-stream)',
-		() =>
-			Effect.gen(function* () {
-				const { user, act, call } = yield* setup();
-				const ann = yield* user('ann');
-				const c = output(yield* act(ann, 'sys_conversation.start', {})).id;
-				expect((yield* call(ann, 'GET', `/__bolt/agent/stream?conversation=${c}`)).status).toBe(
-					404
-				);
-				expect((yield* call(ann, 'GET', '/__bolt/agent/conversations')).status).toBe(404);
-			})
+	it.live('starts a conversation and queues a confirmed automation only for its person', () =>
+		Effect.gen(function* () {
+			const { t, bolt, user, act, transcript } = yield* setup([
+				use('act', { callable: 'automation.quotes_mark', input: { title: 'Chair' } }, 'k1'),
+				say('Marked.')
+			]);
+			const ann = yield* user('ann'),
+				bob = yield* user('bob');
+			const c = output(yield* act(ann, 'sys_conversation.start', { title: 'Help' })).id;
+			const posted = yield* act(ann, 'sys_message.post', {
+				conversation: c,
+				text: 'mark a chair'
+			});
+			expect(posted.kind).toBe('committed');
+			yield* bolt.settled;
+			const held = required(
+				required((yield* transcript(ann, c)).rows).find((r) => r.state === 'confirm')
+			);
+			expect(held).toMatchObject({
+				tag: 'confirm',
+				call: { name: 'act', input: { callable: 'automation.quotes_mark' } }
+			});
+			expect(yield* quotes(t)).toEqual([]);
+			// another member sees neither the transcript nor the card
+			expect((yield* transcript(bob, c)).status).toBe(404);
+			expect(
+				yield* act(bob, 'sys_message.confirm', { message: held.id, approve: true }).pipe(
+					Effect.flip
+				)
+			).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+			expect(
+				yield* act(bob, 'sys_message.post', { conversation: c, text: 'hi' }).pipe(Effect.flip)
+			).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+			expect(
+				(yield* act(ann, 'sys_message.confirm', { message: held.id, approve: true })).kind
+			).toBe('committed');
+			yield* bolt.settled;
+			expect(yield* quotes(t)).toEqual([]);
+			expect(
+				yield* t.db.rows(Schema.Struct({ state: Schema.String }), {
+					text: "SELECT state FROM sys_run WHERE automation = 'quotes_mark'",
+					params: []
+				})
+			).toEqual([{ state: 'queued' }]);
+			const reply = required(required((yield* transcript(ann, c)).rows).at(-1));
+			expect(reply).toMatchObject({
+				role: 'assistant',
+				text: 'Marked.',
+				receipts: [{ outcome: 'committed', callable: 'automation.quotes_mark' }]
+			});
+			yield* t.runDue();
+			expect(yield* quotes(t)).toEqual([{ title: 'Chair' }]);
+			const quoteId = yield* t.db.value(Schema.String, {
+				text: 'SELECT id FROM quotes',
+				params: []
+			});
+			expect(
+				yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+					text: "SELECT state, output FROM sys_run WHERE automation = 'quotes_mark'",
+					params: []
+				})
+			).toEqual([{ state: 'succeeded', output: quoteId }]);
+		})
 	);
 
 	it.live(

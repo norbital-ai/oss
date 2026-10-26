@@ -1,5 +1,7 @@
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
+import { HttpClientRequest } from 'effect/unstable/http';
 import { withFetch } from '../src/util.ts';
+import { jsonApi, providerJson } from '../src/transport.ts';
 import { fakeFetch } from './kit.ts';
 // The host's transactional providers against a fake fetch: Twilio Verify (service by friendly name, start by SMS or
 // WhatsApp, check), Twilio Messages (sender discovery, the send), Resend emails, Sinch (Mailgun mail, SMS,
@@ -25,6 +27,42 @@ function fake(answer: (url: string, method: string) => Response) {
 }
 const form = (c: Call) => Object.fromEntries(new URLSearchParams(c.body));
 const basic = `Basic ${Buffer.from('AC123:secret').toString('base64')}`;
+
+it.effect('preserves transactional and API error details through the shared JSON executor', () =>
+	Effect.gen(function* () {
+		const body = { message: 'x'.repeat(600) };
+		const limited = {
+			fetch: fake(() => Response.json(body, { status: 429, headers: { 'retry-after': '2' } })).f
+		};
+		const send = providerJson(
+			'fixture',
+			Schema.String,
+			HttpClientRequest.get('https://provider.example/models')
+		);
+		const api = jsonApi('https://provider.example', {})(Schema.String, 'GET', '/models');
+		expect(yield* Effect.flip(withFetch(limited, send))).toMatchObject({
+			message: `fixture 429: ${body.message}`,
+			status: 429,
+			retryAfterMs: undefined
+		});
+		expect(yield* Effect.flip(withFetch(limited, api))).toMatchObject({
+			message: `GET /models answered 429: ${JSON.stringify(body).slice(0, 500)}`,
+			status: 429,
+			retryAfterMs: 2000
+		});
+		const invalid = { fetch: fake(() => Response.json({})).f };
+		expect(yield* Effect.flip(withFetch(invalid, send))).toMatchObject({
+			message: 'fixture: response failed validation',
+			status: 200
+		});
+		const invalidApi = yield* Effect.flip(withFetch(invalid, api));
+		expect(invalidApi).toMatchObject({
+			_tag: 'ProviderUnavailable',
+			message: 'GET /models answered something that is not its result'
+		});
+		if (invalidApi._tag === 'ProviderUnavailable') expect(invalidApi.status).toBeUndefined();
+	})
+);
 
 describe('Twilio Verify', () => {
 	it.effect('finds the Norbital service once, starts by SMS or WhatsApp, and checks the code', () =>

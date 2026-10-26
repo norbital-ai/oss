@@ -1,4 +1,4 @@
-// Calendar feeds keep snapshot/sync cursors and sealed watch identities across renewals. Writes are the driver's `call`:
+// Calendar syncs keep snapshot/sync cursors and sealed watch identities across renewals. Writes are the driver's `call`:
 // an http-shaped op on one calendar's events through this standing link, answered `{ status, body }` for the definition's
 // outbound run to read (a 412 its conflict). A sign-in sealed before it could write keeps importing and says to reconnect.
 import { Clock, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
@@ -122,9 +122,9 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		params: { access_type: 'offline', prompt: 'consent' }
 	};
 	const client = () =>
-		Effect.suspend(() => {
-			const configured = ctx.oauthClient('google');
-			return configured === undefined
+		Effect.gen(function* () {
+			const configured = yield* Effect.promise(() => ctx.oauthClient('google'));
+			return yield* configured === undefined
 				? Effect.fail(
 						new ProviderUnavailable({ message: 'this host has no Google sign-in configured' })
 					)
@@ -166,25 +166,16 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			)
 		)
 	);
-	const feeds = Object.entries(ctx.definition.feeds ?? {}).filter(
-		([, feed]) => feed.from === 'driver'
-	);
-	const calendars = (): string[] => {
+	const syncs = ctx.syncs;
+	const calendarsOf = (sync: DriverOpen['syncs'][number]): string[] => {
+		if (sync.partitions === undefined) return ['primary'];
 		const configuration = Predicate.isObject(ctx.configuration) ? ctx.configuration : {};
-		return [
-			...new Set(
-				feeds.flatMap(([, feed]) => {
-					if (feed.partitions === undefined) return ['primary'];
-					const partitions = configuration[feed.partitions];
-					return Array.isArray(partitions)
-						? partitions.filter(
-								(value): value is string => typeof value === 'string' && value !== ''
-							)
-						: [];
-				})
-			)
-		];
+		const partitions = configuration[sync.partitions];
+		return Array.isArray(partitions)
+			? partitions.filter((value): value is string => typeof value === 'string' && value !== '')
+			: [];
 	};
+	const calendars = (): string[] => [...new Set(syncs.flatMap(calendarsOf))];
 	const save = (watches: readonly Watch[]) =>
 		writes.withPermit(
 			Effect.gen(function* () {
@@ -305,7 +296,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		});
 	});
 	const read = Effect.fn('GoogleCalendar.read')(function* (
-		_feed: string,
+		_sync: string,
 		partition: string,
 		cursor: Json | null
 	): Effect.fn.Return<DriverPage, import('../errors.ts').ProviderFailure> {
@@ -369,13 +360,13 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 	});
 	const invalidate = (calendar: string) =>
 		Effect.forEach(
-			feeds,
-			([feed, definition]) =>
-				hostCall('queue calendar feed', () =>
+			syncs.filter((sync) => calendarsOf(sync).includes(calendar)),
+			(sync) =>
+				hostCall('queue calendar sync', () =>
 					ctx.emit({
 						kind: 'invalidate',
-						feed,
-						partition: definition.partitions === undefined ? '' : calendar
+						sync: sync.name,
+						partition: sync.partitions === undefined ? '' : calendar
 					})
 				),
 			{ concurrency: 1 }
@@ -406,8 +397,8 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		now: number
 	) {
 		const watch: Watch = {
-			id: ctx.state(),
-			token: ctx.state(),
+			id: yield* Effect.promise(() => ctx.state()),
+			token: yield* Effect.promise(() => ctx.state()),
 			calendar,
 			resource: null,
 			expiration: now + WATCH_MS,
@@ -646,7 +637,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			completion.reset(
 				Effect.gen(function* () {
 					pending = null;
-					const pairing = attempt(ctx.state()),
+					const pairing = attempt(yield* Effect.promise(() => ctx.state())),
 						account = yield* client();
 					const url = authorizeUrl(
 						app,

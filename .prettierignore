@@ -4,10 +4,11 @@
 **/build/
 **/.generated/
 
-# Generated migration history. Not merely regenerated output — `migrationFingerprint` hashes the
-# RAW BYTES of every file under this directory into `historySha256`, so reformatting one rewrites
-# the fingerprint and the build reads that as a changed migration history.
-**/.norbital/migrations/
+# Store serializes and verifies these migration proofs; retain the generator's bytes.
+**/migrations/snapshot.json
+**/migrations/physical.json
+packages/bolt/src/node/audit/**/snapshot.json
+packages/bolt/src/node/audit/**/physical.json
 
 # Tooling / CI
 .turbo/
@@ -35,11 +36,6 @@ pnpm-workspace.yaml
 Thumbs.db
 
 vite.config.js*
-
-# Reviewed Phase 0 sync-engine probes: `sync-sync-engine-receipt.test.ts` pins their sha256, so a
-# reformat reads as a tampered receipt.
-packages/bolt/tests/sync-sync-engine-pglite-probes.test.mjs
-packages/bolt/tests/sync-sync-engine-prefix-model.test.mjs
 
 # The authoring reference is the built declarations verbatim; scripts/authoring-reference.mjs writes it.
 **/*.generated.ts

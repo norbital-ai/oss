@@ -2,26 +2,34 @@
 // The artifact's `client/**`: an internal SPA whose main-thread module graph initializes before admission, and a
 // shared Vite/Svelte multi-entry graph for server-rendered public routes. Each public entry reaches its requested
 // page, shared wrapper and codec; the internal shell, agent, Studio and session registry remain in the private SPA.
+// The SPA imports the shell, Bolt's page entries, ui, svelte and effect from the platform layer (`platform.ts`, under
+// `client/assets/platform/`), the same bytes in every artifact on this Bolt, and bundles only the workspace's code.
 // There is no template Vite config (§3.2: `vite.config.ts` is deleted with no successor). Runtime assets live in the
 // workspace `assets/` directory, which the artifact ships as `assets/**` and hosts serve at `/assets/*` after the
 // client's own chunks; a page reaches a file there by that path, or imports one through Vite's `?url` / `?worker`,
 // which this build fingerprints into `client/assets/`.
 import { Effect, FileSystem, Schema, Result } from 'effect';
 import { createRequire } from 'node:module';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
-import { build, type Rolldown } from 'vite';
+import { build, type InlineConfig, type Rolldown } from 'vite';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { ShellManifest } from '../../shell/nav.ts';
 import type { Discovered } from '../discover.ts';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { clientImportBoundary } from './client-boundary.ts';
+import {
+	platformConfig,
+	platformLayer,
+	shellRuntime,
+	SHELL,
+	type PlatformLayer
+} from './platform.ts';
 import { publicWrapper } from './public-wrapper.ts';
 import { cachedSvelte } from './svelte-cache.ts';
 
 const SOURCE = dirname(fileURLToPath(import.meta.url));
-const SHELL = join(SOURCE, '../../shell');
 /** Source (`.ts`) in the checkout, emitted `.js` in the published package. */
 const EXT = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
 const BOLT = join(SOURCE, `../../index${EXT}`);
@@ -41,6 +49,17 @@ const escape = (text: string) =>
 export class BuildError extends Schema.TaggedError<BuildError>()('BuildError', {
 	cause: Schema.Defect()
 }) {}
+/** One Vite build's output: a watcher or an empty result is a failure. */
+const bundle = Effect.fnUntraced(function* (config: InlineConfig) {
+	const built = yield* Effect.tryPromise({
+		try: () => build(config),
+		catch: (cause) => new BuildError({ cause })
+	});
+	const result = Array.isArray(built) ? built[0] : built;
+	if (result === undefined || 'close' in result)
+		return yield* new BuildError({ cause: new Error('the client bundler returned no output') });
+	return result;
+});
 const version = Effect.fnUntraced(function* (pkg: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const decoded = yield* fs
@@ -144,8 +163,9 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	yield* fs.makeDirectory(gen, { recursive: true });
 	yield* fs.writeFileString(
 		styles,
-		// the compile caches hold compiled code, never a class source (.gitignore or not)
-		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital', 'cache'))};\n`
+		// the compile caches and the output (the platform layer is built into it first) hold compiled code, never a class
+		// source (.gitignore or not)
+		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital', 'cache'))};\n@source not ${key(out)};\n`
 	);
 	// hook:server-cli — the messages: the base (`+messages.ts`) under the reader's first matching `+<locale>.messages.ts`
 	const reps = files
@@ -162,6 +182,13 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	});
 	const base = files.find((f) => f.role === 'messages'),
 		locales = files.filter((f) => f.role === 'locale');
+	// hook:shell — the account menu's versions (L-BOLT-073): the workspace's, this Bolt's and the building Node's. The
+	// entry sets them: the shared platform layer (Nav's module) carries nothing of one workspace or build host
+	const versions = {
+		workspace: yield* version(join(root, 'package.json')),
+		bolt: yield* version(join(SOURCE, '../../../package.json')),
+		node: process.versions.node
+	};
 	const entry = `import ${key(styles)};
 import { initializeShellAssets, mountShell } from ${key(join(SHELL, `mount${EXT}`))};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
@@ -170,6 +197,7 @@ ${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('
 ${renderers.map((r, i) => `import F${i} from ${key(join(root, r.path))};`).join('\n')}
 const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`).join(', ')} };
 const tag = navigator.languages.map((l) => l.toLowerCase()).flatMap((l) => [l, l.split('-')[0]]).find((l) => l in locales);
+globalThis.__BOLT_BUILD__ = ${key(versions)};
 const ready = initializeShellAssets(import.meta.url);
 ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key(publicFiles.map((file) => `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`))}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
@@ -179,84 +207,64 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 	if (status !== null) { status.textContent = 'The workspace could not finish loading. Reload to try again.'; status.setAttribute('role', 'alert'); }
 	console.error(cause);
 });`;
-	const versions = {
-		workspace: yield* version(join(root, 'package.json')),
-		bolt: yield* version(join(SOURCE, '../../../package.json')),
-		node: process.versions.node
-	};
+	/** `layer` (the internal SPA): its modules are imported from the platform layer already built into `destination`. */
 	const compile = Effect.fn('bolt.buildClient.bundle')(function* (
 		source: string | Record<string, string>,
 		destination: string,
-		publicPage: boolean
+		publicPage: boolean,
+		layer?: PlatformLayer
 	) {
-		const built = yield* Effect.tryPromise({
-			try: () =>
-				build({
-					// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
-					configFile: false,
-					logLevel: 'silent',
-					root,
-					base: './',
-					// hook:shell — the account menu's versions (L-BOLT-073): the workspace's, this Bolt's and the building Node's
-					define: { __BOLT_BUILD__: key(versions) },
-					// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group
-					resolve: {
-						dedupe: EDITOR_SINGLETONS,
-						alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT }]
+		const result = yield* bundle({
+			// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
+			configFile: false,
+			logLevel: 'silent',
+			root,
+			base: './',
+			// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group
+			resolve: {
+				dedupe: EDITOR_SINGLETONS,
+				alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT }]
+			},
+			plugins: [
+				clientImportBoundary(root, files, layer?.modules),
+				{
+					name: 'bolt:client',
+					enforce: 'pre',
+					// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
+					async resolveId(id, importer) {
+						if (id === ENTRY) return `\0${id}`;
+						if (id === '$bolt' || (publicPage && id === '@norbital-ai/bolt/page'))
+							return publicPage
+								? join(SHELL, 'public', `client${EXT}`)
+								: join(SOURCE, '../../page', `index${EXT}`);
+						// one Svelte runtime and one ui, the shell's: pages and the record view reach ui as the shell does, so its
+						// contexts (`$bolt`, kinds) are the shell's
+						if (shellRuntime(id, importer))
+							return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
+						return null;
 					},
-					plugins: [
-						clientImportBoundary(root, files),
-						{
-							name: 'bolt:client',
-							enforce: 'pre',
-							// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
-							async resolveId(id, importer) {
-								if (id === ENTRY) return `\0${id}`;
-								if (id === '$bolt' || (publicPage && id === '@norbital-ai/bolt/page'))
-									return publicPage
-										? join(SHELL, 'public', `client${EXT}`)
-										: join(SOURCE, '../../page', `index${EXT}`);
-								// one Svelte runtime: the shell's
-								if (
-									(id === 'svelte' || id.startsWith('svelte/')) &&
-									importer !== undefined &&
-									!importer.startsWith(SHELL)
-								)
-									return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
-								// one ui: pages and the record view reach ui as the shell does, so its contexts (`$bolt`, kinds) are the shell's
-								if (
-									(id === '@norbital-ai/ui' || id.startsWith('@norbital-ai/ui/')) &&
-									importer !== undefined &&
-									!importer.startsWith(SHELL)
-								)
-									return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
-								return null;
-							},
-							load: (id) => (id === `\0${ENTRY}` && typeof source === 'string' ? source : null)
-						},
-						cachedSvelte({ configFile: false }, join(root, '.norbital', 'cache', 'svelte')),
-						tailwindcss()
-					],
-					// maps name their sources but carry none: an asset's placeholder id in a source's text follows emission order, so an
-					// embedded source made two builds of one workspace differ (the artifact is byte for byte)
-					build: {
-						outDir: destination,
-						emptyOutDir: true,
-						sourcemap: true,
-						...(publicPage ? { manifest: true, cssCodeSplit: true } : {}),
-						rolldownOptions: {
-							input: typeof source === 'string' ? { shell: ENTRY } : source,
-							output: { entryFileNames: 'assets/[name]-[hash].js', sourcemapExcludeSources: true }
-						}
-					}
-				}),
-			catch: (cause) => new BuildError({ cause })
+					load: (id) => (id === `\0${ENTRY}` && typeof source === 'string' ? source : null)
+				},
+				// template pages compile in Svelte's async mode (`await` in markup); a public page hydrates its synchronous SSR
+				cachedSvelte(
+					{ configFile: false, compilerOptions: { experimental: { async: !publicPage } } },
+					join(root, '.norbital', 'cache', 'svelte')
+				),
+				tailwindcss()
+			],
+			// maps name their sources but carry none: an asset's placeholder id in a source's text follows emission order, so an
+			// embedded source made two builds of one workspace differ (the artifact is byte for byte)
+			build: {
+				outDir: destination,
+				emptyOutDir: layer === undefined,
+				sourcemap: true,
+				...(publicPage ? { manifest: true, cssCodeSplit: true } : {}),
+				rolldownOptions: {
+					input: typeof source === 'string' ? { shell: ENTRY } : source,
+					output: { entryFileNames: 'assets/[name]-[hash].js', sourcemapExcludeSources: true }
+				}
+			}
 		});
-		const result = Array.isArray(built) ? built[0] : built;
-		if (result === undefined || 'close' in result)
-			return yield* Effect.fail(
-				new BuildError({ cause: new Error('the client bundler returned no output') })
-			);
 		const chunk = result.output.find(
 			(o): o is Rolldown.OutputChunk => o.type === 'chunk' && o.isEntry
 		);
@@ -273,15 +281,18 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 				.filter((item): item is Rolldown.OutputChunk => item.type === 'chunk')
 				.map((item) => [item.fileName, item])
 		);
-		/** Every chunk `entry` reaches through static and dynamic imports, itself included. */
+		const graph = new Map([...(layer?.chunks ?? []), ...chunks]);
+		/** Every chunk `entry` reaches through static and dynamic imports, itself and the layer's included. */
 		const reach = (entry: string) => {
 			const reached = new Set<string>();
 			const visit = (name: string): void => {
 				if (reached.has(name)) return;
-				const item = chunks.get(name);
+				const item = graph.get(name);
 				if (item === undefined) return;
 				reached.add(name);
-				for (const imported of [...item.imports, ...item.dynamicImports]) visit(imported);
+				// a chunk names the chunks it imports by file name, and the layer's modules by their relative import
+				for (const imported of [...item.imports, ...item.dynamicImports])
+					visit(imported.startsWith('.') ? posix.join(posix.dirname(name), imported) : imported);
 			};
 			visit(entry);
 			return reached;
@@ -353,7 +364,12 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 			});
 		return { chunk, name: projection[0], page: projection[1] };
 	});
-	const internal = yield* compile(entry, out, false);
+	// the layer first: it empties `out`, and the workspace's own chunks are written beside it
+	const layer = platformLayer(
+		yield* bundle(yield* platformConfig(out, join(root, '.norbital', 'cache', 'platform')))
+	);
+	const internal = yield* compile(entry, out, false, layer);
+	const css = [...layer.css, ...internal.css];
 	const require = createRequire(import.meta.url);
 	for (const [name, source] of Object.entries(ICONS))
 		yield* fs.copyFile(
@@ -368,7 +384,7 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 		document(
 			title,
 			internal.entry,
-			internal.css,
+			css,
 			internal.modules,
 			yield* fs.readFileString(require.resolve('@norbital-ai/ui/brand/access.css'))
 		)
@@ -462,5 +478,5 @@ ${assets.css.map((css) => `<link rel="stylesheet" href="/${css}">`).join('\n')}
 			);
 		}
 	}
-	return { entry: internal.entry, css: internal.css, pages: publicPages };
+	return { entry: internal.entry, css, pages: publicPages };
 });

@@ -3,7 +3,7 @@
 // both refuse a caller who does not read every field they cover unmasked (rule 14).
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema, Stream } from 'effect';
-import type { Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
@@ -48,7 +48,6 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -114,7 +113,7 @@ const workspace = () =>
 		const titles = (where: Json, who = a) =>
 			Effect.gen(function* () {
 				const reply = yield* qReply(route, who, {
-					reads: [{ m: 'read', a: ['jobs', { all: true, where, select: { title: true } }] }]
+					reads: [{ m: 'query', a: ['jobs', { all: true, where, select: { title: true } }] }]
 				});
 				return (yield* Schema.decodeUnknownEffect(Page)(reply.answers[0])).rows
 					.map((row) => row.title)

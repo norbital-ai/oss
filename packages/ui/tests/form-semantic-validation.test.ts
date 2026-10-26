@@ -23,7 +23,12 @@ const catalog = {
 		update: { columns: ['title'] }
 	}
 } satisfies NonNullable<KindsHost['catalog']>;
-const text = { pendingApproval: 'held', conflict: 'conflict', unknown: 'unknown' };
+const text = {
+	pendingApproval: 'held',
+	conflict: 'conflict',
+	unknown: 'unknown',
+	running: 'running'
+};
 const notBad = (form: Form) => (): readonly SemanticIssue[] =>
 	form.get('title') === 'bad' ? [{ field: 'title', message: 'Title cannot be bad' }] : [];
 const specOf = (...args: Parameters<typeof d.formSpec>): FormSpec => required(d.formSpec(...args));

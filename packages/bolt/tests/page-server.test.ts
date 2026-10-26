@@ -88,12 +88,9 @@ describe('read-only page server authoring', () => {
 					});
 				const metadata = yield* load(root, []);
 				const names = namesIndex(found.files, metadata.manifest);
-				expect(names).toContain(
-					'pageServers: { "catalogue/home": typeof import("../src/app/catalogue/+home.page.server.ts").default };'
-				);
-				expect(names).toContain(
-					'kioskPageServers: { "catalogue/home": typeof import("../src/kiosk/catalogue/+home.page.server.ts").default };'
-				);
+				expect(names).toMatch(/pages:\s*\{\s*"catalogue": "home";\s*\};/);
+				expect(names).toMatch(/kioskPages:\s*\{\s*"catalogue": "home";\s*\};/);
+				expect(names).not.toContain('typeof import(');
 				yield* (yield* FileSystem.FileSystem).remove(
 					join(root, 'src/app/catalogue/+home.page.svelte')
 				);

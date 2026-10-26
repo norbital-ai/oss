@@ -12,7 +12,7 @@ test('a failed picker read does not claim there are no options', async () => {
 	const app = mount(Harness, {
 		target,
 		props: {
-			read: () =>
+			query: () =>
 				Effect.fail(
 					Object.assign(new Error('connection lost'), {
 						_tag: 'ReadFailed' as const,

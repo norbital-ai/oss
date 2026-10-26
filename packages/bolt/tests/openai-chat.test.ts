@@ -65,6 +65,59 @@ const collect = (infer: OpenAiChat, input: AiRequest = request) =>
 	});
 
 describe('openAiChat', () => {
+	it.effect(
+		'decodes temporary budget and rate refusals with their retry hints, preserving permanent 402s',
+		() =>
+			Effect.gen(function* () {
+				const temporary = capture(() =>
+					Response.json(
+						{
+							error: {
+								metadata: {
+									reason: 'in_flight_budget_exhausted',
+									headers: { 'Retry-After': '120' }
+								}
+							}
+						},
+						{ status: 402 }
+					)
+				);
+				expect(
+					yield* collect(openAiChat(config, { fetch: temporary.f })).pipe(Effect.flip)
+				).toMatchObject({
+					kind: 'rateLimited',
+					status: 402,
+					retryAfterMs: 120_000
+				});
+				yield* TestClock.setTime(Date.UTC(2026, 9, 26));
+				const rate = capture(
+					() =>
+						new Response('busy', {
+							status: 429,
+							headers: {
+								'retry-after': new Date(Date.UTC(2026, 9, 26) + 30_000).toUTCString()
+							}
+						})
+				);
+				expect(
+					yield* collect(openAiChat(config, { fetch: rate.f })).pipe(Effect.flip)
+				).toMatchObject({
+					kind: 'rateLimited',
+					status: 429,
+					retryAfterMs: 30_000
+				});
+				const unpaid = capture(() =>
+					Response.json({ error: { message: 'Insufficient credits' } }, { status: 402 })
+				);
+				expect(
+					yield* collect(openAiChat(config, { fetch: unpaid.f })).pipe(Effect.flip)
+				).toMatchObject({
+					kind: 'upstream',
+					status: 402
+				});
+			})
+	);
+
 	it.effect('headers have a 20-second response deadline that aborts the native fetch', () =>
 		Effect.gen(function* () {
 			const started = yield* Deferred.make<void>();

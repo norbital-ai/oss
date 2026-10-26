@@ -31,8 +31,6 @@ it('reports a workspace handoff without replacing its current screen', async () 
 	node.dispatchEvent(event);
 	expect(cover()?.textContent).toContain('Opening workspace…');
 	expect(cover()?.getAttribute('role')).toBe('status');
-	expect(cover()?.classList.contains('access-loading-track')).toBe(true);
-	expect(cover()?.querySelector('img')).toBeNull();
 	expect(document.activeElement).toBe(node);
 	expect(event.defaultPrevented).toBe(false);
 	expect(location.hash).toBe('#workspace-option');

@@ -37,8 +37,14 @@ export const oauthClientOf = (
 /** What the links manager hands a provider to open one instance's link. Credentials stay host-side, under the opener's epoch. */
 export type DriverOpen = {
 	instance: string;
-	/** The instance's definition (`integration('<name>', …)`): its `http`, `credential` fields and `conversation`. */
+	/** The instance's integration definition, including its request and credential fields. */
 	definition: IntegrationSpec;
+	/** Model read syncs using this instance's definition; `name` is `'<model>.sync.<sync>'`. */
+	readonly syncs: readonly {
+		readonly name: string;
+		/** The configuration field whose values partition this sync, otherwise one default partition. */
+		readonly partitions?: string;
+	}[];
 	/** A personal instance (an owner's own account): it syncs and never sends a message; a command may write back to it. */
 	personal: boolean;
 	configuration: Json;
@@ -51,8 +57,11 @@ export type DriverOpen = {
 	 * with the OAuth app once. Its callback reaches this link's `webhook` by the `state` it carries, minted by `state()`.
 	 */
 	redirectUrl: string;
-	/** A fresh, unguessable OAuth `state` that routes its callback back to this instance; the link still checks it is its own. */
-	state(): string;
+	/**
+	 * A fresh, unguessable OAuth `state` that routes its callback back to this instance; the link still checks it is its
+	 * own. Asynchronous, as every call into the engine: the engine may be in another isolate.
+	 */
+	state(): Promise<string>;
 	/** Aborted when the link closes or is replaced. */
 	signal: AbortSignal;
 	/** The fetch to reach the provider with (tests pass a fake). */
@@ -62,7 +71,7 @@ export type DriverOpen = {
 	 * workspace's secrets), else the host's (`LinksHost.oauth`); `undefined` when neither is configured. Without a
 	 * vendor, only the definition's own.
 	 */
-	oauthClient(vendor?: OAuthVendor): OAuthClient | undefined;
+	oauthClient(vendor?: OAuthVendor): Promise<OAuthClient | undefined>;
 	/**
 	 * The instance's credentials as they were when the link opened (`provider` is the manager's); a write is one fenced
 	 * statement retried until it lands, and rejects for good once another link opened the instance (`fenced`) — for a
@@ -95,9 +104,9 @@ export type Link = { close(): Promise<void> } & Partial<{
 	typing(to: string, signal: AbortSignal): Promise<void>;
 	/** A request driver's op (an http `{ method, path, … }` answering `{ status, body }`, a database request its rows), or a pushing driver's `call` through this link. */
 	request(op: Json, signal: AbortSignal): Promise<Json>;
-	/** A pushing driver's feed page from `cursor` (its `invalidate` event said which feed and partition moved). */
+	/** A pushing driver's sync page from `cursor` (its `invalidate` event names the sync and partition). */
 	read(
-		feed: string,
+		sync: string,
 		partition: string,
 		cursor: Json | null,
 		signal: AbortSignal

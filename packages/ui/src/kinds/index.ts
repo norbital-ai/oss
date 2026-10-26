@@ -16,9 +16,9 @@ export {
 	type NumberTupleValue
 } from './number-tuple.svelte';
 export { default as PointInput, type PointInputProps } from './point-input.svelte';
-export { default as SchemaEditor, type SchemaEditorProps } from './schema-editor.svelte';
 export { default as Show, type ShowProps } from './show.svelte';
 export { default as StateBadge, type StateBadgeProps } from './state-badge.svelte';
+export { default as StructuredData, type StructuredDataProps } from './structured-data.svelte';
 export { default as TimeRangeInput, type TimeRangeInputProps } from './time-range-input.svelte';
 export {
 	provideKinds,
@@ -26,8 +26,9 @@ export {
 	DEFAULT_BASEMAP,
 	photonGeocoder,
 	type CollectionExposure,
+	type AutomationExposure,
 	type CustomFieldEntry,
-	type CustomFieldView,
+	type KindView,
 	type Geocoder,
 	type KindsHost
 } from './context.js';
@@ -50,7 +51,6 @@ export {
 	type Point
 } from './kind.js';
 export { KINDS, presentation, sortable } from './registry.js';
-export { default as JsonSchemaForm, type JsonSchemaFormProps } from './json-schema-form.svelte';
 export {
 	isJsonSchema,
 	isJsonSchemaDocument,
@@ -58,8 +58,13 @@ export {
 	resolveJsonSchema,
 	type JsonSchema
 } from './json-schema.js';
-export {
-	default as JsonSchemaMatrix,
-	type JsonSchemaMatrixProps
-} from './json-schema-matrix.svelte';
 export { jsonSchemaFromRows, jsonSchemaRows, type JsonSchemaRow } from './json-schema-rows.js';
+
+export {
+	inferJsonSchema,
+	kindJsonSchema,
+	dataChanged,
+	dataEqual,
+	pairDataRows,
+	type ArrayKeys
+} from './structured-data.js';

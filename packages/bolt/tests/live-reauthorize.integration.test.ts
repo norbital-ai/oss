@@ -19,7 +19,6 @@ const manifest = {
 	policies: {},
 	agent: { internal: 'Staff brief.', skills: {} },
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	automations: {},
 	connections: {},

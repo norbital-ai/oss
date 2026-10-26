@@ -1,23 +1,25 @@
 // The caller's approval inbox and addressed notifications.
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import type { Authority } from '../../engine/contracts.ts';
 import type { TenantDbShape } from '../../engine/db/tenant-db.ts';
 import type { Json } from '../../decl/values.ts';
+import { BoltError } from '../../protocol/errors.ts';
+import { NoticeRow } from '../../protocol/schema.ts';
 import { inboxRequests, openRequests, type InboxRequest } from '../../engine/approvals/inbox.ts';
 export type { InboxRequest } from '../../engine/approvals/inbox.ts';
 
 const q = (text: string, ...params: Json[]) => ({ text, params });
 
-export type Notice = {
-	id: string;
-	title: string;
-	body: string | null;
-	link: Json;
-	at: string;
-	read: boolean;
+export type Inbox = {
+	readonly requests: readonly InboxRequest[];
+	readonly notices: readonly NoticeRow[];
+	readonly unread: number;
 };
-export type Inbox = { requests: InboxRequest[]; notices: Notice[]; unread: number };
 const INBOX_LIMIT = 200;
+const Rows = Schema.Struct({
+	notices: Schema.Array(NoticeRow),
+	count: Schema.Array(Schema.Struct({ unread: Schema.Number }))
+});
 
 export const inbox = Effect.fn('shell.inbox')(function* (db: TenantDbShape, auth: Authority) {
 	const a = auth.actor;
@@ -35,17 +37,13 @@ export const inbox = Effect.fn('shell.inbox')(function* (db: TenantDbShape, auth
 			a.id
 		)
 	]);
-	const requests = inboxRequests(open?.rows ?? [], auth);
+	const rows = yield* Schema.decodeUnknownEffect(Rows)({
+		notices: notes?.rows ?? [],
+		count: count?.rows ?? []
+	}).pipe(Effect.mapError((e) => BoltError.make('internal', 'decode', String(e))));
 	return {
-		requests,
-		unread: Number(count?.rows[0]?.['unread'] ?? 0),
-		notices: (notes?.rows ?? []).map((n) => ({
-			id: String(n['id']),
-			title: String(n['title']),
-			body: typeof n['body'] === 'string' ? n['body'] : null,
-			link: n['link'] ?? null,
-			at: String(n['at']),
-			read: n['read'] === true
-		}))
+		requests: inboxRequests(open?.rows ?? [], auth),
+		unread: rows.count[0]?.unread ?? 0,
+		notices: rows.notices
 	};
 });

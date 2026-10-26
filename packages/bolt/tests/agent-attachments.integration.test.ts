@@ -10,7 +10,12 @@ import { decodeManifest } from '../src/engine/manifest.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
 import { ActRefused, actFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiRequest, AiResponse, Authority, Outcome } from '../src/engine/contracts.ts';
+import type {
+	AiRequest,
+	AiResponse,
+	Authority,
+	ActOutcome as Outcome
+} from '../src/engine/contracts.ts';
 import type { System1Request } from '../src/engine/decisions/index.ts';
 import { upload } from '../src/engine/callables/upload.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -28,7 +33,6 @@ const manifest = (triage: boolean) =>
 			policies: {},
 			agent: { internal: 'Staff brief.', skills: {} },
 			integrations: {},
-			pipelines: {},
 			teams: {},
 			automations: {},
 			connections: {},
@@ -314,7 +318,6 @@ describe('read_file', () => {
 			teams: { Inspectors: ['inspector'] },
 			agent: { internal: 'Staff brief.', skills: {} },
 			integrations: {},
-			pipelines: {},
 			automations: {},
 			connections: {},
 			envoys: {},

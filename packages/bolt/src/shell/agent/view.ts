@@ -1,6 +1,6 @@
 // The agent panel's pure projections of its transcript rows: the orb's mark (L-BOLT-436), the context view (L-BOLT-546)
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
-import { Option, Predicate, Schema } from 'effect';
+import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 import type { StudioLogLine } from '../studio/model.ts';
 
@@ -153,8 +153,28 @@ export type StepView = {
 	target: string;
 	code?: { text: string; language: 'javascript' | 'json' | 'plaintext' };
 };
+/** A received sub-agent message, without the engine's routing prefix; unfamiliar text stays intact. */
+export function reportView(row: AgentRow): (StepView & { message: string }) | null {
+	if (row.report === undefined) return null;
+	const text = row.text ?? '';
+	const match =
+		/^Sub-agent "([\s\S]*?)" \(conversation ([^)]*)\) (?:asks you|was stopped|failed|finished): ([\s\S]*)$/.exec(
+			text
+		);
+	const parsed = match !== null && match[2] === row.report.conversation;
+	const message = parsed ? (match[3] ?? '') : text;
+	return {
+		icon: row.report.asked === true ? 'lucide:message-circle-question' : 'lucide:inbox',
+		verb: row.report.asked === true ? 'Received a question' : 'Received a message',
+		target: parsed ? (match[1]?.split('\n')[0] ?? '') : '',
+		message:
+			parsed && row.report.asked === true
+				? message.replace(/\nAnswer it with subagent message\.$/, '')
+				: message
+	};
+}
 type Args = { readonly [k: PropertyKey]: unknown };
-const obj = (v: unknown): Args => (Predicate.isObject(v) && !Array.isArray(v) ? v : {});
+const obj = (v: unknown): Args => (Predicate.isObject(v) && !Arr.isArray(v) ? v : {});
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const words = (s: string) => s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 /** A file's language by its extension: TypeScript, Svelte and JavaScript highlight as JavaScript. */
@@ -179,7 +199,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			: {
 					icon: 'lucide:database',
 					verb: a['aggregate'] === undefined ? 'Read' : 'Counted',
-					target: Array.isArray(a['reads'])
+					target: Arr.isArray(a['reads'])
 						? a['reads']
 								.map((r: unknown) => str(obj(r)['collection']).replace(/_/g, ' '))
 								.join(', ')
@@ -188,9 +208,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	// an inference's answer, built on its draft
 	find: (a) => ({ icon: 'lucide:text-search', verb: 'Searched the draft', target: str(a['text']) }),
 	edit: (a) => {
-		const paths = Array.isArray(a['ops'])
-			? a['ops'].map((op: unknown) => str(obj(op)['path']))
-			: [];
+		const paths = Arr.isArray(a['ops']) ? a['ops'].map((op: unknown) => str(obj(op)['path'])) : [];
 		return {
 			icon: 'lucide:pencil',
 			verb: 'Edited the draft',
@@ -206,7 +224,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	// a write reads as what it did: "Update holiday", "Run the roster entry pipeline"
 	act: (a) => ({
 		icon: 'lucide:square-pen',
-		verb: Array.isArray(a['actions'])
+		verb: Arr.isArray(a['actions'])
 			? a['actions'].map((x: unknown) => callableWords(str(obj(x)['callable']))).join(', ')
 			: callableWords(str(a['callable'])),
 		target: ''
@@ -215,7 +233,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	goals: (a) => ({
 		icon: 'lucide:list-checks',
 		verb: 'Updated the checklist',
-		target: Array.isArray(a['items']) ? `${a['items'].length} steps` : ''
+		target: Arr.isArray(a['items']) ? `${a['items'].length} steps` : ''
 	}),
 	compact: (a) => ({
 		icon: 'lucide:shrink',
@@ -245,7 +263,11 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Looked up a place',
 		target: str(a['query']) || str(a['address'])
 	}),
-	workspace_type: () => ({ icon: 'lucide:braces', verb: 'Read workspace types', target: '' }),
+	workspace_lang: (a) => ({
+		icon: 'lucide:braces',
+		verb: 'Read workspace types',
+		target: str(a['path']) || str(a['type'])
+	}),
 	workspace_search: (a) => ({
 		icon: 'lucide:folder-search',
 		verb: a['path'] === undefined ? 'Searched the source' : 'Read source',
@@ -257,18 +279,17 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target:
 			str(a['query']) ||
 			str(a['namespace']) ||
-			(Array.isArray(a['symbols']) ? a['symbols'].join(', ') : '')
+			(Arr.isArray(a['symbols']) ? a['symbols'].join(', ') : '')
 	}),
 	subagent: (a) => ({
-		icon: 'lucide:bot',
-		verb:
-			a['action'] === 'spawn'
-				? 'Started a helper'
-				: a['action'] === 'message'
-					? 'Messaged a helper'
-					: a['action'] === 'stop'
-						? 'Stopped a helper'
-						: 'Checked a helper',
+		...(a['action'] === 'message'
+			? { icon: 'lucide:send', verb: 'Sent a message to a subagent' }
+			: a['action'] === 'stop'
+				? { icon: 'lucide:circle-stop', verb: 'Stopped a subagent' }
+				: {
+						icon: 'lucide:bot',
+						verb: a['action'] === 'spawn' ? 'Started a subagent' : 'Checked subagents'
+					}),
 		target: (str(a['task']) || str(a['text'])).split('\n')[0] ?? ''
 	}),
 	wait: () => ({ icon: 'lucide:hourglass', verb: 'Waited for background work', target: '' }),
@@ -284,7 +305,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		code: { text: str(a['markdown']), language: 'plaintext' }
 	}),
 	workspace_write: (a) => {
-		const changes: Args[] = Array.isArray(a['changes']) ? a['changes'].map(obj) : [];
+		const changes: Args[] = Arr.isArray(a['changes']) ? a['changes'].map(obj) : [];
 		const first = changes[0] ?? {};
 		// a whole file is its text; a find/replace edit shows what it replaced and with what
 		const text = changes
@@ -327,7 +348,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	browser_act: (a) => ({
 		icon: 'lucide:mouse-pointer-click',
 		verb: 'Used the page',
-		target: Array.isArray(a['steps']) ? `${a['steps'].length} steps` : ''
+		target: Arr.isArray(a['steps']) ? `${a['steps'].length} steps` : ''
 	}),
 	browser_evaluate: (a) => ({
 		icon: 'lucide:code',
@@ -337,25 +358,17 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	}),
 	browser_screenshot: () => ({ icon: 'lucide:camera', verb: 'Took a screenshot', target: '' }),
 	browser_download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
+	download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
+	run_js: (a) =>
+		typeof a['file'] === 'string'
+			? { icon: 'lucide:code', verb: 'Ran a script', target: a['file'] }
+			: {
+					icon: 'lucide:code',
+					verb: 'Ran a script',
+					target: '',
+					code: { text: str(a['code']), language: 'javascript' }
+				},
 	web_search: (a) => ({ icon: 'lucide:search', verb: 'Searched the web', target: str(a['query']) }),
-	sandbox_run: (a) => {
-		const line = [
-			str(a['command']),
-			...(Array.isArray(a['args']) ? a['args'].map(String) : [])
-		].join(' ');
-		const script = Array.isArray(a['args'])
-			? a['args'].map(String).find((x) => x.includes('\n'))
-			: undefined;
-		return {
-			icon: 'lucide:terminal',
-			verb: 'Ran a command',
-			target: line.split('\n')[0] ?? '',
-			code: {
-				text: script ?? line,
-				language: /^(node|deno|bun)$/.test(str(a['command'])) ? 'javascript' : 'plaintext'
-			}
-		};
-	},
 	personal_skill_save: (a) => ({
 		icon: 'lucide:bookmark-plus',
 		verb: 'Saved a skill',
@@ -384,7 +397,7 @@ export function stepView(name: string, args: unknown): StepView {
 export function resultLine(result: unknown): string {
 	const r = obj(result);
 	if (typeof r['error'] === 'string') return r['error'];
-	const rows = Array.isArray(r['rows']) ? r['rows'] : Array.isArray(r['data']) ? r['data'] : null;
+	const rows = Arr.isArray(r['rows']) ? r['rows'] : Arr.isArray(r['data']) ? r['data'] : null;
 	return rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`;
 }
 
@@ -410,29 +423,6 @@ const DOING: { readonly [tool: string]: string } = {
 };
 export const doingOf = (steps: readonly AgentRow[]): string =>
 	DOING[steps.findLast((s) => s.tool?.running === true)?.tool?.name ?? ''] ?? 'Working…';
-
-/**
- * A Studio call's outcome, shown outside its folded steps: a publish or rollback that switched the workspace over ("View
- * live" loads it here; its answer, or the restart its switch-over caused, settled on its card). A built preview is no
- * outcome: the panel header's one Preview button opens the latest.
- */
-export function outcomeOf(
-	tool: AgentRow['tool']
-): { text: string; action: string; reload: true } | null {
-	if (tool === undefined || tool.running === true || tool.failed) return null;
-	// the engine's own answer to a declined card is the one non-failed result that changed nothing; live is this very page,
-	// so viewing it is loading the new version here
-	if (
-		(tool.studio === 'publish' || tool.studio === 'rollback') &&
-		tool.result !== '{"declined":true}'
-	)
-		return {
-			text: 'Applied — the workspace is now on the new version.',
-			action: 'View live',
-			reload: true
-		};
-	return null;
-}
 
 /** What a Studio result shows in one line, in a person's words: "Draft · Rename title · 390×844 · 23:05" (never an id). */
 export function captionOf(

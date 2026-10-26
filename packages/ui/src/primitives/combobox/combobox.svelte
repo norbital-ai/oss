@@ -45,11 +45,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	export type ComboboxProps<
 		V extends string = string,
 		M extends boolean = false
-	> = ComboboxCommonProps<V> &
-		{ multiple?: M } & {
-			value: M extends true ? readonly V[] : V | null;
-			onChange(next: M extends true ? readonly V[] : V | null): void;
-		};
+	> = ComboboxCommonProps<V> & { multiple?: M } & {
+		value: M extends true ? readonly V[] : V | null;
+		onChange(next: M extends true ? readonly V[] : V | null): void;
+	};
 </script>
 
 <script lang="ts" generics="V extends string = string, M extends boolean = false">

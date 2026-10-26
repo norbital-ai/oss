@@ -1,11 +1,12 @@
 import './dom.ts';
 import { viewFixture, browser } from './view-fixture.ts';
-import { Deferred, Effect, Fiber } from 'effect';
+import { Deferred, Effect, Fiber, Schema } from 'effect';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { Json } from '@norbital-ai/std/wire';
-import type { FormSpec } from '../src/form/draft.ts';
+import type { FormSpec, Outcome } from '../src/form/draft.ts';
+import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 
 const d = await import('../src/form/draft.ts');
 const { FormState } = await import('../src/form/form-state.svelte.ts');
@@ -29,13 +30,20 @@ const exposure = {
 	},
 	relations: { account: { targets: ['accounts'] } },
 	create: { columns: ['title', 'total', 'note', 'account'] },
-	update: { columns: ['title', 'total', 'note'] },
-	actions: {
-		hire: { input: { name: { kind: 'text' }, start: { kind: 'date' } } },
-		close: { input: { reason: { kind: 'text', optional: true } }, target: 'record' }
+	update: { columns: ['title', 'total', 'note'] }
+} as const;
+const automations = {
+	hire: { input: { name: { kind: 'text' }, start: { kind: 'date' } } },
+	close: {
+		input: { target: { kind: 'id', of: 'quotes' }, reason: { kind: 'text', optional: true } }
 	}
 } as const;
-const text = { pendingApproval: 'held', conflict: 'conflict', unknown: 'unknown' };
+const text = {
+	pendingApproval: 'held',
+	conflict: 'conflict',
+	unknown: 'unknown',
+	running: 'running'
+};
 
 it.effect(
 	'transform-filled create fields may be omitted while supplied values remain validated',
@@ -118,7 +126,7 @@ it.effect('draft comparisons ignore object key order and observe later nested ed
 	})
 );
 
-it.effect('a create omits nulls so defaults apply; an action wraps a record target', () =>
+it.effect('create and automation forms omit nulls and send direct input fields', () =>
 	Effect.sync(() => {
 		const create = specOf('quotes', exposure, 'create');
 		assert.deepEqual(d.payload(create, {}, { title: 'A', total: '1', note: null, account: 'a1' }), {
@@ -126,15 +134,155 @@ it.effect('a create omits nulls so defaults apply; an action wraps a record targ
 			total: '1',
 			account: 'a1'
 		});
-		const hire = specOf({ action: 'quotes.hire' }, exposure, 'create');
+		const hire = specOf({ automation: 'hire' }, undefined, 'create', undefined, automations.hire);
 		assert.deepEqual(d.payload(hire, {}, { name: 'N', start: '2026-01-01' }), {
 			name: 'N',
 			start: '2026-01-01'
 		});
-		const close = specOf({ action: 'quotes.close' }, exposure, 'create', 'q1');
-		assert.equal(close.callable, 'quotes.close');
-		assert.deepEqual(d.payload(close, {}, { reason: null }), { target: 'q1', input: {} });
+		const close = specOf(
+			{ automation: 'close' },
+			undefined,
+			'create',
+			undefined,
+			automations.close
+		);
+		assert.equal(close.callable, 'close');
+		assert.deepEqual(close.target, { of: 'automation', automation: 'close' });
+		assert.deepEqual(d.payload(close, {}, { target: 'q1', reason: null }), { target: 'q1' });
+		assert.equal(d.formSpec({ automation: 'close' }, exposure, 'create'), null);
 	})
+);
+
+it.live('an automation submit reports queue admission and retains its native run separately', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const started = yield* Deferred.make<void>(),
+				admitted = yield* Deferred.make<void>();
+			const inputs: Json[] = [];
+			const { bolt } = yield* browser(() =>
+				viewFixture({
+					act: (callable, input) => {
+						assert.equal(callable, 'start');
+						const request = Schema.decodeUnknownSync(
+							Schema.Struct({
+								automation: Schema.String,
+								runs: Schema.Array(Schema.Struct({ id: Schema.String, input: Schema.Json }))
+							})
+						)(input);
+						assert.equal(request.automation, 'close');
+						const first = request.runs[0];
+						assert.ok(first);
+						inputs.push(first.input);
+						const queued: WireOutcome = {
+							kind: 'committed',
+							output: {
+								id: first.id,
+								ids: request.runs.map((run) => run.id),
+								automation: request.automation
+							},
+							records: []
+						};
+						return Deferred.succeed(started, undefined).pipe(
+							Effect.andThen(Deferred.await(admitted)),
+							Effect.as(queued)
+						);
+					}
+				})
+			);
+			let writes = 0;
+			const form = new FormState(
+				specOf({ automation: 'close' }, undefined, 'create', undefined, automations.close),
+				null,
+				{ target: 'q1', reason: 'Duplicate' },
+				(callable, input, options) => {
+					writes++;
+					return bolt.act(callable, input, options);
+				},
+				text,
+				undefined,
+				(automation, input) => bolt.start(automation, input)
+			);
+			const observed: Outcome[] = [];
+			form.onOutcome((outcome) => observed.push(outcome));
+			const submitted = yield* form.submit().pipe(Effect.forkScoped);
+			yield* Deferred.await(started);
+			assert.equal(form.pending, true);
+			assert.deepEqual(observed, []);
+			assert.deepEqual(inputs, [{ target: 'q1', reason: 'Duplicate' }]);
+			yield* Deferred.succeed(admitted, undefined);
+			const outcome = yield* Fiber.join(submitted);
+			const handle = form.run;
+			assert.ok(handle);
+			assert.deepEqual(outcome, {
+				kind: 'committed',
+				output: { id: handle.id, ids: handle.ids, automation: 'close' },
+				records: []
+			});
+			assert.strictEqual(observed[0], outcome);
+			assert.equal(writes, 0);
+			assert.equal(form.pending, false);
+			assert.deepEqual(form.notice, { tone: 'info', text: 'running', run: handle.id });
+		})
+	)
+);
+
+it.live(
+	'unknown automation retries reuse the run only while the submitted input is unchanged',
+	() =>
+		Effect.gen(function* () {
+			let minted = 0;
+			const requests: { id: string; input: Json }[] = [];
+			const { bolt } = yield* browser(() =>
+				viewFixture({
+					uuid: () => `run-${++minted}`,
+					act: (callable, input) => {
+						assert.equal(callable, 'start');
+						const request = Schema.decodeUnknownSync(
+							Schema.Struct({
+								automation: Schema.String,
+								runs: Schema.Array(Schema.Struct({ id: Schema.String, input: Schema.Json }))
+							})
+						)(input);
+						const run = request.runs[0];
+						assert.ok(run);
+						requests.push(run);
+						return requests.length <= 2
+							? { kind: 'unknown', invocation: run.id }
+							: {
+									kind: 'committed',
+									output: { id: run.id, ids: [run.id], automation: request.automation },
+									records: []
+								};
+					}
+				})
+			);
+			const form = new FormState(
+				specOf({ automation: 'close' }, undefined, 'create', undefined, automations.close),
+				null,
+				{ target: 'q1', reason: 'Duplicate' },
+				(callable, input, options) => bolt.act(callable, input, options),
+				text,
+				undefined,
+				(automation, input) => bolt.start(automation, input)
+			);
+			assert.equal((yield* form.submit())?.kind, 'unknown');
+			const first = form.run;
+			assert.ok(first);
+			assert.deepEqual(form.values, { target: 'q1', reason: 'Duplicate' });
+			assert.equal((yield* form.submit())?.kind, 'unknown');
+			assert.strictEqual(form.run, first);
+			form.set('reason', 'Corrected reason');
+			assert.deepEqual(form.values, { target: 'q1', reason: 'Corrected reason' });
+			assert.equal((yield* form.submit())?.kind, 'committed');
+			assert.ok(form.run);
+			assert.notEqual(form.run.id, first.id);
+			assert.deepEqual(requests, [
+				{ id: first.id, input: { target: 'q1', reason: 'Duplicate' } },
+				{ id: first.id, input: { target: 'q1', reason: 'Duplicate' } },
+				{ id: form.run.id, input: { target: 'q1', reason: 'Corrected reason' } }
+			]);
+			assert.equal(minted, 2);
+		})
 );
 
 it.effect('advisory check blocks what decode would refuse, by path', () =>
@@ -220,6 +368,17 @@ it.effect('only an unknown outcome retries under the same key; a conflict marks 
 		);
 		assert.deepEqual([...c.errors], [['title', 'conflict']]);
 		assert.equal(c.newKey, true);
+	})
+);
+
+it.effect('a running outcome keeps the draft and key, and its notice names the run', () =>
+	Effect.sync(() => {
+		const spec = specOf('quotes', exposure, 'create');
+		const base = { title: null, total: null, note: null, account: null };
+		const s = d.settle(spec, base, { ...base, title: 'A' }, { kind: 'running', run: 'r1' }, text);
+		assert.equal(s.draft, null);
+		assert.equal(s.newKey, false);
+		assert.deepEqual(s.notice, { tone: 'info', text: 'running', run: 'r1' });
 	})
 );
 

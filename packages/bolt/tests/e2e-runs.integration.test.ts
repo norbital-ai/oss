@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { describe, expect, it } from '@effect/vitest';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../src/test/index.ts';
+import { uuidv7 } from '../src/protocol/wire.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -43,7 +44,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -89,8 +89,9 @@ describe('an automation on created with a delay', () => {
 					yield* Schema.decodeUnknownEffect(
 						Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
 					)(
-						(yield* qReply(route, ops.authority, { reads: [{ m: 'get', a: ['quotes', id] }] }))
-							.answers[0]
+						(yield* qReply(route, ops.authority, {
+							reads: [{ m: 'query', a: ['quotes', { id: id }] }]
+						})).answers[0]
 					)
 				).toMatchObject({ status: 'draft' });
 				t.clock.advance('1h');
@@ -99,8 +100,9 @@ describe('an automation on created with a delay', () => {
 					yield* Schema.decodeUnknownEffect(
 						Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
 					)(
-						(yield* qReply(route, ops.authority, { reads: [{ m: 'get', a: ['quotes', id] }] }))
-							.answers[0]
+						(yield* qReply(route, ops.authority, {
+							reads: [{ m: 'query', a: ['quotes', { id: id }] }]
+						})).answers[0]
 					)
 				).toMatchObject({ status: 'sent' });
 				const runs = present(
@@ -112,57 +114,74 @@ describe('an automation on created with a delay', () => {
 	);
 });
 
-describe('an automation acting on a failing collection action', () => {
-	it.live('fails the run with the action body error, not an unknown outcome', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const quotes = present(manifest.collections.quotes);
-				const context = yield* Layer.build(
-					TestWorkspace.layer({
-						manifest: {
-							...manifest,
-							collections: {
-								quotes: { ...quotes, actions: { boom: { description: 'Throws', input: {} } } }
-							},
-							policies: {
-								ops: {
-									description: 'Ops',
-									grants: { quotes: { read: true, create: true, update: true, actions: ['boom'] } }
+describe('a started automation whose body fails', () => {
+	it.live(
+		'queues before execution, then records the body error rather than an unknown outcome',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const context = yield* Layer.build(
+						TestWorkspace.layer({
+							manifest: {
+								...manifest,
+								policies: {
+									ops: {
+										description: 'Ops',
+										grants: { quotes: { read: true, create: true, update: true } },
+										automations: ['quotes_boom']
+									}
+								},
+								automations: {
+									quotes_boom: {
+										description: 'Throws',
+										input: {},
+										runAs: 'trigger'
+									}
 								}
 							},
-							automations: {
-								remind: {
-									description: 'Act on a throwing action',
-									on: { created: 'quotes' },
-									runAs: ['ops']
-								}
-							}
-						},
-						guest: yield* program(`export default {
-	automation: { remind: { body: function* (input, ctx) { yield* ctx.act('quotes.boom', {}); } } },
-	collection: { quotes: { bodies: { actions: { boom: function* () { throw new Error('a bug'); } } } } },
+							guest: yield* program(`export default {
+	automation: { quotes_boom: { body: function* () { throw new Error('a bug'); } } },
 };`),
-						now: '2026-09-25T10:00:00.000Z'
-					})
-				);
-				const t = Context.get(context, TestWorkspace),
-					route = yield* routeFixture(context);
-				yield* actReply(route, t.as(t.member(['ops'])).authority, {
-					callable: 'quotes.create',
-					input: { title: 'q1' },
-					issuedAt: t.clock.now()
-				});
-				yield* t.runDue();
-				const runs = present(
-					(yield* t.db.read([
+							now: '2026-09-25T10:00:00.000Z'
+						})
+					);
+					const t = Context.get(context, TestWorkspace);
+					const queued = (yield* actReply(
+						yield* routeFixture(context),
+						t.as(t.member(['ops'])).authority,
 						{
-							text: `SELECT state, error->>'code' AS code, error->>'message' AS message FROM sys_run`,
-							params: []
+							callable: 'start',
+							input: {
+								automation: 'quotes_boom',
+								runs: [{ id: uuidv7(Date.parse(t.clock.now())), input: {} }]
+							},
+							issuedAt: t.clock.now()
 						}
-					]))[0]
-				).rows;
-				expect(runs).toEqual([{ state: 'failed', code: 'guestError', message: 'a bug' }]);
-			})
-		)
+					)).outcome;
+					if (queued.kind !== 'committed') throw new Error('Failing workflow did not enqueue');
+					const run = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+						queued.output
+					);
+					expect(
+						yield* t.db.rows(
+							Schema.Struct({ state: Schema.String, error: Schema.NullOr(Schema.Json) }),
+							{
+								text: 'SELECT state, error FROM sys_run WHERE id = $1',
+								params: [run.id]
+							}
+						)
+					).toEqual([{ state: 'queued', error: null }]);
+					yield* t.runDue();
+					const runs = present(
+						(yield* t.db.read([
+							{
+								text: `SELECT state, error->>'code' AS code, error->>'message' AS message FROM sys_run`,
+								params: []
+							}
+						]))[0]
+					).rows;
+					expect(runs).toEqual([{ state: 'failed', code: 'guestError', message: 'a bug' }]);
+				})
+			)
 	);
 });

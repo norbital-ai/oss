@@ -34,7 +34,7 @@
 	import { uiText, useControls } from '../primitives/utils.js';
 	import { useKinds } from './context.js';
 	import { Effect } from 'effect';
-	import { query as queryState } from '../effect/index.js';
+	import { observeOnce as queryState } from '../effect/index.js';
 	import { idsOf } from '../form/form-state.svelte.js';
 	import { currencyOf, format, pickerRead } from './kind.js';
 
@@ -73,7 +73,7 @@
 
 	let query = $state('');
 	const options = queryState<Hit[], ReadError>(() => {
-		const read = host.read;
+		const read = host.query;
 		if (read === undefined) return null;
 		const q = query;
 		return Effect.sleep(q === '' ? 0 : 250).pipe(
@@ -82,7 +82,7 @@
 		);
 	});
 	const selected = queryState<Hit | null, ReadError>(() => {
-		const read = host.read,
+		const read = host.query,
 			id = value;
 		if (read === undefined || id === null) return null;
 		return read(of, { select, limit: 1, where: { id: { eq: id } } }).pipe(
@@ -118,9 +118,9 @@
 	<!-- the row's label, never its id; nothing while the label loads -->
 	<CopyText {id} text={value === null ? '' : (current?.text ?? '')}>
 		{#if value === null}<span class="text-muted-foreground">{t('none')}</span
-			>{:else}{current?.text ?? (host.read === undefined ? value : '')}{/if}
+			>{:else}{current?.text ?? (host.query === undefined ? value : '')}{/if}
 	</CopyText>
-{:else if host.read === undefined}
+{:else if host.query === undefined}
 	<!-- no client above: an id is typed -->
 	<Input
 		{id}

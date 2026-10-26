@@ -5,13 +5,11 @@ import ts from 'typescript';
 import { memoised, type FactContext } from './facts.js';
 import { decodeJsonObject, stringField } from './manifest.js';
 
-// compiler/discover.ts ROLES; check/index.ts bundles every discovered .ts role, not only attached bodies.
+// decl/layout.ts ROLES; check/index.ts bundles every discovered .ts role, not only attached bodies.
 const ROLES = [
 	/^src\/\+(?:workspace|secrets)\.ts$/,
-	/^src\/data\/\+relationship\.ts$/,
-	/^src\/data\/model\/\+[^/]+\.model\.ts$/,
+	/^src\/data\/model\/[^/]+\/\+model\.ts$/,
 	/^src\/data\/custom_field\/[^/]+\/\+definition\.ts$/,
-	/^src\/data\/collection\/.+\/\+(?:collection|pipeline)\.ts$/,
 	/^src\/integration\/[^/]+\/\+integration\.ts$/,
 	/^src\/access_control\/policy\/\+[^/]+\.policy\.ts$/,
 	/^src\/access_control\/team\/\+team\.ts$/,

@@ -1,19 +1,18 @@
 // `search.semantic` embeddings (rule 16): a write that creates a row, or sets one of its semantic source fields, nulls
 // the row's platform embedding and queues the platform run `bolt.embed` in its own statement; the run embeds every row
 // whose vector is missing through the host's `embeddings` port, after commit, never inside a write.
-import type { Json } from '../../decl/values.ts';
 import { Clock, Effect, Schema } from 'effect';
 import { LIMITS, type EmbedInput, type QueuedRun } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
-import { Ai, Files } from '../ports.ts';
+import { Ai } from '../ports.ts';
 import { Manifest, Wake, type RunHandler } from '../services.ts';
 import { Port } from '../port.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { q } from '../../protocol/catalog.ts';
+import { q } from '@norbital-ai/store';
 import type { Write } from '../write/commit.ts';
 
 export const EMBED = 'bolt.embed';
@@ -22,6 +21,15 @@ const PAGE = 100;
 /** Rule 72: the queue's 10,000 ids per run; past it the run queues one continuation (rule 25a). */
 const RUN_IDS = 10_000;
 
+/** A stored file reference, as much of it as the embedder reads. */
+const FileLike = Schema.Struct({ id: Schema.String, mime: Schema.String });
+/** One unembedded row: its semantic text fields and its file fields, each in declaration order. */
+const EmbedRow = Schema.Struct({
+	id: Schema.String,
+	revision: Schema.Number,
+	texts: Schema.Array(Schema.NullOr(Schema.String)),
+	files: Schema.Array(Schema.NullOr(Schema.Union([FileLike, Schema.Array(FileLike)])))
+});
 const semanticOf = (m: EngineManifest, c: string) => m.models[c]?.search?.semantic;
 
 /**
@@ -85,13 +93,13 @@ export const embedRun = Effect.gen(function* () {
 	const manifest = yield* Manifest,
 		db = yield* TenantDb,
 		ai = yield* Ai,
-		files = yield* Files,
 		wake = yield* Wake;
 	const File = Schema.Struct({
 		id: Schema.String,
 		name: Schema.String,
 		mime: Schema.String,
 		key: Schema.String,
+		size: Schema.Number,
 		sha256: Schema.String
 	});
 	const imageInputs = (ids: readonly string[]) =>
@@ -99,21 +107,19 @@ export const embedRun = Effect.gen(function* () {
 			const out = new Map<string, EmbedInput>();
 			if (ids.length === 0) return out;
 			const rows = yield* db.rows(File, {
-				text: `SELECT id, name, mime, key, sha256 FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+				text: `SELECT id, name, mime, key, size, sha256 FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
 				params: [JSON.stringify(ids)]
 			});
 			for (const row of rows) {
-				const bytes = yield* files.get(row.key, LIMITS.storedFileBytes).pipe(
-					Port.call('files', LIMITS.callMs.other),
-					Effect.mapError((error) =>
-						BoltError.make(
-							error._tag === 'Unavailable' ? 'unavailable' : error.kind,
-							'facility',
-							error._tag === 'Unavailable' ? error.reason : error.message
-						)
-					)
-				);
-				out.set(row.id, { $file: { name: row.name, mime: row.mime, sha256: row.sha256, bytes } });
+				out.set(row.id, {
+					$stored: {
+						key: row.key,
+						name: row.name,
+						mime: row.mime,
+						sha256: row.sha256,
+						bytes: row.size
+					}
+				});
 			}
 			return out;
 		});
@@ -136,42 +142,22 @@ export const embedRun = Effect.gen(function* () {
 						yield* wake.at(at);
 						return { embedded, continued: true };
 					}
-					const rows = yield* db.rows(Schema.Record(Schema.String, Schema.Json), {
-						text: `SELECT id::text AS id, revision${[...fields.map((field) => `, ${q(field)}::text AS ${q(field)}`), ...fileFields.map((field) => `, ${q(field)}`)].join('')} FROM ${q(collection)} WHERE ${q(COLUMN)} IS NULL AND id::text > $1 AND ${sources.map((field) => `coalesce(${field}, '')`).join(' || ') || "''"} <> '' ORDER BY id::text LIMIT ${PAGE}`,
+					const rows = yield* db.rows(EmbedRow, {
+						text: `SELECT id::text AS id, revision, jsonb_build_array(${fields.map((field) => `${q(field)}::text`).join(', ')}) AS texts, jsonb_build_array(${fileFields.map(q).join(', ')}) AS files FROM ${q(collection)} WHERE ${q(COLUMN)} IS NULL AND id::text > $1 AND ${sources.map((field) => `coalesce(${field}, '')`).join(' || ') || "''"} <> '' ORDER BY id::text LIMIT ${PAGE}`,
 						params: [after]
 					});
-					if (rows.length === 0) break;
 					const last = rows.at(-1);
 					if (last === undefined) break;
-					after = String(last['id']);
+					after = last.id;
 					selected += rows.length;
-					const picked = rows.map((row) => {
-						const image = fileFields
-							.flatMap((field) => (Array.isArray(row[field]) ? row[field] : [row[field]]))
-							.find(
-								(ref) =>
-									typeof ref === 'object' &&
-									ref !== null &&
-									!Array.isArray(ref) &&
-									typeof ref['mime'] === 'string' &&
-									ref['mime'].startsWith('image/')
-							);
-						return {
-							id: String(row['id']),
-							revision: Number(row['revision']),
-							file:
-								image !== null &&
-								typeof image === 'object' &&
-								!Array.isArray(image) &&
-								typeof image['id'] === 'string'
-									? image['id']
-									: undefined,
-							text: fields
-								.map((field) => row[field])
-								.filter((value) => typeof value === 'string' && value !== '')
-								.join('\n')
-						};
-					});
+					const picked = rows.map((row) => ({
+						id: row.id,
+						revision: row.revision,
+						file: row.files
+							.flatMap((v) => (v === null ? [] : 'id' in v ? [v] : v))
+							.find((ref) => ref.mime.startsWith('image/'))?.id,
+						text: row.texts.filter((value) => value !== null && value !== '').join('\n')
+					}));
 					const stored = yield* imageInputs(
 						picked.flatMap((row) => (row.file === undefined ? [] : [row.file]))
 					);

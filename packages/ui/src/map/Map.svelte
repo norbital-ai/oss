@@ -41,12 +41,12 @@
 	import { DEFAULT_BASEMAP, useKinds } from '../kinds/context.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
-	import { watch } from '../read/live.svelte.js';
 	import { and, compact } from '../filter/scope.js';
 	import { isRow, nextOf, rowsOf } from '../read/results.js';
 	import { label as labelOf, msg } from '../text/messages.js';
 	import { listSelect, refOf, unref } from '../relations/select.js';
 	import ReadGate from '../read/ReadGate.svelte';
+	import { queryState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar from '../collection/ViewToolbar.svelte';
 
@@ -78,9 +78,9 @@
 		const timer = setTimeout(() => (search = t.trim()), 300);
 		return () => clearTimeout(timer);
 	});
-	const page = watch(() =>
-		bolt.live(
-			bolt.read(
+	const page = $derived(
+		queryState(
+			bolt.query(
 				of,
 				compact({
 					where: and(where, view.where, { [at]: { isNull: false } }) ?? null,
@@ -92,25 +92,22 @@
 		)
 	);
 	const points = $derived(
-		page.state.kind === 'ready'
-			? unref(
-					host.catalog,
-					of,
-					label === undefined ? [] : [label],
-					rowsOf(page.state.value)
-				).flatMap((r) => {
-					const p = r[at];
-					return isRow(p) && typeof p['lat'] === 'number' && typeof p['lng'] === 'number'
-						? [
-								{
-									id: r.id,
-									lat: p['lat'],
-									lng: p['lng'],
-									text: label ? (refOf(r, label)?.text ?? show(r[label] ?? null)) : ''
-								}
-							]
-						: [];
-				})
+		page.kind === 'ready'
+			? unref(host.catalog, of, label === undefined ? [] : [label], rowsOf(page.value)).flatMap(
+					(r) => {
+						const p = r[at];
+						return isRow(p) && typeof p['lat'] === 'number' && typeof p['lng'] === 'number'
+							? [
+									{
+										id: r.id,
+										lat: p['lat'],
+										lng: p['lng'],
+										text: label ? (refOf(r, label)?.text ?? show(r[label] ?? null)) : ''
+									}
+								]
+							: [];
+					}
+				)
 			: []
 	);
 	let failed = $state(false);
@@ -221,7 +218,7 @@
 	bind:q
 	searchable={(catalog[of]?.search?.length ?? 0) > 0}
 />
-<ReadGate state={page.state} what={labelOf(bolt, of)}>
+<ReadGate state={page} what={labelOf(bolt, of)}>
 	{#snippet children(value)}
 		<div class="flex flex-col gap-1" data-view="map">
 			<div class="h-80 w-full rounded-md border" {@attach mount}></div>

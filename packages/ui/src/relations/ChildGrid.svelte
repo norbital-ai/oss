@@ -4,7 +4,7 @@ A related-record grid with explicit child operations, original revisions and par
 -->
 <script lang="ts" module>
 	import type { Json } from '../client/contract.js';
-	import type { Row, Values } from '../collection/types.js';
+	import type { Page, Row, Values } from '../collection/types.js';
 	import type { Col } from '../table/Table.svelte';
 	/** The parent collection and inverse relation, with an explicit save scope and optional display columns/filter. */
 	export type ChildGridProps = {
@@ -40,7 +40,7 @@ A related-record grid with explicit child operations, original revisions and par
 	import { isRow, rowsOf } from '../read/results.js';
 	import { msg } from '../text/messages.js';
 	import { selectOf } from './select.js';
-	import { watch } from '../read/live.svelte.js';
+	import { queryState } from '../read/state.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import Table from '../table/Table.svelte';
 	import ChildCell from './ChildCell.svelte';
@@ -102,19 +102,18 @@ A related-record grid with explicit child operations, original revisions and par
 		save === 'parent' ? owner?.mode === 'edit' || owner?.mode === 'create' : independentEdit
 	);
 	const editing = $derived(scope?.historical !== true && activeEdit);
-	const reads = watch(() =>
+	const reads = $derived(
 		id === undefined || identity === undefined
 			? null
-			: bolt.live(
-					bolt.read(collection, {
-						where: and(where, { [identity.parent]: id }) ?? null,
-						select: selectOf([...fields, identity.parent, 'revision']),
-						limit: 25,
-						...(after === null ? {} : { after })
-					})
-				)
+			: bolt.query<Page>(collection, {
+					where: and(where, { [identity.parent]: id }) ?? null,
+					select: selectOf([...fields, identity.parent, 'revision']),
+					limit: 25,
+					...(after === null ? {} : { after })
+				})
 	);
-	const rows = $derived(reads.state.kind === 'ready' ? rowsOf(reads.state.value) : []);
+	const loaded = $derived(queryState(reads));
+	const rows = $derived(loaded.kind === 'ready' ? rowsOf(loaded.value) : []);
 	type Draft = {
 		form: FormState;
 		row: Row;
@@ -172,7 +171,8 @@ A related-record grid with explicit child operations, original revisions and par
 	const text = {
 		pendingApproval: msg(bolt, 'form.pendingApproval', 'Pending approval'),
 		conflict: msg(bolt, 'form.conflict', 'The record changed. Review your draft and try again.'),
-		unknown: msg(bolt, 'form.unknown', 'The outcome is unknown. Retry to check the same request.')
+		unknown: msg(bolt, 'form.unknown', 'The outcome is unknown. Retry to check the same request.'),
+		running: msg(bolt, 'form.running', 'Still working: this continues in the background.')
 	};
 	function make(row: Row, created: boolean, key = row.id): Draft | null {
 		const target = created ? 'create' : 'update';
@@ -236,7 +236,9 @@ A related-record grid with explicit child operations, original revisions and par
 							? outcome.message
 							: outcome.kind === 'committed'
 								? null
-								: text.conflict;
+								: outcome.kind === 'running'
+									? text.running
+									: text.conflict;
 			});
 		return { form, row, created, request: 0 };
 	}
@@ -453,9 +455,9 @@ A related-record grid with explicit child operations, original revisions and par
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						if (outcome.kind === 'committed') drafts.set(key, { ...entry, removed: action });
-						else if (outcome.kind === 'pendingApproval') {
+						else if (outcome.kind === 'pendingApproval' || outcome.kind === 'running') {
 							noticeError = false;
-							notice = text.pendingApproval;
+							notice = outcome.kind === 'running' ? text.running : text.pendingApproval;
 						} else {
 							noticeError = true;
 							notice = outcome.kind === 'refused' ? outcome.message : text.conflict;
@@ -483,7 +485,7 @@ A related-record grid with explicit child operations, original revisions and par
 		linkBusy = true;
 		fork(
 			Effect.gen(function* () {
-				const row = yield* bolt.get<Row | null>(collection, selected);
+				const row = yield* bolt.query<Row | null>(collection, { id: selected });
 				if (!active) return;
 				if (row === null || typeof row['revision'] !== 'number') {
 					notice = msg(bolt, 'record.notFound', 'Not found or no access');
@@ -549,7 +551,12 @@ A related-record grid with explicit child operations, original revisions and par
 						)
 					);
 					if (outcome.kind !== 'committed' && outcome.kind !== 'pendingApproval')
-						notice = outcome.kind === 'refused' ? outcome.message : text.conflict;
+						notice =
+							outcome.kind === 'refused'
+								? outcome.message
+								: outcome.kind === 'running'
+									? text.running
+									: text.conflict;
 				}
 				link = null;
 			}).pipe(
@@ -604,9 +611,11 @@ A related-record grid with explicit child operations, original revisions and par
 						size="sm"
 						disabled={!entry.form.canSave}
 						onclick={() => fork(entry.form.submit())}
-						>{entry.form.requestingApproval
-							? msg(bolt, 'record.requestApproval', 'Request approval')
-							: msg(bolt, 'record.save', 'Save')}</Button
+						>{entry.form.resubmitting
+							? msg(bolt, 'record.resubmit', 'Resubmit')
+							: entry.form.requestingApproval
+								? msg(bolt, 'record.requestApproval', 'Request approval')
+								: msg(bolt, 'record.save', 'Save')}</Button
 					>{/if}
 				{#if entry.created || (strategy.delete && permits(entry.form.capabilities?.delete))}<Button
 						size="sm"
@@ -696,19 +705,18 @@ A related-record grid with explicit child operations, original revisions and par
 			{msg(bolt, 'child.unavailable', 'This relationship is not exposed.')}
 		</p>
 	{:else}
-		{#if id !== undefined}<ReadGate state={reads.state} what={collection}
-				>{@render table()}</ReadGate
+		{#if id !== undefined}<ReadGate state={loaded} what={collection}>{@render table()}</ReadGate
 			>{:else}{@render table()}{/if}
-		{#if reads.state.kind === 'ready' && isRow(reads.state.value) && typeof reads.state.value['next'] === 'string'}<Button
+		{#if loaded.kind === 'ready' && isRow(loaded.value) && typeof loaded.value['next'] === 'string'}<Button
 				size="sm"
 				variant="outline"
 				onclick={() => {
 					if (
-						reads.state.kind === 'ready' &&
-						isRow(reads.state.value) &&
-						typeof reads.state.value['next'] === 'string'
+						loaded.kind === 'ready' &&
+						isRow(loaded.value) &&
+						typeof loaded.value['next'] === 'string'
 					)
-						after = reads.state.value['next'];
+						after = loaded.value['next'];
 				}}>{msg(bolt, 'child.next', 'Next page')}</Button
 			>{/if}
 		{#if editing && !identity.owned && strategy.link && (id !== undefined || (save === 'parent' && owner?.mode === 'create'))}<div

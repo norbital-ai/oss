@@ -1,6 +1,6 @@
-import { Option, Predicate, Schema } from 'effect';
+import { Array as EffectArray, Option, Predicate, Schema } from 'effect';
 import { BUILTIN_FIELDS } from '../../decl/builtin-fields.ts';
-import type { InputKind } from '../../decl/fields.ts';
+import type { OutputKind } from '../../decl/fields.ts';
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest } from '../manifest.ts';
 
@@ -17,20 +17,30 @@ const file = Schema.decodeUnknownOption(File, { onExcessProperty: 'error' });
 
 /** Stored handles in declared file leaves; opaque JSON never grants file access. */
 export function outputFiles(
-	kind: InputKind | undefined,
+	kind: OutputKind | undefined,
 	value: Json | undefined,
-	customFields: EngineManifest['customFields'] = {}
+	customFields: EngineManifest['customFields'] = {},
+	models: EngineManifest['models'] = {}
 ): readonly OutputFile[] {
 	const files = new Map<string, OutputFile>();
 	const visit = (
-		kind: InputKind | undefined,
+		kind: OutputKind | undefined,
 		value: Json | undefined,
 		aliases: ReadonlySet<string> = new Set()
 	): void => {
 		if (kind === undefined || value == null) return;
 		switch (kind.kind) {
+			case 'row':
+				if (Predicate.isObject(value) && !EffectArray.isArray<typeof value>(value))
+					for (const [name, field] of Object.entries(models[kind.of]?.fields ?? {}))
+						visit(field, value[name], aliases);
+				break;
 			case 'file': {
-				const values = kind.multiple ? (Array.isArray(value) ? value : []) : [value];
+				const values = kind.multiple
+					? EffectArray.isArray<typeof value>(value)
+						? value
+						: []
+					: [value];
 				for (const value of values) {
 					const parsed = file(value);
 					if (Option.isSome(parsed)) {
@@ -47,7 +57,8 @@ export function outputFiles(
 					Object.entries(BUILTIN_FIELDS).find(([name]) => name === kind.of)?.[1].spec.shape;
 				const next = new Set([...aliases, kind.of]);
 				if (kind.many) {
-					if (Array.isArray(value)) for (const item of value) visit(shape, item, next);
+					if (EffectArray.isArray<typeof value>(value))
+						for (const item of value) visit(shape, item, next);
 				} else visit(shape, value, next);
 				break;
 			}
@@ -55,7 +66,8 @@ export function outputFiles(
 				visit(kind.shape, value, aliases);
 				break;
 			case 'list':
-				if (Array.isArray(value)) for (const item of value) visit(kind.of, item, aliases);
+				if (EffectArray.isArray<typeof value>(value))
+					for (const item of value) visit(kind.of, item, aliases);
 				break;
 			case 'record':
 				if (Predicate.isObject(value))

@@ -109,61 +109,58 @@ function enclosingFunction(node: ts.Node): ts.FunctionLikeDeclaration | undefine
 
 const TENANT_FACTORIES = new Set([
 	'@norbital-ai/bolt.automation',
-	'@norbital-ai/bolt.collection',
-	'@norbital-ai/bolt.integration'
+	'@norbital-ai/bolt.integration',
+	'@norbital-ai/bolt.model'
 ]);
-const TENANT_CALLBACKS = new Map([
-	['@norbital-ai/bolt.automation().run', 0],
-	['@norbital-ai/bolt.collection().project', 0],
-	['@norbital-ai/bolt.collection().transform', 0],
-	['@norbital-ai/bolt.collection().query', 1],
-	['@norbital-ai/bolt.collection().action', 1],
-	['@norbital-ai/bolt.collection().similarity', 1],
-	['@norbital-ai/bolt.integration().test', 0],
-	['@norbital-ai/bolt.integration().receive', 0],
-	['@norbital-ai/bolt.integration().send', 0]
+/** The generator bodies inside each factory's literal (its second argument), by property path; `*` is any key or element. */
+const TENANT_BODIES: ReadonlyMap<string, readonly (readonly string[])[]> = new Map([
+	['@norbital-ai/bolt.automation', [['run']]],
+	['@norbital-ai/bolt.integration', [['test']]],
+	[
+		'@norbital-ai/bolt.model',
+		[
+			['create', 'transform'],
+			['update', 'transform'],
+			['delete', 'check'],
+			['queries', '*', 'run'],
+			['actions', '*', 'run'],
+			['notify'],
+			['syncs', '*', 'read'],
+			['syncs', '*', 'write'],
+			['syncs', '*', 'parser', '*', 'parse']
+		]
+	]
 ]);
 
 /** Markdown is not an Effect-owned module: only a registered tenant body owns its async syntax. */
 function documentedTenantBody({ node, source }: FactContext): boolean {
 	const body = enclosingFunction(node);
 	if (body === undefined) return false;
+	// the property path from the literal down to the body: a property's name, `*` for an array element
+	const path: string[] = [];
 	let argument: ts.Node = body;
 	let parent = body.parent;
 	while (parent !== undefined && !ts.isCallExpression(parent)) {
 		if (ts.isFunctionLike(parent)) return false;
+		if (ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent)) {
+			if (!ts.isIdentifier(parent.name) && !ts.isStringLiteral(parent.name)) return false;
+			path.unshift(parent.name.text);
+		} else if (ts.isArrayLiteralExpression(parent)) path.unshift('*');
+		else if (!ts.isObjectLiteralExpression(parent) && !ts.isParenthesizedExpression(parent))
+			return false;
 		argument = parent;
 		parent = parent.parent;
 	}
-	if (parent === undefined || !ts.isCallExpression(parent)) return false;
+	if (ts.isMethodDeclaration(body)) {
+		if (!ts.isIdentifier(body.name) && !ts.isStringLiteral(body.name)) return false;
+		path.push(body.name.text);
+	}
+	if (parent === undefined || !ts.isCallExpression(parent) || parent.arguments[1] !== argument)
+		return false;
 	const target = importedCallTarget(parent, source, /^@norbital-ai\/bolt$/, TENANT_FACTORIES);
-	if (target === undefined) return false;
-	const at = parent.arguments.findIndex((value) => value === argument);
-	const direct = TENANT_CALLBACKS.get(target);
-	if (direct !== undefined) {
-		let callback = argument;
-		while (ts.isParenthesizedExpression(callback)) callback = callback.expression;
-		return at === direct && callback === body;
-	}
-	const property = ts.isMethodDeclaration(body) ? body : body.parent;
-	if (!ts.isPropertyAssignment(property) && !ts.isMethodDeclaration(property)) return false;
-	const name = property.name;
-	if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) return false;
-	if (property.parent !== argument) {
-		if (target !== '@norbital-ai/bolt.pipeline' || at !== 1) return false;
-		const imported = property.parent.parent;
-		return (
-			ts.isPropertyAssignment(imported) &&
-			(ts.isIdentifier(imported.name) || ts.isStringLiteral(imported.name)) &&
-			imported.name.text === 'import' &&
-			imported.parent === argument &&
-			['known', 'check', 'template'].includes(name.text)
-		);
-	}
-	return (
-		at === 1 &&
-		((target === '@norbital-ai/bolt.integration().feed' && ['read', 'map'].includes(name.text)) ||
-			(target === '@norbital-ai/bolt.integration().outbound' && name.text === 'run'))
+	return (TENANT_BODIES.get(target ?? '') ?? []).some(
+		(pattern) =>
+			pattern.length === path.length && pattern.every((at, i) => at === '*' || at === path[i])
 	);
 }
 

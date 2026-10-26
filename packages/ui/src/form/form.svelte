@@ -3,8 +3,8 @@
 	import type { Value } from '../kinds/kind.js';
 	import type { Outcome, Row } from './draft.js';
 	import type {
-		ActionInputOf,
-		ActionKey,
+		AutomationInputOf,
+		AutomationKey,
 		CollectionKey,
 		IdOf,
 		InsertOf,
@@ -15,29 +15,29 @@
 	import type { RecordSection } from './section.svelte';
 
 	/**
-	 * `Form of="<c>" mode="create" | "update"` edits a collection's allowlisted fields; `Form of={{ action: '<c>.<a>' }}`
-	 * renders an action's `input` literal and calls it (§3.6). Generated from the collection's exposure: without
+	 * `Form of="<c>" mode="create" | "update"` edits a collection's allowlisted fields; `Form of={{ automation: '<a>' }}`
+	 * renders an automation's input and queues a run. Generated from authorized metadata: without
 	 * `children` every allowlisted field renders in order; with `children` the page lays out its own `Field`s.
 	 */
-	/** What a form edits: a collection's row, or an action's input. */
-	export type FormSource = CollectionKey | { [A in ActionKey]: { action: A } }[ActionKey];
-	type Target<S> = S extends { action: `${infer C}.${string}` } ? C : S;
-	/** A record action's act input is `{ target, input }`: its form starts from part of `input`. */
-	type ActionValues<I> = I extends { target: unknown; input?: infer V }
-		? { input?: Partial<NonNullable<V>> }
-		: Partial<I>;
+	/** What a form edits: a collection's row, or a declared automation's input. */
+	export type FormSource =
+		CollectionKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
 	/** The props of `Form`: what it edits (`of`), create or update, the row id, and the layout of its fields. */
 	export type FormProps<S = FormSource> = {
 		of: S;
 		mode?: 'view' | 'edit' | 'create' | 'update';
-		/** The row an update edits, or a record action's target. */
-		id?: IdOf<Target<S>>;
+		/** The row a collection update edits. */
+		id?: S extends string ? IdOf<S> : never;
 		/** The stored row, when the page already reads it; else the enclosing `RecordShell`'s shown row (the scrubbed revision while one is picked) when it is this record, else the form reads it once. */
-		record?: (S extends string ? RecordOf<S> : Row) | null;
-		/** Create and action forms start from these values over the defaults; a record action's from its `input`. */
-		values?: S extends { action: infer A } ? ActionValues<ActionInputOf<A>> : Partial<InsertOf<S>>;
+		record?: (S extends string ? RecordOf<S> : never) | null;
+		/** Create and automation forms start from these direct input values over the defaults. */
+		values?: S extends { automation: infer A }
+			? Partial<AutomationInputOf<A>>
+			: Partial<InsertOf<S>>;
 		/** A subset and order of the generated fields. */
-		fields?: readonly (S extends string ? RecordFieldOf<S> : string)[];
+		fields?: readonly (S extends { automation: infer A }
+			? keyof AutomationInputOf<A> & string
+			: RecordFieldOf<S>)[];
 		/** The generated fields grouped into collapsible `Section`s, in order; fields no section lists follow, untitled. */
 		sections?: readonly RecordSection[];
 		submit?: string;
@@ -49,6 +49,7 @@
 		readonly?: boolean;
 		/** Every field stays an editor, muted and inert, and the submit is disabled; a `Field` or `Fieldset` may override it. */
 		disabled?: boolean;
+		/** An automation reports queue admission here; its retained run is followed separately by RunStatus. */
 		onOutcome?(outcome: Outcome): void;
 		children?: Snippet<[FormState]>;
 		/** Extra buttons beside submit. */
@@ -88,10 +89,11 @@
 	const bolt = useBolt();
 	const host = useKinds();
 	const t = uiText();
-	const collection = $derived(
-		typeof of === 'string' ? of : of.action.slice(0, of.action.lastIndexOf('.'))
-	);
+	const collection = $derived(typeof of === 'string' ? of : '');
 	const exposure = $derived(host.catalog?.[collection]);
+	const automation = $derived(
+		typeof of === 'string' ? undefined : host.automations?.[of.automation]
+	);
 	// its fields' labels and enum words read this collection's catalog keys
 	provideCollection(() => collection);
 	const resolved = $derived(
@@ -104,15 +106,14 @@
 					: 'create'
 	);
 	const readOnly = $derived(readonly === true || mode === 'view');
-	const spec = $derived(formSpec(of, exposure, resolved, id));
-	// a record action's values are shaped like its act input (`{ input }`): the fields start from `input`
+	const spec = $derived(formSpec(of, exposure, resolved, id, automation));
 	const seeded = $derived.by((): Row => {
-		const given: Row = (values ?? {}) as Row;
-		if (spec?.target.of !== 'action' || !spec.target.record) return given;
-		const input = given['input'];
-		return typeof input === 'object' && input !== null && !Array.isArray(input)
-			? (input as Row)
-			: {};
+		const given: Readonly<Record<string, Value | undefined>> = values ?? {};
+		return Object.fromEntries(
+			Object.entries(given).flatMap<[string, Value]>(([name, value]) =>
+				value === undefined ? [] : [[name, value]]
+			)
+		);
 	});
 	const updating = $derived(typeof of === 'string' && resolved === 'update');
 	const act = (
@@ -132,7 +133,7 @@
 			v.collection === collection &&
 			id !== undefined &&
 			v.record['id'] === id
-			? (v.record as Row)
+			? v.record
 			: undefined;
 	});
 	const row = $derived(
@@ -144,11 +145,13 @@
 					? Effect.succeed(shown)
 					: id === undefined
 						? Effect.succeed(undefined)
-						: bolt.get<Row | null>(collection, id).pipe(Effect.catch(() => Effect.succeed(null)))
+						: bolt
+								.query<Row | null>(collection, { id })
+								.pipe(Effect.catch(() => Effect.succeed(null)))
 	);
 	const parents = $derived.by(() => {
 		if (typeof of !== 'string' || resolved !== 'create' || exposure === undefined) return [];
-		const given: Row = (values ?? {}) as Row;
+		const given = seeded;
 		const own = Object.keys(exposure.fields).filter(
 			(field) => exposure.fields[field]?.kind === 'currency' && given[field] == null
 		);
@@ -171,14 +174,16 @@
 		Effect.forEach(
 			parents,
 			(parent) =>
-				bolt.get<Row | null>(parent.of, parent.id).pipe(
+				bolt.query<Row | null>(parent.of, { id: parent.id }).pipe(
 					Effect.map((record) =>
-						Object.fromEntries(parent.fields.map((field) => [field, record?.[field] ?? null]))
+						Object.fromEntries(
+							parent.fields.map((field): [string, Value] => [field, record?.[field] ?? null])
+						)
 					),
 					Effect.catch(() => Effect.succeed({}))
 				),
 			{ concurrency: 'unbounded' }
-		).pipe(Effect.map((rows) => Object.assign({}, ...rows)))
+		).pipe(Effect.map((rows) => Object.fromEntries(rows.flatMap((row) => Object.entries(row)))))
 	);
 </script>
 

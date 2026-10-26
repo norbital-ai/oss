@@ -28,7 +28,8 @@ describe('$bolt', () => {
 					kiosks: [],
 					push: null,
 					visitor: null,
-					catalog: {}
+					catalog: {},
+					automations: {}
 				},
 				{ messages: { x: 'ms:x' } }
 			);

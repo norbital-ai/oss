@@ -1,13 +1,11 @@
 // The tenant database as a service (W2.E1) over node-postgres fakes: one connection per call under the database wall,
-// destroyed (never returned) when the call is interrupted; a transaction rolls back on failure and, interrupted, leaves
-// the rollback to the server; typed reads refuse a malformed row naming its table; native cancellation destroys
-// its connection and a body's own defect passes through.
+// destroyed (never returned) when the call is interrupted or rollback fails; a SQL batch rolls back on failure and,
+// interrupted, leaves the rollback to the server; typed reads refuse a malformed row naming its table.
 import { describe, expect, expectTypeOf, it } from '@effect/vitest';
-import { Cause, Effect, Exit, Fiber, Option, Result, Schema } from 'effect';
+import { Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { LIMITS } from '../src/engine/contracts.ts';
-import { PostgresDb, type PgClient } from '../src/engine/db/postgres.ts';
-import { TenantTx } from '../src/engine/db/tenant-db.ts';
+import { PostgresDb, type PgClient } from '../src/node/db/postgres.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { row, type Row } from '../src/engine/system/rows.ts';
@@ -15,6 +13,12 @@ import { row, type Row } from '../src/engine/system/rows.ts';
 type Answer = Awaited<ReturnType<PgClient['query']>>;
 const EMPTY: Answer = { rows: [], rowCount: 0 };
 const statement = { text: 'select 1', params: [] };
+const begin = [
+	'begin',
+	"set local lock_timeout = '5s'",
+	"set local statement_timeout = '15s'",
+	"set local idle_in_transaction_session_timeout = '5s'"
+].join(';\n');
 const hang = () => new Promise<Answer>(() => {});
 /** A pool of one connection whose queries `answer` decides; what was sent and how it was released are recorded. */
 function fake(answer: (text: string) => Promise<Answer>) {
@@ -66,13 +70,15 @@ describe('PostgresDb', () => {
 
 	it.live('a failed call fails with the SQLSTATE and returns its connection', () =>
 		Effect.gen(function* () {
-			const f = fake(() =>
-				Promise.reject(
-					Object.assign(new Error('duplicate key'), {
-						code: '23505',
-						constraint: 'customers_email'
-					})
-				)
+			const f = fake((text) =>
+				text === statement.text
+					? Promise.reject(
+							Object.assign(new Error('duplicate key'), {
+								code: '23505',
+								constraint: 'customers_email'
+							})
+						)
+					: Promise.resolve(EMPTY)
 			);
 			const error = yield* Effect.flip(PostgresDb.make(f.pool).write(statement));
 			expect(error).toBeInstanceOf(DbError);
@@ -85,17 +91,18 @@ describe('PostgresDb', () => {
 		})
 	);
 
-	it.live('a transaction commits its body on one connection, its locks first', () =>
+	it.live('a transaction commits its SQL batch on one connection, its locks first', () =>
 		Effect.gen(function* () {
-			const f = fake(() => Promise.resolve(EMPTY));
-			const out = yield* PostgresDb.make(f.pool).transaction(
-				TenantTx.use((tx) => tx.query(statement)).pipe(Effect.as(7)),
-				{ advisory: ['k'] }
+			const f = fake((text) =>
+				Promise.resolve(text === statement.text ? { rows: [{ n: 7 }], rowCount: 1 } : EMPTY)
 			);
-			expect(out).toBe(7);
+			const out = yield* PostgresDb.make(f.pool).transaction({
+				statements: [statement],
+				lock: { advisory: ['k'] }
+			});
+			expect(out).toEqual([{ rows: [{ n: 7 }], affected: 1 }]);
 			expect(f.sent).toEqual([
-				'begin',
-				`select pg_advisory_xact_lock(hashtext('k'))`,
+				`${begin};\nselect pg_advisory_xact_lock(hashtext('k'))`,
 				'select 1',
 				'commit'
 			]);
@@ -103,19 +110,51 @@ describe('PostgresDb', () => {
 		})
 	);
 
-	it.live('a transaction rolls back when its body fails, and returns its connection', () =>
+	it.live('a transaction rolls back when a statement fails, and returns its connection', () =>
 		Effect.gen(function* () {
-			const f = fake(() => Promise.resolve(EMPTY));
-			const error = yield* Effect.flip(
-				PostgresDb.make(f.pool).transaction(
-					TenantTx.use((tx) => tx.query(statement)).pipe(
-						Effect.andThen(Effect.fail('refused' as const))
-					)
-				)
+			const f = fake((text) =>
+				text === statement.text
+					? Promise.reject(Object.assign(new Error('refused'), { code: 'P0001' }))
+					: Promise.resolve(EMPTY)
 			);
-			expect(error).toBe('refused');
-			expect(f.sent).toEqual(['begin', 'select 1', 'rollback']);
+			const error = yield* Effect.flip(
+				PostgresDb.make(f.pool).transaction({ statements: [statement] })
+			);
+			expect(error).toMatchObject({ _tag: 'DbError', sqlstate: 'P0001', message: 'refused' });
+			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
 			expect(f.released).toEqual([false]);
+		})
+	);
+
+	it.live('a dry-run batch returns its results and rolls back instead of committing', () =>
+		Effect.gen(function* () {
+			const f = fake((text) =>
+				Promise.resolve(text === statement.text ? { rows: [{ n: 7 }], rowCount: 1 } : EMPTY)
+			);
+			expect(
+				yield* PostgresDb.make(f.pool).transaction({ statements: [statement], rollback: true })
+			).toEqual([{ rows: [{ n: 7 }], affected: 1 }]);
+			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
+			expect(f.released).toEqual([false]);
+		})
+	);
+
+	it.live('a failed rollback destroys the connection and retains the statement failure', () =>
+		Effect.gen(function* () {
+			const refused = DbError.make('23505', 'duplicate key');
+			const f = fake((text) =>
+				text === statement.text
+					? Promise.reject(refused)
+					: text === 'rollback'
+						? Promise.reject(Object.assign(new Error('connection lost'), { code: '08006' }))
+						: Promise.resolve(EMPTY)
+			);
+			const error = yield* Effect.flip(
+				PostgresDb.make(f.pool).transaction({ statements: [statement] })
+			);
+			expect(error).toBe(refused);
+			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
+			expect(f.released).toEqual([true]);
 		})
 	);
 
@@ -126,11 +165,11 @@ describe('PostgresDb', () => {
 				const r = reaching('select 1'),
 					f = fake(r.answer);
 				const call = yield* Effect.forkChild(
-					PostgresDb.make(f.pool).transaction(TenantTx.use((tx) => tx.query(statement)))
+					PostgresDb.make(f.pool).transaction({ statements: [statement] })
 				);
 				yield* Effect.promise(() => r.reached);
 				yield* Fiber.interrupt(call);
-				expect(f.sent).toEqual(['begin', 'select 1']);
+				expect(f.sent).toEqual([begin, 'select 1']);
 				expect(f.released).toEqual([true]);
 			})
 	);
@@ -213,40 +252,38 @@ describe('native transaction boundaries', () => {
 		})
 	);
 
-	it.live("a body's own defect passes through unchanged and rolls back", () =>
+	it.live('a native statement failure passes through unchanged and rolls back', () =>
 		Effect.gen(function* () {
-			const f = fake(() => Promise.resolve(EMPTY)),
-				mine = new Error('mine');
-			const exit = yield* Effect.exit(
-				PostgresDb.make(f.pool).transaction(
-					TenantTx.use((tx) => tx.query(statement)).pipe(Effect.andThen(Effect.die(mine)))
-				)
+			const mine = DbError.make('22003', 'mine');
+			const f = fake((text) =>
+				text === statement.text ? Promise.reject(mine) : Promise.resolve(EMPTY)
 			);
-			if (Exit.isSuccess(exit)) throw new Error('Expected the body defect.');
-			const found = Cause.findDefect(exit.cause);
-			expect(Result.isSuccess(found) ? found.success : undefined).toBe(mine);
-			expect(f.sent).toEqual(['begin', 'select 1', 'rollback']);
+			const error = yield* Effect.flip(
+				PostgresDb.make(f.pool).transaction({ statements: [statement] })
+			);
+			expect(error).toBe(mine);
+			expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
 		})
 	);
 
 	it.live(
-		'a failing native body rolls back, preserves its typed failure, and the next transaction commits',
+		'a failing native batch rolls back, preserves its typed failure, and the next transaction commits',
 		() =>
 			Effect.gen(function* () {
-				const f = fake(() => Promise.resolve(EMPTY)),
+				const refused = DbError.make('P0001', 'refused');
+				const f = fake((text) =>
+						text === statement.text
+							? Promise.reject(refused)
+							: Promise.resolve(text === 'select 7' ? { rows: [{ n: 7 }], rowCount: 1 } : EMPTY)
+					),
 					db = PostgresDb.make(f.pool);
-				expect(
-					yield* Effect.flip(
-						db.transaction(
-							TenantTx.use((tx) => tx.query(statement)).pipe(
-								Effect.andThen(Effect.fail('refused' as const))
-							)
-						)
-					)
-				).toBe('refused');
-				expect(f.sent).toEqual(['begin', 'select 1', 'rollback']);
-				expect(yield* db.transaction(Effect.succeed(1))).toBe(1);
-				expect(f.sent.slice(3)).toEqual(['begin', 'commit']);
+				expect(yield* Effect.flip(db.transaction({ statements: [statement] }))).toBe(refused);
+				expect(f.sent).toEqual([begin, 'select 1', 'rollback']);
+				expect(yield* db.transaction({ statements: [{ text: 'select 7', params: [] }] })).toEqual([
+					{ rows: [{ n: 7 }], affected: 1 }
+				]);
+				expect(f.sent.slice(3)).toEqual([begin, 'select 7', 'commit']);
+				expect(f.released).toEqual([false, false]);
 			})
 	);
 });

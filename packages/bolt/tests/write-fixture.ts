@@ -1,7 +1,7 @@
 // The write area's test workspace: orders with owned lines (roll-ups, `seq`, a state with a locking `edit`), and tags
 // that `setNull` when their order goes. Shared by the unit and PGlite suites of `engine/write`.
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import type { Pred } from '../src/protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
 import type { Authority, CollectionAuthority, EngineActor } from '../src/engine/contracts.ts';
 
 export const NOW = '2026-09-25T10:00:00.000Z';
@@ -64,7 +64,6 @@ export const manifest: EngineManifest = {
 		tags: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } }
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -101,9 +100,7 @@ export const grants = (over: Partial<CollectionAuthority> = {}): CollectionAutho
 	create: [arm()],
 	update: [arm()],
 	delete: [arm()],
-	approval: { create: [], update: [], delete: [] },
 	queries: [],
-	actions: [],
 	moves: { status: 'all' },
 	masks: {},
 	...over

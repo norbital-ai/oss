@@ -74,7 +74,8 @@ it.live(
 				kiosks: [],
 				push: null,
 				visitor: null,
-				catalog: {}
+				catalog: {},
+				automations: {}
 			};
 			const load: IntegrationSetupLoader = async () =>
 				import('../src/page/IntegrationSetup.svelte');

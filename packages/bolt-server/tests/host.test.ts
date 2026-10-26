@@ -1,6 +1,7 @@
 // bolt start's host facilities (§5.11.6, rule 69): the S3 files store, the Postgres TLS
 // default, and activation's requirements. One test per guarantee; the MinIO round trip runs when BOLT_TEST_S3 names a
 // bucket (`<url>|<access key>:<secret>`).
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { describe, expect, it } from '@effect/vitest';
 import {
@@ -37,7 +38,7 @@ const serve = Effect.fn('HostTest.serve')(function* (
 		url: URL,
 		headers: { [k: string]: string | string[] | undefined },
 		body: Buffer
-	) => { status: number; body?: string | Buffer; json?: unknown }
+	) => { status: number; body?: string | Buffer; json?: unknown; headers?: { [k: string]: string } }
 ) {
 	const s = yield* Effect.acquireRelease(
 		Effect.sync(() =>
@@ -55,7 +56,7 @@ const serve = Effect.fn('HostTest.serve')(function* (
 						res
 							.writeHead(
 								r.status,
-								r.json === undefined ? {} : { 'content-type': 'application/json' }
+								r.json === undefined ? (r.headers ?? {}) : { 'content-type': 'application/json' }
 							)
 							.end(r.json === undefined ? r.body : JSON.stringify(r.json));
 					});
@@ -137,6 +138,82 @@ describe('the S3 files store (BOLT_FILES_PROVIDER=s3)', () => {
 		})
 	);
 
+	it.live('downloads media from a URL into a multipart upload, and aborts what it refuses', () =>
+		Effect.gen(function* () {
+			const png = Buffer.concat([
+				Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+				Buffer.alloc(10_000, 7)
+			]);
+			const objects = new Map<string, Buffer>(),
+				uploads = new Map<string, Buffer[]>();
+			let completed = '',
+				begun = 0;
+			const base = yield* serve((method, url, headers, body) => {
+				// the origin the agent named: a PNG sent as octet-stream, and source code
+				if (url.pathname === '/origin/seal.png')
+					return {
+						status: 200,
+						body: png,
+						headers: { 'content-type': 'application/octet-stream' }
+					};
+				if (url.pathname === '/origin/index.ts')
+					return { status: 200, body: 'export const answer = 42;\n'.repeat(400) };
+				if (!String(headers['authorization']).startsWith('AWS4-HMAC-SHA256 Credential=ak/'))
+					return { status: 403 };
+				const id = url.searchParams.get('uploadId') ?? '';
+				if (method === 'POST' && url.searchParams.has('uploads')) {
+					const next = `u${++begun}`;
+					uploads.set(next, []);
+					return {
+						status: 200,
+						body: `<InitiateMultipartUploadResult><UploadId>${next}</UploadId></InitiateMultipartUploadResult>`
+					};
+				}
+				const parts = uploads.get(id);
+				if (parts === undefined) return { status: 404 };
+				if (method === 'PUT') {
+					const n = Number(url.searchParams.get('partNumber'));
+					parts[n - 1] = body;
+					return { status: 200, headers: { etag: `"e${n}"` } };
+				}
+				uploads.delete(id);
+				if (method === 'POST') {
+					completed = body.toString();
+					objects.set(url.pathname, Buffer.concat(parts));
+					return { status: 200, body: '<CompleteMultipartUploadResult/>' };
+				}
+				return { status: 204 };
+			});
+			const s3 = yield* s3Files(`${base}/bucket?region=auto`, 'ak:sk', {
+				allowLoopback: true
+			}).pipe(Effect.provide(FetchHttpClient.layer));
+			const file = yield* s3.download(`${base}/origin/seal.png`);
+			expect(file).toMatchObject({
+				mime: 'image/png',
+				name: 'seal.png',
+				bytes: png.byteLength,
+				sha256: createHash('sha256').update(png).digest('hex')
+			});
+			expect(objects.get(`/bucket/${file.key}`)?.equals(png)).toBe(true);
+			expect(completed).toBe(
+				'<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"e1"</ETag></Part></CompleteMultipartUpload>'
+			);
+			expect(yield* Effect.flip(s3.download(`${base}/origin/index.ts`))).toMatchObject({
+				kind: 'invalid'
+			});
+			const capped = yield* s3Files(`${base}/bucket?region=auto`, 'ak:sk', {
+				allowLoopback: true,
+				maxBytes: 6000
+			}).pipe(Effect.provide(FetchHttpClient.layer));
+			expect(yield* Effect.flip(capped.download(`${base}/origin/seal.png`))).toMatchObject({
+				kind: 'invalid'
+			});
+			// the refused body began no upload; the capped one was aborted: no object, no open upload
+			expect(objects.size).toBe(1);
+			expect(uploads.size).toBe(0);
+		})
+	);
+
 	it.live('round-trips against a real S3-compatible store', (context) =>
 		Effect.gen(function* () {
 			const minio = yield* EffectConfig.option(EffectConfig.string('BOLT_TEST_S3'));
@@ -177,6 +254,7 @@ describe('activation requirements (rule 69)', () => {
 		configured({
 			BOLT_ARTIFACT: '/a',
 			BOLT_PGLITE_DIR: '/d',
+			BOLT_AUDIT_DIR: '/audit',
 			BOLT_PUBLIC_URL: 'http://localhost:3100',
 			BOLT_FILES_PROVIDER: 'local',
 			BOLT_FILES_ENDPOINT: '/f',
@@ -261,7 +339,12 @@ describe('activation requirements (rule 69)', () => {
 			expect((yield* config({ BOLT_DEV: '1' })).mode).toBe('dev');
 			expect(
 				(yield* configured(
-					{ BOLT_ARTIFACT: '/a', BOLT_PGLITE_DIR: '/d', BOLT_PUBLIC_URL: 'http://localhost:3100' },
+					{
+						BOLT_ARTIFACT: '/a',
+						BOLT_PGLITE_DIR: '/d',
+						BOLT_AUDIT_DIR: '/audit',
+						BOLT_PUBLIC_URL: 'http://localhost:3100'
+					},
 					{ dev: true }
 				)).mode
 			).toBe('dev');
@@ -365,6 +448,7 @@ describe('activation requirements (rule 69)', () => {
 						yield* configured({
 							BOLT_ARTIFACT: '/a',
 							BOLT_PGLITE_DIR: '/d',
+							BOLT_AUDIT_DIR: '/audit',
 							BOLT_PUBLIC_URL: 'https://acme.example'
 						}),
 						manifest()
@@ -375,6 +459,7 @@ describe('activation requirements (rule 69)', () => {
 						yield* configured({
 							BOLT_ARTIFACT: '/a',
 							BOLT_PGLITE_DIR: '/d',
+							BOLT_AUDIT_DIR: '/audit',
 							BOLT_PUBLIC_URL: 'http://localhost:3100',
 							BOLT_FILES_PROVIDER: 'local',
 							BOLT_FILES_ENDPOINT: '/f'

@@ -1,13 +1,12 @@
-// Rule 11a: the strict `Where`/`OrderBy` decoder, calendar-relative operands, child aggregates, json contains, `bolt.decode`.
+// Rule 11a: the strict `Where`/`OrderBy` decoder, materialized time bounds, child aggregates, json contains, `bolt.decode`.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result } from 'effect';
-import { BoltError } from '../src/protocol/errors.ts';
-import type { RowData } from '../src/engine/contracts.ts';
-import type { Pred } from '../src/protocol/ir-types.ts';
+import { BoltError, storeSync } from '../src/protocol/errors.ts';
+import type { Reader, RowData } from '../src/engine/contracts.ts';
 import { browserCatalog, catalog } from '../src/protocol/catalog.ts';
 import { contains, evaluate, midnight, startOfDate } from '../src/engine/query/eval.ts';
-import { decodeView, order, read, where } from '../src/protocol/ir.ts';
-import { compile } from '../src/engine/query/sql.ts';
+import { compile, decodeView, order, read, where, type Pred } from '@norbital-ai/store';
+import { readOptions } from '../src/engine/query/reader.ts';
 import { createBolt } from '../src/page/bolt.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import { bindings, manifest, rep } from './query.fixture.ts';
@@ -40,25 +39,6 @@ describe('rule 11a: one invalid row per shape', () => {
 		['orders', 'undeclared enum value', { status: { eq: 'bogus' } }],
 		['orders', 'bad ISO date', { placed: { eq: '2026-02-30' } }],
 		['orders', 'bad instant', { at: { lt: 'soon' } }],
-		['orders', 'retired date tag', { placed: { eq: { $d: '2026-01-02' } } }],
-		['orders', 'retired date tag shorthand', { placed: { $d: '2026-01-02' } }],
-		['orders', 'retired instant tag', { at: { lt: { $t: '2026-01-02T03:04:05.000Z' } } }],
-		[
-			'orders',
-			'retired period tag',
-			{ span: { overlaps: { $period: { from: '2026-01-01', to: null } } } }
-		],
-		[
-			'orders',
-			'retired date tag in period start',
-			{ span: { overlaps: { from: { $d: '2026-01-01' }, to: null } } }
-		],
-		[
-			'orders',
-			'retired date tag in period end',
-			{ span: { within: { from: '2026-01-01', to: { $d: '2026-01-02' } } } }
-		],
-		['orders', 'retired date tag in period contains', { span: { contains: { $d: '2026-01-01' } } }],
 		['orders', 'decimal tag with extra keys', { total: { eq: { $dec: '1.20', extra: true } } }],
 		['orders', 'malformed decimal tag', { total: { eq: { $dec: '1e3' } } }],
 		[
@@ -116,33 +96,35 @@ describe('rule 11a: one invalid row per shape', () => {
 		['orders', 'nested past WHERE_MAX_DEPTH', nest(17)]
 	];
 	it.each(rows)('%s: %s', (m, _, w) => {
-		expect(code(() => where(cat, m, w))).toBe('invalid');
+		expect(code(() => storeSync(where(cat, m, w)))).toBe('invalid');
 	});
 	it('the invalid names the path of the first fault', () => {
 		expect(() =>
-			where(cat, 'accounts', { orders: { some: { lines: { every: { amount: { gt: 'x' } } } } } })
+			storeSync(
+				where(cat, 'accounts', { orders: { some: { lines: { every: { amount: { gt: 'x' } } } } } })
+			)
 		).toThrow(/where\.orders\.some\.lines\.every\.amount\.gt/);
 	});
 	it('a bare value is eq, a list in and null isNull, as a person writes it; a bad value is still refused', () => {
-		expect(where(cat, 'orders', { status: 'open' })).toEqual(
-			where(cat, 'orders', { status: { eq: 'open' } })
+		expect(storeSync(where(cat, 'orders', { status: 'open' }))).toEqual(
+			storeSync(where(cat, 'orders', { status: { eq: 'open' } }))
 		);
-		expect(where(cat, 'orders', { status: ['open'] })).toEqual(
-			where(cat, 'orders', { status: { in: ['open'] } })
+		expect(storeSync(where(cat, 'orders', { status: ['open'] }))).toEqual(
+			storeSync(where(cat, 'orders', { status: { in: ['open'] } }))
 		);
-		expect(where(cat, 'orders', { note: null })).toEqual(
-			where(cat, 'orders', { note: { isNull: true } })
+		expect(storeSync(where(cat, 'orders', { note: null }))).toEqual(
+			storeSync(where(cat, 'orders', { note: { isNull: true } }))
 		);
-		expect(code(() => where(cat, 'orders', { status: 'bogus' }))).toBe('invalid');
+		expect(code(() => storeSync(where(cat, 'orders', { status: 'bogus' })))).toBe('invalid');
 		const account = '0199a000-0000-4000-8000-0000000000a1';
-		expect(where(cat, 'orders', { account })).toEqual(
-			where(cat, 'orders', { account: { eq: account } })
+		expect(storeSync(where(cat, 'orders', { account }))).toEqual(
+			storeSync(where(cat, 'orders', { account: { eq: account } }))
 		);
 	});
 	it('an empty Where is valid at the root and as a quantifier body', () => {
-		expect(where(cat, 'orders', {})).toEqual({ t: 'const', value: true });
-		expect(code(() => where(cat, 'accounts', { orders: { none: {} } }))).toBe('ok');
-		expect(code(() => where(cat, 'orders', nest(16)))).toBe('ok');
+		expect(storeSync(where(cat, 'orders', {}))).toEqual({ t: 'const', value: true });
+		expect(code(() => storeSync(where(cat, 'accounts', { orders: { none: {} } })))).toBe('ok');
+		expect(code(() => storeSync(where(cat, 'orders', nest(16))))).toBe('ok');
 	});
 });
 
@@ -170,29 +152,31 @@ describe('one wire literal per kind', () => {
 			op: 'eq',
 			arg: { _tag: 'Lit', value }
 		} satisfies Pred;
-		expect(where(cat, 'orders', { total: { eq: value } })).toEqual(expected);
-		expect(where(cat, 'orders', { total: value })).toEqual(expected);
+		expect(storeSync(where(cat, 'orders', { total: { eq: value } }))).toEqual(expected);
+		expect(storeSync(where(cat, 'orders', { total: value }))).toEqual(expected);
 	});
 	it('preserves ISO date, instant and open date-period values', () => {
-		expect(where(cat, 'orders', { placed: '2026-01-02' })).toEqual({
+		expect(storeSync(where(cat, 'orders', { placed: '2026-01-02' }))).toEqual({
 			t: 'cmp',
 			field: 'placed',
 			op: 'eq',
 			arg: { _tag: 'Lit', value: '2026-01-02' }
 		} satisfies Pred);
-		expect(where(cat, 'orders', { at: { eq: '2026-01-02T03:04:05.123Z' } })).toEqual({
+		expect(storeSync(where(cat, 'orders', { at: { eq: '2026-01-02T03:04:05.123Z' } }))).toEqual({
 			t: 'cmp',
 			field: 'at',
 			op: 'eq',
 			arg: { _tag: 'Lit', value: '2026-01-02T03:04:05.123Z' }
 		} satisfies Pred);
-		expect(where(cat, 'orders', { span: { overlaps: { from: '2026-01-01', to: null } } })).toEqual({
+		expect(
+			storeSync(where(cat, 'orders', { span: { overlaps: { from: '2026-01-01', to: null } } }))
+		).toEqual({
 			t: 'period',
 			field: 'span',
 			op: 'overlaps',
 			arg: { _tag: 'Lit', value: { from: '2026-01-01', to: null } }
 		} satisfies Pred);
-		expect(where(cat, 'orders', { span: { within: { param: 'window' } } })).toEqual({
+		expect(storeSync(where(cat, 'orders', { span: { within: { param: 'window' } } }))).toEqual({
 			t: 'period',
 			field: 'span',
 			op: 'within',
@@ -201,14 +185,14 @@ describe('one wire literal per kind', () => {
 	});
 	it('preserves instant-period ends and compares their actual instants', () => {
 		const value = { start: '2026-01-02T10:00:00.123+08:00', end: '2026-01-02T03:00:00.456Z' };
-		expect(where(instants, 'clock', { slot: { within: value } })).toEqual({
+		expect(storeSync(where(instants, 'clock', { slot: { within: value } }))).toEqual({
 			t: 'period',
 			field: 'slot',
 			op: 'within',
 			arg: { _tag: 'Lit', value }
 		} satisfies Pred);
 		expect(
-			where(instants, 'clock', { slot: { overlaps: { start: value.start, end: null } } })
+			storeSync(where(instants, 'clock', { slot: { overlaps: { start: value.start, end: null } } }))
 		).toEqual({
 			t: 'period',
 			field: 'slot',
@@ -217,31 +201,16 @@ describe('one wire literal per kind', () => {
 		} satisfies Pred);
 		expect(
 			code(() =>
-				where(instants, 'clock', { slot: { overlaps: { start: value.end, end: value.start } } })
+				storeSync(
+					where(instants, 'clock', { slot: { overlaps: { start: value.end, end: value.start } } })
+				)
 			)
 		).toBe('invalid');
-	});
-	it('refuses retired instant/period tags at the predicate boundary', () => {
-		for (const slot of [
-			{ contains: { $t: '2026-01-02T03:00:00.000Z' } },
-			{ overlaps: { $period: { start: '2026-01-02T03:00:00.000Z', end: null } } },
-			{ overlaps: { start: { $t: '2026-01-02T03:00:00.000Z' }, end: null } },
-			{ within: { start: '2026-01-02T03:00:00.000Z', end: { $t: '2026-01-02T04:00:00.000Z' } } }
-		])
-			expect(code(() => where(instants, 'clock', { slot }))).toBe('invalid');
-	});
-	it('names the exact temporal value path when refusing a retired tag', () => {
-		expect(() => where(cat, 'orders', { placed: { eq: { $d: '2026-01-02' } } })).toThrow(
-			/where\.placed\.eq: 'placed' takes an ISO date/
-		);
-		expect(() =>
-			where(cat, 'orders', { span: { overlaps: { from: { $d: '2026-01-01' }, to: null } } })
-		).toThrow(/where\.span\.overlaps\.from: 'span' takes an ISO date/);
 	});
 });
 
 describe('P34: the widened language', () => {
-	it('startOf: Monday weeks, months, quarters, years, shifted; an instant is that day 00:00 in the zone', () => {
+	it('materializes Monday weeks, months, quarters, years and zoned midnight as ISO values', () => {
 		expect(startOfDate({ unit: 'week' }, '2026-09-27')).toBe('2026-09-21'); // a Sunday belongs to the week of Monday the 21st
 		expect(startOfDate({ unit: 'week', shift: -1 }, '2026-09-21')).toBe('2026-09-14');
 		expect(startOfDate({ unit: 'month', shift: 1 }, '2026-12-15')).toBe('2027-01-01');
@@ -250,12 +219,16 @@ describe('P34: the widened language', () => {
 		expect(midnight('2026-09-01', 'Asia/Kuala_Lumpur')).toBe('2026-08-31T16:00:00.000Z');
 		expect(midnight('2026-03-29', 'Europe/Berlin')).toBe('2026-03-28T23:00:00.000Z');
 	});
-	it('this month, as a date range and as an overlapping period, in SQL and JS', () => {
-		const p = where(cat, 'orders', {
-			placed: { gte: { startOf: 'month' }, lt: { startOf: 'month', shift: 1 } },
-			span: { overlaps: { from: { startOf: 'month' }, to: { today: '' } } },
-			at: { gte: { startOf: 'week' } }
-		});
+	it('decodes materialized date, period and instant bounds identically in SQL and JS', () => {
+		const month = startOfDate({ unit: 'month' }, bindings.today);
+		const nextMonth = startOfDate({ unit: 'month', shift: 1 }, bindings.today);
+		const week = midnight(startOfDate({ unit: 'week' }, bindings.today), bindings.tz);
+		const filter = {
+			placed: { gte: month, lt: nextMonth },
+			span: { overlaps: { from: month, to: bindings.today } },
+			at: { gte: week }
+		};
+		const p = storeSync(where(cat, 'orders', filter));
 		const env = { cat, bindings };
 		const row = {
 			id: 'x',
@@ -266,13 +239,16 @@ describe('P34: the widened language', () => {
 		expect(evaluate(env, 'orders', p, row)).toBe(true);
 		expect(evaluate(env, 'orders', p, { ...row, placed: '2026-08-31' })).toBe(false);
 		expect(evaluate(env, 'orders', p, { ...row, at: '2026-09-20T15:59:59.000Z' })).toBe(false); // before Monday 00:00 in KL
-		const sql = compile(
-			cat,
-			read(cat, 'orders', { limit: 1, where: { placed: { gte: { startOf: 'month' } } } }),
-			{ as: 'workspace' },
-			bindings
+		const sql = storeSync(
+			compile(
+				cat,
+				storeSync(read(cat, 'orders', { limit: 1, where: filter })),
+				readOptions({ as: 'workspace' }, bindings)
+			)
 		).sql;
-		expect(sql.params).toContain('2026-09-01');
+		expect(sql.params).toContain(month);
+		expect(sql.params).toContain(nextMonth);
+		expect(sql.params).toContain(week);
 	});
 	it('child aggregates: sum of none is 0, min/max/avg of none match nothing; a masked of is forbidden', () => {
 		const env = {
@@ -286,7 +262,8 @@ describe('P34: the widened language', () => {
 							{ id: 'l2', amount: '10.20' }
 						]
 		};
-		const is = (w: object, id: string) => evaluate(env, 'orders', where(cat, 'orders', w), { id });
+		const is = (w: object, id: string) =>
+			evaluate(env, 'orders', storeSync(where(cat, 'orders', w)), { id });
 		expect(is({ lines: { sum: { of: 'amount', eq: 0 } } }, 'a')).toBe(true);
 		expect(is({ lines: { avg: { of: 'amount', ne: 1 } } }, 'a')).toBe(false);
 		expect(is({ lines: { sum: { of: 'amount', eq: '20.3' } } }, 'b')).toBe(true);
@@ -295,17 +272,23 @@ describe('P34: the widened language', () => {
 		).toBe(true);
 		expect(
 			code(() =>
-				compile(
-					cat,
-					read(cat, 'accounts', { limit: 1, where: { orders: { sum: { of: 'total', gt: 1 } } } }),
-					{ as: 'caller', authority: rep },
-					bindings
+				storeSync(
+					compile(
+						cat,
+						storeSync(
+							read(cat, 'accounts', {
+								limit: 1,
+								where: { orders: { sum: { of: 'total', gt: 1 } } }
+							})
+						),
+						readOptions({ as: 'caller', authority: rep }, bindings)
+					)
 				)
 			)
 		).toBe('forbidden');
 	});
 	it('json contains is jsonb @>', () => {
-		expect(where(cat, 'orders', { doc: { contains: { big: 'x' } } })).toEqual({
+		expect(storeSync(where(cat, 'orders', { doc: { contains: { big: 'x' } } }))).toEqual({
 			t: 'json',
 			field: 'doc',
 			contains: { big: 'x' }
@@ -315,7 +298,9 @@ describe('P34: the widened language', () => {
 		expect(contains({ a: 1 }, { a: 2 }, true)).toBe(false);
 	});
 	it('OrderBy: at most 4 keys, one field each, no field twice, sortable fields only', () => {
-		expect(order([{ total: 'desc' }, 'placed', { created_at: 'asc' }], cat, 'orders')).toEqual([
+		expect(
+			storeSync(order([{ total: 'desc' }, 'placed', { created_at: 'asc' }], cat, 'orders'))
+		).toEqual([
 			{ field: 'total', dir: 'desc' },
 			{ field: 'placed', dir: 'asc' },
 			{ field: 'created_at', dir: 'asc' }
@@ -331,21 +316,23 @@ describe('P34: the widened language', () => {
 			'revision',
 			{ qty: 'up' }
 		])
-			expect(code(() => order(bad, cat, 'orders'))).toBe('invalid');
+			expect(code(() => storeSync(order(bad, cat, 'orders')))).toBe('invalid');
 	});
 	it('OrderBy: a related key nests through one-relations (≤ 2 hops) to a sortable target field; the IR path is dotted', () => {
 		expect(
-			order(
-				[{ account: { name: 'asc' } }, { account: { region: 'desc' } }, 'account'],
-				cat,
-				'orders'
+			storeSync(
+				order(
+					[{ account: { name: 'asc' } }, { account: { region: 'desc' } }, 'account'],
+					cat,
+					'orders'
+				)
 			)
 		).toEqual([
 			{ field: 'account.name', dir: 'asc' },
 			{ field: 'account.region', dir: 'desc' },
 			{ field: 'account', dir: 'asc' }
 		]);
-		expect(order({ order: { account: { name: 'desc' } } }, cat, 'lines')).toEqual([
+		expect(storeSync(order({ order: { account: { name: 'desc' } } }, cat, 'lines'))).toEqual([
 			{ field: 'order.account.name', dir: 'desc' }
 		]);
 		for (const bad of [
@@ -359,17 +346,21 @@ describe('P34: the widened language', () => {
 			{ status: { name: 'asc' } },
 			[{ account: { name: 'asc' } }, { account: { name: 'desc' } }]
 		])
-			expect(code(() => order(bad, cat, 'orders'))).toBe('invalid');
-		expect(code(() => order({ about: { name: 'asc' } }, cat, 'notes'))).toBe('invalid'); // an arc is not a hop
-		expect(code(() => order({ order: { account: { name: { x: 'asc' } } } }, cat, 'lines'))).toBe(
-			'invalid'
-		); // three hops
+			expect(code(() => storeSync(order(bad, cat, 'orders')))).toBe('invalid');
+		expect(code(() => storeSync(order({ about: { name: 'asc' } }, cat, 'notes')))).toBe('invalid'); // an arc is not a hop
+		expect(
+			code(() => storeSync(order({ order: { account: { name: { x: 'asc' } } } }, cat, 'lines')))
+		).toBe('invalid'); // three hops
 	});
 	it('rule 14: a related key compiles to a subselect only where the caller reads the target field unmasked, else invalidInput', () => {
-		const sql = (
-			orderBy: unknown,
-			reader: Parameters<typeof compile>[2] = { as: 'caller', authority: rep }
-		) => compile(cat, read(cat, 'orders', { limit: 5, orderBy }), reader, bindings);
+		const sql = (orderBy: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
+			storeSync(
+				compile(
+					cat,
+					storeSync(read(cat, 'orders', { limit: 5, orderBy })),
+					readOptions(reader, bindings)
+				)
+			);
 		const ok = sql({ account: { name: 'asc' } }).sql.text;
 		expect(ok).toMatch(/ORDER BY \(SELECT \w+\."name" FROM "accounts"/);
 		expect(ok).toMatch(/jsonb_build_array\(\(SELECT \w+\."name"/); // the cursor carries the related value
@@ -391,10 +382,12 @@ describe('P34: the widened language', () => {
 
 describe('bolt.decode (rule 11a in the browser, rule 16b)', () => {
 	it('keeps valid conditions and sort keys, drops each invalid one alone with its path', () => {
-		const out = decodeView(cat, 'orders', {
-			where: { status: { eq: 'open' }, qty: {}, lines: { some: { amount: { gt: 'x' } } } },
-			orderBy: ['placed', 'tags', 'placed', { total: 'desc' }]
-		});
+		const out = storeSync(
+			decodeView(cat, 'orders', {
+				where: { status: { eq: 'open' }, qty: {}, lines: { some: { amount: { gt: 'x' } } } },
+				orderBy: ['placed', 'tags', 'placed', { total: 'desc' }]
+			})
+		);
 		expect(out.where).toEqual({ status: { eq: 'open' } });
 		expect(out.orderBy).toEqual(['placed', { total: 'desc' }]);
 		expect(out.dropped.map((d) => d.path)).toEqual([

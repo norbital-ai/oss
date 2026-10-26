@@ -20,16 +20,14 @@
 		throw new Error('Unexpected remote call in local table test');
 	};
 	const client: ViewBolt = {
-		read: unavailable,
-		get: unavailable,
+		query: unavailable,
 		aggregate: unavailable,
 		history: unavailable,
-		query: unavailable,
-		live: unavailable,
+		clock: () => ({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' }),
 		act: unavailable,
 		start: unavailable,
 		fileUrl: unavailable,
-		approvals: { process: unavailable },
+		approvals: { decide: unavailable, get: unavailable, list: unavailable },
 		actor: null,
 		locale: 'en',
 		t: (key) => key

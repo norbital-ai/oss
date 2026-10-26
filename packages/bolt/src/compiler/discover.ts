@@ -8,7 +8,7 @@ import { LAYOUT_HELP, NAME, ROLES, type Role } from '../decl/layout.ts';
 
 /**
  * A discovered role file. `name` is the path-derived name: the folder's (`orders`, `hr/kiosk`) or the file's
- * (`sales_rep`); a page is `<app>/<page>`; singletons (`workspace`, `relationship`, …) have `''`.
+ * (`sales_rep`); a page is `<app>/<page>`; singletons (`workspace`, `team`, …) have `''`.
  */
 export type Discovered = { role: Role; name: string; path: string };
 export type Diagnostic = {
@@ -129,21 +129,13 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			fail('bad-name', path, `'${bad}' is not a name (${NAME.source})`);
 			continue;
 		}
-		const nested =
-			r.role === 'model' ||
-			r.role === 'collection' ||
-			r.role === 'representation' ||
-			r.role === 'pipeline';
-		const leaf = folder!.split('/').at(-1)!;
 		const name =
 			r.role === 'page' ||
 			r.role === 'page_server' ||
 			r.role === 'kiosk_page' ||
 			r.role === 'kiosk_page_server'
 				? `${folder}/${fileName}`
-				: nested
-					? (fileName ?? leaf)
-					: (fileName ?? folder!);
+				: (fileName ?? folder!);
 		files.push({ role: r.role, name, path });
 	}
 
@@ -166,18 +158,8 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	if (!system && !has('workspace', ''))
 		fail('workspace-missing', 'src/+workspace.ts', 'a workspace has exactly one src/+workspace.ts');
 	for (const f of files) {
-		if (f.role === 'collection' && !has('model', f.name))
-			fail(
-				'collection-without-model',
-				f.path,
-				`no src/data/model/+${f.name}.model.ts; a collection exposes the model of its name`
-			);
-		if ((f.role === 'representation' || f.role === 'pipeline') && !has('collection', f.name))
-			fail(
-				'without-collection',
-				f.path,
-				`no src/data/collection/${f.name}/+collection.ts beside it`
-			);
+		if (f.role === 'representation' && !has('model', f.name))
+			fail('representation-without-model', f.path, 'no +model.ts beside it');
 		if (f.role === 'renderer' && !has('custom_field', f.name))
 			fail('custom-field-without-definition', f.path, `no +definition.ts beside it`);
 		if (f.role === 'integration_setup' && !has('integration_definition', f.name))
@@ -221,7 +203,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 					`src/app/${outer}/ holds no +group.ts; only a group holds apps and groups`
 				);
 		}
-		if (!system && (f.role === 'model' || f.role === 'collection') && reserved(f.name))
+		if (!system && f.role === 'model' && reserved(f.name))
 			fail(
 				'reserved-name',
 				f.path,
@@ -250,8 +232,8 @@ export const discover = Effect.fn('bolt.discover')(function* (
 		if (f.role === 'locale' && !has('messages', ''))
 			fail('messages-missing', f.path, 'src/i18n/ holds exactly one +messages.ts, the base locale');
 	}
-	// Collections, automations and named integrations share one source namespace.
-	const spaced = ['collection', 'automation', 'integration_definition'] as const;
+	// Models, automations and named integrations share one source namespace.
+	const spaced = ['model', 'automation', 'integration_definition'] as const;
 	const seen = new Map<string, Discovered>();
 	for (const f of files
 		.filter((x) => spaced.includes(x.role as (typeof spaced)[number]))
@@ -265,17 +247,14 @@ export const discover = Effect.fn('bolt.discover')(function* (
 		else seen.set(f.name, f);
 	}
 
-	// Seeds: seed/**/<collection>.json[.gz]; seed/assets.json, seed/assets/** and seed/seed.ts are not collections.
-	const collections = new Set([
-		...of('collection').map((f) => f.name),
-		...Object.keys(SYSTEM.collections)
-	]);
+	// Seeds: seed/**/<model>.json[.gz]; seed/assets.json, seed/assets/** and seed/seed.ts are not models. A workspace seeds
+	// its own models and the exposed system models.
+	const models = new Set([...of('model').map((f) => f.name), ...Object.keys(SYSTEM.collections)]);
 	if (!system)
 		for (const path of yield* walk(join(root, 'seed'))) {
 			const m = /^seed\/(?:.+\/)?([^/]+)\.json(?:\.gz)?$/.exec(path);
 			if (!m || path === 'seed/assets.json' || path.startsWith('seed/assets/')) continue;
-			if (!collections.has(m[1]!))
-				fail('seed-unknown-collection', path, `'${m[1]}' names no collection`);
+			if (!models.has(m[1]!)) fail('seed-unknown-model', path, `'${m[1]}' names no model`);
 		}
 	return { files, errors };
 });

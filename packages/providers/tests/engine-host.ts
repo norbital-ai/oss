@@ -55,6 +55,7 @@ export const engineHost = <A, E>(
 					const manager = yield* integrationLinks({
 						providers,
 						enter: (effect) => effect.pipe(Effect.provideContext(context)),
+						admit: (effect) => effect.pipe(Effect.provideContext(context)),
 						credentials: store,
 						...options,
 						log: () => {}

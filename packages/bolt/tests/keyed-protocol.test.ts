@@ -7,13 +7,15 @@ import { DbError } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { BoltRoutes } from '../src/protocol/http.ts';
-import type { ReadIR } from '../src/protocol/ir-types.ts';
+import type { ReadIR } from '../src/protocol/reads.ts';
 import { QReply, type QBody } from '../src/protocol/schema.ts';
 import { manifest, rep } from './query.fixture.ts';
 
 const db = TenantDb.typed({
 	read: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol database read')),
 	write: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol database write')),
+	session: () =>
+		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol transaction'))
 });
 const request = (body: QBody) =>
@@ -52,21 +54,21 @@ describe('native keyed /q reads', () => {
 				{
 					reads: [
 						{
-							m: 'read',
+							m: 'query',
 							a: [
 								{
-									accounts: { collection: 'accounts', all: true },
+									accounts: { from: 'accounts', all: true },
 									orders: {
-										collection: 'orders',
+										from: 'orders',
 										all: true,
 										where: { account: { in: { member: 'accounts', field: 'id' } } }
 									}
 								}
 							]
 						},
-						{ m: 'read', a: [{}] },
-						{ m: 'get', a: ['accounts', '00000000-0000-0000-0000-000000000002'] },
-						{ m: 'read', a: [{ accounts: { collection: 'accounts', all: true } }] }
+						{ m: 'query', a: [{}] },
+						{ m: 'query', a: ['accounts', { id: '00000000-0000-0000-0000-000000000002' }] },
+						{ m: 'query', a: [{ accounts: { from: 'accounts', all: true } }] }
 					]
 				},
 				{
@@ -109,7 +111,7 @@ describe('native keyed /q reads', () => {
 		Effect.gen(function* () {
 			let runs = 0;
 			const response = yield* run(
-				{ reads: [{ m: 'read', a: [{}] }] },
+				{ reads: [{ m: 'query', a: [{}] }] },
 				{
 					run: (batch) =>
 						Effect.sync(() => {
@@ -131,12 +133,12 @@ describe('native keyed /q reads', () => {
 				{
 					reads: [
 						{
-							m: 'read',
+							m: 'query',
 							a: [
 								{
-									accounts: { collection: 'accounts', all: true },
+									accounts: { from: 'accounts', all: true },
 									record: {
-										collection: 'accounts',
+										from: 'accounts',
 										id: '00000000-0000-0000-0000-000000000001',
 										select: {
 											orders: {
@@ -192,26 +194,26 @@ describe('native keyed /q reads', () => {
 			for (const reads of [
 				[
 					{
-						m: 'read',
+						m: 'query',
 						a: [
 							{
 								first: {
-									collection: 'orders',
+									from: 'orders',
 									all: true,
 									where: { account: { in: { member: 'later', field: 'id' } } }
 								},
-								later: { collection: 'accounts', all: true }
+								later: { from: 'accounts', all: true }
 							}
 						]
 					}
 				],
 				[
 					{
-						m: 'read',
+						m: 'query',
 						a: [
 							{
 								self: {
-									collection: 'orders',
+									from: 'orders',
 									all: true,
 									where: { account: { in: { member: 'self', field: 'id' } } }
 								}
@@ -220,13 +222,13 @@ describe('native keyed /q reads', () => {
 					}
 				],
 				[
-					{ m: 'read', a: [{ previous: { collection: 'accounts', all: true } }] },
+					{ m: 'query', a: [{ previous: { from: 'accounts', all: true } }] },
 					{
-						m: 'read',
+						m: 'query',
 						a: [
 							{
 								next: {
-									collection: 'orders',
+									from: 'orders',
 									all: true,
 									where: { account: { in: { member: 'previous', field: 'id' } } }
 								}
@@ -262,11 +264,11 @@ describe('native keyed /q reads', () => {
 			const malformedSets: readonly Json[] = [
 				{ broken: { all: true } },
 				{ broken: false },
-				{ broken: { collection: 'accounts', id: 2 } }
+				{ broken: { from: 'accounts', id: 2 } }
 			];
 			for (const set of malformedSets) {
 				const malformed = yield* Effect.result(
-					run({ reads: [{ m: 'read', a: [set] }] }, { run: () => Effect.succeed([]) })
+					run({ reads: [{ m: 'query', a: [set] }] }, { run: () => Effect.succeed([]) })
 				);
 				expect(Result.isFailure(malformed)).toBe(true);
 				if (Result.isFailure(malformed))
@@ -274,7 +276,7 @@ describe('native keyed /q reads', () => {
 			}
 			const missing = yield* Effect.result(
 				run(
-					{ reads: [{ m: 'read', a: [{ first: { collection: 'accounts', all: true } }] }] },
+					{ reads: [{ m: 'query', a: [{ first: { from: 'accounts', all: true } }] }] },
 					{ run: () => Effect.succeed([]) }
 				)
 			);

@@ -6,10 +6,8 @@ import type { Instant, PlainDate } from '@norbital-ai/std/date';
 export type { Decimal, Instant, PlainDate };
 export declare const brand: unique symbol;
 
-/** A `time` field's value: a time of day. */
-export interface PlainTime {
-	readonly [brand]: 'PlainTime';
-}
+/** A `time` field's value: a validated time-of-day string. */
+export type PlainTime = string & { readonly [brand]: 'PlainTime' };
 /** A `duration` field's value: whole seconds. */
 export type Seconds = number & { readonly [brand]: 'Seconds' };
 /** A row id, branded by its collection so an id of one collection never passes for another's. */

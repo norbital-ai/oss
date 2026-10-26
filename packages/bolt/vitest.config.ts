@@ -49,7 +49,18 @@ function liveFixture(): Plugin {
 // Suites split by filename: `*.integration.test.ts` needs PGlite (`BOLT_TEST_SUITE=integration`);
 // browser files follow https://vitest.dev/guide/browser/; every other `*.test.ts` is unit.
 const integrationSuite = process.env.BOLT_TEST_SUITE === 'integration';
-const workers = Math.max(1, Math.min(2, Math.floor(availableParallelism() / 2)));
+const positiveInteger = (name: string, fallback: number): number => {
+	const value = Number(process.env[name] ?? fallback);
+	if (!Number.isSafeInteger(value) || value < 1)
+		throw new Error(`${name} must be a positive integer`);
+	return value;
+};
+// The package's worker setting is also bounded by the whole-realm allocation.
+const packageWorkers = positiveInteger(
+	'BOLT_TEST_MAX_WORKERS',
+	Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)))
+);
+const workers = Math.min(packageWorkers, positiveInteger('VITEST_MAX_WORKERS', packageWorkers));
 
 export default defineConfig({
 	plugins: [liveFixture(), svelte()],

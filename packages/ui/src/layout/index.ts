@@ -1,4 +1,5 @@
 // The layout layer (§3.6 `./layout`): the layoutPack primitives and AppShell. Inset and scroll-port context stay internal.
+export { default as AppHeader, type AppHeaderProps } from './app-header.svelte';
 export { default as AppShell, type AppShellProps, type AppShellVariant } from './app-shell.svelte';
 export {
 	getAppIdentitySlot,

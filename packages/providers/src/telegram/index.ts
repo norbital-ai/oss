@@ -5,8 +5,16 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstab
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';
-import { storedCredential } from '../link.ts';
-import { blobOf, field, hostCall, same, str, withFetch, type Obj } from '../util.ts';
+import {
+	blobOf,
+	field,
+	hostCall,
+	same,
+	str,
+	storedCredential,
+	withFetch,
+	type Obj
+} from '../util.ts';
 
 const API = 'https://api.telegram.org';
 const MEDIA_MAX = 20 * 1024 * 1024;

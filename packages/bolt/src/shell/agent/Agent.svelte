@@ -9,18 +9,18 @@
 	quiet "Not for the assistant" block. Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
 	The selector switches between the member's own conversations and the envoy conversation threads they may read, segmented by
-	source (newest first); each delegated sub-agent is one read-only card (its task, its steps as they land, its answer),
+	source (newest first); delegated sub-agents live in the session rail (their tasks, live steps and answers),
 	several working at once, one level deep; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
 	stops (asked first) and a stopped one resumes; a draft plan is a collapsed card above the prompt (execute, delete), an
 	executed plan a strip above the transcript (revise, delete), the goals a checklist under the latest message, and a
 	checkpoint one line across the transcript, opening to its summary. The session rail (the
-	header's panel button, or the context meter) is a stack of closed cards: the context, what the conversation changed,
+	header's panel button, or the context meter) shows input, outputs, sub-agents and disclosures for the context, what the conversation changed,
 	the work it left running in the background (its sub-agents and automation runs, each stoppable while it runs), and the connected MCP servers. The composer has no box: one top border.
 	While a turn runs the accretion disc is the orb and an empty reply counts its seconds; plain Tab toggles plan mode;
 	what the model no longer reads (summarized into the latest checkpoint, or before an executed plan) is dimmed; the orb names the conversation's state; reasoning streams above the reply and stays on it, folded; a
 	cut reply that no turn continues is marked interrupted; a divider names the model where it changed. Consecutive
-	tool calls and reasoning fold into one "Worked for Ns" group whose rows (each tool's own icon, what it did, on what,
+	tool calls, sub-agent messages and reasoning fold into one "Worked for Ns" group whose rows (each event's own icon, what it did, on what,
 	how long) open to tabs: the code it carried, highlighted, its input and its output (`Steps`); a failed row's icon is the alert, so the call that failed reads at a glance. Code blocks copy. The open conversation is the shell's `?agent=` (`onConversation` reports a switch). The
 	picker groups conversations by where they happen: the member's own (Web UI), each envoy's direct messages, and each
 	envoy group chat by its name. For an administrator, a scale mark closes each triaged batch of messages; it opens to the
@@ -28,10 +28,12 @@
 	envoy's integration conversation is read-only here (rule 61): its transcript, and no composer or controls at all.
 -->
 <script lang="ts">
-	import { attach as attachEffect, live as liveEdge, fork } from '@norbital-ai/ui/effect';
+	import { attach as attachEffect, observe as liveEdge, fork } from '@norbital-ai/ui/effect';
 	import { Effect, FiberSet, Option, Predicate, Result, Schedule, Schema, Stream } from 'effect';
 	import { getContext, tick, type Snippet } from 'svelte';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { MediaQuery, SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { cubicOut } from 'svelte/easing';
+	import { fly } from 'svelte/transition';
 	import { watch } from 'runed';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
@@ -46,6 +48,7 @@
 		Progress,
 		ReadonlyMarkdown,
 		Spinner,
+		StructuredData,
 		pickerRead,
 		useKinds,
 		virtualList,
@@ -61,7 +64,6 @@
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';
-	import { PHASES, elapsedText, stepLabel, type StudioRole } from '../studio/model.ts';
 	import StudioResult from './StudioResult.svelte';
 	import MadeFiles from './MadeFiles.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
@@ -69,13 +71,13 @@
 		background,
 		captionOf,
 		checkpointSections,
+		childStatus,
 		contextView,
 		doingOf,
 		failedVerbs,
 		modelDividers,
 		ORB,
 		orbState,
-		outcomeOf,
 		previewsOf,
 		callableWords,
 		revisable,
@@ -94,7 +96,7 @@
 		onConversation
 	}: {
 		api: ShellApi;
-		bolt: Pick<ShellBolt, 'live' | 'fileUrl'>;
+		bolt: Pick<ShellBolt, 'observe' | 'fileUrl'>;
 		t: (key: string) => string;
 		request: AgentRequest;
 		onClose: () => void;
@@ -196,6 +198,14 @@
 		event.preventDefault();
 		attach([...(event.dataTransfer?.files ?? [])]);
 	}
+	async function createFile(): Promise<void> {
+		if (draft.trim() === '') draft = `${t('Create a file')}: `;
+		if (railEl !== null && getComputedStyle(railEl).position === 'absolute') rail = false;
+		await tick();
+		const composer = picker?.form?.querySelector('textarea');
+		composer?.focus();
+		composer?.setSelectionRange(composer.value.length, composer.value.length);
+	}
 
 	/** The member's own conversations and the envoy conversation threads they may read (the selector, and the open one's status, plan, goals and model): a live read. */
 	let list = $state<AgentConversation[]>([]);
@@ -208,43 +218,72 @@
 	let connectors = $state<readonly { name: string; description: string }[]>([]);
 	/** The session rail is open. */
 	let rail = $state(false);
-	/** The rail widened (its expand control, or a preview opened in it): its sections at a useful size. */
-	let wide = $state(false);
-	/** The rail stays mounted through its short slide out. */
-	// svelte-ignore state_referenced_locally
-	let railShown = $state(rail);
 	let railEl = $state<HTMLElement | null>(null);
-	watch(
-		() => rail,
-		(open) => {
-			if (open) return void (railShown = true);
-			if (!railShown) return;
-			const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-			if (reduced || railEl === null || typeof railEl.animate !== 'function') {
-				railShown = false;
-				return;
-			}
-			const animation = railEl.animate(
-				[
-					{ opacity: 1, transform: 'translate3d(0, 0, 0)' },
-					{ opacity: 0, transform: 'translate3d(16px, 0, 0)' }
-				],
-				{ duration: 150, easing: 'cubic-bezier(0.4, 0, 1, 1)' }
-			);
-			animation.finished.then(
-				() => {
-					if (!rail) railShown = false;
-				},
-				() => (railShown = false)
-			);
-		}
-	);
+	let railToggle = $state<HTMLButtonElement | null>(null);
+	let chatEl = $state<HTMLDivElement | null>(null);
+	let panelRemWidth = $state(0);
+	let navigating = $state(false);
+	const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)');
+	function sessionMotion(node: HTMLElement, options: { x: number; duration: number }) {
+		return fly(node, {
+			...options,
+			duration: reducedMotion.current || typeof node.animate !== 'function' ? 0 : options.duration,
+			easing: cubicOut
+		});
+	}
+	function measureSession(node: HTMLDivElement): () => void {
+		const measure = () => {
+			panelRemWidth =
+				node.getBoundingClientRect().width /
+				parseFloat(getComputedStyle(node.ownerDocument.documentElement).fontSize);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}
+	async function openRail(): Promise<void> {
+		navigating = false;
+		focus = null;
+		previewing = false;
+		rail = true;
+		await tick();
+		railEl?.querySelector<HTMLButtonElement>('[data-rail-close]')?.focus({ preventScroll: true });
+	}
+	function closeRail(): void {
+		rail = false;
+		railToggle?.focus({ preventScroll: true });
+	}
+	async function openChild(id: string): Promise<void> {
+		navigating = true;
+		focus = id;
+		await tick();
+		railEl?.querySelector<HTMLButtonElement>('[data-rail-back]')?.focus({ preventScroll: true });
+	}
+	async function backToChildren(): Promise<void> {
+		navigating = true;
+		const id = focus;
+		focus = null;
+		await tick();
+		const child = [...(railEl?.querySelectorAll<HTMLElement>('[data-subagent]') ?? [])].find(
+			(row) => row.dataset['subagent'] === id
+		);
+		child?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+	}
+	function railKeydown(event: KeyboardEvent): void {
+		if (!rail || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+		const target = event.target;
+		if (
+			!(target instanceof Node) ||
+			(!railEl?.contains(target) && !chatEl?.contains(target) && !railToggle?.contains(target))
+		)
+			return;
+		event.preventDefault();
+		event.stopPropagation();
+		closeRail();
+	}
 	/** The sub-agent open in the session rail. */
 	let focus = $state<string | null>(null);
-	const openChild = (id: string) => {
-		focus = id;
-		rail = true;
-	};
 	const current = $derived(list.find((c) => c.id === conversation));
 	const status = $derived(current?.status ?? 'idle');
 	/** An instance or envoy name in words: `field_ops` → `Field ops`. */
@@ -272,7 +311,7 @@
 				: `${c.peer} (${formatHandle(null, c.thread)})`);
 	// svelte-ignore state_referenced_locally
 	const conversations = liveEdge(() =>
-		bolt.live<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] } })
+		bolt.observe<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] } })
 	);
 	watch(
 		() => $conversations,
@@ -333,7 +372,7 @@
 	const transcript = liveEdge(() =>
 		conversation === null
 			? null
-			: bolt.live<{
+			: bolt.observe<{
 					rows: AgentRow[];
 					from?: number;
 					thread?: true;
@@ -355,7 +394,7 @@
 	watch(
 		() => [$transcript, transcript.error] as const,
 		([value, cause]) => {
-			if (cause?.code === 'notFound') return fresh();
+			if (cause?._tag === 'ReadFailed' && cause.code === 'notFound') return fresh();
 			if (value === undefined) return;
 			live = [...value.rows];
 			from = value.from ?? null;
@@ -521,19 +560,6 @@
 			)
 		);
 	}
-	/** What a person is asked to approve, in words; the raw input stays one click away. */
-	const confirmTitle = (studio: StudioRole | undefined) =>
-		studio === 'publish'
-			? t('Publish these changes to the workspace?')
-			: studio === 'rollback'
-				? t('Roll the workspace back to an earlier version?')
-				: t('Allow Norbius to do this?');
-	const confirmHint = (studio: StudioRole | undefined) =>
-		studio === 'publish' || studio === 'rollback'
-			? t(
-					'The workspace updates for everyone. It can take a few minutes; pages wait while it switches over and nobody is signed out.'
-				)
-			: null;
 	const empty = $derived(draft.trim() === '' && attached.length === 0);
 	const lastPending = $derived(rows.findLast((r) => r.state === 'pending')?.id);
 	const lastReply = $derived(rows.findLastIndex((r) => r.role === 'assistant'));
@@ -614,7 +640,8 @@
 			.map(({ c, s }) => ({
 				value: c.id,
 				label: nameOf(c),
-				description: when(c.at),
+				// the picker says which run is live, stopped, or idle; a failed turn is its transcript's last row
+				description: `${when(c.at)} · ${c.status === 'running' ? t('Running') : c.status === 'stopped' ? t('Stopped') : t('Idle')}`,
 				group: s.label
 			}))
 	);
@@ -638,29 +665,41 @@
 		}
 	);
 	/** One `decision.made` event's attributes as the decision matrix reads them (`decisionEvent`); a missing answer is a dash. */
-	type DecisionAnswer = {
-		type?: string;
-		choice?: string;
-		score?: number;
-		noul?: number;
-		confidence?: number;
-	};
-	type DecisionAttributes = {
-		use?: string;
-		action?: string;
-		error?: string;
-		questions?: readonly string[];
-		answers?: { readonly [id: string]: DecisionAnswer };
-		verdicts?: readonly string[];
-		state?: {
-			directive?: string;
-			assistant?: string;
-			pending?: readonly { id?: string; from?: string; text?: string }[];
-			earlier?: readonly { from?: string; text?: string }[];
-		};
-	};
+	const DecisionAnswer = Schema.Struct({
+		type: Schema.optionalKey(Schema.String),
+		choice: Schema.optionalKey(Schema.String),
+		score: Schema.optionalKey(Schema.Number),
+		noul: Schema.optionalKey(Schema.Number),
+		confidence: Schema.optionalKey(Schema.Number)
+	});
+	type DecisionAnswer = typeof DecisionAnswer.Type;
+	const Said = Schema.Struct({
+		from: Schema.optionalKey(Schema.String),
+		text: Schema.optionalKey(Schema.String)
+	});
+	const DecisionAttributes = Schema.Struct({
+		use: Schema.optionalKey(Schema.String),
+		action: Schema.optionalKey(Schema.String),
+		error: Schema.optionalKey(Schema.String),
+		questions: Schema.optionalKey(Schema.Array(Schema.String)),
+		answers: Schema.optionalKey(Schema.Record(Schema.String, DecisionAnswer)),
+		verdicts: Schema.optionalKey(Schema.Array(Schema.String)),
+		state: Schema.optionalKey(
+			Schema.Struct({
+				directive: Schema.optionalKey(Schema.String),
+				assistant: Schema.optionalKey(Schema.String),
+				pending: Schema.optionalKey(
+					Schema.Array(Schema.Struct({ ...Said.fields, id: Schema.optionalKey(Schema.String) }))
+				),
+				earlier: Schema.optionalKey(Schema.Array(Said))
+			})
+		)
+	});
+	type DecisionAttributes = typeof DecisionAttributes.Type;
+	const NO_DECISION: DecisionAttributes = {};
+	/** An event that is no decision the matrix can read shows as an empty one. */
 	const decisionOf = (a: Json): DecisionAttributes =>
-		(a !== null && typeof a === 'object' && !Array.isArray(a) ? a : {}) as DecisionAttributes;
+		Option.getOrElse(Schema.decodeUnknownOption(DecisionAttributes)(a), () => NO_DECISION);
 	const answerOf = (a: DecisionAnswer | undefined) =>
 		a === undefined
 			? '—'
@@ -768,7 +807,9 @@
 			.trim();
 
 	// the queue: messages posted while a turn runs wait here until its next step takes them
-	const queued = $derived(rows.filter((r) => r.role === 'user' && r.state === 'queued'));
+	const queued = $derived(
+		rows.filter((r) => r.role === 'user' && r.state === 'queued' && r.report === undefined)
+	);
 	let revising = $state<AgentRow | null>(null);
 	function revise(row: AgentRow): void {
 		revising = row;
@@ -870,19 +911,6 @@
 		}
 	);
 	const thinking = $derived(since === null ? 0 : Math.max(0, Math.floor((now - since) / 1000)));
-	// an approved Studio call's card ticks its phase's elapsed time, counted from when this panel first saw it approved
-	const approvals = new Map<string, number>();
-	// the moment it is first seen approved, not the last tick of an idle clock
-	const approvedSince = (id: string) =>
-		approvals.get(id) ?? approvals.set(id, Date.now()).get(id) ?? Date.now();
-	watch(
-		() => rows.some((r) => r.state === 'approved'),
-		(running) => {
-			if (!running) return;
-			const timer = setInterval(() => (now = Date.now()), 1_000);
-			return () => clearInterval(timer);
-		}
-	);
 
 	// the transcript follows its tail while the reader is there; a scroll up (only the reader scrolls up) pauses it and
 	// "Jump to latest" returns; reaching the tail again resumes it
@@ -958,16 +986,17 @@
 	const shown = (r: AgentRow) =>
 		// a bare `/compact` is the checkpoint's own line, not a message
 		(r.role === 'user' &&
+			r.report === undefined &&
 			r.text !== '/compact' &&
 			(r.state !== 'queued' || thread) &&
 			(!!r.text || (r.files?.length ?? 0) > 0)) ||
 		((r.state === 'confirm' || r.state === 'approved') && r.call !== undefined) ||
 		(r.role === 'assistant' && !!r.text) ||
 		(r.role === 'system' && (r.tag === 'compact' || r.tag === 'verdict') && !!r.text);
-	// the work between two messages folds into one group, Codex-style: each tool call and each piece of reasoning (a
-	// reply's own reasoning included, ahead of its text) is a step; a message, a reply's text or a card ends the group.
-	// A sub-agent's spawn is never folded: its row is the conversation it started. Rows behind the context boundary stay,
-	// dimmed (L-BOLT-546).
+	// The work between chat messages folds into one group: tool calls, received sub-agent messages and reasoning
+	// (a reply's own reasoning ahead of its text). A person's message, a reply's text or a card ends the group.
+	// Spawning a sub-agent is a step; its detached work lives in the session rail. Rows behind the context boundary
+	// stay dimmed (L-BOLT-546).
 	// For an administrator, each triaged batch closes with its decision: the newest `decision.made` naming a message decides
 	// it, and the mark follows the batch's last message; `awaiting` is a decided reply not written yet.
 	type Decided = { event: LogRow; d: DecisionAttributes };
@@ -996,11 +1025,11 @@
 		const replied = rows.findLastIndex((r) => r.role === 'assistant' && !!r.text);
 		return rows.reduce<Item[]>((out, row, index) => {
 			const last = out.at(-1);
-			if (row.tool?.child !== undefined) {
-				out.push({ row, index });
-				return out;
-			}
-			if (row.tool !== undefined || (row.role === 'assistant' && !!row.reasoning)) {
+			if (
+				row.tool !== undefined ||
+				row.report !== undefined ||
+				(row.role === 'assistant' && !!row.reasoning)
+			) {
 				if (last !== undefined && 'steps' in last) last.steps.push(row);
 				else out.push({ steps: [row] });
 			}
@@ -1046,6 +1075,38 @@
 	// the session rail: what this conversation changed, and the work it left running (its sub-agents and automation runs)
 	const changes = $derived(rows.flatMap((r) => r.receipts ?? []));
 	const tasks = $derived(background(rows));
+	const children = $derived(tasks.filter((task) => task.kind === 'agent'));
+	const childStates = new SvelteMap<string, ReturnType<typeof childStatus> | null>();
+	let showCompleted = $state(false);
+	const childrenLoading = $derived(children.every((child) => childStates.get(child.id) == null));
+	const workingChildren = $derived(
+		children.filter((child) => childStates.get(child.id) === 'running')
+	);
+	const doneChildren = $derived(children.filter((child) => childStates.get(child.id) === 'done'));
+	// Keyed rows move into the completed group without restarting their live reads.
+	const orderedChildren = $derived([
+		...children.filter((child) => childStates.get(child.id) !== 'done'),
+		...doneChildren
+	]);
+	function childState(id: string, state: ReturnType<typeof childStatus> | null): void {
+		const focused = railEl?.ownerDocument.activeElement;
+		const foldingFocused =
+			state === 'done' &&
+			!showCompleted &&
+			focused?.closest('[data-subagent]')?.getAttribute('data-subagent') === id;
+		childStates.set(id, state);
+		if (foldingFocused)
+			void tick().then(() =>
+				railEl?.querySelector<HTMLButtonElement>('[data-subagent-completed-toggle]')?.focus()
+			);
+	}
+	watch(
+		() => conversation,
+		() => {
+			showCompleted = false;
+			childStates.clear();
+		}
+	);
 	/** The runs' ids as one value, so a transcript patch that starts no run does not restart their read. */
 	const runIds = $derived(
 		tasks
@@ -1164,7 +1225,10 @@
 	let previewing = $state(false),
 		seenPreview = $state<string | null>(null);
 	const shownPreview = $derived(previewsOf(rows).at(-1) ?? null);
-	const showingPreview = $derived(rail && previewing && shownPreview !== null && !thread);
+	const previewInRail = $derived(previewing && shownPreview !== null && !thread);
+	const showingPreview = $derived(rail && previewInRail);
+	// The host is usually a 40rem sheet; keep the transcript intact beneath its session view.
+	const railOverlay = $derived(panelRemWidth < (previewInRail ? 88 : 64));
 	watch(
 		() => (showingPreview ? (shownPreview?.key ?? null) : null),
 		(key) => {
@@ -1175,7 +1239,6 @@
 		if (showingPreview) return void (previewing = false);
 		previewing = true;
 		focus = null;
-		wide = true;
 		rail = true;
 	}
 	function mentions(q: string): Effect.Effect<CommandItem[], Error> {
@@ -1197,24 +1260,26 @@
 				);
 			const c = q.slice(0, slash),
 				target = kinds.catalog?.[c];
-			if (target === undefined || kinds.read === undefined) return Effect.succeed([]);
-			return kinds.read(c, pickerRead(target, target.label, { limit: 8 }, q.slice(slash + 1))).pipe(
-				Effect.map((page) =>
-					page.rows.map((r) => {
-						const label =
-							target.label
-								.map((f) => r[f])
-								.filter((x) => x !== null && x !== undefined && x !== '')
-								.join(' · ') || String(r['id']);
-						return {
-							id: String(r['id']),
-							label,
-							group: c.replace(/_/g, ' '),
-							insert: `[@${label}](${c}/${r.id}) `
-						};
-					})
-				)
-			);
+			if (target === undefined || kinds.query === undefined) return Effect.succeed([]);
+			return kinds
+				.query(c, pickerRead(target, target.label, { limit: 8 }, q.slice(slash + 1)))
+				.pipe(
+					Effect.map((page) =>
+						page.rows.map((r) => {
+							const label =
+								target.label
+									.map((f) => r[f])
+									.filter((x) => x !== null && x !== undefined && x !== '')
+									.join(' · ') || String(r['id']);
+							return {
+								id: String(r['id']),
+								label,
+								group: c.replace(/_/g, ' '),
+								insert: `[@${label}](${c}/${r.id}) `
+							};
+						})
+					)
+				);
 		});
 	}
 	// hook:view-ui — inside the shell's sheet the panel's header is the sheet's (one header: mark, title, conversations); the
@@ -1356,21 +1421,15 @@
 					></span>{/if}</Button
 			>{/if}
 		<Button
+			bind:ref={railToggle}
 			size="icon-sm"
 			variant="ghost"
 			class="shrink-0"
 			aria-label={t('Session')}
 			title={t('Session')}
 			aria-pressed={rail}
-			onclick={() => {
-				if (rail) rail = false;
-				else {
-					focus = null;
-					previewing = false;
-					rail = true;
-				}
-			}}
-			data-rail-toggle><Icon name="lucide:panel-right" class="size-4" /></Button
+			onclick={() => (rail ? closeRail() : openRail())}
+			data-rail-toggle><Icon name="lucide:sliders-horizontal" class="size-4" /></Button
 		>
 		<Button
 			size="icon-sm"
@@ -1384,152 +1443,224 @@
 {/snippet}
 
 {#snippet card(title: string, aside: string, body: Snippet, extra?: Snippet)}
-	<details
-		class="group/card overflow-hidden rounded-xl border border-border bg-background shadow-xs transition-shadow open:shadow-sm"
-	>
+	<details class="group/card min-w-0">
 		<summary
-			class="flex cursor-pointer list-none items-center gap-1.5 rounded-xl px-4 py-3 text-sm transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden"
+			class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden"
 		>
-			<span class="font-medium">{title}</span>
+			<span>{title}</span>
 			<Icon
 				name="lucide:chevron-right"
-				class="size-3.5 text-muted-foreground transition-transform group-open/card:rotate-90"
+				class="size-3.5 transition-transform duration-150 group-open/card:rotate-90 motion-reduce:transition-none"
 			/>
 			<span class="flex-1"></span>
-			{#if aside !== ''}<span
-					class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-tiny leading-4 tabular-nums text-muted-foreground"
-					>{aside}</span
-				>{/if}
+			{#if aside !== ''}<span class="shrink-0 text-xs tabular-nums">{aside}</span>{/if}
 			{@render extra?.()}
 		</summary>
-		<div class="px-4 pb-3 text-xs">{@render body()}</div>
+		<div class="pt-1 pb-4 text-xs leading-5">{@render body()}</div>
 	</details>
 {/snippet}
 
 {#snippet session()}
-	<!-- Session rail: a stack of cards, each one line (what it is, and its count): the work left running in the background
-		(always open, it is the live part), then closed cards opening to their detail: how full the conversation's memory is,
-		what it changed, and the connected services -->
+	<!-- One session frame: files and helpers stay visible; secondary session metadata opens in place. -->
 	<aside
 		bind:this={railEl}
-		class="absolute inset-y-0 right-0 z-30 flex {wide
-			? 'w-[56rem]'
+		transition:sessionMotion={{ x: 6, duration: 160 }}
+		inert={!rail}
+		class="absolute inset-y-0 right-0 z-30 flex w-full shrink-0 {previewInRail
+			? '@min-[88rem]:relative @min-[88rem]:w-[56rem] @min-[88rem]:border-l-0'
 			: focus === null
-				? 'w-80'
-				: 'w-[28rem]'} max-w-full animate-in flex-col gap-2 overflow-auto border-l border-border bg-card p-3 shadow-lg fade-in-0 slide-in-from-right-4 animation-duration-200 ease-out motion-reduce:animate-none @3xl:relative @3xl:border-l-0 @3xl:shadow-none"
+				? '@5xl:relative @5xl:w-[21rem] @5xl:border-l-0'
+				: '@5xl:relative @5xl:w-[30rem] @5xl:border-l-0'} max-w-full flex-col overflow-hidden border-l border-border bg-card p-3 {!rail
+			? 'pointer-events-none'
+			: ''}"
 		aria-label={t('Session')}
 		data-agent-rail
 	>
-		<div class="flex shrink-0 items-center justify-between gap-1">
-			{#if focus !== null}
-				<Button
-					size="sm"
-					variant="ghost"
-					class="gap-1 px-2 text-muted-foreground hover:text-foreground"
-					onclick={() => (focus = null)}
-					data-rail-back><Icon name="lucide:chevron-left" class="size-4" />{t('Session')}</Button
-				>
-			{:else}
-				<p class="pl-1 text-overline text-muted-foreground">{t('Session')}</p>
-			{/if}
+		<div class="mb-2 flex min-h-8 shrink-0 items-center justify-between gap-1 px-1">
+			<p class="text-sm text-muted-foreground">{t(focus === null ? 'Session' : 'Subagents')}</p>
 			<span class="flex-1"></span>
-			<Button
-				size="icon-sm"
-				variant="ghost"
-				class="shrink-0 text-muted-foreground hover:text-foreground"
-				aria-label={t(wide ? 'Narrow' : 'Expand')}
-				title={t(wide ? 'Narrow' : 'Expand')}
-				aria-pressed={wide}
-				onclick={() => (wide = !wide)}
-				data-rail-expand
-				><Icon name={wide ? 'lucide:minimize-2' : 'lucide:maximize-2'} class="size-4" /></Button
-			>
 			<Button
 				size="icon-sm"
 				variant="ghost"
 				class="shrink-0 text-muted-foreground hover:text-foreground"
 				aria-label={t('Close')}
 				title={t('Close')}
-				onclick={() => (rail = false)}
+				onclick={closeRail}
 				data-rail-close><Icon name="lucide:x" class="size-4" /></Button
 			>
 		</div>
 		{#if focus !== null}
-			<!-- one sub-agent, opened from the list, the transcript or a report: its whole live view -->
+			<!-- one sub-agent, opened from the list: its whole live view -->
 			<div
-				class="grid animate-in gap-2 fade-in-0 slide-in-from-right-2 animation-duration-150 ease-out motion-reduce:animate-none"
+				class="min-h-0 flex-1 overflow-auto rounded-2xl border border-border bg-background"
+				in:sessionMotion={{ x: 4, duration: navigating ? 120 : 0 }}
+				data-rail-view="agent"
 			>
-				<div class="rounded-xl border border-border bg-background px-4 py-3">
-					{#key focus}<AgentChild {bolt} {t} id={focus} control={childControl} />{/key}
-				</div>
+				{#key focus}<AgentChild
+						{bolt}
+						{t}
+						id={focus}
+						control={childControl}
+						onBack={backToChildren}
+					/>{/key}
 			</div>
 		{:else}
 			<div
-				class="grid animate-in gap-2 fade-in-0 slide-in-from-left-2 animation-duration-150 ease-out motion-reduce:animate-none"
+				class="grid min-h-0 content-start divide-y divide-border overflow-auto rounded-2xl border border-border bg-background px-5 [&>section]:py-4"
+				in:sessionMotion={{ x: -4, duration: navigating ? 120 : 0 }}
+				data-rail-view="overview"
 			>
-				{#if tasks.length > 0}
-					<!-- the sub-agents and automation runs this conversation started, each one line with its live state -->
-					<section class="rounded-xl border border-border bg-background" data-rail="tasks">
-						<p class="flex items-center gap-1.5 px-4 py-3 text-sm">
-							<span class="flex-1 font-medium">{t('Background')}</span><span
-								class="rounded-full bg-muted px-2 py-0.5 text-tiny leading-4 tabular-nums text-muted-foreground"
-								>{tasks.length}</span
+				{#if previewing && shownPreview !== null && !thread}
+					<!-- the one previewer: the latest bundle; open (the header's Preview button), it fills the widened rail -->
+					<section class="min-w-0 overflow-hidden" data-rail="preview">
+						<div class="flex h-[70vh] min-h-80 flex-col" data-agent-preview={shownPreview.url}>
+							<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
+							<PreviewFrame
+								src={shownPreview.url}
+								version={shownPreview.key}
+								title={t('Preview')}
+								label={shownPreview.about?.['message']}
+								{t}
+								onClose={() => (previewing = false)}
 							>
-						</p>
-						<ul class="grid gap-1.5 px-3 pb-3">
-							{#each tasks as task (task.id)}
-								<li
-									class="min-w-0 animate-in fade-in-0 slide-in-from-bottom-1 animation-duration-150 ease-out motion-reduce:animate-none"
-								>
-									{#if task.kind === 'agent'}
-										<AgentChild
-											{bolt}
-											{t}
-											id={task.id}
-											compact
-											onOpen={() => (focus = task.id)}
-											control={childControl}
-										/>
-									{:else}
-										{@const run = runs.current?.get(task.id)}
-										{@const state = run === undefined ? null : runState(run.status)}
-										<!-- an automation run: its live state, and Stop while it is queued or running (as Settings → Automations) -->
-										<div
-											class="flex w-full min-w-0 items-center rounded-lg border border-border/70 bg-background text-xs"
-											data-run={task.id}
-											data-run-state={state}
+								{#snippet details()}
+									{#if shownPreview.about !== undefined}<p data-preview-caption>
+											{captionOf(shownPreview.about, kinds.zone)}
+										</p>{:else}<p>{shownPreview.url}</p>{/if}
+								{/snippet}
+							</PreviewFrame>
+						</div>
+					</section>
+				{/if}
+				{#each [['Input', inputs], ['Outputs', outputs]] as const as [title, files] (title)}
+					<section class="min-w-0" data-rail={title === 'Input' ? 'inputs' : 'outputs'}>
+						<div class="mb-2 flex min-h-8 items-center justify-between gap-2">
+							<h3 class="text-sm text-muted-foreground">{t(title)}</h3>
+							{#if !thread && !automation}<Button
+									size="icon-sm"
+									variant="ghost"
+									class="text-muted-foreground hover:text-foreground"
+									aria-label={t(title === 'Input' ? 'Attach files' : 'Create a file')}
+									title={t(title === 'Input' ? 'Attach files' : 'Create a file')}
+									onclick={title === 'Input' ? () => picker?.click() : createFile}
+									data-rail-attach={title === 'Input' ? '' : undefined}
+									data-rail-create={title === 'Outputs' ? '' : undefined}
+									><Icon name="lucide:plus" class="size-4" /></Button
+								>{:else if files.length > 0}<span class="text-xs text-muted-foreground tabular-nums"
+									>{files.length}</span
+								>{/if}
+						</div>
+						{#if files.length === 0}<p class="text-sm leading-6 text-muted-foreground">
+								{t(
+									title === 'Input'
+										? 'Files you share appear here.'
+										: 'Ask Norbius to create a file.'
+								)}
+							</p>
+						{:else}<MadeFiles {files} {fileHref} {t} rail />{/if}
+						{#if title === 'Input' && attached.length > 0}<p
+								class="mt-2 text-xs text-muted-foreground"
+								role="status"
+							>
+								{attached.length}
+								{t('ready to send')}
+							</p>{/if}
+					</section>
+				{/each}
+				{#if children.length > 0}
+					<section class="min-w-0" data-rail="tasks">
+						<div
+							class="mb-2 flex min-h-8 items-center justify-between gap-2 text-sm text-muted-foreground"
+						>
+							<h3>{t('Subagents')}</h3>
+							<span
+								class="tabular-nums"
+								data-subagent-summary
+								aria-live="polite"
+								aria-atomic="true"
+								aria-label={childrenLoading
+									? t('Loading…')
+									: t('{working} of {total} subagents working')
+											.replace('{working}', String(workingChildren.length))
+											.replace('{total}', String(children.length))}
+								>{childrenLoading ? '…' : workingChildren.length}/{children.length}</span
+							>
+						</div>
+						<ul id="agent-children" class="-mx-2 grid">
+							{#each orderedChildren as child (child.id)}
+								{#if child.id === doneChildren[0]?.id}
+									<li class="min-w-0">
+										<button
+											type="button"
+											class="flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-sm:min-h-11"
+											aria-expanded={showCompleted}
+											aria-controls={doneChildren.map((done) => `agent-child-${done.id}`).join(' ')}
+											onclick={() => (showCompleted = !showCompleted)}
+											data-subagent-completed-toggle
 										>
-											<span class="flex min-h-8 min-w-0 flex-1 items-center gap-2 px-3 py-2">
-												<Icon name="lucide:zap" class="size-3.5 shrink-0 text-muted-foreground" />
-												{#if state === 'running'}<Spinner
-														label={t('Working…')}
-														class="size-3.5 shrink-0"
-													/>
-												{:else}<Icon
-														name={state === null ? 'lucide:circle-dashed' : ORB[state].icon}
-														class="size-3.5 shrink-0 text-muted-foreground"
-													/>{/if}
-												<span class="min-w-0 flex-1 truncate" title={run?.automation}
-													>{run === undefined
-														? t('Automation run')
-														: human(run.automation.replaceAll('.', ' '))}</span
-												>
-												{#if state !== null}<span class="shrink-0 text-muted-foreground"
-														>{t(ORB[state === 'running' ? 'working' : state].label)}</span
-													>{/if}
-											</span>
-											{#if state === 'running'}<Button
-													size="icon-sm"
-													variant="ghost"
-													class="shrink-0 text-muted-foreground"
-													aria-label={t('Stop run')}
-													title={t('Stop run')}
-													onclick={() => stopRun(task.id)}
-													data-run-stop
-													><Icon name="lucide:square" class="size-3.5 fill-current" /></Button
-												>{/if}
-										</div>
-									{/if}
+											<Icon
+												name="lucide:chevron-right"
+												class="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none {showCompleted
+													? 'rotate-90'
+													: ''}"
+											/>
+											{t('Completed')} <span class="tabular-nums">{doneChildren.length}</span>
+										</button>
+									</li>
+								{/if}
+								<li
+									id={`agent-child-${child.id}`}
+									class="min-w-0"
+									data-subagent-completed={childStates.get(child.id) === 'done' ? '' : undefined}
+									hidden={childStates.get(child.id) === 'done' && !showCompleted}
+								>
+									<AgentChild
+										{bolt}
+										{t}
+										id={child.id}
+										compact
+										onOpen={() => openChild(child.id)}
+										onState={(state) => childState(child.id, state)}
+										control={childControl}
+									/>
+								</li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+				{#if runIds !== ''}
+					<section class="min-w-0" data-rail="runs">
+						<h3 class="mb-2 text-sm text-muted-foreground">{t('Automations')}</h3>
+						<ul class="grid gap-1">
+							{#each tasks.filter((task) => task.kind === 'run') as task (task.id)}
+								{@const run = runs.current?.get(task.id)}
+								{@const state = run === undefined ? null : runState(run.status)}
+								<li
+									class="flex min-h-10 min-w-0 items-center gap-2 text-sm"
+									data-run={task.id}
+									data-run-state={state}
+								>
+									<Icon name="lucide:zap" class="size-4 shrink-0 text-muted-foreground" />
+									<span class="min-w-0 flex-1 truncate" title={run?.automation}
+										>{run === undefined
+											? t('Automation run')
+											: human(run.automation.replaceAll('.', ' '))}</span
+									>
+									<span class="shrink-0 text-xs text-muted-foreground"
+										>{state === null
+											? t('Loading…')
+											: t(ORB[state === 'running' ? 'working' : state].label)}</span
+									>
+									{#if state === 'running'}<Button
+											size="icon-sm"
+											variant="ghost"
+											class="shrink-0 text-muted-foreground"
+											aria-label={t('Stop run')}
+											title={t('Stop run')}
+											onclick={() => stopRun(task.id)}
+											data-run-stop
+											><Icon name="lucide:square" class="size-3.5 fill-current" /></Button
+										>{/if}
 								</li>
 							{/each}
 						</ul>
@@ -1611,41 +1742,6 @@
 						changesBody
 					)}
 				</div>
-				<!-- the conversation's files, each list its own card: posted and received files, then what the work made -->
-				{#each [['Inputs', inputs], ['Outputs', outputs]] as const as [title, files] (title)}
-					{#snippet filesBody()}
-						{#if files.length === 0}<p class="text-muted-foreground">{t('None yet.')}</p>
-						{:else}<MadeFiles {files} {fileHref} {t} />{/if}
-					{/snippet}
-					<div data-rail={title.toLowerCase()}>
-						{@render card(t(title), files.length === 0 ? '' : String(files.length), filesBody)}
-					</div>
-				{/each}
-				{#if previewing && shownPreview !== null && !thread}
-					<!-- the one previewer: the latest bundle; open (the header's Preview button), it fills the widened rail -->
-					<section
-						class="overflow-hidden rounded-xl border border-border bg-background shadow-xs"
-						data-rail="preview"
-					>
-						<div class="flex h-[70vh] min-h-80 flex-col" data-agent-preview={shownPreview.url}>
-							<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
-							<PreviewFrame
-								src={shownPreview.url}
-								version={shownPreview.key}
-								title={t('Preview')}
-								label={shownPreview.about?.['message']}
-								{t}
-								onClose={() => (previewing = false)}
-							>
-								{#snippet details()}
-									{#if shownPreview.about !== undefined}<p data-preview-caption>
-											{captionOf(shownPreview.about, kinds.zone)}
-										</p>{:else}<p>{shownPreview.url}</p>{/if}
-								{/snippet}
-							</PreviewFrame>
-						</div>
-					</section>
-				{/if}
 				{#if connectors.length > 0}
 					{#snippet connectorsBody()}
 						<ul class="grid gap-1.5">
@@ -1682,8 +1778,13 @@
 	data-agent-panel
 >
 	{#if toSheet === undefined}<div class="shrink-0 border-b px-4 py-2">{@render head()}</div>{/if}
-	<div class="@container relative flex min-h-0 flex-1">
-		<div class="flex min-w-0 flex-1 flex-col">
+	<div class="@container relative flex min-h-0 flex-1 overflow-x-clip" {@attach measureSession}>
+		<div
+			bind:this={chatEl}
+			class="flex min-w-0 flex-1 flex-col"
+			inert={rail && railOverlay}
+			data-agent-chat
+		>
 			<div class="relative flex min-h-0 w-full flex-1 flex-col">
 				{#snippet transcriptTab()}
 					<div class="flex h-full min-h-0 w-full flex-col">
@@ -1813,31 +1914,15 @@
 											</summary>
 											<Steps steps={item.steps} {t} />
 										</details>
-										{#each item.steps.flatMap((st) => outcomeOf(st.tool) ?? []) as outcome, i (i)}
-											<!-- what a Studio call achieved (a version applied): outside the fold -->
-											<Inline
-												gap="sm"
-												align="center"
-												class="mt-2 text-sm"
-												role="status"
-												data-outcome
-											>
-												<Icon name="lucide:circle-check" class="size-4 shrink-0 text-success" />
-												<span class="min-w-0 whitespace-normal">{t(outcome.text)}</span>
-												<Button
-													size="sm"
-													variant="outline"
-													class="shrink-0"
-													onclick={() => location.reload()}
-													data-view-live>{t(outcome.action)}</Button
-												>
-											</Inline>
-										{/each}
 										{#each item.steps as st (st.id)}
 											<StudioResult step={st} {t} zone={kinds.zone} />
+											{#if !thread && st.tool?.approval !== undefined}
+												<!-- a live change the host holds for the person: approved here, it runs as them -->
+												<StudioApproval {api} step={st} {t} />
+											{/if}
 										{/each}
 										{#if item.steps.some((st) => (st.files?.length ?? 0) > 0)}
-											<!-- what the work made (a screenshot, a document, a sandbox output): outside the fold -->
+											<!-- what the work made (a screenshot, a document): outside the fold -->
 											<MadeFiles
 												files={item.steps.flatMap((st) => st.files ?? [])}
 												{fileHref}
@@ -1895,45 +1980,7 @@
 									</li>
 								{:else}
 									{@const { row, index } = item}
-									{#if row.tool?.child !== undefined}
-										{@const child = row.tool.child}
-										<li {@attach turns.measure(itemKey(at))} data-role="subagent">
-											<AgentChild
-												{bolt}
-												{t}
-												id={child}
-												compact
-												onOpen={() => openChild(child)}
-												control={childControl}
-											/>
-										</li>
-									{:else if row.role === 'user' && row.report !== undefined}
-										{@const from = row.report.conversation}
-										<!-- a sub-agent's report: one quiet line (its answer or question reaches the agent as input), opening it -->
-										<li {@attach turns.measure(itemKey(at))} data-role="report" data-report={from}>
-											<button
-												type="button"
-												class="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-												onclick={() => openChild(from)}
-											>
-												<Icon
-													name={row.report.asked
-														? 'lucide:message-circle-question'
-														: 'lucide:corner-down-right'}
-													class="size-3.5 shrink-0"
-												/>
-												<span class="shrink-0 font-medium"
-													>{t(row.report.asked ? 'A sub-agent asks' : 'A sub-agent reported')}</span
-												>
-												<span class="min-w-0 flex-1 truncate"
-													>{(row.text ?? '').replace(
-														/^Sub-agent "[^"]*" \(conversation [^)]*\) [^:]*: /,
-														''
-													)}</span
-												>
-											</button>
-										</li>
-									{:else if row.role === 'user'}
+									{#if row.role === 'user'}
 										{@const label = triageLabel(row, index)}
 										<li
 											{@attach turns.measure(itemKey(at))}
@@ -1979,26 +2026,20 @@
 										</li>
 									{:else if !thread && (row.state === 'confirm' || row.state === 'approved') && row.call}
 										{@const call = row.call}
-										{@const hint = confirmHint(call.studio)}
 										{@const busy = answering.has(row.id) || row.state === 'approved'}
 										<li
 											{@attach turns.measure(itemKey(at))}
 											class="rounded-xl border border-border/70 bg-background p-3 shadow-sm"
 											data-role="confirm"
 										>
-											<p class="text-sm font-medium text-foreground">{confirmTitle(call.studio)}</p>
-											{#if call.studio === 'publish' || call.studio === 'rollback'}
-												<StudioApproval {api} studio={call.studio} input={call.input} {t} />
-											{/if}
-											{#if hint}<p class="mt-1 text-xs text-muted-foreground">{hint}</p>{/if}
+											<p class="text-sm font-medium text-foreground">
+												{t('Allow Norbius to do this?')}
+											</p>
 											<details class="mt-1 text-xs text-muted-foreground">
 												<summary class="cursor-pointer">{t('Details')}</summary>
-												<pre
-													class="mt-1 max-h-48 overflow-auto rounded-md bg-muted/60 p-2">{JSON.stringify(
-														call.input,
-														null,
-														2
-													)}</pre>
+												<div class="mt-1 max-h-48 min-w-0 overflow-auto">
+													<StructuredData value={call.input} name={t('Input')} />
+												</div>
 											</details>
 											<Inline gap="xs" class="mt-2" align="center">
 												{#if row.state === 'confirm'}<Button
@@ -2013,9 +2054,7 @@
 														onclick={() => confirm(row, false)}>{t('Decline')}</Button
 													>{/if}
 												{#if busy}<span class="text-xs text-muted-foreground" role="status"
-														>{row.progress === undefined
-															? t('Working on it… you can keep using the app.')
-															: `${t(stepLabel(PHASES.indexOf(row.progress)))} · ${elapsedText(now - approvedSince(row.id))}`}</span
+														>{t('Working on it… you can keep using the app.')}</span
 													>{/if}
 											</Inline>
 											{#if confirmFailed.has(row.id)}<p
@@ -2159,7 +2198,7 @@
 					data-agent-read-only
 				>
 					{automation
-						? t("An automation's inference, recorded as it ran. Read-only here.")
+						? t("An automation's inference, recorded as it ran. Read-only here — start a new conversation to retry or ask again.")
 						: t('An integration conversation, answered by its envoy. Read-only here.')}
 				</p>
 			{:else}
@@ -2415,10 +2454,7 @@
 									data-context-meter
 									class="flex h-8 cursor-pointer items-center gap-1 rounded-md px-2 text-xs text-muted-foreground tabular-nums hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-sm:min-h-11"
 									aria-label={`${t('Context window used')}: ${k(meter.context)} / ${k(meter.window)}`}
-									onclick={() => {
-										focus = null;
-										rail = true;
-									}}
+									onclick={openRail}
 								>
 									<Icon name="lucide:chart-pie" class="size-3.5" /><span
 										>{meter.percent === null ? '—' : `${Math.round(meter.percent)}%`}</span
@@ -2475,9 +2511,11 @@
 				</div>
 			{/if}
 		</div>
-		{#if railShown}{@render session()}{/if}
+		{#if rail}{@render session()}{/if}
 	</div>
 </div>
+
+<svelte:document onkeydown={railKeydown} />
 
 <!-- Ask before stopping a response, and before deleting a plan while it runs -->
 <Dialog.Root
@@ -2548,6 +2586,9 @@
 	[data-agent-rail] details[open] > :not(summary) {
 		animation: rail-card-in 150ms var(--ease-out, ease-out);
 	}
+	[data-subagent-completed]:not([hidden]) {
+		animation: rail-card-in 120ms var(--ease-out, ease-out);
+	}
 	@keyframes rail-card-in {
 		from {
 			opacity: 0;
@@ -2570,7 +2611,8 @@
 			animation: none;
 			color: var(--color-muted-foreground);
 		}
-		[data-agent-rail] details[open] > :not(summary) {
+		[data-agent-rail] details[open] > :not(summary),
+		[data-subagent-completed]:not([hidden]) {
 			animation: none;
 		}
 		[data-streaming] .agent-reply :global([data-markdown] > :last-child::after) {

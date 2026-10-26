@@ -1,9 +1,8 @@
-// PGlite as the service (W2.E1): every call is one PGlite transaction, so a transaction rolls back when its body fails
-// and when it is interrupted; a fresh database starts from the process's pristine dump.
+// Native PGlite batches commit or roll back before their answers are decoded; independent scopes start from pristine.
 import { describe, expect, it } from '@effect/vitest';
-import { Deferred, Effect, Fiber, Layer, Schema } from 'effect';
-import { PgliteDb, Pristine } from '../src/engine/db/pglite.ts';
-import { TenantDb, TenantTx } from '../src/engine/db/tenant-db.ts';
+import { Deferred, Effect, Exit, Fiber, Layer, Schema } from 'effect';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 
 const sql = (text: string) => ({ text, params: [] });
 const Pglite = PgliteDb.layer().pipe(Layer.provide(Pristine.layer));
@@ -12,8 +11,8 @@ const prepared = Effect.gen(function* () {
 	yield* db.write(sql('create table t (n int)'));
 	return db;
 });
-const count = (db: TenantDb['Service']) =>
-	db.value(Schema.Number, sql('select count(*)::int from t'));
+const count = (db: TenantDb['Service']) => db.value(Schema.Int, sql('select count(*)::int from t'));
+const numbers = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ n: Schema.Int })));
 
 describe('PgliteDb', () => {
 	it.live(
@@ -32,7 +31,7 @@ describe('PgliteDb', () => {
 				).pipe(Effect.provide(Pglite));
 				const rows = yield* TenantDb.use((db) =>
 					db.value(
-						Schema.Number,
+						Schema.Int,
 						sql("select count(*)::int from pg_tables where tablename = 'pristine_scope_write'")
 					)
 				).pipe(Effect.provide(Pglite));
@@ -40,42 +39,109 @@ describe('PgliteDb', () => {
 			})
 	);
 
-	it.live('a transaction commits its body', () =>
+	it.live('a locked SQL batch commits and answers each statement in order', () =>
 		Effect.gen(function* () {
 			const db = yield* prepared;
-			yield* db.transaction(TenantTx.use((tx) => tx.query(sql('insert into t values (1)'))));
+			const answered = yield* db.transaction({
+				statements: [sql('insert into t values (1) returning n'), sql('select n + 1 as n from t')],
+				lock: { tables: ['t'] }
+			});
+			expect(answered).toHaveLength(2);
+			expect(yield* numbers(answered[0]?.rows ?? [])).toEqual([{ n: 1 }]);
+			expect(yield* numbers(answered[1]?.rows ?? [])).toEqual([{ n: 2 }]);
 			expect(yield* count(db)).toBe(1);
 		}).pipe(Effect.provide(Pglite))
 	);
 
-	it.live('a transaction rolls back when its body fails', () =>
+	it.live(
+		'a failing native statement rolls back earlier writes and preserves its SQLSTATE before reuse',
+		() =>
+			Effect.gen(function* () {
+				const db = yield* prepared;
+				const failure = yield* Effect.flip(
+					db.transaction({
+						statements: [
+							sql('insert into t values (1)'),
+							sql(
+								"do $$ begin raise exception using errcode = 'P0001', message = 'refused'; end $$"
+							),
+							sql('insert into t values (2)')
+						]
+					})
+				);
+				expect(failure).toMatchObject({ _tag: 'DbError', sqlstate: 'P0001', message: 'refused' });
+				expect(yield* count(db)).toBe(0);
+				yield* db.write(sql('insert into t values (3)'));
+				expect(yield* count(db)).toBe(1);
+			}).pipe(Effect.provide(Pglite))
+	);
+
+	it.live('a native dry-run answers its SQL results and rolls back before the next batch', () =>
 		Effect.gen(function* () {
 			const db = yield* prepared;
-			const failed = db.transaction(
-				TenantTx.use((tx) => tx.query(sql('insert into t values (1)'))).pipe(
-					Effect.andThen(Effect.fail('refused' as const))
-				)
-			);
-			expect(yield* Effect.flip(failed)).toBe('refused');
+			const answered = yield* db.transaction({
+				statements: [
+					sql('insert into t values (1) returning n'),
+					sql('select count(*)::int as n from t')
+				],
+				rollback: true
+			});
+			expect(yield* numbers(answered[0]?.rows ?? [])).toEqual([{ n: 1 }]);
+			expect(yield* numbers(answered[1]?.rows ?? [])).toEqual([{ n: 1 }]);
 			expect(yield* count(db)).toBe(0);
+			yield* db.transaction({ statements: [sql('insert into t values (2)')] });
+			expect(yield* count(db)).toBe(1);
 		}).pipe(Effect.provide(Pglite))
 	);
 
-	it.live('an interrupted transaction rolls back', () =>
-		Effect.gen(function* () {
-			const db = yield* prepared,
-				inserted = yield* Deferred.make<void>();
-			const call = yield* Effect.forkChild(
-				db.transaction(
-					TenantTx.use((tx) => tx.query(sql('insert into t values (2)'))).pipe(
-						Effect.andThen(Deferred.succeed(inserted, undefined)),
-						Effect.andThen(Effect.never)
-					)
-				)
-			);
-			yield* Deferred.await(inserted);
-			yield* Fiber.interrupt(call);
-			expect(yield* count(db)).toBe(0);
-		}).pipe(Effect.provide(Pglite))
+	it.live(
+		'interruption waits for a native statement to settle, rolls back its write, then permits reuse',
+		() =>
+			Effect.gen(function* () {
+				const pg = yield* PgliteDb.open();
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				const insert = 'insert into t values (2)';
+				// Hold only the native driver's result: the application submits complete SQL before acquisition.
+				const client: PgliteClient = {
+					query: pg.query.bind(pg),
+					exec: pg.exec.bind(pg),
+					transaction: (body) =>
+						pg.transaction((tx) =>
+							body({
+								query: tx.query.bind(tx),
+								exec: async (text) => {
+									const answered = await tx.exec(text);
+									if (text === insert) {
+										entered.resolve();
+										await release.promise;
+									}
+									return answered;
+								}
+							})
+						)
+				};
+				const db = PgliteDb.make(client);
+				yield* db.write(sql('create table t (n int)'));
+				yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
+				const call = yield* db
+					.transaction({ statements: [sql(insert), sql('insert into t values (4)')] })
+					.pipe(Effect.forkChild);
+				yield* Effect.promise(() => entered.promise);
+				const stopped = yield* Deferred.make<void>();
+				const stopping = yield* Fiber.interrupt(call).pipe(
+					Effect.andThen(Deferred.succeed(stopped, undefined)),
+					Effect.forkChild({ startImmediately: true })
+				);
+				yield* Effect.yieldNow;
+				const settledBeforeNative = yield* Deferred.isDone(stopped);
+				yield* Effect.sync(() => release.resolve());
+				yield* Fiber.join(stopping);
+				expect(settledBeforeNative).toBe(false);
+				expect(Exit.hasInterrupts(yield* Fiber.await(call))).toBe(true);
+				expect(yield* count(db)).toBe(0);
+				yield* db.write(sql('insert into t values (3)'));
+				expect(yield* count(db)).toBe(1);
+			}).pipe(Effect.provide(Pristine.layer))
 	);
 });

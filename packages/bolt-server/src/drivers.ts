@@ -6,13 +6,15 @@ import {
 	httpOAuth,
 	httpRequest,
 	OAUTH_CALLBACK,
+	Http,
 	Port,
-	publicFetch,
 	type DriverOpen,
+	type HttpPort,
 	type Json,
 	type SetupDescription,
 	type SetupField
 } from '@norbital-ai/bolt/engine';
+import { httpPort, publicFetch } from '@norbital-ai/bolt/node';
 import {
 	attempt,
 	authorizeUrl,
@@ -37,6 +39,22 @@ export type DriversOptions = {
 	readonly fetch?: typeof fetch;
 	readonly database?: ReturnType<typeof sqlServerDatabase>;
 };
+/** An injected fetch (a test's) as the engine's HTTP port; without one, requests take the public-network guard. */
+const fetchHttp = (fetcher: typeof fetch): HttpPort => ({
+	fetch: async (request, _limits, signal) => {
+		const response = await fetcher(request.url, {
+			method: request.method,
+			headers: request.headers.map(([name, value]): [string, string] => [name, value]),
+			...(request.body === undefined ? {} : { body: new Uint8Array(request.body) }),
+			signal
+		});
+		return {
+			status: response.status,
+			headers: [...response.headers],
+			body: new Uint8Array(await response.arrayBuffer())
+		};
+	}
+});
 export function drivers(options: DriversOptions = {}): readonly ProviderDef[] {
 	return [
 		...defaultProviders(),
@@ -109,12 +127,14 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 			const definition = ctx.definition,
 				oauth = httpOAuth(definition);
 			const run = yield* ProviderRuntime;
+			// OAuth token exchanges take a fetch; the definition's own requests take the engine's HTTP port
 			const guarded = { fetch: options.fetch ?? publicFetch(run) };
+			const http = Http.fromAbi(options.fetch === undefined ? httpPort : fetchHttp(options.fetch));
 			let pending: { state: string; verifier: string; at: number } | null = null;
 			/** The definition's own OAuth app, from the workspace's secrets. */
-			const own = Effect.suspend(() => {
-				const client = ctx.oauthClient();
-				return client === undefined
+			const own = Effect.gen(function* () {
+				const client = yield* Effect.promise(() => ctx.oauthClient());
+				return yield* client === undefined
 					? Effect.fail(
 							new ProviderUnavailable({
 								message: `${oauth?.client ?? 'the OAuth client'} is not set`
@@ -148,8 +168,9 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 									)
 							},
 							operation,
-							{ fetch: guarded.fetch, secrets }
+							{ secrets }
 						).pipe(
+							Effect.provide(http),
 							Effect.mapError((error) => (error._tag === 'Fenced' ? error : unavailable(error)))
 						);
 					}),
@@ -162,7 +183,7 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 						yield* hostCall('report HTTP status', () => ctx.status({ state: 'connected' }));
 						return;
 					}
-					const paired = attempt(ctx.state());
+					const paired = attempt(yield* Effect.promise(() => ctx.state()));
 					const url = authorizeUrl(
 						appOf(oauth),
 						(yield* own).id,

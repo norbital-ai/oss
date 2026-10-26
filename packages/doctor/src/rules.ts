@@ -1,4 +1,4 @@
-/** Compiled pack YAML (`packs/<name>/<id>.yaml` or `.norbital/config/doctor/`): id, summary, `check`. One file, no type checker. */
+/** Compiled rule documents (`packs/<name>/<id>.yaml`, or an organization's own rule): id, summary, `check`. No type checker. */
 import ts from 'typescript';
 
 /** Findings are errors (must fix) or hints (inventory). No warning tier. */

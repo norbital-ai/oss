@@ -15,7 +15,7 @@ import {
 	routeFixture,
 	type FixtureRoute
 } from './support/route-fixture.ts';
-import type { Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { ask, type System1Request } from '../src/engine/decisions/index.ts';
 import { TestWorkspace, type Kit } from '../src/test/index.ts';
@@ -66,7 +66,6 @@ const manifest = {
 		route: { description: 'Route a new ticket', on: { created: 'tickets' }, runAs: ['desk'] }
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -82,7 +81,7 @@ const questions = {
 	urgency: { type: 'score', instructions: 'How urgent?', criteria: ['low', 'medium', 'high'] } };
 export default { automation: { route: { body: function* (input, ctx) {
 	for (const id of input.ids) {
-		const t = yield* ctx.get('tickets', id, { select: { subject: true, photo: true, ref_id: true } });
+		const t = yield* ctx.query('tickets', { id, select: { subject: true, photo: true, ref_id: true } });
 		const photo = t.ref_id ? { id: t.ref_id, name: 'x.png', mime: 'image/png' } : t.photo;
 		const r = yield* Effect.result(ctx.ai.sys_1.decide({ state: { subject: t.subject, ...(photo ? { photo } : {}) }, questions }));
 		if (Result.isFailure(r)) { yield* ctx.act('tickets.update', { target: id, set: { note: r.failure._tag === 'Unavailable' ? 'unavailable' : r.failure.kind } }); continue; }
@@ -173,7 +172,7 @@ const ticket = (t: Kit, route: FixtureRoute, set: Record<string, Json>) =>
 		})
 	);
 const get = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, desk(t), { reads: [{ m: 'get', a: ['tickets', id] }] }).pipe(
+	qReply(route, desk(t), { reads: [{ m: 'query', a: ['tickets', { id: id }] }] }).pipe(
 		Effect.map((reply) => reply.answers[0])
 	);
 const events = (t: Kit) =>

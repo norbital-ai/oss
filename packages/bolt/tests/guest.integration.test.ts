@@ -21,7 +21,6 @@ const invocation: Invocation = {
 		seed: 's'
 	},
 	budget: {
-		cpuMs: LIMITS.guestCpuMs,
 		crossings: LIMITS.crossings.automation,
 		readBytes: LIMITS.readBytes
 	}

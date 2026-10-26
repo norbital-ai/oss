@@ -63,6 +63,7 @@ export type HostOptions = {
 	personal?: boolean;
 	importStart?: DriverOpen['importStart'];
 	definition?: DriverOpen['definition'];
+	syncs?: DriverOpen['syncs'];
 	configuration?: Json;
 	secrets?: { readonly [name: string]: string };
 	/** The host's own Google client, used where the definition names none. */
@@ -106,15 +107,16 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 		.open({
 			instance: 'desk',
 			definition,
+			syncs: o.syncs ?? [],
 			personal: o.personal === true,
 			...(o.importStart === undefined ? {} : { importStart: o.importStart }),
 			configuration: o.configuration ?? {},
 			webhookUrl: o.webhookUrl ?? HOOK,
 			redirectUrl: o.redirectUrl ?? REDIRECT,
-			state: () => `${randomUUID()}.desk`,
+			state: async () => `${randomUUID()}.desk`,
 			signal: controller.signal,
 			fetch: f,
-			oauthClient: (vendor) =>
+			oauthClient: async (vendor) =>
 				oauthClientOf(
 					definition,
 					o.secrets,

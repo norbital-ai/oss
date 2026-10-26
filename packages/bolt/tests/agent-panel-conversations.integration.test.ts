@@ -26,7 +26,6 @@ import { Port } from '../src/engine/port.ts';
 import { Agents } from '../src/engine/services.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { AgentConversation } from '../src/protocol/schema.ts';
-import { ReadFailed } from '../src/decl/errors.ts';
 import type { AiResponse } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { DecisionAnswer } from '../src/engine/decisions/index.ts';
@@ -45,7 +44,6 @@ const manifest = Result.getOrThrow(
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -170,11 +168,9 @@ const listOf = (fetch: typeof globalThis.fetch) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const bolt = yield* liveBolt(fetch);
-			const read = Object.assign(
-				Effect.fail(new ReadFailed({ code: 'liveOnly', message: 'live only' })),
-				{ read: { m: 'conversations' as const, a: [] } }
-			);
-			const values = yield* bolt.live(read).pipe(Stream.take(1), Stream.runCollect);
+			const values = yield* bolt
+				.observe({ read: { m: 'conversations', a: [] } })
+				.pipe(Stream.take(1), Stream.runCollect);
 			return (yield* Schema.decodeUnknownEffect(
 				Schema.Struct({ rows: Schema.Array(AgentConversation) })
 			)(values[0])).rows;
@@ -240,7 +236,7 @@ describe('the agent panel restored', () => {
 	);
 
 	it.live(
-		'the meter opens the session rail: closed cards for the context, the changes and the connected MCP servers',
+		'the meter opens Input and Outputs above collapsed context, changes and connected servers',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -280,6 +276,20 @@ describe('the agent panel restored', () => {
 						target.querySelector<HTMLButtonElement>('[data-context-meter]')!.click();
 						flushSync();
 						const rail = target.querySelector('[data-agent-rail]')!;
+						expect(
+							[...rail.querySelectorAll('[data-rail]')].map((section) =>
+								section.getAttribute('data-rail')
+							)
+						).toEqual(['inputs', 'outputs', 'context', 'changes', 'connectors']);
+						const input = rail.querySelector('[data-rail="inputs"]')!;
+						expect(input.textContent).toContain('Input');
+						expect(input.textContent).not.toContain('Inputs');
+						expect(input.textContent).toContain('Files you share appear here.');
+						expect(input.querySelector('summary')).toBeNull();
+						expect(input.querySelector('[data-rail-attach]')).not.toBeNull();
+						const output = rail.querySelector('[data-rail="outputs"]')!;
+						expect(output.textContent).toContain('Ask Norbius to create a file.');
+						expect(output.querySelector('summary')).toBeNull();
 						const head = (card: string) =>
 							rail
 								.querySelector(`[data-rail="${card}"] summary`)
@@ -287,11 +297,210 @@ describe('the agent panel restored', () => {
 						expect(head('context')).toContain('1%');
 						expect(head('changes')).toContain('Changes');
 						expect(head('connectors')).toContain('1 connected');
-						expect(rail.querySelector('[data-rail="tasks"]')).toBeNull(); // no sub-agent, no card
-						expect(rail.querySelector('details[open]')).toBeNull(); // every card starts closed
+						expect(rail.querySelector('[data-rail="tasks"]')).toBeNull();
+						expect(rail.querySelector('details[open]')).toBeNull();
 					} finally {
 						yield* Effect.tryPromise({
 							try: () => unmount(v),
+							catch: (error) => new KitInvalid({ message: String(error) })
+						});
+						target.remove();
+					}
+				})
+			)
+	);
+
+	it.live(
+		'subagent activity stays in ordinary steps while the rail follows asynchronous work',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const s = yield* setup(() => Effect.succeed(reply('Finished.')));
+					const parent = yield* s.agent.start({ owner: 'ann', title: 'Delegated work' });
+					const children: string[] = [];
+					for (let i = 0; i < 8; i++) {
+						const task = `Task ${i + 1}`;
+						const child = yield* s.agent.start({ owner: 'ann', parent, title: task });
+						children.push(child);
+						yield* s.agent.post({ conversation: child, as: { member: 'ann' }, text: task });
+						if (i < 2) yield* s.agent.drain(child);
+						yield* s.t.db.write({
+							text: `INSERT INTO sys_message (id, conversation, role, content) VALUES ($1, $2, 'tool', $3::jsonb)`,
+							params: [
+								crypto.randomUUID(),
+								parent,
+								JSON.stringify({
+									id: `spawn-${i}`,
+									name: 'subagent',
+									args: JSON.stringify({ action: 'spawn', task }),
+									result: { conversation: child }
+								})
+							]
+						});
+					}
+					yield* s.t.settled();
+					for (const args of [
+						{ action: 'message', conversation: children[0]!, text: 'Please include permissions.' },
+						{ action: 'stop', conversation: children[1]! }
+					])
+						yield* s.t.db.write({
+							text: `INSERT INTO sys_message (id, conversation, role, content) VALUES ($1, $2, 'tool', $3::jsonb)`,
+							params: [
+								crypto.randomUUID(),
+								parent,
+								JSON.stringify({
+									id: args.action,
+									name: 'subagent',
+									args: JSON.stringify(args),
+									result: { ok: true }
+								})
+							]
+						});
+					const reportId = crypto.randomUUID();
+					const reportText =
+						'The migration notes are ready.\nPermissions and API changes are included.';
+					const report = `Sub-agent "Task 3" (conversation ${children[2]}) finished: ${reportText}`;
+					yield* s.t.db.write({
+						text: `INSERT INTO sys_message (id, conversation, role, content, text, state, meta) VALUES ($1, $2, 'user', $3::jsonb, $4, 'queued', $5::jsonb)`,
+						params: [
+							reportId,
+							parent,
+							JSON.stringify({ text: report }),
+							report,
+							JSON.stringify({ tag: 'report', conversation: children[2] })
+						]
+					});
+					const target = document.createElement('div');
+					document.body.append(target);
+					const view = mount(Agent, {
+						target,
+						props: {
+							api: s.api,
+							bolt: s.bolt,
+							t: (key: string) => key,
+							request: { conversation: parent },
+							onClose: () => {}
+						}
+					});
+					try {
+						flushSync();
+						const toolSteps = () =>
+							[...target.querySelectorAll('[data-step][data-tool="subagent"]')].filter(
+								(step) => step.closest('[data-agent-rail]') === null
+							);
+						const spawnSteps = () =>
+							toolSteps().filter((step) => step.getAttribute('data-step-icon') === 'lucide:bot');
+						yield* until(() => toolSteps().length === 10);
+						yield* until(() => spawnSteps().length === 8);
+						expect(target.querySelector('[data-role="subagent"]')).toBeNull();
+						expect(target.querySelector('[data-role="report"]')).toBeNull();
+						expect(target.querySelector(`[data-queued="${reportId}"]`)).toBeNull();
+						expect(target.querySelector('[data-role="user"]')).toBeNull();
+						expect(target.querySelector('[data-subagent]')).toBeNull();
+						expect(toolSteps().every((step) => step.closest('[data-role="steps"]') !== null)).toBe(
+							true
+						);
+						expect(
+							spawnSteps().every((step) => step.textContent?.includes('Started a subagent'))
+						).toBe(true);
+						expect(
+							toolSteps().every((step) => step.getAttribute('data-step-state') === 'done')
+						).toBe(true);
+						for (const [icon, label] of [
+							['lucide:send', 'Sent a message to a subagent'],
+							['lucide:circle-stop', 'Stopped a subagent']
+						])
+							expect(
+								toolSteps().find((step) => step.getAttribute('data-step-icon') === icon)
+									?.textContent
+							).toContain(label);
+						const received = target.querySelector<HTMLElement>(
+							`[data-step][data-report="${children[2]}"]`
+						)!;
+						expect(received.closest('[data-role="steps"]')).not.toBeNull();
+						expect(received.getAttribute('data-step-state')).toBe('done');
+						expect(received.textContent).toContain('Received a message');
+						const work = received.closest('[data-role="steps"]')!.querySelector('details')!;
+						yield* press(work.querySelector<HTMLElement>('summary')!);
+						yield* press(received.querySelector<HTMLElement>('summary')!);
+						yield* until(
+							() =>
+								received
+									.querySelector('[data-step-pane="output"]')
+									?.textContent?.includes('Permissions and API changes are included.') === true
+						);
+						expect(received.textContent).toContain('The migration notes are ready.');
+						target.querySelector<HTMLButtonElement>('[data-rail-toggle]')!.click();
+						flushSync();
+						const rail = () => target.querySelector('[data-agent-rail]')!;
+						const summary = () =>
+							target
+								.querySelector('[data-agent-rail] [data-subagent-summary]')
+								?.textContent?.replace(/\s+/g, ' ');
+						yield* until(() => /6\s*\/\s*8/.test(summary() ?? ''));
+						const list = rail().querySelector('#agent-children')!;
+						expect(list.querySelectorAll('[data-subagent]')).toHaveLength(8);
+						expect(
+							[...target.querySelectorAll('[data-subagent]')].every(
+								(child) => child.closest('[data-agent-rail]') !== null
+							)
+						).toBe(true);
+						expect(list.querySelectorAll('li:not([hidden]) [data-subagent]')).toHaveLength(6);
+						expect(list.querySelectorAll('li[hidden] [data-subagent]')).toHaveLength(2);
+						const completed = rail().querySelector<HTMLButtonElement>(
+							'[data-subagent-completed-toggle]'
+						)!;
+						expect(completed.textContent?.replace(/\s+/g, ' ').trim()).toBe('Completed 2');
+						expect(completed.getAttribute('aria-expanded')).toBe('false');
+						// Live completion moves an active child into the folded group without losing its subscription.
+						const finishing = children[6]!;
+						const finishingButton = list.querySelector<HTMLButtonElement>(
+							`[data-subagent="${finishing}"] button`
+						)!;
+						finishingButton.focus();
+						expect(document.activeElement).toBe(finishingButton);
+						yield* s.api.agent.post(finishing, 'Complete this task', true);
+						yield* s.t.settled();
+						yield* until(() => /5\s*\/\s*8/.test(summary() ?? ''));
+						expect(
+							list
+								.querySelector(`[data-subagent="${finishing}"]`)
+								?.getAttribute('data-subagent-state')
+						).toBe('done');
+						expect(list.querySelector(`#agent-child-${finishing}`)?.hasAttribute('hidden')).toBe(
+							true
+						);
+						yield* until(() => document.activeElement === completed);
+						expect(completed.textContent?.replace(/\s+/g, ' ').trim()).toBe('Completed 3');
+						expect(list.querySelectorAll('li[hidden] [data-subagent]')).toHaveLength(3);
+						expect(
+							spawnSteps().every((step) => step.getAttribute('data-step-state') === 'done')
+						).toBe(true);
+						completed.click();
+						flushSync();
+						expect(list.querySelectorAll('li:not([hidden]) [data-subagent]')).toHaveLength(8);
+						expect(completed.getAttribute('aria-expanded')).toBe('true');
+						completed.click();
+						flushSync();
+						expect(list.querySelectorAll('li:not([hidden]) [data-subagent]')).toHaveLength(5);
+						completed.click();
+						flushSync();
+						list
+							.querySelector<HTMLButtonElement>(`[data-subagent="${children[0]}"] button`)!
+							.click();
+						yield* until(() => rail().querySelector('[data-subagent-detail]') !== null);
+						expect(
+							rail().querySelector('[data-subagent-detail]')?.getAttribute('data-subagent-detail')
+						).toBe(children[0]);
+						yield* until(() => rail().textContent?.includes('Finished.') === true);
+						rail().querySelector<HTMLButtonElement>('[data-rail-back]')!.click();
+						yield* until(() => /5\s*\/\s*8/.test(summary() ?? ''));
+						expect(rail().querySelector('[data-rail-expand]')).toBeNull();
+						rail().querySelector<HTMLButtonElement>('[data-rail-close]')!.click();
+						yield* until(() => target.querySelector('[data-agent-rail]') === null);
+					} finally {
+						yield* Effect.tryPromise({
+							try: () => unmount(view),
 							catch: (error) => new KitInvalid({ message: String(error) })
 						});
 						target.remove();
@@ -341,9 +550,6 @@ describe('the agent panel restored', () => {
 						default: 'default',
 						mcp: []
 					});
-					// the list is the panel's only source: there is no polling endpoint and no second stream
-					expect((yield* s.request('/__bolt/agent/conversations')).status).toBe(404);
-					expect((yield* s.request(`/__bolt/agent/stream?conversation=${first}`)).status).toBe(404);
 				})
 			)
 	);

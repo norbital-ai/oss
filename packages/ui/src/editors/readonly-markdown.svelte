@@ -20,7 +20,7 @@ Renders Markdown text for reading.
 <div
 	{...rest}
 	class={cn(
-		'prose prose-sm max-w-none min-w-0 dark:prose-invert [overflow-wrap:anywhere]',
+		'prose prose-sm max-w-none min-w-0 dark:prose-invert [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere]',
 		className
 	)}
 	data-markdown

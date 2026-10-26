@@ -8,12 +8,14 @@
  * is not a reviewed exception, it is a missing setting.
  *
  * The format is `.gitignore`'s familiar subset: one glob per line, `#` comments, blank lines
- * ignored, `!` to re-include. Paths are repository-relative with POSIX separators.
+ * ignored, `!` to re-include. Paths are relative to the file's own directory with POSIX separators: a
+ * nested `.doctorignore` (a workspace inside a scanned repository) scopes its own subtree, read after its
+ * ancestors' so its lines win.
  *
  * The syntactic runner and the type-aware tier both read it here, so an exclusion holds for every
  * tier.
  */
-// repository-health:allow STATE2 -- parsed rules cached per root; `sourceFiles` clears the entry before each scan, and re-reading `.doctorignore` per scanned path would dominate scan cost.
+// repository-health:allow STATE2 -- parsed rules cached per directory; `sourceFiles` clears a root's entries before each scan, and re-reading `.doctorignore` per scanned path would dominate scan cost.
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 
@@ -28,11 +30,14 @@ type IgnoreRule = Readonly<{
 	globs: ReadonlyArray<string>;
 }>;
 
+/** Keyed `${root}\0${path}`: one directory's parsed rules, and the rules that reach one file. */
 const CACHE = new Map<string, ReadonlyArray<IgnoreRule>>();
+const SCOPED = new Map<string, ReadonlyArray<readonly [IgnoreRule, string]>>();
 
 /** Forget one root's parsed rules so a long-lived process observes edits to `.doctorignore`. */
 export function clearIgnoreCache(root: string): void {
-	CACHE.delete(root);
+	for (const cache of [CACHE, SCOPED])
+		for (const key of cache.keys()) if (key.startsWith(`${root}\0`)) cache.delete(key);
 }
 
 /** One `.gitignore`-style line. A bare directory name excludes the tree beneath it, as git does. */
@@ -66,11 +71,12 @@ const covers = (rule: IgnoreRule, file: string): boolean =>
  */
 const INHERIT = /^inherit:\s*(.+)$/;
 
-/** Parsed rules for a root, or an empty list when it has no `.doctorignore`. */
-function ignoreRules(root: string): ReadonlyArray<IgnoreRule> {
-	const cached = CACHE.get(root);
+/** Parsed rules of one directory's `.doctorignore` (`inherit:` read beside it), or none when it has no file. */
+function directoryRules(root: string, dir: string): ReadonlyArray<IgnoreRule> {
+	const key = `${root}\0${dir}`;
+	const cached = CACHE.get(key);
 	if (cached !== undefined) return cached;
-	const path = join(root, '.doctorignore');
+	const path = join(root, dir, '.doctorignore');
 	const rules: Array<IgnoreRule> = [];
 	if (existsSync(path)) {
 		const lines = readFileSync(path, 'utf8')
@@ -84,7 +90,7 @@ function ignoreRules(root: string): ReadonlyArray<IgnoreRule> {
 				continue;
 			}
 			for (const name of inherited.split(/\s+/).filter(Boolean)) {
-				const source = join(root, name);
+				const source = join(root, dir, name);
 				if (!existsSync(source)) continue;
 				for (const borrowed of readFileSync(source, 'utf8').split(/\r?\n/)) {
 					const entry = borrowed.trim();
@@ -94,8 +100,24 @@ function ignoreRules(root: string): ReadonlyArray<IgnoreRule> {
 			}
 		}
 	}
-	CACHE.set(root, rules);
+	CACHE.set(key, rules);
 	return rules;
+}
+
+/** Every rule that can reach a repository-relative file, outermost `.doctorignore` first, each with the file relative to it. */
+function scopedRules(root: string, file: string): ReadonlyArray<readonly [IgnoreRule, string]> {
+	const key = `${root}\0${file}`;
+	const cached = SCOPED.get(key);
+	if (cached !== undefined) return cached;
+	const parts = file.split('/');
+	const scoped: Array<readonly [IgnoreRule, string]> = [];
+	for (let depth = 0; depth < parts.length; depth++) {
+		const relative = parts.slice(depth).join('/');
+		for (const rule of directoryRules(root, parts.slice(0, depth).join('/')))
+			scoped.push([rule, relative]);
+	}
+	SCOPED.set(key, scoped);
+	return scoped;
 }
 
 /**
@@ -108,8 +130,8 @@ function ignoreRules(root: string): ReadonlyArray<IgnoreRule> {
  */
 export function ignoredFile(root: string, file: string): boolean {
 	let excluded = false;
-	for (const rule of ignoreRules(root))
-		if (rule.rules.length === 0 && covers(rule, file)) excluded = !rule.negated;
+	for (const [rule, path] of scopedRules(root, file))
+		if (rule.rules.length === 0 && covers(rule, path)) excluded = !rule.negated;
 	return excluded;
 }
 
@@ -122,7 +144,7 @@ export function ignoredFile(root: string, file: string): boolean {
  */
 export function ignoredRule(root: string, file: string, ruleId: string): boolean {
 	let excluded = false;
-	for (const rule of ignoreRules(root))
-		if (rule.rules.includes(ruleId) && covers(rule, file)) excluded = !rule.negated;
+	for (const [rule, path] of scopedRules(root, file))
+		if (rule.rules.includes(ruleId) && covers(rule, path)) excluded = !rule.negated;
 	return excluded;
 }

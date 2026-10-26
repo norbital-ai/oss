@@ -1,4 +1,4 @@
-import { localOf } from '@norbital-ai/std/zone';
+import { bindingsAt } from '../query/reader.ts';
 import { Clock, Context, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Authority } from '../contracts.ts';
@@ -281,12 +281,7 @@ export const agentCallables = Effect.gen(function* () {
 					const answer = yield* reads.run(
 						[lowerRead(manifest, 'get', [input.about.collection, input.about.id])],
 						{ as: 'caller', authority },
-						{
-							now: new Date(now).toISOString(),
-							today: localOf(now, manifest.workspace.tz).date,
-							tz: manifest.workspace.tz,
-							params: {}
-						}
+						bindingsAt(now, manifest.workspace.tz)
 					);
 					if (answer[0] == null)
 						return yield* Effect.fail(

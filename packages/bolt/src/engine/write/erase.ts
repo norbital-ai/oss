@@ -1,8 +1,8 @@
-import { Effect, Schema } from 'effect';
-import { Outcome as OutcomeSchema } from '../../protocol/schema.ts';
+import { Array as EffectArray, Effect, Schema } from 'effect';
+import { WriteOutcome as OutcomeSchema } from '../../protocol/schema.ts';
 // `<c>.erase` (rule 38e, §5.13): the engine write of an administrator's generated `delete` (remove) or `update`
-// (anonymise) with no transform, never routed, and with its history purged in the same one
-// statement. Admission (admin-only, `locked`, erasable fields) is identity's `judgeErase`; this file
+// (anonymise) with no transform, never routed. Durable audit delays history purge until its full
+// external acknowledgement. Admission (admin-only, `locked`, erasable fields) is identity's `judgeErase`; this file
 // decodes, reads, and compiles the act.
 import { Predicate } from 'effect';
 import type { Outcome, RowData } from '../contracts.ts';
@@ -23,13 +23,7 @@ import {
 	type Taker,
 	type WriteEngine
 } from './act.ts';
-import {
-	compileCommit,
-	compileOutcomeRecord,
-	CommitAnswer,
-	type Commit,
-	type Write
-} from './commit.ts';
+import { executeCommit, compileOutcomeRecord, type Commit, type Write } from './commit.ts';
 import { Flattener } from './flatten.ts';
 import { decided } from './sql.ts';
 export const erase = Effect.fn('Bolt.erase')(function* (
@@ -55,7 +49,8 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 	const input = r.input;
 	if (!Predicate.isObject(input) || Object.keys(input).some((x) => x !== 'target' && x !== 'set'))
 		return none(refused('invalidInput', 'erase takes { target } or { target, set }.'));
-	const ids = Array.isArray(input['target']) ? input['target'] : [input['target']];
+	const target = input['target'];
+	const ids = EffectArray.isArray<typeof target>(target) ? target : [target];
 	if (ids.length === 0 || !ids.every((x): x is string => typeof x === 'string'))
 		return none(refused('invalidInput', 'target is an id or a list of ids.', ['target']));
 	const set = input['set'];
@@ -167,7 +162,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		});
 	}
 	return yield* Effect.gen(function* () {
-		const rows = yield* e.db.returning(CommitAnswer, compileCommit(m, cat, commit));
+		const rows = yield* executeCommit(e.db, m, cat, commit);
 		const row = rows[0];
 		if (row === undefined)
 			return yield* Effect.fail(

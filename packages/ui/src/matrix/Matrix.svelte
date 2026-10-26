@@ -52,7 +52,6 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
-	import { watch } from '../read/live.svelte.js';
 	import { actOutcome, outcomeText } from '../actions/outcome.js';
 	import { and, compact } from '../filter/scope.js';
 	import { cellKey, MATRIX_PAGE, matrixCells } from './cells.js';
@@ -61,6 +60,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import { selectOf } from '../relations/select.js';
 	import { valueAt } from '../cell/value.js';
 	import ReadGate from '../read/ReadGate.svelte';
+	import { queryState } from '../read/state.js';
 	import RecordShell from '../record/RecordShell.svelte';
 	import Value from '../cell/Value.svelte';
 	import ViewToolbar from '../collection/ViewToolbar.svelte';
@@ -102,9 +102,9 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 
 	let after = $state<string | null>(null);
 	let back = $state<(string | null)[]>([]);
-	const rowPage = watch(() =>
-		bolt.live(
-			bolt.read(
+	const rowPage = $derived(
+		queryState(
+			bolt.query(
 				rows,
 				compact({
 					where: rowWhere,
@@ -116,7 +116,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 			)
 		)
 	);
-	const pageRows = $derived(rowPage.state.kind === 'ready' ? rowsOf(rowPage.state.value) : []);
+	const pageRows = $derived(rowPage.kind === 'ready' ? rowsOf(rowPage.value) : []);
 	const ids = $derived(pageRows.map((r) => r.id));
 	// the page's rows window inside the grid's scroll port; the sticky header row and first column stay put
 	const grid = virtualList({
@@ -126,37 +126,35 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		threshold: 20
 	});
 	// one live read per page over `of` (final-ui 29b); a TooLarge refusal is an error band, never an empty grid
-	const items = watch(() =>
-		ids.length === 0
-			? null
-			: bolt.live(
-					bolt.read(of, {
+	const items = $derived(
+		queryState(
+			ids.length === 0
+				? null
+				: bolt.query(of, {
 						where: and(where, { [row]: { in: ids } }, { [col]: { in: colValues } }) ?? null,
 						select: selectOf([...select, row, col]),
 						all: true
 					})
-				)
+		)
 	);
-	const markRead = watch(() =>
-		marks === undefined
-			? null
-			: bolt.live(
-					bolt.read(marks.of, {
+	const markRead = $derived(
+		queryState(
+			marks === undefined
+				? null
+				: bolt.query(marks.of, {
 						where: { [marks.at]: { in: colValues } },
 						select: selectOf([marks.at, marks.label, ...(marks.row ? [marks.row] : [])]),
 						all: true
 					})
-				)
+		)
 	);
 	const cells = $derived(
-		items.state.kind === 'ready'
-			? matrixCells(rowsOf(items.state.value), row, col)
-			: new Map<string, Row[]>()
+		items.kind === 'ready' ? matrixCells(rowsOf(items.value), row, col) : new Map<string, Row[]>()
 	);
 	const markCells = $derived.by(() => {
-		if (marks === undefined || markRead.state.kind !== 'ready') return new Map<string, Row[]>();
+		if (marks === undefined || markRead.kind !== 'ready') return new Map<string, Row[]>();
 		return matrixCells(
-			rowsOf(markRead.state.value).map((m) => (marks.row ? m : { ...m, $row: '*' })),
+			rowsOf(markRead.value).map((m) => (marks.row ? m : { ...m, $row: '*' })),
 			marks.row ?? '$row',
 			marks.at
 		);
@@ -215,15 +213,15 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 				>{/each}
 		</div>
 	{/if}
-	<ReadGate state={rowPage.state} what={label(bolt, rows)}>
+	<ReadGate state={rowPage} what={label(bolt, rows)}>
 		{#snippet children()}
-			{#if items.state.kind === 'error' || items.state.kind === 'noAccess'}
+			{#if items.kind === 'error' || items.kind === 'noAccess'}
 				<div
 					role="alert"
 					class="border-destructive text-destructive rounded-md border p-3 text-sm"
-					data-read={items.state.kind}
+					data-read={items.kind}
 				>
-					{items.state.kind === 'noAccess'
+					{items.kind === 'noAccess'
 						? msg(bolt, 'view.noAccess', 'No access to {what}', { what: label(bolt, of) })
 						: msg(
 								bolt,
@@ -232,8 +230,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 								{
 									from: back.length * MATRIX_PAGE + 1,
 									to: back.length * MATRIX_PAGE + pageRows.length,
-									code: items.state.code,
-									message: items.state.message
+									code: items.code,
+									message: items.message
 								}
 							)}
 				</div>
@@ -331,11 +329,11 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 				<Button
 					size="sm"
 					variant="outline"
-					disabled={rowPage.state.kind !== 'ready' || nextOf(rowPage.state.value) === null}
+					disabled={rowPage.kind !== 'ready' || nextOf(rowPage.value) === null}
 					onclick={() => {
-						if (rowPage.state.kind === 'ready') {
+						if (rowPage.kind === 'ready') {
 							back = [...back, after];
-							after = nextOf(rowPage.state.value);
+							after = nextOf(rowPage.value);
 						}
 					}}>{msg(bolt, 'table.next', 'Next')}</Button
 				>

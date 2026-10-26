@@ -36,6 +36,20 @@ export type Request = {
 export class ConversionFailed extends Schema.TaggedError<ConversionFailed>()('ConversionFailed', {
 	message: Schema.String
 }) {}
+export const processFailure = (
+	code: number | null,
+	signal: NodeJS.Signals | null,
+	killed: boolean,
+	stderr: string,
+	timeout: number
+) =>
+	new ConversionFailed({
+		// Node's deadline calls child.kill(); an external kill does not set child.killed.
+		message:
+			signal === 'SIGKILL' && killed
+				? `The conversion took longer than ${timeout / 1000} s.`
+				: stderr.trim() || `pandoc exited with ${code ?? signal}`
+	});
 const failed = (cause: unknown) =>
 	new ConversionFailed({
 		message: cause instanceof Error ? cause.message : String(cause)
@@ -136,14 +150,7 @@ const run = Effect.fn('Convert.process')(function* (
 					resume(
 						code === 0
 							? Effect.void
-							: Effect.fail(
-									new ConversionFailed({
-										message:
-											signal === 'SIGKILL'
-												? `The conversion took longer than ${timeout / 1000} s.`
-												: stderr.trim() || `pandoc exited with ${code ?? signal}`
-									})
-								)
+							: Effect.fail(processFailure(code, signal, child.killed, stderr, timeout))
 					);
 				if (spawnError !== undefined) return error(spawnError);
 				if (closed) return close(child.exitCode, child.signalCode);

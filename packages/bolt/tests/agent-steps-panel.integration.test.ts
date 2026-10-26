@@ -27,7 +27,6 @@ const manifest = Result.getOrThrow(
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		automations: {},
 		connections: {},
@@ -165,12 +164,13 @@ it.live(
 						['Input', 'true'],
 						['Output', 'false']
 					]);
-					expect(steps[1]!.querySelector('[role="tabpanel"]')!.textContent).toContain('"month"');
+					expect(steps[1]!.querySelector('[role="tabpanel"]')!.textContent).toContain('Month');
+					expect(steps[1]!.querySelector('[role="tabpanel"] .cm-editor')).toBeNull();
 					steps[1]!.querySelector<HTMLElement>('[data-pane="output"]')!.click();
 					yield* until(
 						() => steps[1]!.querySelector('[aria-selected="true"]')?.textContent === 'Output'
 					);
-					expect(steps[1]!.querySelector('[role="tabpanel"]')!.textContent).toContain('error'); // the run sits between the question and the reply
+					expect(steps[1]!.querySelector('[role="tabpanel"]')!.textContent).toMatch(/error/i); // the run sits between the question and the reply
 					expect(
 						[...target.querySelectorAll('ol[aria-live] > li')].map((e) =>
 							e.getAttribute('data-role')

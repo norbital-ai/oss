@@ -5,7 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { discover } from '../src/compiler/discover.ts';
-import { load } from '../src/compiler/load.ts';
+import { load, type Manifest } from '../src/compiler/load.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import {
 	challengedApps,
@@ -26,7 +26,6 @@ const base: EngineManifest = {
 	relationships: {},
 	collections: {},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -46,14 +45,85 @@ describe('decodeManifest', () => {
 		for (const bad of [
 			{ ...base, extra: {} },
 			{ ...base, models: { orders: 'orders' } },
+			{
+				...base,
+				models: { orders: { description: 'Orders', label: 'number', fields: {}, was: 123 } }
+			},
 			{ ...base, workspace: { locale: 'en' } },
 			{ ...base, teams: { sales: 'p' } },
+			{ ...base, policies: { p: { description: '', grants: { orders: { read: 'all' } } } } },
+			{ ...base, policies: { p: { description: '', grants: { orders: { moves: ['a->b'] } } } } },
+			{ ...base, policies: { p: { description: '', grants: { orders: { reed: true } } } } },
+			{
+				...base,
+				policies: { p: { description: '', grants: { orders: { actions: ['submit'] } } } }
+			},
+			// approval sits on the write arm it governs, never beside the grants
+			{
+				...base,
+				policies: {
+					p: { description: '', grants: { orders: { approval: { update: { steps: [['f']] } } } } }
+				}
+			},
+			{ ...base, pipelines: {} },
 			null
 		]) {
 			const e = refusal(bad);
 			expect(e).toBeInstanceOf(ManifestInvalid);
 			expect(e?.issues.length).toBeGreaterThan(0);
 		}
+	});
+
+	it('keeps a standalone automation outside model exposure', () => {
+		const m = Result.getOrThrow(
+			decodeManifest({
+				...base,
+				models: {
+					orders: { description: 'Orders', label: 'number', fields: { number: { kind: 'text' } } }
+				},
+				collections: { orders: { read: { fields: 'all', relations: 'all' } } },
+				automations: {
+					orders_submit: {
+						description: 'Submit an order through its native update.',
+						runAs: 'trigger',
+						input: { target: { kind: 'id', of: 'orders' } }
+					}
+				}
+			})
+		);
+		expect(m.automations.orders_submit).toEqual({
+			description: 'Submit an order through its native update.',
+			runAs: 'trigger',
+			input: { target: { kind: 'id', of: 'orders' } }
+		});
+		expect(m.collections.orders).toEqual({ read: { fields: 'all', relations: 'all' } });
+	});
+
+	it('decodes each grant once: scopes, the approval marker on a write arm and moves arrive typed', () => {
+		const m = Result.getOrThrow(
+			decodeManifest({
+				...base,
+				policies: {
+					rep: {
+						description: '',
+						grants: {
+							orders: {
+								read: { where: { region: { eq: 'north' } }, fields: ['region'] },
+								update: { where: 'read', approval: true },
+								delete: { approval: true },
+								moves: { status: ['draft->sent'] }
+							},
+							lines: { via: 'order' }
+						}
+					}
+				}
+			})
+		);
+		const grant = m.policies.rep?.grants.orders;
+		expect(grant?.read).toEqual({ where: { region: { eq: 'north' } }, fields: ['region'] });
+		expect(grant?.update).toEqual({ where: 'read', approval: true });
+		expect(grant?.delete).toEqual({ approval: true });
+		expect(m.policies.rep?.grants.lines?.via).toBe('order');
 	});
 
 	it.live(
@@ -71,6 +141,128 @@ describe('decodeManifest', () => {
 				expect(m.kiosks?.clock?.policies).toEqual(['kiosk_reader']);
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
+});
+
+describe('projectManifest', () => {
+	const loaded = (over: Partial<Manifest>): Manifest => ({
+		workspace: { '': { tz: 'UTC', locale: 'en' } },
+		secrets: {},
+		model: {},
+		representation: {},
+		custom_field: {},
+		renderer: {},
+		integration_definition: {},
+		integration_setup: {},
+		policy: {},
+		team: {},
+		agent: {},
+		agent_external: {},
+		envoy: {},
+		skill: {},
+		mcp: {},
+		automation: {},
+		app: {},
+		kiosk: {},
+		kiosk_page: {},
+		kiosk_page_server: {},
+		session: {},
+		page: {},
+		page_server: {},
+		messages: {},
+		locale: {},
+		group: {},
+		...over
+	});
+	it('splits each model into its storage, its refs and, with `read`, its exposure; a model without `read` is not exposed', () => {
+		const m = Result.getOrThrow(
+			decodeManifest(
+				projectManifest(
+					loaded({
+						model: {
+							// as the check serializer hands it over (a body is `true`), or as loaded (a function)
+							orders: {
+								name: 'orders',
+								spec: {
+									description: 'Orders',
+									was: 'prior_orders',
+									label: 'number',
+									fields: {
+										number: { kind: 'text' },
+										customer: { kind: 'ref', to: 'customers', inverse: 'orders' }
+									},
+									read: 'all',
+									create: { columns: ['number', 'customer'], transform: true },
+									update: { columns: ['number'], transform: () => [] },
+									delete: {}
+								},
+								bodies: {}
+							},
+							customers: {
+								description: 'Customers',
+								label: 'name',
+								fields: { name: { kind: 'text' } }
+							}
+						}
+					})
+				)
+			)
+		);
+		expect(m.models.orders?.fields).toEqual({ number: { kind: 'text' } });
+		expect(m.models.orders?.was).toBe('prior_orders');
+		expect(m.relationships).toEqual({ 'orders.customer': { to: 'customers', inverse: 'orders' } });
+		expect(m.collections.orders).toEqual({
+			read: { fields: 'all', relations: 'all' },
+			create: { input: { columns: ['number', 'customer'] }, transform: true },
+			update: { input: { columns: ['number'] }, transform: true },
+			delete: {}
+		});
+		expect(m.collections).not.toHaveProperty('customers');
+		expect(m.models).toHaveProperty('customers');
+	});
+
+	it("marks bodies the engine must know of and keeps no function: a write arm's approval, a custom field's validate, an integration's test", () => {
+		const m = Result.getOrThrow(
+			decodeManifest(
+				projectManifest(
+					loaded({
+						policy: {
+							rep: {
+								description: '',
+								grants: {
+									orders: { update: { where: 'read', approval: () => ({}) }, read: true }
+								}
+							}
+						},
+						custom_field: {
+							sku: {
+								name: 'sku',
+								spec: {
+									description: 'A SKU.',
+									shape: { kind: 'text' },
+									validate: () => undefined
+								},
+								check: () => undefined
+							}
+						},
+						integration_definition: {
+							crm: {
+								name: 'crm',
+								spec: { description: 'CRM', driver: 'http', test: function* () {} },
+								bodies: {}
+							}
+						}
+					})
+				)
+			)
+		);
+		expect(m.policies.rep?.grants.orders?.update).toEqual({ where: 'read', approval: true });
+		expect(m.customFields.sku).toEqual({
+			description: 'A SKU.',
+			shape: { kind: 'text' },
+			check: true
+		});
+		expect(m.integrations.crm).toEqual({ description: 'CRM', driver: 'http', test: true });
+	});
 });
 
 describe('manifest accessors', () => {

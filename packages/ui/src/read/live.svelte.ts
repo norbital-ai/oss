@@ -1,9 +1,9 @@
 import { Cause, type Stream } from 'effect';
-import { live } from '../effect/index.js';
+import { observe } from '../effect/index.js';
 import { failed, readState } from './state.js';
 /** A component-owned live read: follows its reactive source, exposes value/error/state and releases subscriptions. */
 export function watch<T, E>(source: () => Stream.Stream<T, E> | null) {
-	const store = live(source);
+	const store = observe(source);
 	return {
 		get state() {
 			const result = store.result;

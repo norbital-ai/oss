@@ -13,7 +13,7 @@ import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
 import { json, routeFixture } from './support/route-fixture.ts';
 import { ActRefused, actFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { instanceMessages } from '../src/shell/integration/messages.ts';
@@ -48,7 +48,6 @@ const manifest = Result.getOrThrow(
 		connections: { field: { integration: 'whatsapp', envoy: 'field' } },
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
-		pipelines: {},
 		teams: { 't-ops': { name: 'Ops', policies: ['rep'] } },
 		automations: {},
 		mcp: {},

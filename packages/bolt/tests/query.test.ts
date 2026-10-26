@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { Encoding } from 'effect';
-import type { Pred } from '../src/protocol/ir-types.ts';
 import { catalog } from '../src/protocol/catalog.ts';
 import { evaluate, likeRegex } from '../src/engine/query/eval.ts';
-import { aggregate, read, similar, where } from '../src/protocol/ir.ts';
-import { compile, encodeCursor } from '../src/engine/query/sql.ts';
+import {
+	aggregate,
+	compile,
+	encodeCursor,
+	read,
+	similar,
+	where,
+	type Pred
+} from '@norbital-ai/store';
+import { storeSync } from '../src/protocol/errors.ts';
+import { readOptions } from '../src/engine/query/reader.ts';
 import { bindings, manifest, rep } from './query.fixture.ts';
 
 const cat = catalog(manifest);
@@ -19,15 +27,16 @@ const code = (f: () => unknown) => {
 
 describe('next query: decode', () => {
 	it('decodes cursor keys as string-or-null JSON and keeps them parameterized', () => {
-		const query = read(cat, 'orders', { limit: 2, orderBy: { note: 'asc' } });
+		const query = storeSync(read(cat, 'orders', { limit: 2, orderBy: { note: 'asc' } }));
 		if (query.kind !== 'read') throw new Error('Expected the native list read');
-		const first = compile(cat, query, { as: 'workspace' }, bindings);
+		const first = storeSync(compile(cat, query, readOptions({ as: 'workspace' }, bindings)));
 		const after = (cursor: string) =>
-			compile(
-				cat,
-				{ ...query, page: { _tag: 'Limit', limit: 2, after: cursor } },
-				{ as: 'workspace' },
-				bindings
+			storeSync(
+				compile(
+					cat,
+					{ ...query, page: { _tag: 'Limit', limit: 2, after: cursor } },
+					readOptions({ as: 'workspace' }, bindings)
+				)
 			);
 		const id = '00000000-0000-4000-8000-000000000001';
 		const note = "quoted ' note \\ 🔒";
@@ -54,27 +63,35 @@ describe('next query: decode', () => {
 	});
 
 	it('rule 9: a read states a limit (0–10,000) or all; never a default', () => {
-		expect(code(() => read(cat, 'orders', {}))).toBe('invalid');
-		expect(code(() => read(cat, 'orders', { limit: 10_001 }))).toBe('invalid');
-		expect(code(() => read(cat, 'orders', { limit: 5, all: true }))).toBe('invalid');
-		expect(code(() => read(cat, 'orders', { limit: 0 }))).toBe('ok');
+		expect(code(() => storeSync(read(cat, 'orders', {})))).toBe('invalid');
+		expect(code(() => storeSync(read(cat, 'orders', { limit: 10_001 })))).toBe('invalid');
+		expect(code(() => storeSync(read(cat, 'orders', { limit: 5, all: true })))).toBe('invalid');
+		expect(code(() => storeSync(read(cat, 'orders', { limit: 0 })))).toBe('ok');
 		expect(
-			code(() => read(cat, 'accounts', { all: true, select: { orders: { select: {} } } }))
+			code(() =>
+				storeSync(read(cat, 'accounts', { all: true, select: { orders: { select: {} } } }))
+			)
 		).toBe('invalid');
-		expect(code(() => aggregate(cat, 'orders', { by: ['status'], count: true }))).toBe('invalid');
+		expect(code(() => storeSync(aggregate(cat, 'orders', { by: ['status'], count: true })))).toBe(
+			'invalid'
+		);
 	});
 
 	it('an unknown field or operator is invalid at decode, never an ignored filter', () => {
-		expect(code(() => where(cat, 'orders', { nope: { eq: 1 } }))).toBe('invalid');
-		expect(code(() => where(cat, 'orders', { total: { like: 'x' } }))).toBe('invalid');
-		expect(code(() => where(cat, 'orders', { doc: { eq: 1 } }))).toBe('invalid');
-		expect(code(() => where(cat, 'notes', { about: { lines: { is: {} } } }))).toBe('invalid');
-		expect(code(() => similar(cat, 'orders', 'nope', {}, { limit: 3 }))).toBe('invalid');
+		expect(code(() => storeSync(where(cat, 'orders', { nope: { eq: 1 } })))).toBe('invalid');
+		expect(code(() => storeSync(where(cat, 'orders', { total: { like: 'x' } })))).toBe('invalid');
+		expect(code(() => storeSync(where(cat, 'orders', { doc: { eq: 1 } })))).toBe('invalid');
+		expect(code(() => storeSync(where(cat, 'notes', { about: { lines: { is: {} } } })))).toBe(
+			'invalid'
+		);
+		expect(code(() => storeSync(similar(cat, 'orders', 'nope', {}, { limit: 3 })))).toBe('invalid');
 	});
 
 	it('normalizes relations: is, some/none/every, count, arc arms (K3)', () => {
 		expect(
-			where(cat, 'accounts', { orders: { some: { status: { eq: 'open' } }, count: { gte: 2 } } })
+			storeSync(
+				where(cat, 'accounts', { orders: { some: { status: { eq: 'open' } }, count: { gte: 2 } } })
+			)
 		).toEqual({
 			t: 'and',
 			of: [
@@ -89,9 +106,11 @@ describe('next query: decode', () => {
 			]
 		});
 		expect(
-			where(cat, 'notes', {
-				about: { orders: { is: { qty: { gt: 1 } } }, accounts: { isNull: true } }
-			})
+			storeSync(
+				where(cat, 'notes', {
+					about: { orders: { is: { qty: { gt: 1 } } }, accounts: { isNull: true } }
+				})
+			)
 		).toEqual({
 			t: 'and',
 			of: [
@@ -104,11 +123,11 @@ describe('next query: decode', () => {
 				{ t: 'null', field: 'about.accounts', is: true }
 			]
 		});
-		expect(where(cat, 'orders', { placed: { gte: { today: '-7d' } } })).toEqual({
+		expect(storeSync(where(cat, 'orders', { placed: { gte: '2026-09-18' } }))).toEqual({
 			t: 'cmp',
 			field: 'placed',
 			op: 'gte',
-			arg: { _tag: 'Today', offset: '-7d' }
+			arg: { _tag: 'Lit', value: '2026-09-18' }
 		});
 	});
 
@@ -116,32 +135,40 @@ describe('next query: decode', () => {
 		const none = { ...rep, collections: {} };
 		expect(
 			code(() =>
-				compile(cat, read(cat, 'orders', { limit: 1 }), { as: 'caller', authority: none }, bindings)
+				storeSync(
+					compile(
+						cat,
+						storeSync(read(cat, 'orders', { limit: 1 })),
+						readOptions({ as: 'caller', authority: none }, bindings)
+					)
+				)
 			)
 		).toBe('forbidden');
 		expect(
 			code(() =>
-				compile(
-					cat,
-					read(cat, 'notes', { limit: 1, where: { created_at: { isNull: false } } }),
-					{ as: 'caller', authority: rep },
-					bindings
+				storeSync(
+					compile(
+						cat,
+						storeSync(read(cat, 'notes', { limit: 1, where: { created_at: { isNull: false } } })),
+						readOptions({ as: 'caller', authority: rep }, bindings)
+					)
 				)
 			)
 		).toBe('ok');
 		expect(
 			code(() =>
-				compile(
-					cat,
-					{
-						kind: 'read',
-						collection: 'notes',
-						select: { fields: ['id'], relations: {} },
-						page: { _tag: 'Limit', limit: 1 },
-						where: { t: 'null', field: 'revision', is: false }
-					},
-					{ as: 'workspace' },
-					bindings
+				storeSync(
+					compile(
+						cat,
+						{
+							kind: 'read',
+							collection: 'notes',
+							select: { fields: ['id'], relations: {} },
+							page: { _tag: 'Limit', limit: 1 },
+							where: { t: 'null', field: 'revision', is: false }
+						},
+						readOptions({ as: 'workspace' }, bindings)
+					)
 				)
 			)
 		).toBe('ok');
@@ -150,11 +177,15 @@ describe('next query: decode', () => {
 	});
 
 	it('rule 14: aggregating a field masked to the caller is forbidden', () => {
-		const ir = aggregate(cat, 'orders', { sum: ['total'] });
-		expect(code(() => compile(cat, ir, { as: 'caller', authority: rep }, bindings))).toBe(
-			'forbidden'
-		);
-		expect(code(() => compile(cat, ir, { as: 'workspace' }, bindings))).toBe('ok');
+		const ir = storeSync(aggregate(cat, 'orders', { sum: ['total'] }));
+		expect(
+			code(() =>
+				storeSync(compile(cat, ir, readOptions({ as: 'caller', authority: rep }, bindings)))
+			)
+		).toBe('forbidden');
+		expect(
+			code(() => storeSync(compile(cat, ir, readOptions({ as: 'workspace' }, bindings))))
+		).toBe('ok');
 	});
 
 	it('the JS evaluator: nulls never match, ne and nin are distinct-from, email folds, operands resolve', () => {
@@ -170,22 +201,29 @@ describe('next query: decode', () => {
 			total: '10.50'
 		};
 		const is = (p: Pred) => evaluate(env, 'orders', p, row);
-		expect(is(where(cat, 'orders', { note: { eq: 'x' } }))).toBe(false);
-		expect(is(where(cat, 'orders', { note: { ne: 'x' } }))).toBe(true);
-		expect(is(where(cat, 'orders', { not: { note: { eq: 'x' } } }))).toBe(true);
-		expect(is(where(cat, 'orders', { email: { eq: { actor: 'email' } } }))).toBe(true);
+		expect(is(storeSync(where(cat, 'orders', { note: { eq: 'x' } })))).toBe(false);
+		expect(is(storeSync(where(cat, 'orders', { note: { ne: 'x' } })))).toBe(true);
+		expect(is(storeSync(where(cat, 'orders', { not: { note: { eq: 'x' } } })))).toBe(true);
+		expect(is(storeSync(where(cat, 'orders', { email: { eq: { actor: 'email' } } })))).toBe(true);
 		expect(
 			is(
-				where(cat, 'orders', { placed: { gte: { today: '-7d' } }, total: { gt: { param: 'min' } } })
+				storeSync(
+					where(cat, 'orders', {
+						placed: { gte: '2026-09-18' },
+						total: { gt: { param: 'min' } }
+					})
+				)
 			)
 		).toBe(false);
 		expect(
 			is(
-				where(cat, 'orders', {
-					total: { lt: '10.6' },
-					tags: { hasAll: ['a'] },
-					status: { nin: ['closed'] }
-				})
+				storeSync(
+					where(cat, 'orders', {
+						total: { lt: '10.6' },
+						tags: { hasAll: ['a'] },
+						status: { nin: ['closed'] }
+					})
+				)
 			)
 		).toBe(true);
 		expect(likeRegex('a\\%b%').test('A%bcd')).toBe(true);
@@ -197,7 +235,9 @@ describe('next query: decode', () => {
 		} as typeof rep;
 		const guestIs = (p: Pred) =>
 			evaluate({ cat, bindings, authority: guest }, 'orders', p, { ...row, note: 'v-1' });
-		expect(guestIs(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } }))).toBe(true);
-		expect(is(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } }))).toBe(false);
+		expect(guestIs(storeSync(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } })))).toBe(
+			true
+		);
+		expect(is(storeSync(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } })))).toBe(false);
 	});
 });

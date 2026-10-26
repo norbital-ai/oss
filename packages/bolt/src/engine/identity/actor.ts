@@ -280,8 +280,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	}
 	/**
 	 * A system actor: an automation's `runAs` policies (or, for `'trigger'`, the trigger's own authority), or a platform run
-	 * (the workspace's own work). A feed's or outbound rule's write is admitted by no grant and holds none here. No team;
-	 * cannot approve.
+	 * or a remote sync (the workspace's own work). Syncs hold no authored policies or team and cannot approve.
 	 */
 	system(
 		run: string,
@@ -299,10 +298,10 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				{ actor, admin: false, platform: true, policies: [] },
 				`platform:${by.platform}:${run}`
 			);
-		if ('integration' in by)
+		if ('sync' in by)
 			return this.compile(
-				{ actor, admin: false, policies: [] },
-				`integration:${by.integration}:${run}`
+				{ actor, admin: false, platform: true, policies: [] },
+				`sync:${by.sync}:${by.instance}:${run}`
 			);
 		const runAs = this.m.automations[by.automation]?.runAs;
 		if (runAs === undefined)

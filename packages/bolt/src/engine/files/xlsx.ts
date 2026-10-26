@@ -1,6 +1,35 @@
-// Shared xlsx workbook reads and writes on the host (`node:zlib`): the agent's `read_attachment` sheets, the sheets
-// `sandbox_run` hands its programs as CSV, and a pipeline's upload, template and export.
-import { crc32, deflateRawSync, inflateRawSync } from 'node:zlib';
+// Shared xlsx workbook reads and writes in the engine (raw DEFLATE by `fflate`): the agent's `read_attachment` sheets,
+// `ctx.files.sheet`, and a file sync's upload, template and export.
+import { deflateSync, Inflate } from 'fflate';
+
+const CRC = Uint32Array.from({ length: 256 }, (_, n) => {
+	for (let k = 0; k < 8; k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1;
+	return n;
+});
+const crc32 = (bytes: Uint8Array): number => {
+	let c = ~0;
+	for (const b of bytes) c = CRC[(c ^ b) & 0xff]! ^ (c >>> 8);
+	return ~c >>> 0;
+};
+/** A zip bomb stops here, whatever size the entry declares (writers may declare none). */
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+const inflated = (name: string, data: Uint8Array): Uint8Array => {
+	const parts: Uint8Array[] = [];
+	let total = 0;
+	const inflate = new Inflate((chunk) => {
+		total += chunk.length;
+		if (total > MAX_ENTRY_BYTES) throw new Error(`${name} is over 64 MiB unpacked`);
+		parts.push(chunk);
+	});
+	inflate.push(data, true);
+	const out = new Uint8Array(total);
+	let at = 0;
+	for (const part of parts) {
+		out.set(part, at);
+		at += part.length;
+	}
+	return out;
+};
 
 /** std/sheet's cell (`@norbital-ai/std` sheet). */
 export type Cell = string | number | boolean | null;
@@ -27,7 +56,7 @@ const texts = (xml: string) =>
 	);
 
 /**
- * An xlsx worksheet as std/sheet's `Cell[][]` (row 1 first; gaps are `null`). A zip read with `node:zlib`:
+ * An xlsx worksheet as std/sheet's `Cell[][]` (row 1 first; gaps are `null`). A zip read with `fflate`:
  * stored and deflated entries, shared and inline strings, booleans and numbers.
  * ponytail: styled dates arrive as serials (styles are not read); ISO date cells retain their text and zone.
  */
@@ -48,9 +77,7 @@ function xlsxEntries(zip: Uint8Array): Map<string, () => string> {
 			const data = zip
 				.subarray(local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true))
 				.subarray(0, size);
-			return new TextDecoder().decode(
-				method === 0 ? data : inflateRawSync(data, { maxOutputLength: 64 * 1024 * 1024 })
-			);
+			return new TextDecoder().decode(method === 0 ? data : inflated(name, data));
 		});
 	}
 	return entries;
@@ -130,19 +157,6 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 	return out;
 }
 
-/** Cells as RFC 4180 CSV: a field with a comma, quote or line break is quoted, quotes doubled; `null` is empty. */
-export const csvOf = (rows: readonly (readonly Cell[])[]): string =>
-	rows
-		.map((r) =>
-			r
-				.map((c) => {
-					const t = c === null ? '' : String(c);
-					return /[",\r\n]/.test(t) ? `"${t.replaceAll('"', '""')}"` : t;
-				})
-				.join(',')
-		)
-		.join('\n') + '\n';
-
 const xml = (s: string) =>
 	s.replace(
 		/[<>&"]/g,
@@ -198,7 +212,7 @@ export function xlsxOf(rows: readonly (readonly Cell[])[], sheet = 'Sheet1'): Ui
 	let offset = 0;
 	for (const [name, text] of files) {
 		const raw = new TextEncoder().encode(text),
-			data = deflateRawSync(raw),
+			data = deflateSync(raw),
 			path = new TextEncoder().encode(name),
 			crc = crc32(raw);
 		const head = (sig: number, extra: number) => {

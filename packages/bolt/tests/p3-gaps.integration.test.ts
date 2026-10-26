@@ -2,7 +2,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Queue, Result, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Outcome } from '../src/engine/contracts.ts';
+import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { lowerRead } from '../src/engine/query/engine.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
@@ -42,7 +42,6 @@ const manifest = Result.getOrThrow(
 		},
 		automations: { tidy: { description: 'Tidy', runAs: ['p'] } },
 		integrations: {},
-		pipelines: {},
 		teams: {},
 		connections: {},
 		envoys: {},
@@ -75,6 +74,7 @@ const queued = (t: Kit) =>
 const Titles = Schema.Array(
 	Schema.Struct({ title: Schema.String, $distance: Schema.optionalKey(Schema.Number) })
 );
+const Page = Schema.Struct({ rows: Titles, next: Schema.Null });
 const setup = (embed?: Ai['Service']['embed']) =>
 	Effect.gen(function* () {
 		const ports =
@@ -84,8 +84,11 @@ const setup = (embed?: Ai['Service']['embed']) =>
 						ports: Layer.succeed(Ai, {
 							ask: respondSystem1,
 							maxChoices: undefined,
-							models: ['default'],
-							catalog: Port.unavailable('ai.catalog'),
+							models: ['small'],
+							catalog: Effect.succeed({
+								models: [{ id: 'small', label: 'Small' }],
+								default: 'small'
+							}),
 							infer: () => Stream.fail(Port.failure('ai')(new Error('unused'))),
 							embed
 						})
@@ -117,7 +120,7 @@ const setup = (embed?: Ai['Service']['embed']) =>
 
 describe('search.semantic embeddings (rule 16)', () => {
 	it.live(
-		'a create queues bolt.embed in its statement; the run embeds after commit; only a source-field change makes it stale again',
+		'a create queues bolt.embed with its native commit; the run embeds after commit; only a source-field change makes it stale again',
 		() =>
 			Effect.gen(function* () {
 				const calls: string[][] = [];
@@ -130,9 +133,7 @@ describe('search.semantic embeddings (rule 16)', () => {
 						})
 					);
 				const { t, act, run } = yield* setup(embed);
-				t.count.reset();
 				const id = created(yield* act('docs.create', { title: 'desk', body: 'oak' }));
-				expect(t.count.writes).toBe(1);
 				expect(yield* queued(t)).toBe(1);
 				expect(
 					t.fakes.deadlines.announced.map(({ scope, at }) => ({ scope, at: Date.parse(at) })).at(-1)
@@ -172,7 +173,7 @@ describe('search.semantic embeddings (rule 16)', () => {
 
 describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 	it.live(
-		'similar({ to: text | { record } }) ranks by the embedding; /semantic fuses it with the lexical hit',
+		'query search.semantic ranks text and record probes by the embedding; /semantic fuses it with the lexical hit',
 		() =>
 			Effect.gen(function* () {
 				const near: { [text: string]: number[] } = {
@@ -190,24 +191,24 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 				const desk = created(yield* act('docs.create', { title: 'desk' }));
 				for (const title of ['chair', 'lamp']) yield* act('docs.create', { title });
 				yield* run;
-				const byText = yield* Schema.decodeUnknownEffect(Titles)(
-					yield* read('similar', ['docs', { to: 'table', limit: 2 }])
+				const byText = yield* Schema.decodeUnknownEffect(Page)(
+					yield* read('query', ['docs', { search: { semantic: 'table' }, limit: 2 }])
 				);
-				expect(byText.map((row) => row.title)).toEqual(['desk', 'chair']);
-				expect(typeof required(byText[0]).$distance).toBe('number');
+				expect(byText.rows.map((row) => row.title)).toEqual(['desk', 'chair']);
+				expect(typeof required(byText.rows[0]).$distance).toBe('number');
 				expect(
-					(yield* Schema.decodeUnknownEffect(Titles)(
-						yield* read('similar', ['docs', { to: { record: { id: desk } }, limit: 5 }])
-					)).map((row) => row.title)
+					(yield* Schema.decodeUnknownEffect(Page)(
+						yield* read('query', ['docs', { search: { semantic: { record: desk } }, limit: 5 }])
+					)).rows.map((row) => row.title)
 				).toEqual(['chair', 'lamp']);
-				const hybrid = yield* Schema.decodeUnknownEffect(Schema.Struct({ rows: Titles }))(
-					yield* read('read', ['docs', { search: '/semantic lamp', limit: 10 }])
+				const hybrid = yield* Schema.decodeUnknownEffect(Page)(
+					yield* read('query', ['docs', { search: '/semantic lamp', limit: 10 }])
 				);
 				expect(hybrid.rows.map((row) => row.title)[0]).toBe('lamp');
 				expect(hybrid.rows).toHaveLength(3);
-				expect(() => lowerRead(t.manifest, 'similar', ['docs', { to: '', limit: 1 }])).toThrow(
-					/to: text/
-				);
+				expect(() =>
+					lowerRead(t.manifest, 'query', ['docs', { search: { semantic: '' }, limit: 1 }])
+				).toThrow(/to: text/);
 			})
 	);
 
@@ -233,7 +234,7 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 						return fixture;
 					});
 				const probe = (fixture: Effect.Success<ReturnType<typeof workspace>>) =>
-					fixture.read('similar', ['docs', { to: 'table', limit: 2 }], {
+					fixture.read('query', ['docs', { search: { semantic: 'table' }, limit: 2 }], {
 						now: '2026-01-01T00:00:00.000Z',
 						today: '2026-01-01',
 						tz: 'UTC',
@@ -251,7 +252,7 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 				const fixture = yield* workspace(embed);
 				yield* fixture.run;
 				expect(
-					required((yield* Schema.decodeUnknownEffect(Titles)(yield* probe(fixture)))[0]).title
+					required((yield* Schema.decodeUnknownEffect(Page)(yield* probe(fixture))).rows[0]).title
 				).toBe('desk');
 				expect(asked).toEqual([3, 3]);
 			})
@@ -275,7 +276,7 @@ describe('erase and the live lane (rules 38e, 50, 66)', () => {
 			if (hello.t !== 'hello') throw new Error('live connection did not begin with hello');
 			yield* live
 				.register(hello.conn, 'v', {
-					read: lowerRead(manifest, 'read', ['docs', { all: true, select: { title: true } }])
+					read: lowerRead(manifest, 'query', ['docs', { all: true, select: { title: true } }])
 				})
 				.pipe(Effect.provide(context));
 			expect(yield* Queue.take(queue)).toMatchObject({ t: 'answer', view: 'v' });

@@ -1,25 +1,26 @@
-import { Effect, Result } from 'effect';
-// Import (rule 30): one atomic act of ≤ 10,000 rows through the act pipeline (the transform runs over the batch like any
-// create or upsert); this file holds what only an import has: its options, refs given by the target's key values, and
-// the `prune` read. Export is the pipeline's (`pipelines/pipeline.ts`).
+import { Array as EffectArray, Effect, Result } from 'effect';
+// Import: one atomic act of at most 10,000 rows through the ordinary per-verb callbacks. This file owns its options,
+// references given by the target's key values and the `prune` read.
 import { Predicate } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, Outcome, Reader } from '../contracts.ts';
-import type { Pred } from '../../protocol/ir-types.ts';
+import type { Pred } from '@norbital-ai/store';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { LIMITS } from '../contracts.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
-import { q, type Catalog } from '../../protocol/catalog.ts';
-import * as ir from '../../protocol/ir.ts';
-import { whereSql } from '../query/sql.ts';
+import { nullRowSql, q, type Catalog } from '@norbital-ai/store';
+import { where as decodeWhere } from '@norbital-ai/store';
+import { fromStore, storeSync } from '../../protocol/errors.ts';
+import { readOptions } from '../query/reader.ts';
+import { whereSql } from '@norbital-ai/store';
 import { readComposed } from '../query/engine.ts';
-import { composable } from '../query/sql.ts';
+import { composable } from '../query/reader.ts';
 import type { Item } from './flatten.ts';
 import { modelKey } from './flatten.ts';
-import { databaseValue } from './sql.ts';
+import { databaseValue } from '@norbital-ai/store';
 export type ImportPlan = {
 	rows: readonly Json[];
 	/** Required on a keyed collection; `refuse` refuses a row already on file. */
@@ -51,7 +52,7 @@ export function importPlan(
 	input: Json,
 	key: readonly string[]
 ): ImportPlan | Outcome {
-	if (!Predicate.isObject(input) || !Array.isArray(input['rows']))
+	if (!Predicate.isObject(input) || !EffectArray.isArray<Json | undefined>(input['rows']))
 		return bad('an import is { rows, onConflict?, onMissing?, prune?, dryRun? }');
 	const { rows, onConflict, onMissing, prune, dryRun, ...rest } = input;
 	const extra = Object.keys(rest)[0];
@@ -80,7 +81,7 @@ export function importPlan(
 				code: 'forbidden',
 				message: `${collection} does not accept delete.`
 			};
-		const decoded = Result.try(() => ir.where(catalogOf(m), collection, prune));
+		const decoded = Result.try(() => storeSync(decodeWhere(catalogOf(m), collection, prune)));
 		if (Result.isFailure(decoded))
 			return bad(
 				decoded.failure instanceof Error ? decoded.failure.message : 'prune is a Where',
@@ -145,18 +146,9 @@ const pruned = Effect.fn('Bolt.pruned')(function* (
 				};
 	const reader: Reader = { as: 'caller', authority: auth };
 	const result = yield* Effect.result(
-		Effect.try({
-			try: () => whereSql(catalogOf(m), c, { t: 'and', of: [where, keep] }, reader, b),
-			catch: (cause) =>
-				cause instanceof BoltError
-					? cause
-					: BoltError.make(
-							'invalid',
-							'decode',
-							cause instanceof Error ? cause.message : String(cause),
-							cause
-						)
-		})
+		whereSql(catalogOf(m), c, { t: 'and', of: [where, keep] }, readOptions(reader, b)).pipe(
+			Effect.mapError(fromStore)
+		)
 	);
 	if (result._tag === 'Failure') {
 		if (result.failure.code === 'forbidden')
@@ -224,7 +216,7 @@ export const importRefs = Effect.fn('Bolt.importRefs')(function* (
 		list.map((w) =>
 			composable({
 				text: `SELECT DISTINCT t.id::text AS id, ${w.key.map((f) => `t.${q(f)}::text AS ${q(f)}`).join(', ')} FROM ${q(w.target)} t
-			JOIN jsonb_populate_recordset(null::${q(w.target)}, $1::jsonb) r ON ${w.key.map((f) => `t.${q(f)} = r.${q(f)}`).join(' AND ')}`,
+			JOIN jsonb_populate_recordset(${nullRowSql(w.target, cat.models.get(w.target)?.fields.keys() ?? [])}, $1::jsonb) r ON ${w.key.map((f) => `t.${q(f)} = r.${q(f)}`).join(' AND ')}`,
 				params: [
 					JSON.stringify(
 						w.at.map(({ v }) =>

@@ -5,7 +5,8 @@ import type { RecordOf, InsertOf } from '../collection/types.js';
 export type RecordRestriction =
 	| 'noGrant'
 	| 'stateLocked'
-	| 'integrationOwned'
+	/** A read-only sync owns the field. */
+	| 'syncOwned'
 	| 'ownedParent'
 	| 'ownedParentLocked'
 	/** An open approval request holds the record; only its current approvers or (changes requested) its requester edit. */

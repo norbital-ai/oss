@@ -1,4 +1,4 @@
-import type { LiveError } from '../client/contract.js';
+import type { LiveError, Query } from '../client/contract.js';
 export type ReadState<T> =
 	| { kind: 'loading' }
 	| { kind: 'empty' }
@@ -23,3 +23,25 @@ export const failed = (e: unknown): ReadState<never> => {
 		? { kind: 'noAccess' }
 		: { kind: 'error', code, message: e instanceof Error ? e.message : String(e) };
 };
+/** What a view reads of a `Query<T>` (live where a component reads it): its answer, its wait and its failure. */
+export type Reading<T> = Pick<Query<T>, 'current' | 'loading' | 'error'>;
+/** A reading's state for `ReadGate`; no reading (`null`) is empty. */
+export const queryState = <T>(q: Reading<T> | null): ReadState<T> =>
+	q === null
+		? { kind: 'empty' }
+		: q.error !== undefined
+			? failed(q.error)
+			: readState(q.current, undefined, q.loading);
+/** `q`'s answer seen through `f` (a later page's own rows), keeping its wait and failure. */
+export const mapped = <A, B>(q: Reading<A>, f: (answer: A) => B): Reading<B> => ({
+	get current() {
+		const answer = q.current;
+		return answer === undefined ? undefined : f(answer);
+	},
+	get loading() {
+		return q.loading;
+	},
+	get error() {
+		return q.error;
+	}
+});

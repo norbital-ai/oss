@@ -2,10 +2,11 @@
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here (§5.10).
 import { Effect, Fiber, FiberSet } from 'effect';
 import { getContext, setContext } from 'svelte';
+import { encodeWire } from '@norbital-ai/std/wire';
 import type { Value } from '../kinds/kind.js';
 import type { IdOf } from '../collection/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';
-import type { ViewBolt } from '../client/contract.js';
+import type { RunHandle, ViewBolt } from '../client/contract.js';
 import {
 	changed,
 	check,
@@ -13,11 +14,13 @@ import {
 	settle,
 	startValues,
 	type FormSpec,
+	type Notice,
 	type NoticeText,
 	type Outcome,
 	type Row
 } from './draft.js';
 import { childOperations, type ChildOperation } from './child-operations.js';
+import { resubmits } from '../approval/row.js';
 
 /** Narrows string ids to a collection's id type (e.g. for `where: { id: { in: … } }`). */
 export function idsOf<C extends string>(ids: readonly string[]): readonly IdOf<C>[] {
@@ -38,7 +41,9 @@ export class FormState {
 	base = $state<Record<string, Value>>({});
 	values = $state<Record<string, Value>>({});
 	errors = $state<Map<string, string>>(new Map());
-	notice = $state<{ tone: 'info' | 'danger' | 'warning'; text: string } | null>(null);
+	notice = $state<Notice | null>(null);
+	/** The native automation start, whose run status is followed independently of queue admission. */
+	run = $state.raw<RunHandle | null>(null);
 	pending = $state(false);
 	capabilities = $state<RecordCapabilities | null | undefined>(undefined);
 	children = $state<Record<string, readonly ChildOperation[]>>({});
@@ -52,12 +57,15 @@ export class FormState {
 			Object.values(this.children).some((operations) => operations.length > 0)
 	);
 	/** The draft over the row it starts from (the record, else the prefill): a money field reads its currency sibling here even when that is no input. */
-	#around: Row = {};
+	#around = $state.raw<Row>({});
 	readonly row: Row = $derived({ ...this.#around, ...this.values });
 	/** The client-minted idempotency key of this draft's act: reused only to retry an `unknown` outcome (rule 31). */
 	#key: string;
 	#revision = $state<number | undefined>(undefined);
 	#act: Act;
+	#start: ViewBolt['start'] | undefined;
+	#startAttempt:
+		{ readonly key: string; readonly input: string; readonly handle: RunHandle } | undefined;
 	#text: NoticeText;
 	/** Uploads in flight (a file field's bytes going to the host): a submit waits for them. */
 	#uploads = new Set<FiberSet.FiberSet<unknown, Error>>();
@@ -77,16 +85,18 @@ export class FormState {
 		prefill: Row,
 		act: Act,
 		text: NoticeText,
-		locked: (field: string) => boolean = () => false
+		locked: (field: string) => boolean = () => false,
+		start?: ViewBolt['start']
 	) {
 		this.spec = spec;
 		this.mode =
-			spec.target.of === 'collection' && spec.target.mode === 'create' ? 'create' : 'edit';
+			spec.target.of === 'automation' || spec.target.mode === 'create' ? 'create' : 'edit';
 		this.#around = record ?? prefill;
 		this.#revision = typeof record?.['revision'] === 'number' ? record['revision'] : undefined;
 		this.base = startValues(spec, record, prefill);
 		this.values = { ...this.base };
 		this.#act = act;
+		this.#start = start;
 		this.#text = text;
 		this.locked = (field) =>
 			locked(field) ||
@@ -155,6 +165,10 @@ export class FormState {
 	semanticError(field: string): string | undefined {
 		return this.semanticErrors.find((issue) => issue.field === field)?.message;
 	}
+	/** The row's request asks for changes and this draft is its requester's: saving resubmits it (Save reads "Resubmit"). */
+	get resubmitting(): boolean {
+		return this.canSubmit && resubmits(this.#around);
+	}
 	get requestingApproval(): boolean {
 		if (this.spec.proposalOnly === true) return true;
 		if (
@@ -187,7 +201,7 @@ export class FormState {
 
 	get(name: string): Value {
 		return this.spec.fields.find((f) => f.name === name)?.readonly ||
-			this.restrictions(name).includes('integrationOwned')
+			this.restrictions(name).includes('syncOwned')
 			? (this.#around[name] ?? null)
 			: (this.values[name] ?? null);
 	}
@@ -285,7 +299,10 @@ export class FormState {
 	/** A parent transaction settles the same native child draft without submitting it separately. */
 	accept(outcome: Outcome, sent: Row = this.values): void {
 		const target = this.spec.target;
-		if (outcome.kind === 'committed' || outcome.kind === 'pendingApproval') {
+		if (
+			target.of === 'collection' &&
+			(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+		) {
 			const own = outcome.records.find(
 				(record) => record.collection === target.collection && record.id === target.id
 			);
@@ -317,8 +334,31 @@ export class FormState {
 			});
 			if (!this.validate() || valid.some((value) => !value)) return null;
 			const scalar = payload(this.spec, this.base, this.values);
-			const nested = childOperations(this.children);
 			const target = this.spec.target;
+			if (target.of === 'automation') {
+				if (scalar === null) return null;
+				const start = this.#start;
+				if (start === undefined)
+					throw new Error('An automation form requires a start implementation.');
+				this.notice = null;
+				const sent = { ...this.values };
+				const input = JSON.stringify(encodeWire(scalar));
+				const handle =
+					this.#startAttempt?.key === this.#key && this.#startAttempt.input === input
+						? this.#startAttempt.handle
+						: start(target.automation, scalar);
+				this.#startAttempt = { key: this.#key, input, handle };
+				const outcome = yield* handle;
+				this.run =
+					outcome.kind === 'committed' || outcome.kind === 'running' || outcome.kind === 'unknown'
+						? handle
+						: null;
+				this.accept(outcome, sent);
+				if (outcome.kind === 'committed')
+					this.notice = { tone: 'info', text: this.#text.running, run: handle.id };
+				return outcome;
+			}
+			const nested = childOperations(this.children);
 			const hasChildren = Object.keys(nested.set).length > 0;
 			const object = (value: Value | null | undefined): value is Row =>
 				value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
@@ -378,6 +418,8 @@ export class FormState {
 		this.values = { ...this.base };
 		this.errors = new Map();
 		this.notice = null;
+		this.run = null;
+		this.#startAttempt = undefined;
 		this.children = {};
 		for (const form of this.childForms.values()) form.reset();
 		this.childForms.clear();

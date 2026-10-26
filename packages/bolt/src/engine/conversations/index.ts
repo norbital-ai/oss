@@ -1,9 +1,8 @@
-import type { Obj } from './value.ts';
 const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => ({ text, params });
 // Conversations (§4.3, rule 61): what a conversation instance's link hands the engine, and the messages it sends. Each
 // inbound message is one statement keyed by its instance: the conversation (a DM or a group), the message by
 // `(instance, provider_id)` — a newer version converges it, a revoke tombstones it, an admitted row keeps the transcript
-// the agent saw — its files, the definition's `messages` feed runs and, for a new live message on an active workspace
+// the agent saw — its files, the sync inbox and, for a new live message on an active workspace
 // instance with an envoy, its `envoys.admit` run: everything is durable before the link acknowledges. A personal (owner)
 // instance imports its account (origin `sync`), never sends and never admits. A file a row cannot store stays a named
 // descriptor (no `id`) and a malformed message is logged: neither is a failure the link would redeliver forever.
@@ -11,33 +10,33 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // was stored is what the provider redelivers it for; every send is a queued row `integrations.deliver` delivers. A cleared
 // or deleted chat tombstones its rows up to the clear in one statement, under the same admitted-transcript rule.
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
+import * as EffectArray from 'effect/Array';
 import { teams } from '../manifest.ts';
-import { encodeWire } from '@norbital-ai/std/wire';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import type { Json } from '../../decl/values.ts';
-import type { DriverEvent } from '../contracts.ts';
-import { Drivers, Files } from '../ports.ts';
+import type { Bindings, DriverEvent, RowData } from '../contracts.ts';
+import { Drivers, Files, Logs, type LogsShape } from '../ports.ts';
 import { Port } from '../port.ts';
-import { TenantDb, TenantTx } from '../db/tenant-db.ts';
+import { TenantDb } from '../db/tenant-db.ts';
+import { DbError } from '../errors.ts';
 import {
 	Conversations as ConversationsTag,
 	Manifest,
 	Reads,
-	Guest,
 	Outbound as OutboundTag,
 	Wake,
 	RunHandlers,
-	type GuestShape,
 	type OutboundShape
 } from '../services.ts';
-import { localOf } from '@norbital-ai/std/zone';
+import { bindingsAt } from '../query/reader.ts';
 import { LIMITS } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { AgentEngine } from '../agent/index.ts';
-import type { Bindings } from '../contracts.ts';
-import { conversationOf, definitionOf, integrationBody } from '../integrations/instances.ts';
-import { feedsOf, messageFeedRuns } from '../integrations/feeds.ts';
-import { canonical, Chain } from '../write/sql.ts';
+import { conversationOf, definitionOf } from '../integrations/instances.ts';
+import { prepareNoticeFiles } from '../notifications/notify.ts';
+import { inboxPiece } from '../sync/hint.ts';
+import { canonical } from '@norbital-ai/store';
+import { Chain } from '../write/sql.ts';
 import { InboundMessage, normalizeInbound, type Inbound } from './inbound.ts';
 import { ImportStart } from '../../protocol/schema.ts';
 import { permitsImport } from '../integrations/import-start.ts';
@@ -52,16 +51,15 @@ import {
 	stableId,
 	msg as messagePiece
 } from './store.ts';
-import { logged } from '../guest/telemetry.ts';
 type ConversationsConfig = {
 	crypto: Crypto.Crypto;
 	engine: Pick<AgentEngine, 'manifest' | 'db' | 'read'> & { bindings: (now: string) => Bindings };
-	/** The body runner a custom conversation's `receive` runs in. */
-	guest?: GuestShape;
 	files?: Files['Service'];
 	drivers: Drivers['Service'];
+	filesReady: (ids: readonly string[]) => Effect.Effect<void, import('../errors.ts').EngineError>;
+	logs: LogsShape;
 	clock?: Effect.Effect<string>;
-	/** The engine's wake: a statement here queued runs due at `at` (admission, feeds, delivery). */
+	/** The engine's wake: a statement here queued runs due at `at` (admission, sync, delivery). */
 	announce?: (at: string) => Effect.Effect<void>;
 	/** The outbound area's delivery (`integrations.deliver`), its reports and reply matching. */
 	outbound: Pick<OutboundShape, 'deliver' | 'delivered' | 'replied'>;
@@ -165,7 +163,7 @@ export function conversations(cfg: ConversationsConfig) {
 		return out;
 	});
 	/**
-	 * The runs a changed message queues in its own statement: each `messages` feed of the definition (its edits and recalls
+	 * The runs a changed message queues in its own statement: the definition's sync inbox (its edits and recalls
 	 * too) and, for a new live message (`admit`), its admission while the instance is active, has an envoy and no owner.
 	 */
 	function queue(
@@ -181,18 +179,16 @@ export function conversations(cfg: ConversationsConfig) {
 		deleted = false
 	): string[] {
 		const out: string[] = [];
-		const feeds = messageFeedRuns(m, inst.integration, inst.id, id, version, deleted);
-		if (feeds.length > 0)
-			out.push(
-				enqueue(
-					c,
-					{
-						select: `SELECT x.automation, x.input, ${c.p(now)}::timestamptz AS due_at, x.key, 'provider'::text AS cause, 0 AS depth
-                FROM jsonb_to_recordset(${c.p(encodeWire(feeds))}::jsonb) AS x(automation text, input jsonb, key text) WHERE EXISTS (SELECT 1 FROM ${msg})`
-					},
-					{ conflict: 'keep' }
-				)
-			);
+		inboxPiece(
+			m,
+			c,
+			'message_inbox',
+			inst.id,
+			inst.integration,
+			() => `SELECT ${c.p(`${id}:${version}:${deleted}`)}::text AS delivery,
+			jsonb_build_object('kind', 'message', 'id', ${c.p(id)}::text) AS body WHERE EXISTS (SELECT 1 FROM ${msg})`,
+			now
+		);
 		if (admit !== null)
 			out.push(
 				enqueue(
@@ -227,7 +223,7 @@ export function conversations(cfg: ConversationsConfig) {
 				: normalizeInbound(inst.kind, decoded, message, history, now);
 		if (inbound === null) {
 			// the link's bug, never a row: recorded, and acknowledged so the message does not hold the instance's inbound
-			yield* logged({
+			yield* cfg.logs.write({
 				at: now,
 				severity: 'warn',
 				event: 'conversation.malformed',
@@ -277,6 +273,8 @@ export function conversations(cfg: ConversationsConfig) {
 									row.value.version < inbound.version
 							)
 						);
+		// Uploads finish before SQL acquisition; the batch rechecks the source under its native row lock.
+		const stored = inbound.deleted || !content ? [] : yield* files(inst.id, inbound, bins, c, now);
 		let nextDueAt: string | undefined;
 		const persist = (write: typeof db.write) =>
 			Effect.gen(function* () {
@@ -311,8 +309,6 @@ export function conversations(cfg: ConversationsConfig) {
 					return null;
 				}
 				c.cte('previous', `SELECT version FROM sys_message WHERE id = ${c.p(id)}`);
-				const stored =
-					inbound.deleted || !content ? [] : yield* files(inst.id, inbound, bins, c, now);
 				// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it;
 				// `envoy` is the instance's at this message (display: admission reads the instance as it is then)
 				// a received file is one of the conversation's inputs, naming its message, once: a redelivery or an edit adds none
@@ -400,33 +396,39 @@ export function conversations(cfg: ConversationsConfig) {
 			!inbound.deleted &&
 			content &&
 			inbound.attachments.some((attachment) => attachment.bin !== undefined);
-		const result = yield* binary
-			? db.transaction(
-					Effect.gen(function* () {
-						const tx = yield* TenantTx;
-						const locked = yield* tx.query(
-							sql(
-								'SELECT id FROM sys_integration WHERE id = $1 AND import_start IS NOT DISTINCT FROM $2::jsonb FOR SHARE',
-								inst.id,
-								inst.importStartRaw
+		const result = yield* persist(
+			binary
+				? (statement) =>
+						db
+							.transaction({
+								statements: [
+									sql(
+										"SELECT bolt_assert(EXISTS (SELECT id FROM sys_integration WHERE id = $1 AND import_start IS NOT DISTINCT FROM $2::jsonb FOR SHARE), 'sourceChanged', NULL)",
+										inst.id,
+										inst.importStartRaw
+									),
+									statement
+								]
+							})
+							.pipe(Effect.map((rows) => rows[1] ?? { rows: [], affected: 0 }))
+				: db.write
+		).pipe(
+			Effect.catch((error) =>
+				error instanceof DbError && error.sqlstate === 'BA001' && error.message === 'sourceChanged'
+					? Effect.fail(
+							BoltError.make(
+								'sourceChanged',
+								'admission',
+								'The integration import start changed; redeliver this message.'
 							)
-						);
-						if (locked.rows.length === 0)
-							return yield* Effect.fail(
-								BoltError.make(
-									'sourceChanged',
-									'admission',
-									'The integration import start changed; redeliver this message.'
-								)
-							);
-						return yield* persist(tx.query);
-					})
-				)
-			: persist(db.write);
+						)
+					: Effect.fail(error)
+			)
+		);
 		if (nextDueAt !== undefined) yield* cfg.announce?.(nextDueAt) ?? Effect.void;
 		return result;
 	});
-	/** A cleared or deleted chat: one statement tombstones its rows up to `before`; one run per `messages` feed names them. */
+	/** A cleared or deleted chat: one statement tombstones its rows up to `before`; the sync inbox names them. */
 	const clear = Effect.fn('Agents.clear')(function* (
 		inst: Instance,
 		thread: string,
@@ -444,23 +446,17 @@ export function conversations(cfg: ConversationsConfig) {
 		WHERE conversation = ${c.p(conversationId(inst.id, thread))} AND sent_at <= ${c.p(before)}::timestamptz AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM source)`,
 			'id'
 		);
-		const feeds = [...feedsOf(m).values()]
-			.filter((f) => f.definition === inst.integration && f.from === 'messages')
-			.map((f) => f.run);
-		const runs =
-			feeds.length === 0
-				? []
-				: [
-						enqueue(
-							c,
-							{
-								select: `SELECT x.run AS automation, jsonb_build_object('instance', ${c.p(inst.id)}::text, 'messages', (SELECT jsonb_agg(id) FROM ${gone})) AS input,
-					${c.p(now)}::timestamptz AS due_at, jsonb_build_array('feed', x.run, 'clear', ${c.p(thread)}::text, ${c.p(now)}::text)::text AS key, 'provider'::text AS cause, 0 AS depth
-					FROM jsonb_array_elements_text(${c.p(feeds)}::jsonb) AS x(run) WHERE EXISTS (SELECT 1 FROM ${gone})`
-							},
-							{ conflict: 'keep' }
-						)
-					];
+		inboxPiece(
+			m,
+			c,
+			'cleared_inbox',
+			inst.id,
+			inst.integration,
+			() => `SELECT 'clear:' || id || ':' || ${c.p(now)}::text AS delivery,
+			jsonb_build_object('kind', 'message', 'id', id) AS body FROM ${gone}`,
+			now
+		);
+		const runs: string[] = [];
 		const [row] = (yield* db.write(
 			c.sql(
 				`EXISTS (SELECT 1 FROM source) AS admitted, ${counted(runs)} AS queued, ${nextDue(c)}::text AS next_due`
@@ -561,52 +557,6 @@ export function conversations(cfg: ConversationsConfig) {
 				yield* replied(inst.id, got);
 		}
 	});
-	const webhook = Effect.fn('Agents.webhook')(function* (
-		instance: string,
-		request: {
-			body: Json;
-			headers: {
-				readonly [lowercase: string]: string;
-			};
-		}
-	) {
-		const [res] = yield* db.read([
-			sql('SELECT integration, configuration FROM sys_integration WHERE id = $1', instance)
-		]);
-		const row = res!.rows[0],
-			name = String(row?.['integration'] ?? ''),
-			def = definitionOf(m, name);
-		if (def?.conversation === undefined || def.webhook === undefined)
-			return yield* Effect.fail(
-				BoltError.make('notFound', 'decode', `no custom conversation instance '${instance}'`)
-			);
-		const id = yield* uuid;
-		if (cfg.guest === undefined)
-			return yield* Effect.fail(
-				BoltError.make('noGuest', 'guest', 'the conversation receive body needs its compiled guest')
-			);
-		const out = yield* integrationBody(
-			{
-				manifest: m,
-				db,
-				links: cfg.drivers,
-				read: cfg.engine.read,
-				bindings: () => Effect.map(clock, cfg.engine.bindings),
-				guest: cfg.guest
-			},
-			{
-				id,
-				actor: { kind: 'system', run: id, by: { platform: `${name}.receive` } },
-				path: `integration_definition.${name}.bodies.receive`,
-				args: [{ ...request, configuration: row!['configuration'] ?? {} }]
-			}
-		);
-		if (!Predicate.isObject(out) || !Array.isArray(out['messages']))
-			return yield* Effect.fail(
-				BoltError.make('badAnswer', 'guest', `${name}: receive answered no { messages }`)
-			);
-		yield* receive(instance, { kind: 'messages', messages: out['messages'] });
-	});
 	const send = Effect.fn('Agents.send')(function* (
 		to: string,
 		message: Json,
@@ -641,9 +591,10 @@ export function conversations(cfg: ConversationsConfig) {
 		const ids =
 			Predicate.isObject(input) && Array.isArray(input['ids']) ? input['ids'].map(String) : [];
 		if (ids.length === 0) return { sent: 0, skipped: 0 };
+		yield* cfg.filesReady(ids);
 		const [notes, users] = yield* db.read([
 			sql(
-				`SELECT id, recipient, title, body FROM sys_notification WHERE member IS NULL AND id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+				`SELECT id, recipient, title, body, attachments FROM sys_notification WHERE member IS NULL AND id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
 				JSON.stringify(ids)
 			),
 			sql(
@@ -655,7 +606,7 @@ export function conversations(cfg: ConversationsConfig) {
 		for (const n of notes!.rows) {
 			const to = Predicate.isObject(n['recipient']) ? n['recipient'] : {};
 			const slot = String(to['channel'] ?? ''),
-				list = Array.isArray(to['recipients'])
+				list = EffectArray.isArray(to['recipients'])
 					? to['recipients'].filter((x) => Predicate.isObject(x))
 					: [];
 			const def = Object.hasOwn(m.connections, slot)
@@ -700,10 +651,14 @@ export function conversations(cfg: ConversationsConfig) {
 					skipped++;
 					continue;
 				}
-				const message: Obj =
+				const message: RowData =
 					conv.kind === 'email'
-						? { to: [handle], subject: title, text }
-						: { to: handle, text: text === title ? title : `${title}\n${text}` };
+						? { to: [handle], subject: title, text, attachments: n['attachments'] ?? [] }
+						: {
+								to: handle,
+								text: text === title ? title : `${title}\n${text}`,
+								attachments: n['attachments'] ?? []
+							};
 				yield* send(slot, message, { id: stableId('notice', String(n['id']), String(u['id'])) });
 				sent++;
 			}
@@ -712,7 +667,6 @@ export function conversations(cfg: ConversationsConfig) {
 	});
 	return {
 		receive,
-		webhook,
 		send,
 		/** The notices' platform run (rule 48): `runs.platform`. */
 		handlers: { [NOTIFY]: notify }
@@ -726,28 +680,25 @@ export const ConversationsLive = Layer.effect(
 		const manifest = yield* Manifest,
 			db = yield* TenantDb,
 			reads = yield* Reads,
-			guest = yield* Guest,
 			files = yield* Files,
 			drivers = yield* Drivers,
 			outbound = yield* OutboundTag,
 			wake = yield* Wake,
 			handlers = yield* RunHandlers;
+		const fileContext =
+			yield* Effect.context<Effect.Services<ReturnType<typeof prepareNoticeFiles>>>();
 		const api = conversations({
 			crypto: yield* Crypto.Crypto,
 			engine: {
 				manifest,
 				db,
 				read: reads.run,
-				bindings: (now) => ({
-					now,
-					today: localOf(Date.parse(now), manifest.workspace.tz).date,
-					tz: manifest.workspace.tz,
-					params: {}
-				})
+				bindings: (now) => bindingsAt(now, manifest.workspace.tz)
 			},
-			guest,
 			files,
 			drivers,
+			filesReady: (ids) => prepareNoticeFiles(ids).pipe(Effect.provideContext(fileContext)),
+			logs: yield* Logs,
 			outbound,
 			announce: wake.at
 		});

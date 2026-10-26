@@ -1,13 +1,21 @@
-// AES-256-GCM envelopes bound to owner/name; the workspace's live ConfigProvider reads the declared sealed values.
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { ConfigProvider, Context, Effect, Layer, Option, Redacted, Result, Schema } from 'effect';
+// Secrets sealed by the host's key (`Keys`, AES-256-GCM, bound to owner/name by its `aad`): the engine never holds the
+// key. The workspace's live ConfigProvider reads the declared sealed values.
+import { ConfigProvider, Context, Effect, Layer, Option, Schema } from 'effect';
 import { TenantDb } from './db/tenant-db.ts';
 import { type DbError } from './errors.ts';
 import { BoltError } from '../protocol/errors.ts';
+import { Keys } from './ports.ts';
+import type { PortFailure } from './port.ts';
+import { fromBase64, toBase64 } from './crypto.ts';
 
 export type SecretsCodec = {
 	readonly seal: (owner: string, name: string, value: string) => Effect.Effect<string, BoltError>;
-	readonly open: (owner: string, name: string, envelope: string) => Option.Option<string>;
+	/** `None` for an envelope that does not open under this tenant's key, owner and name. */
+	readonly open: (
+		owner: string,
+		name: string,
+		envelope: string
+	) => Effect.Effect<Option.Option<string>, BoltError>;
 };
 export type SecretsShape = SecretsCodec & {
 	readonly status: (
@@ -24,57 +32,40 @@ export type SecretsShape = SecretsCodec & {
 const prefix = (owner: string) => `secret:${owner}:`;
 const stored = Schema.Struct({ key: Schema.String, value: Schema.String });
 export class Secrets extends Context.Service<Secrets, SecretsShape>()('bolt/Secrets') {
-	static readonly layer = (
-		declared: readonly string[],
-		key: Option.Option<Redacted.Redacted<Uint8Array>>
-	) =>
+	static readonly layer = (declared: readonly string[]) =>
 		Layer.effect(
 			Secrets,
 			Effect.gen(function* () {
 				const db = yield* TenantDb;
+				const keys = yield* Keys;
 				const workspace = new Map<string, string>();
-				const aad = (owner: string, name: string) => Buffer.from(`bolt\u0000${owner}\u0000${name}`);
-				const unavailable = () =>
-					BoltError.make('unavailable', 'facility', 'this activation has no secrets key');
+				const aad = (owner: string, name: string) =>
+					new TextEncoder().encode(`bolt\u0000${owner}\u0000${name}`);
+				const failed = (message: string) => (error: PortFailure) =>
+					error._tag === 'Unavailable'
+						? BoltError.make('unavailable', 'facility', 'this activation has no secrets key')
+						: BoltError.make('internal', 'facility', message, error);
 				const seal = Effect.fn('Secrets.seal')(function* (
 					owner: string,
 					name: string,
 					value: string
 				) {
-					if (Option.isNone(key)) return yield* Effect.fail(unavailable());
-					return yield* Effect.try({
-						try: () => {
-							const iv = randomBytes(12),
-								cipher = createCipheriv('aes-256-gcm', Redacted.value(key.value), iv).setAAD(
-									aad(owner, name)
-								);
-							const content = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-							return Buffer.concat([iv, cipher.getAuthTag(), content]).toString('base64');
-						},
-						catch: () => BoltError.make('internal', 'facility', 'the secret could not be sealed')
-					});
+					const sealed = yield* keys
+						.seal(new TextEncoder().encode(value), aad(owner, name))
+						.pipe(Effect.mapError(failed('the secret could not be sealed')));
+					return toBase64(sealed);
 				});
-				const open = (owner: string, name: string, envelope: string): Option.Option<string> => {
-					if (Option.isNone(key)) return Option.none();
-					return Result.getOrElse(
-						Result.try(() => {
-							const bytes = Buffer.from(envelope, 'base64');
-							const decipher = createDecipheriv(
-								'aes-256-gcm',
-								Redacted.value(key.value),
-								bytes.subarray(0, 12)
-							).setAAD(aad(owner, name));
-							decipher.setAuthTag(bytes.subarray(12, 28));
-							return Option.some(
-								Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString(
-									'utf8'
+				// copied envelopes cannot open under another owner/name
+				const open = (owner: string, name: string, envelope: string) =>
+					keys.available
+						? keys
+								.open(fromBase64(envelope), aad(owner, name))
+								.pipe(
+									Effect.map(Option.map((plain) => new TextDecoder().decode(plain))),
+									Effect.mapError(failed('the secret could not be opened'))
 								)
-							);
-						}),
-						() => Option.none()
-					); // copied envelopes cannot open under another owner/name
-				};
-				const rows = Option.isNone(key)
+						: Effect.succeed(Option.none<string>());
+				const rows = !keys.available
 					? []
 					: yield* db.rows(stored.annotate({ identifier: 'sys_config' }), {
 							text: 'SELECT key, value FROM sys_config WHERE key LIKE $1',
@@ -82,7 +73,7 @@ export class Secrets extends Context.Service<Secrets, SecretsShape>()('bolt/Secr
 						});
 				for (const row of rows) {
 					const name = row.key.slice(prefix('workspace').length);
-					const value = open('workspace', name, row.value);
+					const value = yield* open('workspace', name, row.value);
 					if (Option.isSome(value)) workspace.set(name, value.value);
 				}
 				const config = ConfigProvider.make((path) =>

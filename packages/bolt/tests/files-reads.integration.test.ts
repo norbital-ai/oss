@@ -23,7 +23,6 @@ const manifest = {
 		docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},

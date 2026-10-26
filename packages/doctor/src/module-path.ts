@@ -11,20 +11,17 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import { Predicate } from 'effect';
-import { decodeJsonObject, recordField, stringField } from './manifest.js';
+import { decodeJsonObject, jsonRecord, recordField, stringField } from './manifest.js';
 
 const aliasCache = new Map<string, ReadonlyArray<Readonly<{ prefix: string; target: string }>>>();
-
-function stripJsonComments(text: string): string {
-	return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:"'])\/\/[^\n]*/g, '$1');
-}
 
 type RecordAlias = (prefix: string, target: string, base: string) => void;
 
 function tsconfigAliases(root: string, directory: string, name: string, record: RecordAlias): void {
 	const file = join(root, directory === '.' ? name : `${directory}/${name}`);
 	if (!existsSync(file)) return;
-	const parsed = decodeJsonObject(stripJsonComments(readFileSync(file, 'utf8')));
+	const config = ts.parseConfigFileTextToJson(file, readFileSync(file, 'utf8'));
+	const parsed = config.error === undefined ? jsonRecord(config.config) : undefined;
 	if (parsed === undefined) return;
 	const compilerOptions = recordField(parsed, 'compilerOptions');
 	const base = join(directory, stringField(compilerOptions, 'baseUrl') ?? '.');

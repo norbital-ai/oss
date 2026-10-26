@@ -23,30 +23,19 @@ const show = (props: ImageProps) => {
 	return target;
 };
 
-it.live(
-	'an absent image source stays pending with native alt, dimensions and no placeholder request',
-	() =>
-		browser(async () => {
-			const target = show({
-				alt: 'Floor plan being prepared',
-				width: 160,
-				height: 90,
-				class: 'aspect-video',
-				imageClass: 'object-contain'
-			});
-			const frame = element<HTMLElement>(target, '[data-image]');
-			const image = element<HTMLImageElement>(frame, 'img');
-			assert.equal(frame.tagName, 'SPAN');
-			assert.equal(frame.dataset.state, 'pending');
-			assert.ok(frame.classList.contains('aspect-video'));
-			assert.ok(image.classList.contains('object-contain'));
-			assert.equal(image.getAttribute('src'), null);
-			assert.equal(image.getAttribute('alt'), 'Floor plan being prepared');
-			assert.equal(image.getAttribute('width'), '160');
-			assert.equal(image.getAttribute('height'), '90');
-			assert.equal(image.getAttribute('loading'), 'lazy');
-			assert.equal(image.getAttribute('decoding'), 'async');
-		})
+it.live('an absent image source stays pending with native alt and no placeholder request', () =>
+	browser(async () => {
+		const target = show({
+			alt: 'Floor plan being prepared'
+		});
+		const frame = element<HTMLElement>(target, '[data-image]');
+		const image = element<HTMLImageElement>(frame, 'img');
+		assert.equal(frame.dataset.state, 'pending');
+		assert.equal(image.getAttribute('src'), null);
+		assert.equal(image.getAttribute('alt'), 'Floor plan being prepared');
+		assert.equal(image.getAttribute('loading'), 'lazy');
+		assert.equal(image.getAttribute('decoding'), 'async');
+	})
 );
 
 it.live(

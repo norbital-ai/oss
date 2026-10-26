@@ -3,11 +3,12 @@
 // metered; a model that does not take images refused unless its listing did not answer and the host tolerates that.
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { Crypto, Effect, Fiber, Layer, PlatformError } from 'effect';
+import { Crypto, Effect, Fiber, Layer, PlatformError, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { aiModalityRefusals, openAiEmbeddings } from '../src/openrouter/embeddings.ts';
+import { openRouterChat } from '../src/openrouter/chat.ts';
 
 type Seen = { url: string; body: unknown; authorization: string | undefined };
 /** An HttpClient answering each request with `answer(seen)`; every request is recorded. */
@@ -25,6 +26,7 @@ const fake = (answer: (seen: Seen, n: number) => Response) => {
 		})
 	);
 	return {
+		client,
 		seen,
 		provide: Effect.provide(
 			Layer.merge(NodeCrypto.layer, Layer.succeed(HttpClient.HttpClient, client))
@@ -37,12 +39,44 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 		headers: { 'content-type': 'application/json', ...headers }
 	});
 
+it.effect(
+	'DeepSeek chat preserves provider privacy preferences while resolving model classes',
+	() =>
+		Effect.gen(function* () {
+			const http = fake(() => json({ choices: [{ message: { content: 'ok' } }] }));
+			const chat = openRouterChat(
+				{
+					endpoint: 'https://openrouter.ai/api/v1',
+					models: { default: 'deepseek/fixture' },
+					body: { provider: { data_collection: 'deny', zdr: true, sort: 'latency' } }
+				},
+				{ httpClient: http.client }
+			);
+			yield* Stream.runDrain(
+				chat({ model: 'default', messages: [{ role: 'user', content: 'hi' }] })
+			);
+			expect(http.seen[0]).toMatchObject({
+				url: 'https://openrouter.ai/api/v1/chat/completions',
+				body: {
+					model: 'deepseek/fixture',
+					provider: {
+						data_collection: 'deny',
+						zdr: true,
+						sort: 'latency',
+						require_parameters: true
+					}
+				}
+			});
+		})
+);
+
 describe('openAiEmbeddings', () => {
 	it.effect(
 		'batches by the model, sends a file as a content part, answers in input order and meters the charge',
 		() =>
 			Effect.gen(function* () {
 				const metered: [number, string][] = [];
+				const reads: [string, number][] = [];
 				const http = fake((s) => {
 					const input = (s.body as { input: unknown[] }).input;
 					// out of order: the vectors follow `index`
@@ -54,6 +88,11 @@ describe('openAiEmbeddings', () => {
 				});
 				const embed = openAiEmbeddings({
 					baseUrl: 'https://ai.example/v1/',
+					files: (key, max) =>
+						Effect.sync(() => {
+							reads.push([key, max]);
+							return new Uint8Array([1, 2]);
+						}),
 					apiKey: 'k',
 					model: (name) => (name === 'scene' ? { id: 'vendor/embed', batch: 2 } : undefined),
 					meter: (cost, id) =>
@@ -65,12 +104,13 @@ describe('openAiEmbeddings', () => {
 					[
 						'a',
 						'b',
-						{ $file: { name: 'p.png', mime: 'image/png', bytes: new Uint8Array([1, 2]) } }
+						{ $stored: { key: 'stored-photo', name: 'p.png', mime: 'image/png', bytes: 2 } }
 					],
 					'scene',
 					8
 				).pipe(http.provide);
 				expect(vectors).toEqual([[0], [1], [0]]);
+				expect(reads).toEqual([['stored-photo', 2]]);
 				expect(http.seen.map((s) => s.url)).toEqual([
 					'https://ai.example/v1/embeddings',
 					'https://ai.example/v1/embeddings'

@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, FileSystem, Layer, Option } from 'effect';
+import { Context, Effect, Fiber, FileSystem, Layer, Option, Path } from 'effect';
 import {
 	FetchHttpClient,
 	HttpServerRequest,
@@ -14,10 +14,7 @@ import {
 	CODE,
 	BoltHost,
 	Live,
-	PgliteDb,
-	PostgresDb,
 	PublicPages,
-	Runs,
 	TenantDb,
 	clientAddress,
 	clientPage,
@@ -26,6 +23,7 @@ import {
 	LIMITS,
 	wireError
 } from '@norbital-ai/bolt/engine';
+import { PgliteDb, PostgresDb } from '@norbital-ai/bolt/node';
 import type { Config } from './config.ts';
 import { activate, prepare, type StartOptions } from './activate.ts';
 import { ops } from './routes.ts';
@@ -66,7 +64,6 @@ export class Server extends Context.Service<
 	{
 		readonly url: string;
 		readonly warnings: readonly string[];
-		readonly wake: Runs['Service']['tick'];
 		readonly context: Effect.Success<ReturnType<typeof activate>>['context'];
 	}
 >()('bolt-server/Server') {}
@@ -83,7 +80,7 @@ export const ServerLive = (config: Config, options: StartOptions = {}) =>
 						pages = Context.get(activation.context, PublicPages);
 					const io =
 						yield* Effect.context<import('effect/unstable/http/HttpPlatform').HttpPlatform>();
-					const fs = yield* FileSystem.FileSystem;
+					const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 					const handle = Effect.gen(function* () {
 						const incoming = yield* HttpServerRequest.HttpServerRequest;
 						const address = clientAddress(
@@ -116,7 +113,7 @@ export const ServerLive = (config: Config, options: StartOptions = {}) =>
 							activation.artifact.dir,
 							path,
 							activation.artifact.manifest
-						).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+						).pipe(Effect.provide(files));
 						return page === undefined
 							? HttpServerResponse.empty({ status: 404 })
 							: yield* HttpServerResponse.file(page.file, { headers: page.headers }).pipe(
@@ -179,7 +176,6 @@ export const ServerLive = (config: Config, options: StartOptions = {}) =>
 					return {
 						url,
 						warnings: activation.warnings,
-						wake: Context.get(activation.context, Runs).tick,
 						context: activation.context
 					};
 				})

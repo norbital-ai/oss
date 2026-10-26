@@ -2,7 +2,9 @@
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Fiber, Layer, Schedule, Scope } from 'effect';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
-import { Guest, GuestLimits, Isolates, type Bridge } from '../src/engine/services.ts';
+import { GuestIsolates } from '../src/engine/ports.ts';
+import { Guest, type Bridge } from '../src/engine/services.ts';
+import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 const invocation: Invocation = {
 	id: 'scope',
@@ -17,37 +19,42 @@ const invocation: Invocation = {
 		seed: 'scope'
 	},
 	budget: {
-		cpuMs: LIMITS.guestCpuMs,
 		crossings: LIMITS.crossings.sync,
 		readBytes: LIMITS.readBytes
 	}
 };
 const noCalls: Bridge = { cross: () => Effect.succeed([]) };
 it.live('closing a generation disposes its running isolates', () =>
-	Effect.gen(function* () {
-		const scope = yield* Scope.make(),
-			limits = yield* GuestLimits;
-		const context = yield* Layer.build(
-			guestLayer({
-				source: 'export default { automation: { a: { body: () => { for (;;) {} } } } };'
-			}).pipe(
-				Layer.provide(Layer.succeed(GuestLimits, { ...limits, warm: { ...limits.warm, depth: 0 } }))
-			)
-		).pipe(Effect.provideService(Scope.Scope, scope));
-		const isolates = Context.get(context, Isolates),
-			guest = Context.get(context, Guest);
-		const running = yield* guest.invoke(invocation, noCalls).pipe(Effect.forkIn(scope));
-		yield* isolates.counts.pipe(
-			Effect.repeat({
-				schedule: Schedule.spaced('1 millis'),
-				until: (counts) => counts.live > 0,
-				times: 1000
-			})
-		);
-		yield* Scope.close(scope, Exit.succeed(undefined));
-		yield* Fiber.await(running);
-		expect((yield* isolates.counts).live).toBe(0);
-	})
+	Effect.scoped(
+		Effect.gen(function* () {
+			const port = yield* guestIsolates({
+				cpuMs: LIMITS.guestCpuMs,
+				warm: { maxMiB: 512, depth: 0, idleMs: 60_000 }
+			});
+			const scope = yield* Scope.make();
+			const context = yield* Layer.build(
+				guestLayer(
+					{ source: 'export default { automation: { a: { body: () => { for (;;) {} } } } };' },
+					{},
+					undefined,
+					GuestIsolates.fromAbi(port)
+				)
+			).pipe(Effect.provideService(Scope.Scope, scope));
+			const running = yield* Context.get(context, Guest)
+				.invoke(invocation, noCalls)
+				.pipe(Effect.forkIn(scope));
+			yield* Effect.sync(port.counts).pipe(
+				Effect.repeat({
+					schedule: Schedule.spaced('1 millis'),
+					until: (counts) => counts.live > 0,
+					times: 1000
+				})
+			);
+			yield* Scope.close(scope, Exit.succeed(undefined));
+			yield* Fiber.await(running);
+			expect(port.counts().live).toBe(0);
+		})
+	)
 );
 it.live('copies facility failure kind onto the guest error cause', () =>
 	Effect.gen(function* () {

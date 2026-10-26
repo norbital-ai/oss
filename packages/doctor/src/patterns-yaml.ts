@@ -122,29 +122,28 @@ function readExamples(file: string, value: unknown): Examples {
 	return { bad: bad as ReadonlyArray<string>, good: good as ReadonlyArray<string> };
 }
 
-/** Parse, validate and synthesise one YAML file, appending to the run-wide accumulators. */
-function loadFile(
+/** Parse one YAML file into its rule document. */
+function readFile(file: string, absolute: string): unknown {
+	const read = Result.try({
+		try: () => parseYaml(readFileSync(absolute, 'utf8')),
+		catch: (cause) => new DoctorFailure(cause)
+	});
+	return Result.match(read, {
+		onFailure: (error) => fail(file, `invalid YAML: ${error.message}`),
+		onSuccess: (parsed): unknown => parsed
+	});
+}
+
+/**
+ * Validate and synthesise one rule document (a pack file, or an organization's own rule), named `file` in its errors.
+ * `declared` holds the ids already taken in this call; the new id joins it.
+ */
+export function compileRuleDocument(
 	file: string,
-	absolute: string,
-	rules: Array<Rule>,
+	document: unknown,
 	declared: Map<string, string>
-): void {
-	let document: unknown;
-	{
-		const read = Result.try({
-			try: () => parseYaml(readFileSync(absolute, 'utf8')),
-			catch: (cause) => new DoctorFailure(cause)
-		});
-		Result.match(read, {
-			onFailure: (error) =>
-				fail(file, `invalid YAML: ${error instanceof Error ? error.message : String(error)}`),
-			onSuccess: (parsed) => {
-				document = parsed;
-			}
-		});
-	}
-	// The YAML document is decoded at its boundary: one mapping of fields, or the file is not a
-	// rule file at all.
+): Rule {
+	// The document is decoded at its boundary: one mapping of fields, or it is not a rule at all.
 	const yaml =
 		jsonRecord(document) ??
 		fail(file, 'expected one rule per file, written as a mapping of fields');
@@ -202,15 +201,13 @@ function loadFile(
 		yaml.constraints === undefined
 			? undefined
 			: readMatcherMap(file, 'constraints', yaml.constraints);
-	rules.push(
-		defineRule({
-			...common,
-			rule: yaml.rule as Matcher,
-			examples,
-			...(utils === undefined ? {} : { utils }),
-			...(constraints === undefined ? {} : { constraints })
-		})
-	);
+	return defineRule({
+		...common,
+		rule: yaml.rule as Matcher,
+		examples,
+		...(utils === undefined ? {} : { utils }),
+		...(constraints === undefined ? {} : { constraints })
+	});
 }
 
 /**
@@ -228,6 +225,7 @@ export function loadPackDirectory(directory: string): ReadonlyArray<Rule> {
 		throw new Error(`norbital-doctor: pack directory ${directory} contains no .yaml/.yml rules`);
 	const rules: Array<Rule> = [];
 	const declared = new Map<string, string>();
-	for (const name of names) loadFile(name, join(directory, name), rules, declared);
+	for (const name of names)
+		rules.push(compileRuleDocument(name, readFile(name, join(directory, name)), declared));
 	return rules;
 }

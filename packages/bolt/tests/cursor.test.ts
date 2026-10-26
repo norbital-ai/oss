@@ -1,8 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Encoding, Schema } from 'effect';
-import type { Cursor } from '../src/decl/ctx.ts';
-import { CursorValue } from '../src/protocol/cursor.ts';
-import { encodeCursor } from '../src/engine/query/sql.ts';
+import { CursorValue, encodeCursor, type Cursor } from '@norbital-ai/store';
 
 describe('page cursor codec', () => {
 	it('retains issued cursors with Unicode and null keys through the nominal boundary', () => {

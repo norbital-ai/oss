@@ -1,0 +1,393 @@
+import { randomUUID } from 'node:crypto';
+import assert from 'node:assert/strict';
+import { describe, it } from '@effect/vitest';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
+import type { Json } from '../src/decl/values.ts';
+import type { EngineManifest } from '../src/engine/manifest.ts';
+import { Approvals, Writes } from '../src/engine/services.ts';
+import { TestWorkspace } from '../src/test/index.ts';
+import { program } from './support/guest-fixture.ts';
+import { manifest as base } from './write-fixture.ts';
+
+const manifest: EngineManifest = {
+	...base,
+	models: {
+		roots: { description: 'A root', label: 'name', fields: { name: { kind: 'text' } } },
+		archives: { description: 'An archive', label: 'name', fields: { name: { kind: 'text' } } },
+		branches: { description: 'A branch', label: 'name', fields: { name: { kind: 'text' } } },
+		leaves: { description: 'A leaf', label: 'name', fields: { name: { kind: 'text' } } },
+		watchers: { description: 'A watcher', label: 'name', fields: { name: { kind: 'text' } } }
+	},
+	relationships: {
+		'branches.root': { to: 'roots', onDelete: 'cascade' },
+		'leaves.branch': { to: 'branches', onDelete: 'cascade' },
+		'watchers.first': { to: ['roots', 'archives'], optional: true, onDelete: 'setNull' },
+		'watchers.second': { to: ['roots', 'archives'], optional: true, onDelete: 'setNull' }
+	},
+	collections: {
+		roots: { read: { fields: 'all' }, create: { input: { columns: ['name'] } }, delete: {} },
+		archives: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } },
+		branches: { read: { fields: 'all' }, create: { input: { columns: ['name', 'root'] } } },
+		leaves: { read: { fields: 'all' }, create: { input: { columns: ['name', 'branch'] } } },
+		watchers: {
+			read: { fields: 'all' },
+			create: { input: { columns: ['name', 'first', 'second'] } },
+			update: { input: { columns: ['name'] } }
+		}
+	},
+	policies: {
+		requester: {
+			description: 'Requests changes',
+			grants: {
+				roots: { read: true, history: true, delete: { approval: true } },
+				watchers: { read: true, history: true, update: { approval: true } }
+			}
+		},
+		reviewer: {
+			description: 'Reviews changes',
+			grants: { roots: { read: true }, watchers: { read: true } }
+		}
+	},
+	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
+};
+const guest = program(`export default { policy: { requester: { grants: {
+	roots: { delete: { approval: (write, flow) => flow.step('Review deletion', {teams:['reviewers']}) } },
+	watchers: { update: { approval: (write, flow) => flow.step('Review watcher', {teams:['reviewers']}) } }
+} } } };`);
+const Watcher = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	first__roots: Schema.NullOr(Schema.String),
+	first__archives: Schema.NullOr(Schema.String),
+	second__roots: Schema.NullOr(Schema.String),
+	second__archives: Schema.NullOr(Schema.String),
+	revision: Schema.Number
+});
+const History = Schema.Struct({
+	collection: Schema.String,
+	record: Schema.String,
+	revision: Schema.Number,
+	op: Schema.String,
+	cause: Schema.String,
+	changes: Schema.Record(Schema.String, Schema.Json),
+	request: Schema.NullOr(Schema.String)
+});
+const Checkpoint = Schema.Struct({
+	collection: Schema.String,
+	id: Schema.String,
+	op: Schema.String,
+	before: Schema.NullOr(Schema.Number)
+});
+type Collection = 'roots' | 'archives' | 'branches' | 'leaves' | 'watchers';
+
+const fixture = Effect.gen(function* () {
+	const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
+	const t = Context.get(context, TestWorkspace),
+		writes = Context.get(context, Writes),
+		approvals = Context.get(context, Approvals),
+		admin = t.as(t.admin).authority,
+		requester = t.as(
+			t.member(['requester'], { teams: ['requesters'], teamPath: ['requesters'] })
+		).authority,
+		reviewer = t.as(
+			t.member(['reviewer'], { teams: ['reviewers'], teamPath: ['reviewers'] })
+		).authority;
+	const act = (
+		collection: Collection,
+		verb: 'create' | 'update' | 'delete',
+		input: Json,
+		authority = admin,
+		key = randomUUID(),
+		retry = false
+	) => {
+		const now = t.clock.now();
+		return writes.act({
+			collection,
+			verb,
+			input,
+			authority,
+			key,
+			retry,
+			issuedAt: now,
+			invocationId: key,
+			mode: { _tag: 'Direct' },
+			bindings: { now, today: now.slice(0, 10), tz: 'UTC', params: {} }
+		});
+	};
+	const create = Effect.fnUntraced(function* (collection: Collection, input: Json) {
+		const { outcome } = yield* act(collection, 'create', input);
+		assert.ok(outcome.kind === 'committed');
+		const row = outcome.records.find((record) => record.collection === collection);
+		assert.ok(row);
+		return row.id;
+	});
+	const root = yield* create('roots', { name: 'Root' }),
+		archive = yield* create('archives', { name: 'Archive' }),
+		branch = yield* create('branches', { name: 'Branch', root }),
+		leaf = yield* create('leaves', { name: 'Leaf', branch }),
+		watcher = yield* create('watchers', {
+			name: 'Watcher',
+			first: { collection: 'roots', id: root },
+			second: { collection: 'roots', id: root }
+		});
+	const watcherRows = () =>
+		t.db.rows(Watcher, {
+			text: 'SELECT id,name,first__roots,first__archives,second__roots,second__archives,revision FROM watchers WHERE id=$1',
+			params: [watcher]
+		});
+	const history = () =>
+		t.db.rows(History, {
+			text: 'SELECT collection,record::text,revision,op,cause,changes,request::text FROM bolt_history ORDER BY collection,record,revision',
+			params: []
+		});
+	const tables = [
+		'roots',
+		'archives',
+		'branches',
+		'leaves',
+		'watchers',
+		'bolt_history',
+		'bolt_approvals',
+		'approval_request'
+	];
+	const snapshot = () =>
+		t.db.rows(Schema.Struct({ collection: Schema.String, image: Schema.Json }), {
+			text: `SELECT * FROM (${tables.map((table) => `SELECT '${table}'::text AS collection,to_jsonb(t) AS image FROM ${table} t`).join(' UNION ALL ')}) captured ORDER BY collection,image::text`,
+			params: []
+		});
+	const counts = () =>
+		t.db.rows(
+			Schema.Struct({
+				roots: Schema.Number,
+				branches: Schema.Number,
+				leaves: Schema.Number,
+				archives: Schema.Number
+			}),
+			{
+				text: 'SELECT (SELECT count(*)::int FROM roots) AS roots,(SELECT count(*)::int FROM branches) AS branches,(SELECT count(*)::int FROM leaves) AS leaves,(SELECT count(*)::int FROM archives) AS archives',
+				params: []
+			}
+		);
+	const cleanJournal = Effect.gen(function* () {
+		for (const table of [
+			'pg_temp.bolt_write_context',
+			'pg_temp.bolt_write_targets',
+			'pg_temp.bolt_changes',
+			'pg_temp.bolt_erased',
+			'pg_temp.bolt_origins'
+		]) {
+			const exists = yield* t.db.value(Schema.Boolean, {
+				text: 'SELECT to_regclass($1) IS NOT NULL',
+				params: [table]
+			});
+			if (exists) {
+				const count = yield* t.db.value(Schema.Number, {
+					text: `SELECT count(*)::int FROM ${table}`,
+					params: []
+				});
+				assert.equal(count, 0, `${table} must not retain settled writes`);
+			}
+		}
+	});
+	const rawDelete = { text: 'DELETE FROM roots WHERE id=$1', params: [root] };
+	return {
+		t,
+		approvals,
+		requester,
+		reviewer,
+		act,
+		root,
+		archive,
+		branch,
+		leaf,
+		watcher,
+		watcherRows,
+		history,
+		snapshot,
+		counts,
+		cleanJournal,
+		rawDelete
+	};
+});
+
+describe('database-owned referential actions', () => {
+	it.live(
+		'raw DELETE cascades without inverses and records both polymorphic SET NULL updates atomically',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture;
+					const before = yield* f.snapshot();
+					const failed = yield* Effect.result(
+						f.t.db.transaction({
+							statements: [
+								f.rawDelete,
+								{
+									text: "SELECT bolt_assert(false,'conflict','late referential guard')",
+									params: []
+								}
+							]
+						})
+					);
+					assert.ok(Result.isFailure(failed));
+					assert.equal(failed.failure.sqlstate, 'BA001');
+					assert.deepEqual(yield* f.snapshot(), before);
+					yield* f.cleanJournal;
+					yield* f.t.db.write(f.rawDelete);
+					yield* f.cleanJournal;
+					assert.deepEqual(yield* f.counts(), [{ roots: 0, branches: 0, leaves: 0, archives: 1 }]);
+					assert.deepEqual(yield* f.watcherRows(), [
+						{
+							id: f.watcher,
+							name: 'Watcher',
+							first__roots: null,
+							first__archives: null,
+							second__roots: null,
+							second__archives: null,
+							revision: 3
+						}
+					]);
+					const history = yield* f.history();
+					assert.deepEqual(
+						history
+							.filter((row) => row.op === 'delete')
+							.map((row) => ({
+								collection: row.collection,
+								record: row.record,
+								revision: row.revision,
+								cause: row.cause
+							})),
+						[
+							{ collection: 'branches', record: f.branch, revision: 2, cause: 'cascade' },
+							{ collection: 'leaves', record: f.leaf, revision: 2, cause: 'cascade' },
+							{ collection: 'roots', record: f.root, revision: 2, cause: 'direct' }
+						]
+					);
+					const updates = history.filter(
+						(row) => row.collection === 'watchers' && row.op === 'update'
+					);
+					assert.deepEqual(
+						updates.map((row) => ({
+							revision: row.revision,
+							cause: row.cause,
+							request: row.request
+						})),
+						[
+							{ revision: 2, cause: 'cascade', request: null },
+							{ revision: 3, cause: 'cascade', request: null }
+						]
+					);
+					assert.deepEqual(updates.flatMap((row) => Object.keys(row.changes)).sort(), [
+						'first__roots',
+						'second__roots'
+					]);
+					for (const row of updates) assert.deepEqual(Object.values(row.changes), [null]);
+				})
+			)
+	);
+
+	it.live(
+		'raw DELETE refuses a held descendant and rolls back every native referential effect',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture;
+					const held = yield* f.act(
+						'watchers',
+						'update',
+						{ target: f.watcher, set: { name: 'Held watcher' } },
+						f.requester
+					);
+					assert.ok(held.outcome.kind === 'pendingApproval');
+					const before = yield* f.snapshot();
+					const failed = yield* Effect.result(f.t.db.write(f.rawDelete));
+					assert.ok(Result.isFailure(failed));
+					assert.equal(failed.failure.sqlstate, 'BA001');
+					assert.match(failed.failure.message, /^underApproval(?: |$)/);
+					assert.deepEqual(yield* f.snapshot(), before);
+					yield* f.cleanJournal;
+					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
+				})
+			)
+	);
+
+	it.live(
+		'a provisional native delete keeps the earliest checkpoint across both SET NULL events and key replay',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture;
+					const key = randomUUID(),
+						input = { target: f.root };
+					const first = yield* f.act('roots', 'delete', input, f.requester, key);
+					assert.ok(first.outcome.kind === 'pendingApproval');
+					const requestId = first.outcome.requestId;
+					yield* f.cleanJournal;
+					assert.deepEqual(yield* f.counts(), [{ roots: 0, branches: 0, leaves: 0, archives: 1 }]);
+					assert.equal((yield* f.watcherRows())[0]?.revision, 3);
+					const checkpoints = yield* f.t.db.value(Schema.Array(Checkpoint), {
+						text: 'SELECT records FROM bolt_approvals WHERE id=$1',
+						params: [requestId]
+					});
+					assert.deepEqual(
+						[...checkpoints].sort((a, b) => a.collection.localeCompare(b.collection)),
+						[
+							{ collection: 'branches', id: f.branch, op: 'delete', before: 1 },
+							{ collection: 'leaves', id: f.leaf, op: 'delete', before: 1 },
+							{ collection: 'roots', id: f.root, op: 'delete', before: 1 },
+							{ collection: 'watchers', id: f.watcher, op: 'update', before: 1 }
+						]
+					);
+					const history = yield* f.history();
+					assert.deepEqual(
+						history
+							.filter((row) => row.collection === 'watchers' && row.op === 'update')
+							.map((row) => ({
+								revision: row.revision,
+								request: row.request
+							})),
+						[
+							{ revision: 2, request: requestId },
+							{ revision: 3, request: requestId }
+						]
+					);
+					assert.deepEqual(
+						(yield* f.act('roots', 'delete', input, f.requester, key, true)).outcome,
+						first.outcome
+					);
+					assert.deepEqual(yield* f.history(), history);
+					yield* f.cleanJournal;
+					assert.deepEqual(
+						yield* f.approvals.decide({
+							requestId,
+							decision: 'reject',
+							reason: 'Keep the root and both references',
+							authority: f.reviewer,
+							now: f.t.clock.now()
+						}),
+						{ kind: 'decided', requestId, status: 'Rejected' }
+					);
+					yield* f.cleanJournal;
+					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
+					assert.deepEqual(yield* f.watcherRows(), [
+						{
+							id: f.watcher,
+							name: 'Watcher',
+							first__roots: f.root,
+							first__archives: null,
+							second__roots: f.root,
+							second__archives: null,
+							revision: 4
+						}
+					]);
+					const restored = (yield* f.history()).filter(
+						(row) => row.request === requestId && row.cause === 'restored'
+					);
+					assert.deepEqual(
+						restored.map((row) => row.collection),
+						['branches', 'leaves', 'roots', 'watchers']
+					);
+				})
+			)
+	);
+});

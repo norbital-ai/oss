@@ -2,14 +2,14 @@
 // writes of the decision's own statement, recorded `restored` from the checkpoint revision (0: the request created it).
 // A record it updated is restored (per-record restore, restore.ts); one it created is deleted; one it deleted is
 // re-created from its history. A field restore must skip (a link to a since-deleted target) is reported, never fatal.
-import { Effect, Predicate, Schema } from 'effect';
+import { Array, Effect, Predicate, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Bindings } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { catalogOf } from '../access/pred.ts';
-import { SYSTEM_COLUMNS } from '../../protocol/catalog.ts';
+import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { readHistory } from '../query/history.ts';
 import { k, readRows } from '../write/act.ts';
 import type { Write } from '../write/commit.ts';
@@ -45,6 +45,7 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 		restored: { collection: string; id: string; revision: number }[];
 		rolledBack: RolledBack[];
 		skipped: Skipped[];
+		observations: readonly { collection: string; id: string; revision: number | null }[];
 	},
 	EngineError
 > {
@@ -62,6 +63,44 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 		cat,
 		entries.map((r) => [r.collection, r.id] as const)
 	);
+	const observations = entries.map((r) => {
+		const now = live.get(k(r.collection, r.id));
+		return {
+			collection: r.collection,
+			id: r.id,
+			revision: now === undefined ? null : Number(now['revision'])
+		};
+	});
+	const recreations = new Map<
+		string,
+		{ readonly past: Readonly<Record<string, Json>>; readonly revision: number }
+	>();
+	for (const r of entries) {
+		if (r.before === null || live.has(k(r.collection, r.id))) continue;
+		const past = yield* readHistory(
+			db,
+			m,
+			{
+				kind: 'history',
+				collection: r.collection,
+				id: r.id,
+				at: { _tag: 'Revision', revision: r.before },
+				full: true
+			},
+			{ as: 'workspace' },
+			bindings
+		);
+		if (!Predicate.isObject(past) || Array.isArray(past)) continue;
+		const last = yield* db.rows(Schema.Struct({ n: Schema.Number }), {
+			text: 'SELECT coalesce(max(revision), 0)::int AS n FROM bolt_history WHERE collection = $1 AND record = $2::uuid',
+			params: [r.collection, r.id]
+		});
+		recreations.set(k(r.collection, r.id), {
+			past,
+			revision: (last[0]?.n ?? r.before) + 1
+		});
+	}
+	const prospectiveTargets = new Set(recreations.keys());
 	const writes: Write[] = [],
 		restored: { collection: string; id: string; revision: number }[] = [],
 		rolledBack: RolledBack[] = [],
@@ -86,7 +125,8 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 				{ manifest: m, db },
 				{ collection: r.collection, record: r.id, revision: r.before },
 				null,
-				bindings
+				bindings,
+				prospectiveTargets
 			);
 			if (!previewed.ok) {
 				skipped.push({
@@ -112,31 +152,15 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 			continue;
 		}
 		// deleted inside the request: re-created at its next revision from its stored past
-		const past = yield* readHistory(
-			db,
-			m,
-			{
-				kind: 'history',
-				collection: r.collection,
-				id: r.id,
-				at: { _tag: 'Revision', revision: r.before },
-				full: true
-			},
-			{ as: 'workspace' },
-			bindings
-		);
-		const last = yield* db.rows(Schema.Struct({ n: Schema.Number }), {
-			text: 'SELECT coalesce(max(revision), 0)::int AS n FROM bolt_history WHERE collection = $1 AND record = $2::uuid',
-			params: [r.collection, r.id]
-		});
-		if (!Predicate.isObject(past) || Array.isArray(past)) {
+		const recreation = recreations.get(k(r.collection, r.id));
+		if (recreation === undefined) {
 			skipped.push({ collection: r.collection, id: r.id, field: '*', reason: 'noHistory' });
 			continue;
 		}
 		const model = cat.models.get(r.collection)!;
 		const values: Record<string, Json> = {};
 		const links: (readonly [string, string, string])[] = [];
-		for (const [column, value] of Object.entries(past)) {
+		for (const [column, value] of Object.entries(recreation.past)) {
 			if (SYSTEM.has(column) || column.startsWith('bolt_')) continue;
 			const f = model.fields.get(column);
 			if (f !== undefined && (f.computed || f.kind === 'sum' || f.kind === 'count')) continue;
@@ -151,7 +175,7 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 			links.map(([, target, id]) => [target, id] as const)
 		);
 		for (const [column, target, id] of links)
-			if (!targets.has(k(target, id)) && (first.get(k(target, id))?.before ?? null) === null) {
+			if (!targets.has(k(target, id)) && !prospectiveTargets.has(k(target, id))) {
 				values[column] = null;
 				skipped.push({
 					collection: r.collection,
@@ -165,10 +189,10 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 			id: r.id,
 			op: 'create',
 			values,
-			revision: (last[0]?.n ?? r.before) + 1
+			revision: recreation.revision
 		});
 		restored.push({ collection: r.collection, id: r.id, revision: r.before });
 		rolledBack.push({ collection: r.collection, id: r.id, action: 'recreated' });
 	}
-	return { writes, restored, rolledBack, skipped };
+	return { writes, restored, rolledBack, skipped, observations };
 });

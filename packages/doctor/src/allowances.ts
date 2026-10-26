@@ -1,4 +1,3 @@
-import { DoctorFailure } from './failure.js';
 /**
  * Reviewed per-line allowances.
  *
@@ -100,15 +99,9 @@ export function applyAllowances(
 	const sources = new Map<string, ReadonlyArray<string> | undefined>();
 	const linesOf = (file: string): ReadonlyArray<string> | undefined => {
 		if (!sources.has(file)) {
-			const read = Result.try({
-				try: () => readFileSync(join(root, file), 'utf8'),
-				catch: (cause) => new DoctorFailure(cause)
-			});
 			sources.set(
 				file,
-				Result.isSuccess(read)
-					? Result.match(read, { onSuccess: (v) => v.split('\n'), onFailure: () => undefined })
-					: undefined
+				Result.getOrUndefined(Result.try(() => readFileSync(join(root, file), 'utf8').split('\n')))
 			);
 		}
 		return sources.get(file);

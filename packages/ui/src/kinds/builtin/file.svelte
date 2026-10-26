@@ -6,12 +6,12 @@ a preview with Download) when shown; the first chip and how many more in a dense
 <script lang="ts">
 	import { Array as Arr } from 'effect';
 	import { uiText } from '../../primitives/utils.js';
-	import type { CustomFieldView } from '../context.js';
+	import type { KindView } from '../context.js';
 	import FileInput from '../file-input.svelte';
 	import FileList from '../file-list.svelte';
 	import { isFile, type KindOf } from '../kind.js';
 
-	let { view }: { view: CustomFieldView } = $props();
+	let { view }: { view: KindView } = $props();
 	const t = uiText();
 	const kind = $derived<KindOf<'file'>>(
 		view.kind?.kind === 'file' ? view.kind : { kind: 'file', accept: ['*/*'], max: '20MiB' }

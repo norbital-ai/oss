@@ -28,7 +28,7 @@
 	import Show from '../src/kinds/show.svelte';
 	import Form from '../src/form/form.svelte';
 	import ReadonlyMarkdown from '../src/editors/readonly-markdown.svelte';
-	import { Sheet } from '../src/primitives/sheet/index.js';
+	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import { provideBolt } from '../src/client/context.js';
 	import { type Page } from '../src/collection/types.js';
 	import CustomView from '../src/collection/CustomView.svelte';
@@ -42,7 +42,7 @@
 		get catalog() {
 			return fixture.catalog;
 		},
-		read: (c, o) => fixture.bolt.read<Page>(c, o),
+		query: (c, o) => fixture.bolt.query<Page>(c, o),
 		locale: 'en',
 		zone: 'UTC',
 		currency: 'SGD'

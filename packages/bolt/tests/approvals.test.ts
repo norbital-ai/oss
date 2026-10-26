@@ -1,121 +1,186 @@
-// engine/approvals routing and eligibility, pure (rules 44, 46): one guarantee per test.
 import { describe, expect, it } from '@effect/vitest';
-import type { ApprovalRoute, Authority, EngineActor } from '../src/engine/contracts.ts';
+import { Schema } from 'effect';
+import { IdValue } from '@norbital-ai/std/kind';
+import type { Id } from '../src/decl/values.ts';
+import { approvalFlow, snapshotOf } from '../src/decl/access/policy.ts';
+import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import {
 	canApprove,
 	canSupersede,
 	participant,
-	resolve,
-	type Request,
-	type RouteRow
+	rolesOf,
+	sameFlow,
+	type Request
 } from '../src/engine/approvals/route.ts';
-import { authority, manifest, member as anyMember, NOW, TODAY } from './write-fixture.ts';
+import { decisionsFor, moveOf, transition } from '../src/engine/approvals/machine.ts';
+import { rowApproval } from '../src/engine/approvals/lock.ts';
+import { inboxRequests } from '../src/engine/approvals/inbox.ts';
+import { authority } from './write-fixture.ts';
 
-const member = anyMember as Extract<EngineActor, { kind: 'member' }>;
+const MemberId = Schema.declare((value: unknown): value is Id<'sys_user'> =>
+	Schema.is(IdValue)(value)
+);
 
-const b = { now: NOW, today: TODAY, tz: 'UTC', params: {} };
-const as = (teamPath: string[], admin = false): Authority => ({
+const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
+	kind: 'member',
+	id,
+	email: null,
+	phone: null,
+	external: false,
+	teams: [team],
+	teamPath: [team],
+	admin: false,
+	party: null
+});
+const as = (id: string, team: string, admin = false): Authority => ({
 	...authority({}, admin),
-	actor: { ...member, teams: teamPath.slice(0, 1), teamPath, admin }
+	actor: actor(id, team)
 });
-const create = (
-	values: Record<string, string>,
-	routes: readonly ApprovalRoute[]
-): RouteRow & { routes: readonly ApprovalRoute[] } => ({
-	op: 'create',
-	pre: null,
-	post: values,
-	changed: Object.keys(values),
-	routes
-});
-const FIN: ApprovalRoute = { match: { record: { title: { eq: 'big' } } }, steps: [['Finance']] };
-const LEAD: ApprovalRoute = { steps: [['Leadership']], superseded_by: ['Leadership'] };
+const request: Request = {
+	state: 'Pending',
+	step: 0,
+	requestor: 'member:requester',
+	route: {
+		kind: 'steps',
+		steps: [
+			{ name: 'Manager', teams: [], users: ['manager'] },
+			{ name: 'Finance', teams: ['finance'], users: [] }
+		],
+		superseded_by: ['leadership']
+	}
+};
 
-describe('approvals/route (rule 44)', () => {
-	it('the first matching route wins; no match commits directly', () => {
-		expect(
-			resolve(manifest, 'orders', b, as(['Sales']), [create({ title: 'big' }, [FIN, LEAD])])
-		).toEqual({ steps: [['Finance']], superseded_by: [] });
-		expect(
-			resolve(manifest, 'orders', b, as(['Sales']), [create({ title: 'small' }, [FIN])])
-		).toBeNull();
-	});
-
-	it('a changed-fields route routes an update that changes the field, not one that does not', () => {
-		const r: ApprovalRoute = {
-			match: { changed: ['note'], previous: { note: { isNull: true } } },
-			steps: [['Finance']]
+describe('approval flows', () => {
+	it('shows requesters their pending status without giving them a decision or exposing it to strangers', () => {
+		const row = {
+			id: 'request',
+			state: 'Pending',
+			collection: 'orders',
+			record: 'order',
+			action: 'update',
+			requestor: 'member:requester',
+			step: 0,
+			route: request.route,
+			at: '2026-10-25T00:00:00.000Z',
+			by: 'Requester'
 		};
-		const row = (changed: string[]) => ({
-			op: 'update' as const,
-			pre: { title: 'a', note: null },
-			post: { title: 'a', note: 'x' },
-			changed,
-			routes: [r]
+		for (const state of ['Pending', 'ChangesRequested']) {
+			const rows = [{ ...row, state }];
+			expect(inboxRequests(rows, as('requester', 'staff'))).toMatchObject([
+				{ id: 'request', mine: true, canDecide: false, canSupersede: false, moves: [] }
+			]);
+			expect(inboxRequests(rows, as('stranger', 'staff'))).toEqual([]);
+		}
+		expect(inboxRequests([row], as('manager', 'staff'))).toMatchObject([
+			{ id: 'request', mine: false, canDecide: true }
+		]);
+	});
+	it('decodes held approval steps and rejects malformed stored metadata', () => {
+		const held = {
+			requestId: 'request',
+			state: request.state,
+			step: request.step,
+			steps: request.route.steps,
+			by: 'Requester'
+		};
+		expect(rowApproval(held)).toEqual({
+			requestId: 'request',
+			state: 'Pending',
+			step: 0,
+			steps: request.route.steps,
+			requestedBy: 'Requester'
 		});
-		expect(resolve(manifest, 'orders', b, as(['Sales']), [row(['note'])])).not.toBeNull();
-		expect(resolve(manifest, 'orders', b, as(['Sales']), [row(['title'])])).toBeNull();
-	});
-
-	it('an unrouted row rides the batch route; two different routes split', () => {
+		expect(rowApproval({ ...held, steps: [] })).toBeUndefined();
 		expect(
-			resolve(manifest, 'orders', b, as(['Sales']), [
-				create({ title: 'small' }, [FIN]),
-				create({ title: 'big' }, [FIN])
-			])
-		).toEqual({ steps: [['Finance']], superseded_by: [] });
-		expect(
-			resolve(manifest, 'orders', b, as(['Sales']), [
-				create({ title: 'big' }, [FIN]),
-				create({ title: 'x' }, [LEAD])
-			])
-		).toBe('split');
+			rowApproval({ ...held, steps: [{ name: 'Manager', teams: [], users: [42] }] })
+		).toBeUndefined();
 	});
-
-	it('requestor matches on the direct team ID; no_team is a teamless caller', () => {
-		const r = (
-			requestor: NonNullable<NonNullable<ApprovalRoute['match']>['requestor']>
-		): ApprovalRoute[] => [{ match: { requestor }, steps: [['Finance']] }];
+	it('snapshots conditional named steps and direct allow or deny', () => {
 		expect(
-			resolve(manifest, 'orders', b, as(['Sales']), [create({ title: 'a' }, r('in_team'))])
-		).not.toBeNull();
+			snapshotOf(
+				approvalFlow()
+					.if(false, (flow) =>
+						flow.step('Manager', {
+							users: [Schema.decodeUnknownSync(MemberId)('0199a000-0000-7000-8000-000000000002')]
+						})
+					)
+					.else((flow) => flow.step('HR', { teams: ['finance'] }))
+					.supersededBy(['sales'])
+			)
+		).toEqual({
+			kind: 'steps',
+			steps: [{ name: 'HR', teams: ['finance'], users: [] }],
+			superseded_by: ['sales']
+		});
+		expect(snapshotOf(approvalFlow().allow())).toEqual({ kind: 'allow' });
+		expect(snapshotOf(approvalFlow().deny('Not available'))).toEqual({
+			kind: 'deny',
+			message: 'Not available'
+		});
+	});
+	it('allows the named user or current step team, without inheriting parent authority', () => {
+		expect(canApprove(request, actor('manager', 'staff'))).toBe(true);
+		expect(canApprove(request, actor('other', 'finance'))).toBe(false);
+		expect(canApprove({ ...request, step: 1 }, actor('other', 'finance'))).toBe(true);
 		expect(
-			resolve(manifest, 'orders', b, as([]), [create({ title: 'a' }, r('no_team'))])
-		).not.toBeNull();
+			canApprove(request, { ...actor('other', 'staff'), teamPath: ['leadership', 'staff'] })
+		).toBe(false);
+	});
+	it('restricts approval to members and lets an administrator supersede', () => {
+		expect(canApprove(request, { kind: 'system', run: 'run', by: { automation: 'job' } })).toBe(
+			false
+		);
+		expect(canSupersede(request, as('leader', 'leadership'))).toBe(true);
+		expect(canSupersede(request, as('admin', 'staff', true))).toBe(true);
+	});
+	it('uses supersede for a superseder’s approve and requires its reason', () => {
+		const roles = rolesOf(request, as('leader', 'leadership'));
+		expect(moveOf('approve', roles)).toBe('supersede');
+		expect(decisionsFor('Pending', roles)).toEqual([
+			{ decision: 'approve', reason: 'required' },
+			{ decision: 'reject', reason: 'required' },
+			{ decision: 'requestChanges', reason: 'required' }
+		]);
+		expect(transition(request, 2, 'supersede', roles, '')).toMatchObject({ refused: 'reason' });
+	});
+	it('advances one step and approves only after the final step', () => {
+		const roles = new Set(['approver'] as const);
+		expect(transition(request, 2, 'approve', roles, '')).toMatchObject({
+			next: { state: 'Pending', step: 1 }
+		});
+		expect(transition({ state: 'Pending', step: 1 }, 2, 'approve', roles, '')).toMatchObject({
+			next: { state: 'Approved', step: 1 }
+		});
+	});
+	it('resubmits only for the requester and resumes or restarts at the engine’s selected step', () => {
+		const changed = { ...request, state: 'ChangesRequested' as const, step: 1 };
 		expect(
-			resolve(manifest, 'orders', b, as(['Sales', 'Finance']), [
-				create({ title: 'a' }, r({ team: ['finance'] }))
-			])
-		).toBeNull();
+			transition(changed, 2, 'resubmit', rolesOf(changed, as('manager', 'staff')), '')
+		).toMatchObject({ refused: 'forbidden' });
+		expect(
+			transition(changed, 2, 'resubmit', rolesOf(changed, as('requester', 'staff')), '', 1)
+		).toMatchObject({ next: { state: 'Pending', step: 1 } });
+		expect(
+			transition(changed, 2, 'resubmit', rolesOf(changed, as('requester', 'staff')), '', 0)
+		).toMatchObject({ next: { state: 'Pending', step: 0 } });
+		expect(sameFlow(request.route, { ...request.route, steps: [...request.route.steps] })).toBe(
+			true
+		);
+		expect(sameFlow(request.route, { ...request.route, superseded_by: ['different'] })).toBe(true);
+		expect(
+			sameFlow(request.route, {
+				...request.route,
+				steps: [{ name: 'Changed', teams: [], users: ['manager'] }]
+			})
+		).toBe(false);
 	});
-});
-
-describe('approvals eligibility (rule 46)', () => {
-	const req: Request = {
-		state: 'Pending',
-		step: 0,
-		requestor: `member:${member.id}`,
-		route: { steps: [['Finance'], ['Leadership']], superseded_by: ['Leadership'] }
-	};
-	const system: EngineActor = { kind: 'system', run: 'r', by: { automation: 'a' } };
-
-	it('approve needs the exact direct team ID on the current step; a parent team does not inherit', () => {
-		expect(canApprove(req, as(['Finance']).actor)).toBe(true);
-		expect(canApprove(req, as(['finance']).actor)).toBe(false);
-		expect(canApprove(req, as(['Finance Juniors', 'Finance']).actor)).toBe(false);
-		expect(canApprove(req, as(['Leadership']).actor)).toBe(false);
-	});
-
-	it('static identities have no team and cannot decide', () => {
-		expect(canApprove(req, system)).toBe(false);
-		expect(canSupersede(req, { ...as([]), actor: system })).toBe(false);
-	});
-
-	it('superseders are a superseded_by team or an administrator; participants add the requestor, only while pending', () => {
-		expect(canSupersede(req, as(['Leadership']))).toBe(true);
-		expect(canSupersede(req, as([], true))).toBe(true);
-		expect(participant(req, as([]))).toBe(true);
-		expect(participant({ ...req, requestor: 'member:other' }, as(['Ops']))).toBe(false);
-		expect(participant({ ...req, state: 'Approved' }, as(['Finance']))).toBe(false);
+	it('rejects terminal moves and requires reasons for rejection or requested changes', () => {
+		const roles = new Set(['approver'] as const);
+		for (const move of ['reject', 'requestChanges'] as const)
+			expect(transition(request, 2, move, roles, '')).toMatchObject({ refused: 'reason' });
+		expect(transition({ state: 'Approved', step: 1 }, 2, 'reject', roles, 'No')).toMatchObject({
+			refused: 'invalidMove'
+		});
+		expect(participant({ ...request, state: 'Rejected' }, as('manager', 'staff'))).toBe(false);
 	});
 });

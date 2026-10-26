@@ -1,8 +1,8 @@
 // A small workspace for the query engine's tests: accounts ← orders ← lines, an arc on notes, a masked field.
 import type { Authority, Bindings, CollectionAuthority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { SEARCH_FUNCTIONS } from '../src/engine/schema/search.ts';
-import type { Pred } from '../src/protocol/ir-types.ts';
+import { searchFunctions } from '@norbital-ai/store';
+import type { Pred } from '@norbital-ai/store';
 
 const sys = { description: 'x', label: 'name' } as const;
 export const manifest: EngineManifest = {
@@ -34,6 +34,20 @@ export const manifest: EngineManifest = {
 				doc: { kind: 'json', optional: true },
 				color: { kind: 'vector', dim: 3, metric: 'l2', optional: true },
 				spot: { kind: 'point', optional: true }
+			},
+			search: {
+				text: [],
+				indexes: {
+					hue: {
+						description: 'Nearest colour',
+						dim: 3,
+						metric: 'l2',
+						field: 'color',
+						input: {},
+						candidates: 3,
+						rerank: true
+					}
+				}
 			}
 		},
 		lines: {
@@ -50,15 +64,11 @@ export const manifest: EngineManifest = {
 	},
 	collections: {
 		accounts: { read: { fields: 'all' } },
-		orders: {
-			read: { fields: 'all' },
-			similarity: { hue: { description: 'nearest colour', input: {}, candidates: 3 } }
-		},
+		orders: { read: { fields: 'all' } },
 		lines: { read: { fields: 'all' } },
 		notes: { read: { fields: ['body', 'about'], relations: ['about'] } }
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {},
 	teams: {},
 	automations: {},
@@ -73,7 +83,9 @@ export const manifest: EngineManifest = {
 /** The DDL the schema area emits for this manifest, reduced to what reads touch. */
 export const DDL = `
 create extension if not exists vector;
-${SEARCH_FUNCTIONS.map((f) => `${f.sql};`).join('\n')}
+${searchFunctions()
+	.map((f) => `${f.sql};`)
+	.join('\n')}
 create table accounts (id uuid primary key, revision int not null default 1, created_at timestamptz not null default now(),
 	created_by text, updated_at timestamptz not null default now(), updated_by text,
 	name text not null, region text, secret text, shout text generated always as (upper(name)) stored,
@@ -109,9 +121,7 @@ const arm = (where: Pred, masks: CollectionAuthority['masks'] = {}): CollectionA
 	create: [],
 	update: [],
 	delete: [],
-	approval: { create: [], update: [], delete: [] },
 	queries: [],
-	actions: [],
 	moves: {},
 	masks
 });

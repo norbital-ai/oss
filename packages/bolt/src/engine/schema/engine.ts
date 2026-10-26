@@ -5,10 +5,19 @@
 // render after the models (`schemaObjects`).
 import { NOTIFY } from '../conversations/store.ts';
 import { NOTICE_PUSH } from '../runs/push.ts';
-import type { SchemaObject } from './ddl.ts';
-import { MINOR_FN } from './ddl.ts';
+import { MINOR_FN, type SchemaObject } from '@norbital-ai/store';
+import { AUDIT_FUNCTIONS } from './audit.ts';
 
-type Private = { name: string; rank: SchemaObject['rank']; why: string; sql: readonly string[] };
+type Private = {
+	name: string;
+	rank: SchemaObject['rank'];
+	why: string;
+	sql: readonly string[];
+	tables?: readonly string[];
+	functions?: readonly string[];
+	/** Native source migrations carry these definitions and must prove them independently of the host registry. */
+	source?: true;
+};
 
 /** A statement-level trigger on inserted notices that queues one platform run (rules 47, 48). */
 const noticeTrigger = (
@@ -35,14 +44,29 @@ const noticeTrigger = (
 
 const REGISTRY = (): readonly Private[] => [
 	{
+		name: 'bolt_audit',
+		source: true,
+		rank: 'function',
+		functions: [
+			'bolt_write_context()',
+			'store_anonymise_fields(table_name text, record_id text)',
+			'bolt_audit_mark()',
+			'bolt_audit()'
+		],
+		why: 'native row history and raw held-record guards include database FK effects; captures stay in the native operation',
+		sql: AUDIT_FUNCTIONS
+	},
+	{
 		name: 'bolt_minor_units',
 		rank: 'function',
+		functions: ['bolt_minor_units(c text)'],
 		why: 'the money minor-unit CHECK helper (rule 68): SQL, not a record',
 		sql: [MINOR_FN]
 	},
 	{
 		name: 'bolt_assert',
 		rank: 'function',
+		functions: ['bolt_assert(ok boolean, code text, detail text)'],
 		why: "the one write statement's guard (rule 20): raises BA001 inside the WITH chain",
 		sql: [
 			`create or replace function bolt_assert(ok boolean, code text, detail text) returns boolean language plpgsql as $$
@@ -62,11 +86,53 @@ const REGISTRY = (): readonly Private[] => [
 	},
 	{
 		name: 'bolt_history',
+		source: true,
 		rank: 'table',
 		why: "every collection's row history (rule 17), keyed by collection and record: a log over all models, not one; a per-record restore is a `restored` revision naming its source in `restored_from`",
 		sql: [
-			`create table if not exists bolt_history (collection text not null, record uuid not null, revision int not null, at timestamptz not null default now(), actor text, op text not null check (op in ('create', 'update', 'delete')), cause text not null check (cause in ('direct', 'cascade', 'derived', 'seed', 'erased', 'restored')), changes jsonb not null default '{}', restored_from int check ((cause = 'restored') = (restored_from is not null)), request uuid)`,
+			`create table if not exists bolt_history (collection text not null, record uuid not null, revision int not null, at timestamptz not null default now(), actor text, op text not null check (op in ('create', 'update', 'delete')), cause text not null check (cause in ('direct', 'cascade', 'derived', 'seed', 'erased', 'restored')), changes jsonb not null default '{}', restored_from int check ((cause = 'restored') = (restored_from is not null)), request uuid, operation text)`,
+			'alter table bolt_history add column if not exists operation text',
+			"alter table bolt_history add column if not exists meta jsonb not null default '{}'::jsonb",
+			'create index if not exists bolt_history__operation on bolt_history(operation) where operation is not null',
 			'create index if not exists bolt_history__record on bolt_history (collection, record, revision)'
+		]
+	},
+	{
+		name: 'bolt_audit_receipt',
+		rank: 'table',
+		why: 'Small commit correlation for the host-owned durable audit intent; payloads remain in the separate audit store.',
+		sql: [
+			'create table if not exists bolt_audit_receipt (operation text primary key, at timestamptz not null, outcome_key text, digest text, run text, approval uuid)',
+			'alter table bolt_audit_receipt add column if not exists acknowledged_at timestamptz',
+			'alter table bolt_audit_receipt add column if not exists expires_at timestamptz',
+			'alter table bolt_audit_receipt add column if not exists expired_at timestamptz',
+			`do $$ begin
+				if not exists(select 1 from pg_constraint where conrelid='bolt_audit_receipt'::regclass and conname='bolt_audit_receipt__expiry_finite') then
+					alter table bolt_audit_receipt add constraint bolt_audit_receipt__expiry_finite check (
+						(expires_at is null or isfinite(expires_at)) and (expired_at is null or isfinite(expired_at))) not valid;
+				end if;
+			end $$`,
+			'create index if not exists bolt_audit_receipt__at on bolt_audit_receipt(at)',
+			'create index if not exists bolt_audit_receipt__pending on bolt_audit_receipt(operation) where acknowledged_at is null',
+			'create index if not exists bolt_audit_receipt__pending_outcome on bolt_audit_receipt(outcome_key) where acknowledged_at is null'
+		]
+	},
+	{
+		name: 'bolt_audit_retention',
+		rank: 'table',
+		why: 'One native upgrade deadline gives legacy audit receipts a finite grace period without rewriting them.',
+		sql: [
+			'create table if not exists bolt_audit_retention (one boolean primary key check (one), expires_at timestamptz not null check (isfinite(expires_at)))',
+			"insert into bolt_audit_retention(one,expires_at) values(true,clock_timestamp()+interval '30 days') on conflict(one) do nothing"
+		]
+	},
+	{
+		name: 'bolt_audit_erase',
+		rank: 'table',
+		why: 'Deferred history erasure retains only operation, record, revision and field names until external audit acknowledgement; never row payloads.',
+		sql: [
+			`create table if not exists bolt_audit_erase (operation text not null references bolt_audit_receipt(operation) on delete restrict deferrable initially deferred, collection text not null, record uuid not null, revision int not null, mode text not null check (mode in ('remove','anonymise')), purge text[] not null default '{}', keep_marker boolean not null, primary key(operation,collection,record,mode))`,
+			'create index if not exists bolt_audit_erase__record on bolt_audit_erase(collection,record)'
 		]
 	},
 	{
@@ -80,6 +146,7 @@ const REGISTRY = (): readonly Private[] => [
 	{
 		name: 'bolt_idem',
 		rank: 'table',
+		tables: ['bolt_idem', 'bolt_idem_outcome'],
 		why: "the idempotency gate (rules 20, 31, 55): request keys and each one's recorded outcome",
 		sql: [
 			'create table if not exists bolt_idem (key text primary key, digest text not null, issued_at timestamptz not null, run text)',
@@ -121,28 +188,12 @@ const REGISTRY = (): readonly Private[] => [
 		]
 	},
 	{
-		name: 'bolt_feed',
-		rank: 'table',
-		why: "a feed's progress per instance and partition (cursor, snapshot cycle and phase, health, literal digest, CAS version): a composite key",
-		sql: [
-			`create table if not exists bolt_feed (feed text not null, instance text not null references sys_integration (id) on delete cascade, partition text not null default '', cursor jsonb, cycle int not null default 0, phase text not null default 'read' check (phase in ('read', 'reconcile')), health jsonb, digest text not null, version int not null default 0, primary key (feed, instance, partition))`
-		]
-	},
-	{
-		name: 'bolt_feed_row',
-		rank: 'table',
-		why: 'the record each remote key of a feed wrote, and the snapshot cycle that last saw it: deletes by key, reconcile and drain',
-		sql: [
-			`create table if not exists bolt_feed_row (feed text not null, instance text not null, partition text not null default '', key text not null, record text not null, cycle int not null, primary key (feed, instance, partition, key), foreign key (feed, instance, partition) references bolt_feed (feed, instance, partition) on delete cascade)`,
-			'create index if not exists bolt_feed_row_cycle on bolt_feed_row (feed, instance, partition, cycle)'
-		]
-	},
-	{
 		name: 'bolt_approvals',
+		source: true,
 		rank: 'table',
 		why: 'the approval state machine row (X-18, rules 44–46, machine.ts): state, step, snapshotted route, the checkpoint of every record the provisional change touched, and the log of every interaction; approval_request is its readable face',
 		sql: [
-			`create table if not exists bolt_approvals (id uuid primary key, state text not null check (state in ('Pending', 'ChangesRequested', 'Approved', 'Rejected', 'Withdrawn', 'Superseded')), step int not null, collection text not null, record text not null, action text not null, requestor text not null, requestor_user text, route jsonb not null, records jsonb not null, log jsonb not null default '[]', at timestamptz not null, closed_at timestamptz, seq bigint generated always as identity)`,
+			`create table if not exists bolt_approvals (id uuid primary key, state text not null check (state in ('Pending', 'ChangesRequested', 'Approved', 'Rejected', 'Superseded')), step int not null, collection text not null, record text not null, action text not null, requestor text not null, requestor_user text, route jsonb not null, records jsonb not null, log jsonb not null default '[]', at timestamptz not null, closed_at timestamptz, seq bigint generated always as identity)`,
 			`create index if not exists bolt_approvals__open on bolt_approvals (state) where state in ('Pending', 'ChangesRequested')`
 		]
 	},
@@ -173,4 +224,46 @@ export function engineObjects(): readonly SchemaObject[] {
 		drop: null
 	}));
 	return objects;
+}
+
+/** Definitions emitted into source-native migration files, not host-only objects that their proof may omit. */
+export function sourceObjects(): readonly SchemaObject[] {
+	const names = new Set(
+		REGISTRY()
+			.filter((object) => object.source === true)
+			.map((object) => `engine:${object.name}`)
+	);
+	return engineObjects().filter((object) => names.has(object.id));
+}
+
+/** Every `(kind, owner)` pair `engineOwns` covers, whatever the inspected database holds at the time. */
+export function engineOwned(sourceNative = false): readonly (readonly [string, string])[] {
+	const pairs: [string, string][] = [];
+	const registry = REGISTRY().filter((object) => !sourceNative || object.source !== true);
+	for (const object of registry)
+		if (object.rank === 'table')
+			for (const owner of object.tables ?? [object.name])
+				for (const kind of ['table', 'column', 'constraint', 'index', 'sequence'])
+					pairs.push([kind, owner]);
+		else if (object.rank === 'index')
+			for (const fn of object.functions ?? [`${object.name}()`]) pairs.push(['function', fn]);
+		else for (const fn of object.functions ?? [`${object.name}()`]) pairs.push(['function', fn]);
+	for (const object of registry)
+		if (object.rank === 'index') pairs.push(['trigger', `sys_notification.${object.name}`]);
+	return pairs;
+}
+
+/** The only host-owned definitions omitted from source migration proofs. Unknown objects always remain drift. */
+export function engineOwns(kind: string, owner: string, sourceNative = false): boolean {
+	return REGISTRY()
+		.filter((object) => !sourceNative || object.source !== true)
+		.some((object) =>
+			object.rank === 'table'
+				? ['table', 'column', 'constraint', 'index', 'sequence'].includes(kind) &&
+					(object.tables ?? [object.name]).includes(owner)
+				: (kind === 'function' && (object.functions ?? [`${object.name}()`]).includes(owner)) ||
+					(kind === 'trigger' &&
+						object.rank === 'index' &&
+						owner === `sys_notification.${object.name}`)
+		);
 }

@@ -1,5 +1,5 @@
 // The integration workspace: customers ← orders (a seq, a state with a per-state `edit`, a roll-up) → owned lines; a
-// transform on orders that reads the customer and refuses a blocked one; two policies, `rep` (own rows, north only on
+// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows, north only on
 // write) and `auditor` (every row, `note` narrowed away, so a caller holding both sees `note` masked on others' rows).
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
@@ -26,8 +26,16 @@ export const manifest = {
 					states: { draft: { to: ['submitted'] }, submitted: { to: ['draft'], edit: ['note'] } }
 				},
 				note: { kind: 'text', optional: true },
+				archived: { kind: 'bool', default: false },
+				stage: {
+					kind: 'enum',
+					values: ['new', 'won', 'lost'],
+					default: 'new',
+					transitions: { new: ['won'], won: [], lost: [] }
+				},
 				total: { kind: 'sum', of: 'lines.amount' }
-			}
+			},
+			locked: { archived: { eq: true } }
 		},
 		lines: {
 			description: 'A line',
@@ -45,13 +53,13 @@ export const manifest = {
 			read: { fields: 'all' },
 			create: {
 				input: {
-					columns: ['title', 'region', 'note', 'customer'],
+					columns: ['title', 'region', 'note', 'stage', 'customer'],
 					with: { lines: { create: lineCols } }
 				}
 			},
 			update: {
 				input: {
-					columns: ['title', 'region', 'note', 'status'],
+					columns: ['title', 'region', 'note', 'status', 'archived', 'stage'],
 					with: { lines: { create: lineCols, update: lineCols, delete: {} } }
 				}
 			},
@@ -60,7 +68,6 @@ export const manifest = {
 		lines: { read: { fields: 'all' }, update: { input: lineCols } }
 	},
 	integrations: {},
-	pipelines: {},
 	policies: {
 		rep: {
 			description: 'Sales rep',
@@ -94,16 +101,39 @@ export const manifest = {
 	agent: { skills: {} }
 } satisfies EngineManifest;
 
-/** `guest.mjs`: one transform, its reads batched into one crossing (rule 12); `spin` burns CPU past the wall. */
+/** Explicit opt-in for fixtures that bind the guest's create and update callbacks. */
+export const callbacks = {
+	...manifest,
+	collections: {
+		...manifest.collections,
+		orders: {
+			...manifest.collections.orders,
+			create: { ...manifest.collections.orders.create, transform: true },
+			update: { ...manifest.collections.orders.update, transform: true }
+		}
+	}
+} satisfies EngineManifest;
+
+/** `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. */
 export const guest = {
-	source: `import { Effect } from 'effect';
-export default { collection: { orders: { bodies: { transform: function* (rows, ctx) {
-		if (rows.some((r) => r.title === 'spin')) for (;;) {}
-		const ids = rows.map((r, i) => r.customer ?? ctx.existing[i]?.customer ?? null);
-		const found = yield* Effect.all(ids.map((id) => id === null ? Effect.succeed(null) : ctx.db.get('customers', id)), { concurrency: 'unbounded' });
-		for (const c of found) if (c?.blocked) yield* ctx.refuse(c.name + ' is blocked', { field: 'customer' });
-		return rows.map((r) => r.title === undefined ? r : { ...r, title: r.title.trim() });
-	} } } } };`
+	source: `function* checkCustomers(rows, ctx) {
+	const ids = [...new Set(rows.flatMap((row) => row.customer == null ? [] : [row.customer]))];
+	const customers = ids.length === 0 ? [] : (yield* ctx.db.query('customers', { where: { id: { in: ids } }, all: true })).rows;
+	for (const customer of customers) if (customer.blocked) yield* ctx.refuse(customer.name + ' is blocked', { field: 'customer' });
+}
+const trim = (rows) => rows.map((row) => row.title === undefined ? row : { ...row, title: row.title.trim() });
+export default { collection: { orders: { bodies: {
+	create: function* (rows, ctx) {
+		if (rows.some((row) => row.title === 'spin')) for (;;) {}
+		yield* checkCustomers(rows, ctx);
+		return trim(rows);
+	},
+	update: function* (changes, ctx) {
+		if (changes.some(({ set }) => set.title === 'spin')) for (;;) {}
+		yield* checkCustomers(changes.map(({ before, set }) => ({ ...before, ...set })), ctx);
+		return trim(changes.map(({ set }) => set));
+	}
+} } } };`
 };
 
 export const ACME = '0199a000-0000-4000-8000-0000000000c1';

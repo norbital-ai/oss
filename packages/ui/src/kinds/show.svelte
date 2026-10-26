@@ -25,7 +25,6 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { Schema } from 'effect';
 	import { inputSchema } from '@norbital-ai/std/kind';
 	import { useEnumText } from '../collection/context.js';
-	import { humanize } from '../text/messages.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
@@ -34,11 +33,11 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { cn, uiText } from '../primitives/utils.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { arcOf, currencyOf, format, inferKind, isMasked, shownKind, wideKind } from './kind.js';
+	import { arcOf, currencyOf, format, isMasked, shownKind } from './kind.js';
 	import { KINDS } from './registry.js';
 	import Self from './show.svelte';
 	import StateBadge from './state-badge.svelte';
-	import JsonSchemaMatrix from './json-schema-matrix.svelte';
+	import StructuredData from './structured-data.svelte';
 	import { isJsonSchemaDocument } from './json-schema.js';
 	import Picker from './picker.svelte';
 
@@ -161,86 +160,30 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		/></span
 	>
 {:else if shape !== undefined}
-	<Self kind={shape} value={v} {name} {row} {readonly} {id} class={className} />
-{:else if kind.kind === 'object' && object !== null && readonly}
-	<!-- short values flow across the width, label over value; a structure, code or long text takes a whole row -->
-	<dl
-		{id}
-		class={cn('grid grid-cols-[repeat(auto-fill,minmax(min(12rem,100%),1fr))] gap-x-6 gap-y-3 text-sm', className)}
-	>
-		{#each Object.entries(kind.fields).filter(([, k]) => !k.hidden) as [f, k] (f)}
-			<div class={cn('grid min-w-0 content-start gap-0.5', wideKind(k) && 'col-span-full')}>
-				<dt class="text-xs text-muted-foreground">{k.label ?? humanize(f)}</dt>
-				<dd class="min-w-0"><Self kind={k} value={object[f]} name={f} row={object} {readonly} /></dd>
-			</div>
-		{/each}
-	</dl>
-{:else if kind.kind === 'object' && object !== null}
-	<dl {id} class={cn('grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm', className)}>
-		{#each Object.entries(kind.fields).filter(([, k]) => !k.hidden) as [f, k] (f)}
-			<dt class="text-muted-foreground">{k.label ?? humanize(f)}</dt>
-			<dd class="min-w-0"><Self kind={k} value={object[f]} name={f} row={object} {readonly} /></dd>
-		{/each}
-	</dl>
+	<div {id} class={cn('min-w-0', className)}>
+		<StructuredData kind={shape} value={v} mode="view" {name} {row} />
+	</div>
 {:else if kind.kind === 'union' && 'arms' in kind && object !== null}
 	{@const arm = kind.arms[String(object[kind.by])] ?? {}}
 	<Self
 		kind={{ kind: 'object', fields: { [kind.by]: { kind: 'text' }, ...arm } }}
 		value={v}
 		{name}
+		{row}
 		{readonly}
 		{id}
 		class={className}
 	/>
-{:else if kind.kind === 'list' && Arr.isArray<Value>(v) && kind.of.kind === 'object' && !Object.values(kind.of.fields).some(wideKind)}
-	<!-- a list of flat records is a table: a column per field, a row per item -->
-	{@const columns = Object.entries(kind.of.fields).filter(([, k]) => !k.hidden)}
-	<div {id} class={cn('min-w-0 overflow-x-auto rounded-md border border-border', className)}>
-		<table class="w-full text-sm">
-			<thead class="bg-muted/50 text-left text-muted-foreground">
-				<tr>
-					{#each columns as [f, k] (f)}<th class="px-3 py-2 font-medium whitespace-nowrap"
-							>{k.label ?? humanize(f)}</th
-						>{/each}
-				</tr>
-			</thead>
-			<tbody>
-				{#each v as item, i (i)}
-					{@const cells = item !== null && typeof item === 'object' && !Arr.isArray<Value>(item) && !(item instanceof Decimal) ? item : {}}
-					<tr class="border-t border-border align-top">
-						{#each columns as [f, k] (f)}<td class="px-3 py-2"
-								><Self kind={k} value={cells[f]} name={f} row={cells} /></td
-							>{/each}
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+{:else if ((kind.kind === 'object' || kind.kind === 'record') && object !== null) || (kind.kind === 'list' && Arr.isArray<Value>(v))}
+	<div {id} class={cn('min-w-0', className)}>
+		<StructuredData {kind} value={v} mode="view" {name} {row} />
 	</div>
-{:else if kind.kind === 'list' && Arr.isArray<Value>(v) && !wideKind(kind.of)}
-	<ul {id} class={cn('flex flex-wrap gap-x-3 gap-y-1', className)}>
-		{#each v as item, i (i)}<li><Self kind={kind.of} value={item} {name} /></li>{/each}
-	</ul>
-{:else if kind.kind === 'list' && Arr.isArray<Value>(v)}
-	<ul {id} class={cn('grid gap-3', className)}>
-		{#each v as item, i (i)}<li><Self kind={kind.of} value={item} {name} {readonly} /></li>{/each}
-	</ul>
-{:else if kind.kind === 'record' && object !== null}
-	<Self
-		kind={{
-			kind: 'object',
-			fields: Object.fromEntries(Object.keys(object).map((k) => [k, kind.of]))
-		}}
-		value={v}
-		{name}
-		{readonly}
-		{id}
-		class={className}
-	/>
 {:else if kind.kind === 'json' && isJsonSchemaDocument(v)}
-	<JsonSchemaMatrix value={v} {id} />
-{:else if kind.kind === 'json'}
-	<!-- undeclared JSON shows by what it holds: fields, tables and values, never raw text -->
-	<Self kind={inferKind(v)} value={v} {name} {row} {readonly} {id} class={className} />
+	<StructuredData schema={v} mode="schema" {name} {id} />
+{:else if kind.kind === 'json' || kind.kind === 'custom'}
+	<div {id} class={cn('min-w-0', className)}>
+		<StructuredData value={v} mode="view" {name} {row} />
+	</div>
 {:else if readonly}
 	<CopyText {id} {text} class={numeric ? 'tabular-nums' : undefined}>{@render inline()}</CopyText>
 {:else}

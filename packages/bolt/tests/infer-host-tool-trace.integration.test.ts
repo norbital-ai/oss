@@ -3,7 +3,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { AiRequest, Outcome } from '../src/engine/contracts.ts';
+import type { AiRequest, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
@@ -78,7 +78,6 @@ const manifest = {
 		relay: { description: 'Relay as the clerk', input: { id: { kind: 'text' } }, runAs: 'trigger' }
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
 	connections: {},
 	envoys: {},
@@ -93,13 +92,13 @@ const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match in
 export default { automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
-			const inv = yield* ctx.get('invoices', id);
+			const inv = yield* ctx.query('invoices', { id });
 			const r = yield* infer(ctx, inv);
 			yield* ctx.act('invoices.update', { target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } });
 		}
 	} },
 	relay: { body: function* (input, ctx) {
-		const inv = yield* ctx.get('invoices', input.id);
+		const inv = yield* ctx.query('invoices', { id: input.id });
 		const r = yield* infer(ctx, inv);
 		yield* ctx.act('invoices.update', { target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } });
 	} }
@@ -169,7 +168,7 @@ const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, clerk(t), { reads: [{ m: 'get', a: ['invoices', id] }] }).pipe(
+	qReply(route, clerk(t), { reads: [{ m: 'query', a: ['invoices', { id: id }] }] }).pipe(
 		Effect.map(
 			(reply) =>
 				Schema.decodeUnknownSync(Schema.Struct({ note: Schema.NullOr(Schema.String) }))(

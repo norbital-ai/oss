@@ -28,7 +28,7 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import type { DriverName, IntegrationSpec } from '../src/decl/runtime/integration.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, Outcome } from '../src/engine/contracts.ts';
+import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { DbError, Fenced } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
@@ -72,7 +72,6 @@ const manifest = {
 	models: {},
 	relationships: {},
 	collections: {},
-	pipelines: {},
 	integrations: {
 		erp: {
 			description: 'The ERP',
@@ -193,6 +192,7 @@ const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports'
 			integrationLinks({
 				providers,
 				enter: (effect) => effect.pipe(Effect.provide(context)),
+				admit: (effect) => effect.pipe(Effect.provide(context)),
 				credentials: store,
 				publicUrl: PUBLIC,
 				log: () => {},
@@ -1251,7 +1251,7 @@ describe('a provider that signs in with OAuth and tests itself (a mailbox)', () 
 									return { providerId: '<x@acme.example>' };
 								},
 								async pair() {
-									state = ctx.state();
+									state = await ctx.state();
 									ctx.pairing({
 										kind: 'oauth',
 										value: `https://login.example/authorize?state=${state}`,
@@ -1467,10 +1467,12 @@ describe('one per member, and the host’s OAuth client', () => {
 					const after = yield* hosted.offers;
 					expect(present(offerOf(after, 'email').personal[0]).available).toBeUndefined();
 					yield* hosted.pair('mail', { key: 'k' });
-					expect(present(opened.at(-1)).oauthClient('google')).toEqual({
-						id: 'host-id',
-						secret: 'host-secret'
-					});
+					expect(yield* Effect.promise(() => present(opened.at(-1)).oauthClient('google'))).toEqual(
+						{
+							id: 'host-id',
+							secret: 'host-secret'
+						}
+					);
 					yield* hosted.close;
 
 					// a definition's own client, once its secrets are set, wins over the host's

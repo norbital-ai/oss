@@ -36,10 +36,13 @@ export const initializeShellAssets = (entry: string): Promise<void> =>
 			};
 			yield* Effect.all(
 				[
-					Effect.tryPromise(awaitDevice),
+					Effect.tryPromise<void>(awaitDevice),
 					Effect.forEach(
 						assets.modules,
-						(path) => Effect.tryPromise(() => import(/* @vite-ignore */ resolve(path))),
+						(path) =>
+							Effect.tryPromise<void>(async () => {
+								await import(/* @vite-ignore */ resolve(path));
+							}),
 						{ concurrency: 'unbounded', discard: true }
 					),
 					Effect.forEach(

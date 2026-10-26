@@ -2,7 +2,7 @@ import { Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import type { Files } from '../ports.ts';
+import { Images, type Files } from '../ports.ts';
 import { imageJpeg } from '../files/image.ts';
 import { row } from '../system/rows.ts';
 import { MODEL_FILES } from './ai.ts';
@@ -48,7 +48,11 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 });
 
 /** The host-independent attachment reader; model-compatible images and documents remain bytes. */
-export function fileAttachments(db: TenantDbShape, files: Files['Service']): AttachmentPort {
+export function fileAttachments(
+	db: TenantDbShape,
+	files: Files['Service'],
+	images: Images['Service']
+): AttachmentPort {
 	return {
 		read: Effect.fn('Agents.readAttachment')(function* (
 			file: Json,
@@ -70,7 +74,10 @@ export function fileAttachments(db: TenantDbShape, files: Files['Service']): Att
 				if (!mime.startsWith('image/')) return yield* refused(`a ${mime} file is not an image`);
 				return MODEL_IMAGE.test(mime)
 					? { mime, bytes }
-					: { mime: 'image/jpeg', bytes: yield* imageJpeg(bytes, 2048) };
+					: {
+							mime: 'image/jpeg',
+							bytes: yield* imageJpeg(bytes, 2048).pipe(Effect.provideService(Images, images))
+						};
 			}
 			if (as === 'document') {
 				if (mime !== 'application/pdf') return yield* refused(`a ${mime} file is not a PDF`);

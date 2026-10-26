@@ -1,15 +1,17 @@
-// End to end through `/__bolt/act`, the engine entry and the test kit: a collection action writing two collections in
-// one statement, idempotent under its key (rules 31, 33), its commit published to the live lane.
+// End to end through `/__bolt/act`, the engine entry and the test kit: a generated nested create writing two models in
+// one native batch, idempotent under its key (rules 31, 33), its commit published to the live lane.
 import { describe, expect, it } from '@effect/vitest';
+import { vi } from 'vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { PgliteDb } from '../src/engine/db/pglite.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Callables, Live } from '../src/engine/services.ts';
 import { ActReply } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
-import { qReply, routeFixture } from './support/route-fixture.ts';
+import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { program } from './support/guest-fixture.ts';
+import { uuidv7 } from '../src/protocol/wire.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -21,13 +23,8 @@ const manifest = {
 	collections: {
 		orders: {
 			read: { fields: 'all' },
-			create: { input: { columns: ['title'] } },
-			actions: {
-				place: {
-					description: 'Place',
-					input: { title: { kind: 'text' } },
-					output: { kind: 'text' }
-				}
+			create: {
+				input: { columns: ['title'], with: { notes: { create: { columns: ['text'] } } } }
 			}
 		},
 		notes: { read: { fields: 'all' }, create: { input: { columns: ['text', 'order'] } } }
@@ -36,15 +33,22 @@ const manifest = {
 		rep: {
 			description: 'Rep',
 			grants: {
-				orders: { read: true, create: true, actions: ['place'] },
+				orders: { read: true, create: true },
 				notes: { read: true, create: true }
-			}
+			},
+			automations: ['orders_place']
 		}
 	},
 	integrations: {},
-	pipelines: {},
 	teams: {},
-	automations: {},
+	automations: {
+		orders_place: {
+			description: 'Place an order with its note',
+			input: { title: { kind: 'text' } },
+			output: { kind: 'text' },
+			runAs: 'trigger'
+		}
+	},
 	connections: {},
 	envoys: {},
 	mcp: {},
@@ -52,13 +56,12 @@ const manifest = {
 	customFields: {},
 	agent: { skills: {} }
 } satisfies EngineManifest;
-const guest = program(`export default { collection: { orders: { bodies: { actions: {
-	place: function* (input, ctx) {
-		const id = (yield* ctx.act('orders.create', { title: input.title })).records[0].id;
-		yield* ctx.act('notes.create', { text: 'placed ' + input.title, order: id });
-		return id;
-	},
-} } } } };`);
+const guest = program(`export default { automation: { orders_place: { body: function* (input, ctx) {
+	const made = yield* ctx.act('orders.create', {
+		title: input.title, notes: { create: [{ text: 'placed ' + input.title }] },
+	});
+	return made.records.find((row) => row.collection === 'orders').id;
+} } } };`);
 const json = (response: Response) =>
 	Effect.tryPromise({
 		try: () => response.json(),
@@ -67,9 +70,9 @@ const json = (response: Response) =>
 const count = (db: TenantDb['Service'], collection: string) =>
 	db.value(Schema.Number, { text: `SELECT count(*)::int AS n FROM ${collection}`, params: [] });
 
-describe('a collection action over /__bolt/act', () => {
+describe('a generated nested create over /__bolt/act', () => {
 	it.live(
-		'writes two collections in one statement; the same key replays the outcome and writes nothing',
+		'writes two collections in one native batch; the same key replays without adding rows',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -87,28 +90,73 @@ describe('a collection action over /__bolt/act', () => {
 								method: 'POST',
 								headers: { 'Idempotency-Key': 'k1' },
 								body: JSON.stringify({
-									callable: 'orders.place',
-									input: { title: 'desk' },
+									callable: 'orders.create',
+									input: { title: 'desk', notes: { create: [{ text: 'placed desk' }] } },
 									issuedAt: t.clock.now()
 								})
 							})
 						);
-					t.count.reset();
+					const commits = vi.spyOn(t.db, 'transaction');
 					const first = yield* post();
 					expect(first.status).toBe(200);
 					const reply = yield* Schema.decodeUnknownEffect(ActReply)(yield* json(first));
 					expect(reply.outcome).toMatchObject({ kind: 'committed' });
 					expect(reply.v).toBeGreaterThan(0);
 					expect(reply.v).toBe(yield* live.v);
-					expect(t.count.writes).toBe(1);
+					expect(commits).toHaveBeenCalledTimes(1);
 					expect(yield* json(yield* post())).toMatchObject({ outcome: reply.outcome });
 					expect([yield* count(t.db, 'orders'), yield* count(t.db, 'notes')]).toEqual([1, 1]);
 				})
 			)
 	);
+
+	it.live('starts the order workflow as a queued run and records its result after execution', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
+				const t = Context.get(context, TestWorkspace);
+				const queued = (yield* actReply(
+					yield* routeFixture(context),
+					t.as(t.member(['rep'])).authority,
+					{
+						callable: 'start',
+						input: {
+							automation: 'orders_place',
+							runs: [{ id: uuidv7(Date.parse(t.clock.now())), input: { title: 'desk' } }]
+						},
+						issuedAt: t.clock.now()
+					}
+				)).outcome;
+				if (queued.kind !== 'committed') throw new Error('Order workflow did not enqueue');
+				const run = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+					queued.output
+				);
+				expect(yield* count(t.db, 'orders')).toBe(0);
+				expect(
+					yield* t.db.rows(Schema.Struct({ state: Schema.String }), {
+						text: 'SELECT state FROM sys_run WHERE id = $1',
+						params: [run.id]
+					})
+				).toEqual([{ state: 'queued' }]);
+				yield* t.runDue();
+				const order = (yield* t.db.rows(Schema.Struct({ id: Schema.String }), {
+					text: 'SELECT id FROM orders',
+					params: []
+				}))[0];
+				if (order === undefined) throw new Error('Missing workflow order');
+				expect(
+					yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+						text: 'SELECT state, output FROM sys_run WHERE id = $1',
+						params: [run.id]
+					})
+				).toEqual([{ state: 'succeeded', output: order.id }]);
+				expect([yield* count(t.db, 'orders'), yield* count(t.db, 'notes')]).toEqual([1, 1]);
+			})
+		)
+	);
 });
 
-describe('a keyed read (`ctx.read({ … })`)', () => {
+describe('a keyed query (`ctx.query({ … })`)', () => {
 	const keyed = {
 		...manifest,
 		models: {
@@ -138,10 +186,10 @@ describe('a keyed read (`ctx.read({ … })`)', () => {
 	} satisfies EngineManifest;
 	const board = program(`export default { collection: { orders: { bodies: { queries: {
 		board: function* (_, ctx) {
-			const { orders, notes, first } = yield* ctx.read({
-				orders: { collection: 'orders', all: true, select: { title: true } },
-				notes: { collection: 'notes', where: { text: { eq: 'b' } }, all: true },
-				first: { collection: 'orders', id: '00000000-0000-4000-8000-000000000001' },
+			const { orders, notes, first } = yield* ctx.query({
+				orders: { from: 'orders', all: true, select: { title: true } },
+				notes: { from: 'notes', where: { text: { eq: 'b' } }, all: true },
+				first: { from: 'orders', id: '00000000-0000-4000-8000-000000000001' },
 			});
 			return { orders: orders.rows.map((r) => r.title).sort(), notes: notes.rows.length, first: first === null ? null : first.title };
 		},
@@ -188,13 +236,13 @@ describe('a keyed read (`ctx.read({ … })`)', () => {
 					});
 					const rep = t.as(t.member(['rep']));
 					yield* qReply(route, rep.authority, {
-						reads: [{ m: 'query', a: ['orders', 'board', {}] }]
+						reads: [{ m: 'query', a: ['orders.board', {}] }]
 					});
 					t.count.reset();
 					const s0 = statements;
 					expect(
 						(yield* qReply(route, rep.authority, {
-							reads: [{ m: 'query', a: ['orders', 'board', {}] }]
+							reads: [{ m: 'query', a: ['orders.board', {}] }]
 						})).answers[0]
 					).toEqual({ orders: ['open a', 'open b'], notes: 1, first: null });
 					expect([t.count.reads, statements - s0]).toEqual([1, 1]);
@@ -205,27 +253,12 @@ describe('a keyed read (`ctx.read({ … })`)', () => {
 
 describe('several verbs as one act (`calls.acts`, `ctx.act.many`)', () => {
 	it.live(
-		'plans every act at once — one read round trip and statement — and commits them in one statement',
+		'commits the generated verbs in one native batch and replays their outcome without adding rows',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					let statements = 0;
-					const db = Layer.effect(
-						TenantDb,
-						Effect.gen(function* () {
-							const inner = yield* TenantDb;
-							return TenantDb.typed({
-								...inner,
-								read: (batch) =>
-									Effect.suspend(() => {
-										statements += batch.length;
-										return inner.read(batch);
-									})
-							});
-						})
-					).pipe(Layer.provide(PgliteDb.layer()));
 					const context = yield* Layer.build(
-						TestWorkspace.layer({ manifest, guest: yield* guest, db })
+						TestWorkspace.layer({ manifest, guest: yield* guest })
 					);
 					const t = Context.get(context, TestWorkspace),
 						calls = Context.get(context, Callables);
@@ -235,10 +268,9 @@ describe('several verbs as one act (`calls.acts`, `ctx.act.many`)', () => {
 						params: []
 					});
 					const rep = t.as(t.member(['rep'])).authority;
-					t.count.reset();
-					const s0 = statements;
-					const r = yield* calls.acts({
-						name: 'probe',
+					const commits = vi.spyOn(t.db, 'transaction');
+					const request: Parameters<typeof calls.acts>[0] = {
+						name: 'act.many',
 						key: 'k-acts',
 						issuedAt: t.clock.now(),
 						authority: rep,
@@ -262,9 +294,11 @@ describe('several verbs as one act (`calls.acts`, `ctx.act.many`)', () => {
 							{ collection: 'orders', verb: 'create', input: { title: 'chair' } },
 							{ collection: 'notes', verb: 'create', input: { text: 'c', order } }
 						]
-					});
+					};
+					const r = yield* calls.acts(request);
 					expect(r.outcome, JSON.stringify(r.outcome)).toMatchObject({ kind: 'committed' });
-					expect([t.count.reads, statements - s0, t.count.writes]).toEqual([1, 1, 1]);
+					expect(commits).toHaveBeenCalledTimes(1);
+					expect((yield* calls.acts(request)).outcome).toEqual(r.outcome);
 					expect([yield* count(t.db, 'orders'), yield* count(t.db, 'notes')]).toEqual([2, 3]);
 				})
 			)

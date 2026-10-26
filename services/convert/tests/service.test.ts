@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, test } from '@effect/vitest';
 import { Effect, Result, Schema } from 'effect';
-import { ConversionFailed, pandoc, type Converter } from '../src/convert.ts';
+import { ConversionFailed, pandoc, processFailure, type Converter } from '../src/convert.ts';
 import { openQueue } from '../src/queue.ts';
 import { service, type Options } from '../src/server.ts';
 
@@ -203,6 +203,21 @@ test('a failed conversion settles failed with the reason', async () => {
 		error: 'bad input'
 	});
 	assert.equal((await s.call(`/v1/jobs/${id}/result`)).status, 409);
+});
+
+test('an external SIGKILL is a process failure, while the process deadline reports its timeout', () => {
+	assert.equal(
+		processFailure(null, 'SIGKILL', false, '', 60_000).message,
+		'pandoc exited with SIGKILL'
+	);
+	assert.equal(
+		processFailure(null, 'SIGKILL', false, '  worker terminated by host\n', 60_000).message,
+		'worker terminated by host'
+	);
+	assert.equal(
+		processFailure(null, 'SIGKILL', true, '', 60_000).message,
+		'The conversion took longer than 60 s.'
+	);
 });
 
 test('replicas share one queue: a job submitted to an idle replica is run by another', async () => {

@@ -1,6 +1,7 @@
-// HOST_API conformance (D10a): one black-box slice — sign in, q, act, live register, a deadline wake, close — through this
-// release's engine and handlers composed directly, and through HOST_API, each over its own fresh PGlite built from the same
-// artifact. The answers match once generated ids and instants are blanked.
+// HOST_API conformance (D10a): one black-box slice — sign in, q, act, live register, a deadline wake, close — and the
+// host clock's crons and fire, through this release's engine and handlers composed directly, and through HOST_API over
+// `nodePorts()`, each over its own fresh PGlite built from the same artifact. The answers match once generated ids and
+// instants are blanked.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,8 +29,14 @@ import {
 	type Artifact
 } from '../src/engine/artifact/read.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
-import type { DeadlinesPort, FilesPort, TransportPort } from '../src/engine/contracts.ts';
-import { PgliteDb, Pristine, type PgliteClient } from '../src/engine/db/pglite.ts';
+import type {
+	CronEntry,
+	CronFired,
+	DeadlinesPort,
+	FilesPort,
+	TransportPort
+} from '../src/engine/contracts.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { dbError } from '../src/engine/db/wire.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { BoltError } from '../src/protocol/errors.ts';
@@ -47,6 +54,12 @@ import {
 	Drivers,
 	Files,
 	Geo,
+	GuestIsolates,
+	Http,
+	Images,
+	Keys,
+	Docs,
+	Mcp,
 	Metering,
 	Speech,
 	Transport,
@@ -59,12 +72,19 @@ import {
 	readApplied,
 	schemaSlice
 } from '../src/engine/schema/plan.ts';
-import { sha256Hex } from '../src/engine/write/sql.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import { HOST_API, HOST_API_VERSION, HostFailure } from '../src/protocol/host-api.ts';
+import { auditFromAbi, auditShape } from '../src/engine/audit.ts';
+import { memoryAudit } from '../src/test/audit.ts';
 import { BoltHost, BoltHostLive } from '../src/protocol/host.ts';
 import { RateLimits, responseError } from '../src/protocol/http.ts';
 import { HostIdentity, ShellConfig, ShellRoutes, Turnstile } from '../src/shell/host.ts';
-import { guest, manifest } from './engine-fixture.ts';
+import type { EngineManifest } from '../src/engine/manifest.ts';
+import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { artifactPort } from '../src/node/artifact.ts';
+import { tenantDbPort } from '../src/node/db/port.ts';
+import { nodePorts, type NodePorts } from '../src/node/ports.ts';
+import { callbacks, guest, manifest } from './engine-fixture.ts';
 
 const ORIGIN = 'https://acme.example',
 	PUBLIC_URL = `${ORIGIN}/acme`,
@@ -78,7 +98,8 @@ const files: FilesPort = {
 	put: async (bytes, meta) => ({ key: 'k', bytes: bytes.length, sha256: '', mime: meta.mime }),
 	get: async () => new Uint8Array(),
 	url: async (key) => `${ORIGIN}/files/${key}`,
-	remove: async () => undefined
+	remove: async () => undefined,
+	download: () => Promise.reject(new Error('this host downloads nothing'))
 };
 /** Every deadline call, so both sides' scheduling compares too. */
 const deadlines = (calls: string[]): DeadlinesPort => ({
@@ -88,14 +109,21 @@ const deadlines = (calls: string[]): DeadlinesPort => ({
 });
 
 /** `bolt build`'s output for the fixture workspace: the descriptor, the manifest and the guest, digests recorded. */
-const dir = mkdtempSync(join(tmpdir(), 'bolt-host-api-'));
+const dir = mkdtempSync(join(tmpdir(), 'bolt-host-api-')),
+	cronDir = mkdtempSync(join(tmpdir(), 'bolt-host-api-cron-'));
 const databases: { dispose(): Promise<void> }[] = [];
 const native = ManagedRuntime.make(NodeServices.layer);
+const hosts = Effect.runSync(Scope.make());
 afterAll(async () => {
 	for (const database of databases) await database.dispose();
+	await Effect.runPromise(Scope.close(hosts, Exit.void));
 	await native.dispose();
 	rmSync(dir, { recursive: true, force: true });
+	rmSync(cronDir, { recursive: true, force: true });
 });
+/** The same-graph host's ports (guest isolates, http, images, mcp), alive until the suite ends. */
+const hostPorts = (): Promise<NodePorts> =>
+	Effect.runPromise(nodePorts().pipe(Scope.provide(hosts)));
 class NativeDatabase extends Context.Service<NativeDatabase, PgliteClient>()(
 	'test/HostApiPglite'
 ) {}
@@ -108,53 +136,65 @@ const freshClient = async (): Promise<PgliteClient> => {
 	return runtime.runPromise(NativeDatabase);
 };
 const fresh = async (): Promise<TenantDbShape> => PgliteDb.make(await freshClient());
-const built = async (): Promise<Artifact> => {
-	const manifestText = JSON.stringify(manifest);
-	const compiled = await native.runPromise(program(guest.source));
-	writeFileSync(join(dir, 'manifest.json'), manifestText);
-	writeFileSync(join(dir, 'guest.mjs'), compiled.source);
+const built = async (
+	at = dir,
+	m: EngineManifest = callbacks,
+	source = guest.source
+): Promise<Artifact> => {
+	const manifestText = JSON.stringify(m);
+	// admission reads the release's committed history, exactly as it would for a built workspace
+	await native.runPromise(
+		prepareMigrations(at, m, 'generate').pipe(Effect.provide(Pristine.layer))
+	);
+	const compiled = await native.runPromise(program(source));
+	writeFileSync(join(at, 'manifest.json'), manifestText);
+	writeFileSync(join(at, 'guest.mjs'), compiled.source);
 	if (compiled.sourceMap !== undefined)
-		writeFileSync(join(dir, 'guest.mjs.map'), compiled.sourceMap);
+		writeFileSync(join(at, 'guest.mjs.map'), compiled.sourceMap);
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
 		handle: 'acme',
 		name: 'Acme',
-		schema: fingerprint(schemaSlice(manifest)),
-		transforms: ['orders'],
-		projections: [],
+		schema: fingerprint(schemaSlice(m)),
 		client: { entry: 'index.js', css: [] },
 		pages: {},
 		hashes: {
 			manifest: sha256Hex(manifestText),
 			guest: sha256Hex(compiled.source),
-			client: await native.runPromise(treeHash(join(dir, 'client'))),
-			server: await native.runPromise(treeHash(join(dir, 'server')))
+			client: await native.runPromise(treeHash(join(at, 'client'))),
+			server: await native.runPromise(treeHash(join(at, 'server')))
 		}
 	};
 	writeFileSync(
-		join(dir, 'artifact.json'),
-		JSON.stringify({ ...body, hash: await native.runPromise(artifactHash(dir, body)) })
+		join(at, 'artifact.json'),
+		JSON.stringify({ ...body, hash: await native.runPromise(artifactHash(at, body)) })
 	);
-	return await native.runPromise(readArtifact(dir));
+	return await native.runPromise(readArtifact(at));
 };
 
 type Side = {
 	handle(r: Request): Promise<Response>;
 	wake(): Promise<void>;
+	crons(): Promise<readonly CronEntry[]>;
+	fire(id: string, slot: string): Promise<CronFired>;
 	close(): Promise<void>;
 	calls: string[];
 };
 
 /** The same-graph composition is BoltHostLive over the native engine and shell layers. */
 const direct = async (artifact: Artifact, db: TenantDbShape): Promise<Side> => {
-	const calls: string[] = [];
+	const calls: string[] = [],
+		audit = memoryAudit();
 	await native.runPromise(
-		applyPlan(db, plan(await native.runPromise(readApplied(db)), artifact.manifest))
+		Effect.flatMap(plan(await native.runPromise(readApplied(db)), artifact.manifest), (p) =>
+			applyPlan(db, p)
+		)
 	);
 	const identity = await native.runPromise(
 		Effect.gen(function* () {
 			return yield* makeIdentityHost({
+				audit: yield* auditShape(audit.port),
 				db,
 				now: Clock.currentTimeMillis.pipe(Effect.map((at) => new Date(at))),
 				windows: new RateWindows(),
@@ -166,8 +206,16 @@ const direct = async (artifact: Artifact, db: TenantDbShape): Promise<Side> => {
 		})
 	);
 	expect(await native.runPromise(founderBootstrap(identity, EMAIL))).toHaveProperty('user');
+	const host = await hostPorts();
 	const ports = Layer.mergeAll(
+		auditFromAbi(audit.port).pipe(Layer.provide(NodeServices.layer)),
 		Layer.succeed(TenantDb, db),
+		GuestIsolates.fromAbi(host.guestIsolates),
+		Keys.unavailable,
+		Http.fromAbi(host.http),
+		Images.fromAbi(host.images),
+		Mcp.fromAbi(host.mcp),
+		Docs.fromAbi(host.docs),
 		Files.fromAbi(files),
 		DeadlinePort.fromAbi(deadlines(calls)),
 		Transport.fromAbi({ Mail: mail }),
@@ -184,10 +232,7 @@ const direct = async (artifact: Artifact, db: TenantDbShape): Promise<Side> => {
 			release: RELEASE_ID,
 			publicUrl: PUBLIC_URL,
 			guest: Option.some(artifact.guest),
-			transforms: new Set(artifact.transforms),
-			projections: new Set(artifact.projections),
-			start: [],
-			secretsKey: Option.none()
+			start: []
 		})
 	);
 	const engine = EngineLive(artifact.manifest).pipe(Layer.provideMerge(ports));
@@ -197,7 +242,7 @@ const direct = async (artifact: Artifact, db: TenantDbShape): Promise<Side> => {
 				Layer.succeed(HostIdentity, identity),
 				Layer.succeed(ShellConfig, {
 					publicUrl: PUBLIC_URL,
-					workspace: { name: 'Acme', handle: 'acme' },
+					workspace: () => ({ name: 'Acme', handle: 'acme' }),
 					ai: false
 				}),
 				Turnstile.unavailable,
@@ -230,6 +275,8 @@ const direct = async (artifact: Artifact, db: TenantDbShape): Promise<Side> => {
 					)
 				: Promise.resolve(HttpServerResponse.toWeb(responseError(new Interrupted()))),
 		wake: () => runtime.runPromise(Effect.flatMap(Runs, (runs) => runs.tick)),
+		crons: () => runtime.runPromise(Effect.flatMap(Runs, (runs) => runs.crons)),
+		fire: (id, slot) => runtime.runPromise(Effect.flatMap(Runs, (runs) => runs.fire(id, slot))),
 		close: async () => {
 			open = false;
 			await runtime.dispose();
@@ -237,12 +284,17 @@ const direct = async (artifact: Artifact, db: TenantDbShape): Promise<Side> => {
 	};
 };
 
-/** Built SDK and source SDK have distinct error identities; only the native driver crosses. */
-const viaHostApi = async (client: PgliteClient): Promise<Side> => {
-	const calls: string[] = [];
-	const release = { dir, id: RELEASE_ID };
-	const database = { _tag: 'Pglite' as const, client };
-	const branch = await RELEASE_HOST_API.branch({ release, database }, { signal });
+/** Built SDK and source SDK have distinct error identities; only the host's ports cross. */
+const viaHostApi = async (client: PgliteClient, at = dir): Promise<Side> => {
+	const calls: string[] = [],
+		audit = memoryAudit();
+	const host = await hostPorts();
+	const release = { id: RELEASE_ID, artifact: artifactPort(at) };
+	const database = tenantDbPort(PgliteDb.make(client));
+	const branch = await RELEASE_HOST_API.branch(
+		{ release, database, audit: audit.port },
+		{ signal }
+	);
 	await branch.schema.migrate({ signal });
 	expect(
 		await branch.identity.founder(EMAIL, { at: new Date().toISOString(), signal })
@@ -250,14 +302,19 @@ const viaHostApi = async (client: PgliteClient): Promise<Side> => {
 	const workspace = await RELEASE_HOST_API.activate(
 		{
 			scope: SCOPE,
+			audit: audit.port,
 			release,
 			database,
 			publicUrl: PUBLIC_URL,
 			files,
 			deadlines: deadlines(calls),
 			identity: { mail, devSink: true },
-			shell: { workspace: { name: 'Acme', handle: 'acme' }, ai: false },
-			agent: {}
+			shell: { workspace: () => ({ name: 'Acme', handle: 'acme' }), ai: false },
+			agent: {},
+			guestIsolates: host.guestIsolates,
+			http: host.http,
+			images: host.images,
+			mcp: host.mcp
 		},
 		{ signal }
 	);
@@ -278,6 +335,8 @@ const viaHostApi = async (client: PgliteClient): Promise<Side> => {
 			return response ?? new Response(null, { status: 404 });
 		},
 		wake: () => workspace.wake({ signal }),
+		crons: () => workspace.crons(),
+		fire: (id, slot) => workspace.fire(id, slot, { signal }),
 		close: () => workspace.close()
 	};
 };
@@ -422,7 +481,6 @@ describe('HOST_API conformance (D10a)', () => {
 	it.live('answers sign in, q, act, live, a wake and close as the direct composition does', () =>
 		Effect.tryPromise({
 			try: async () => {
-				expect(HOST_API_VERSION).toBe(3);
 				expect(RELEASE_HOST_API.version).toBe(HOST_API_VERSION);
 				expect(RELEASE_HOST_API).not.toBe(HOST_API);
 				expect(ReleaseDbError).not.toBe(DbError);
@@ -464,7 +522,7 @@ describe('HOST_API conformance (D10a)', () => {
 				};
 
 				// q
-				const read = { m: 'read', a: ['customers', { all: true }] };
+				const read = { m: 'query', a: ['customers', { all: true }] };
 				expect((await same('/__bolt/q', { reads: [read] })).status).toBe(200);
 				// act: a create under the booted contract commits; a retired one is refused releaseChanged (L-BOLT-171)
 				const create = { callable: 'customers.create', input: { name: 'Acme' }, issuedAt };
@@ -538,11 +596,66 @@ describe('HOST_API conformance (D10a)', () => {
 		})
 	);
 
+	it.live('lists the crons and fires each slot once, as the direct composition does', () =>
+		Effect.tryPromise({
+			try: async () => {
+				const cronManifest = {
+					...manifest,
+					policies: {
+						...manifest.policies,
+						ops: { description: 'Ops', grants: { customers: { read: true, create: true } } }
+					},
+					automations: {
+						stamp: {
+							description: 'Files a customer',
+							on: { cron: '*/15 * * * *' },
+							runAs: ['ops']
+						},
+						peek: { description: 'Counts customers', on: { cron: '0 6 * * *' }, runAs: ['ops'] }
+					}
+				} satisfies EngineManifest;
+				const artifact = await built(
+					cronDir,
+					cronManifest,
+					`export default { automation: {
+	stamp: { body: function* (input, ctx) { yield* ctx.act('customers.create', { name: 'stamp' }); } },
+	peek: { body: function* (input, ctx) { return (yield* ctx.query('customers', { all: true })).rows.length; } }
+} };`
+				);
+				const sides = [
+					await direct(artifact, await fresh()),
+					await viaHostApi(await freshClient(), cronDir)
+				] as const;
+				const both = async <A>(f: (side: Side) => Promise<A>): Promise<readonly [A, A]> => [
+					await f(sides[0]),
+					await f(sides[1])
+				];
+				const crons = await both((s) => s.crons());
+				expect(crons[0]).toEqual([
+					{ id: 'stamp', cron: '*/15 * * * *', zone: 'UTC' },
+					{ id: 'peek', cron: '0 6 * * *', zone: 'UTC' }
+				]);
+				expect(crons[1]).toEqual(crons[0]);
+				// a slot runs once; a run that only reads writes nothing and answers ran: false
+				const slot = '2026-09-25T10:15:00.000Z';
+				const fired = await both(async (s) => [
+					await s.fire('stamp', slot),
+					await s.fire('stamp', slot),
+					await s.fire('peek', slot)
+				]);
+				expect(fired[0]).toEqual([{ ran: true }, { ran: false }, { ran: false }]);
+				expect(fired[1]).toEqual(fired[0]);
+				await both((s) => s.close());
+			},
+			catch: (cause) => BoltError.make('internal', 'admission', String(cause), cause)
+		})
+	);
+
 	it.live('crosses failures as encoded data, never this release’s class', () =>
 		Effect.tryPromise({
 			try: async () => {
 				const missing = await HOST_API.verify(
-					{ dir: join(dir, 'missing'), id: 'x' },
+					{ id: 'x', artifact: artifactPort(join(dir, 'missing')) },
 					{ signal }
 				).then(
 					() => null,

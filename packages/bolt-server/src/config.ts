@@ -1,4 +1,4 @@
-// `bolt start` configuration (§5.11.6): one decoded set of `BOLT_*` names plus four flags. Anything wrong here refuses
+// `bolt start` configuration (§5.11.6): one decoded set of `BOLT_*` names plus CLI flags. Anything wrong here refuses
 // to start (a thrown `ConfigError`); what depends on the workspace (mail, files, secrets, turnstile, AI models) is
 // checked at activation, against the manifest, by `server.ts`.
 import {
@@ -11,6 +11,7 @@ import {
 	Schema
 } from 'effect';
 import { isIP } from 'node:net';
+import { resolve } from 'node:path';
 import { SINCH_REGIONS, type TransactionalConfig } from '@norbital-ai/providers';
 
 export class ConfigError extends Schema.TaggedError<ConfigError>()('ConfigError', {
@@ -43,14 +44,16 @@ const REGISTERED: { readonly [F in Facility]: readonly string[] } = {
 	WEB: ['public']
 };
 export type AiModel = string | { model: string; inputs?: number; tokens?: number };
-type Modality = 'text' | 'image' | 'file';
-const MODALITIES = new Set(['text', 'image', 'file']);
+const Modalities = Schema.Array(Schema.Literals(['text', 'image', 'file']));
+type Modality = (typeof Modalities.Type)[number];
 
 export type Config = {
 	artifact: string;
 	host: string;
 	port: number;
 	database: { url: string } | { pglite: string };
+	/** Separate durable audit database directory; retained across process and artifact restarts. */
+	auditDir: string;
 	publicUrl: string;
 	files:
 		| { provider: 'local'; root: string }
@@ -97,14 +100,13 @@ export type Config = {
 	turnstile: { siteKey: string; secret: string } | null;
 	/** `BOLT_ENVIRONMENT` (`production`, `staging`, `development`, …): every other than production shows the shell's badge. */
 	environment: string | null;
-	/** `--trust-proxy`, `--accept`, `--founder`, `--seed`. */
+	/** `--trust-proxy`, `--founder`, `--seed`. */
 	trustProxy: readonly string[];
-	accept: boolean;
 	founder: string | null;
 	seed: string | null;
 	/**
-	 * `--dev` or `BOLT_DEV=1` (L-BOLT-366): `bolt start` as `bolt dev` (the dev mail sink, destructive steps accepted, the
-	 * dev Turnstile) and connections may reach a provider on this machine (`*.localhost`). Refused unless the public origin
+	 * `--dev` or `BOLT_DEV=1` (L-BOLT-366): `bolt start` as `bolt dev` (the dev mail sink and dev Turnstile), and
+	 * connections may reach a provider on this machine (`*.localhost`). Refused unless the public origin
 	 * is loopback and `BOLT_ENVIRONMENT` is not `production`.
 	 */
 };
@@ -115,6 +117,7 @@ const KNOWN = new Set([
 	'BOLT_PORT',
 	'BOLT_DATABASE_URL',
 	'BOLT_PGLITE_DIR',
+	'BOLT_AUDIT_DIR',
 	'BOLT_PUBLIC_URL',
 	'BOLT_FILES_PROVIDER',
 	'BOLT_FILES_ENDPOINT',
@@ -289,7 +292,6 @@ function transactional(
 export type StartFlags = {
 	readonly port?: number;
 	readonly trustProxy?: string;
-	readonly accept?: boolean;
 	readonly founder?: string;
 	readonly seed?: string;
 	readonly dev?: boolean;
@@ -304,7 +306,6 @@ function decodeValues(
 	};
 	const flags = {
 		trustProxy: options.trustProxy === undefined ? [] : cidrs(options.trustProxy),
-		accept: options.accept ?? false,
 		founder: options.founder ?? null,
 		seed: options.seed ?? null,
 		dev: options.dev ?? false
@@ -320,6 +321,10 @@ function decodeValues(
 		pglite = get('BOLT_PGLITE_DIR');
 	if ((url === undefined) === (pglite === undefined))
 		throw new ConfigError({ message: 'set exactly one of BOLT_DATABASE_URL and BOLT_PGLITE_DIR' });
+	const auditDir = get('BOLT_AUDIT_DIR');
+	if (auditDir === undefined) throw new ConfigError({ message: 'BOLT_AUDIT_DIR is required' });
+	if (pglite !== undefined && resolve(auditDir) === resolve(pglite))
+		throw new ConfigError({ message: 'BOLT_AUDIT_DIR must be separate from BOLT_PGLITE_DIR' });
 
 	const origin = get('BOLT_PUBLIC_URL');
 	if (origin === undefined) throw new ConfigError({ message: 'BOLT_PUBLIC_URL is required' });
@@ -462,9 +467,10 @@ function decodeValues(
 			.split(',')
 			.map((x) => x.trim())
 			.filter((x) => x !== '');
-		if (!list.every((x) => MODALITIES.has(x)))
+		const decoded = Schema.decodeUnknownOption(Modalities)(list);
+		if (Option.isNone(decoded))
 			throw new ConfigError({ message: `${name} is a comma list of text, image, file` });
-		return Schema.decodeUnknownSync(Schema.Array(Schema.Literals(['text', 'image', 'file'])))(list);
+		return decoded.value;
 	};
 
 	const transcribe = get('BOLT_AI_TRANSCRIBE_MODEL') ?? null,
@@ -517,6 +523,7 @@ function decodeValues(
 		host: get('BOLT_HOST') ?? '127.0.0.1',
 		port,
 		database: url !== undefined ? { url } : { pglite: pglite ?? '' },
+		auditDir,
 		publicUrl: pub.origin,
 		files,
 		masterKey: key32('BOLT_MASTER_KEY', get('BOLT_MASTER_KEY')),
@@ -553,7 +560,6 @@ function decodeValues(
 		turnstile: tsite === undefined ? null : { siteKey: tsite, secret: tsecret ?? '' },
 		environment: get('BOLT_ENVIRONMENT') ?? null,
 		trustProxy: flags.trustProxy,
-		accept: flags.accept,
 		founder: flags.founder,
 		seed: flags.seed
 	};

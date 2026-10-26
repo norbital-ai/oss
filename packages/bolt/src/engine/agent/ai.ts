@@ -5,6 +5,7 @@
 import {
 	Cause,
 	Clock,
+	Duration,
 	Effect,
 	Option,
 	Predicate,
@@ -14,6 +15,7 @@ import {
 	Stream,
 	type Scope
 } from 'effect';
+import * as EffectArray from 'effect/Array';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import type { Ai, AiEvent } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
@@ -29,7 +31,7 @@ import {
 } from '../contracts.ts';
 import { decodeInput } from '../callables/decode.ts';
 import type { Kind } from '@norbital-ai/std/kind';
-import { RequestOutput } from '../integrations/instances.ts';
+import { RequestOutput } from '../integrations/request-schema.ts';
 import { bound, BOUNDS, size } from './context.ts';
 import {
 	ANY,
@@ -74,6 +76,19 @@ const isTransientUpstream = (e: PortFailure): boolean =>
 	e instanceof FacilityFailure &&
 	e.kind === 'upstream' &&
 	(e.status === undefined || e.status === 408 || e.status === 429 || e.status >= 500);
+/** Six retries, with the provider's delay as a floor on exponential backoff. */
+const TRANSIENT_RETRIES = 6;
+const retryBackoff: Schedule.Schedule<Duration.Duration, PortFailure> = Schedule.exponential(
+	'1 second'
+).pipe(
+	Schedule.modifyDelay(({ input, duration }) =>
+		Effect.succeed(
+			input instanceof FacilityFailure && input.retryAfterMs !== undefined
+				? Duration.max(duration, Duration.millis(input.retryAfterMs))
+				: duration
+		)
+	)
+);
 export const servesModel = (
 	ai: Ai['Service'],
 	model: string
@@ -123,43 +138,46 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		progressed = false;
 	let response: AiResponse | undefined;
 	// Each pull races a native sleep. Business time may be frozen or adjusted independently.
-	yield* Stream.transformPull(ai.infer(request), (pull) => {
-		let finished = false;
-		const idle = (cause?: FacilityFailure): Effect.Effect<readonly [AiEvent], FacilityFailure> =>
-			Effect.suspend(() => {
-				finished = true;
-				if (partial === '')
-					return Effect.fail(
-						progressed
-							? new ModelIdle(`the model was still writing a tool call at ${wallMs} ms`, true)
-							: (cause ?? new ModelIdle(`the model yielded nothing within ${wallMs} ms`))
-					);
-				const cut: AiResponse = {
-					content: partial,
-					toolCalls: [],
-					finish: 'cut',
-					...(reasoning === '' ? {} : { reasoning }),
-					usage: { input: 0, output: 0 }
-				};
-				const events: readonly [AiEvent] = [{ _tag: 'Response', response: cut }];
-				return Effect.succeed(events);
-			});
-		return Effect.succeed(
-			Effect.suspend(() =>
-				finished
-					? Cause.done()
-					: pull.pipe(
-							Effect.catchTag('FacilityFailure', (cause) =>
-								cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause)
-							),
-							Effect.timeoutOrElse({
-								duration: wallMs,
-								orElse: () => idle()
-							})
-						)
-			)
-		);
-	}).pipe(
+	yield* Stream.transformPull(
+		Stream.suspend(() => ai.infer(request)),
+		(pull) => {
+			let finished = false;
+			const idle = (cause?: FacilityFailure): Effect.Effect<readonly [AiEvent], FacilityFailure> =>
+				Effect.suspend(() => {
+					finished = true;
+					if (partial === '')
+						return Effect.fail(
+							progressed
+								? new ModelIdle(`the model was still writing a tool call at ${wallMs} ms`, true)
+								: (cause ?? new ModelIdle(`the model yielded nothing within ${wallMs} ms`))
+						);
+					const cut: AiResponse = {
+						content: partial,
+						toolCalls: [],
+						finish: 'cut',
+						...(reasoning === '' ? {} : { reasoning }),
+						usage: { input: 0, output: 0 }
+					};
+					const events: readonly [AiEvent] = [{ _tag: 'Response', response: cut }];
+					return Effect.succeed(events);
+				});
+			return Effect.succeed(
+				Effect.suspend(() =>
+					finished
+						? Cause.done()
+						: pull.pipe(
+								Effect.catchTag('FacilityFailure', (cause) =>
+									cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause)
+								),
+								Effect.timeoutOrElse({
+									duration: wallMs,
+									orElse: () => idle()
+								})
+							)
+				)
+			);
+		}
+	).pipe(
 		Stream.runForEach((event) =>
 			Effect.sync(() => {
 				switch (event._tag) {
@@ -179,7 +197,18 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						break;
 				}
 			})
-		)
+		),
+		// A capacity refusal before output is safe to resend; a partial streamed reply is not.
+		Effect.retry({
+			schedule: retryBackoff,
+			times: TRANSIENT_RETRIES,
+			while: (error) =>
+				error instanceof FacilityFailure &&
+				error.kind === 'rateLimited' &&
+				partial === '' &&
+				!progressed &&
+				response === undefined
+		})
 	);
 	if (response === undefined)
 		return yield* Effect.fail(
@@ -216,8 +245,6 @@ const EDIT = 'edit',
 	DIFF = 'diff',
 	SUBMIT = 'submit';
 /** Consecutive empty (reasoning-only) replies, and prose replies that neither edit nor submit, tolerated before `invalid`. */
-/** Retries of a transient provider failure, backing off from 1 s: about a minute in all. */
-const TRANSIENT_RETRIES = 6;
 const PAUSES = 3,
 	FAILURES = 3;
 /** The most tool turns an author's `steps` may grant one inference. */
@@ -413,22 +440,25 @@ function jsonSchemaOf(k: Kind): Json {
 }
 
 /**
- * Without the author's `steps`, an inference has no step budget: it goes on until it answers (a structured one, until a
- * submission matches). What ends a runaway is then this ceiling, per batch of files the model reads (MODEL_FILES) — at ANSWER_BY of it the tools end and one final turn answers — and the stall guards (an empty or prose reply 3
- * times running, or a draft-only turn that leaves the answer unchanged 3 times running).
+ * Without the author's `steps`, an inference has no step budget and no time limit: it goes on while it progresses, until
+ * it answers (a structured one, until a submission matches). What ends a runaway is the stall window — no model token,
+ * reply or tool result for STALL_MS (compute model §3, one liveness clock) — and the stall guards (an empty or prose
+ * reply 3 times running, or a draft-only turn that leaves the answer unchanged 3 times running).
  */
-const INFER_MS = 30 * 60_000;
-/** Past this share of INFER_MS a batch's tools end and its final turn answers, as when `steps` is spent. */
-const ANSWER_BY = 0.8;
+export const STALL_MS = 5 * 60_000;
 /** Turns that may finish the answer once tools end: a submission the output or rules refuse is repaired, not lost. */
 const FINAL_TURNS = 3;
-/** The ceiling on one `sys_2.infer` call: INFER_MS for every batch of files it reads. ponytail: counts batches by file count only; a byte-split batch adds a step under the same ceiling. */
-export const inferMs = (args: readonly Json[]): number =>
-	INFER_MS *
-	Math.max(
-		1,
-		Math.ceil(((args[0] as { files?: unknown[] } | null)?.files?.length ?? 0) / MODEL_FILES.count)
-	);
+/** One persisted step of an inference: what its turn added to its batch's conversation, and where it left the answer. */
+const InferStep = Schema.Struct({
+	/** The index of its batch's first file. */
+	from: Schema.Int,
+	messages: Schema.Array(
+		Schema.Struct({ role: Schema.Literals(['user', 'assistant', 'tool']), content: Schema.Json })
+	),
+	draft: Schema.Json,
+	turns: Schema.Int,
+	spent: Schema.Boolean
+});
 
 /** A rule the answer must hold beside its shape: CEL over the answer's top-level properties, and what to say when it fails. */
 type Rule = { expression: string; message: string };
@@ -442,7 +472,9 @@ const InferOutput = Schema.Union([
 	Schema.Struct({ jsonSchema: Schema.Json, rules: Schema.optionalKey(Rules) }),
 	RequestOutput
 ]);
-const InferArgs = Schema.Struct({
+/** `ai.sys_2.infer`'s arguments; `tools` names the host tools a run lends it (the run's gate, `runs/index.ts`). */
+export const InferArgs = Schema.Struct({
+	tools: Schema.optionalKey(Schema.Array(Schema.String)),
 	model: Schema.optionalKey(Schema.String),
 	system: Schema.optionalKey(Schema.String),
 	prompt: Schema.optionalKey(Schema.String),
@@ -453,6 +485,7 @@ const InferArgs = Schema.Struct({
 	steps: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_STEPS }))),
 	label: Schema.optionalKey(Schema.String)
 });
+export const inferArgsOf = Schema.decodeUnknownOption(InferArgs);
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
 function schemaChecker(output: SchemaOutput): (value: Json) => string[] {
 	const schema = output.jsonSchema;
@@ -522,15 +555,15 @@ function ruleChecker(
 
 /**
  * `ctx.ai.sys_2.infer` for automations (rule 63, L-BOLT-371/372): a prompt, optional files and an `output`, continued
- * across cut steps (INFER_MS per batch bounds the call). Files are FileRefs the host loads. A
+ * across cut steps while it progresses (STALL_MS of silence ends it). Files are FileRefs the host loads. A
  * structured `output` — a declared kind, or `{ jsonSchema, rules }` — is built, not written in one piece: the model edits a
  * draft with `edit` (keyed pointers: a keyed list's items by key) as it finds each part, inspects it with `read`, `find`
  * and `diff`, and hands it in with `submit`. A submission is checked against `output` and every rule (the schema's and
  * the request's own `rules`); one that does not match gets every offending field (and broken rule) back and the loop goes
  * on until one matches. More files than one model request carries (MODEL_FILES) are read in batches into the same draft:
  * each batch edits in what its files add, and only the last submission is checked. With `tools` (host tools the engine
- * resolved under the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch, and
- * so does 80% of the time ceiling, whichever comes first: once spent, up to FINAL_TURNS turns offer only the draft tools
+ * resolved under the run's policies) the model may call them too. `steps` bounds the turns that call tools, per batch:
+ * once spent, up to FINAL_TURNS turns offer only the draft tools
  * (none for a text answer) and are told to answer, each refused submission coming back to be fixed; without a valid answer
  * from them (or already in the draft) the call fails
  * `invalid`, naming the spent budget and what the draft still breaks. An empty (reasoning-only) reply is asked to
@@ -553,7 +586,9 @@ function unquoted(kind: Kind, value: Json): Json {
 		case 'json':
 			return kind.shape === undefined ? value : unquoted(kind.shape, value);
 		case 'list':
-			return Array.isArray(value) ? value.map((item) => unquoted(kind.of, item)) : value;
+			return EffectArray.isArray<typeof value>(value)
+				? value.map((item) => unquoted(kind.of, item))
+				: value;
 		case 'record':
 		case 'object':
 		case 'union': {
@@ -587,7 +622,17 @@ export function inferFacility(
 		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
 		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
-		onMessage?: (message: AiMessage) => Effect.Effect<void>;
+		onMessage?: (message: AiMessage, index: number) => Effect.Effect<void>;
+		/** Rebuild the transcript from its durable steps, in their original order. */
+		onResume?: () => Effect.Effect<void>;
+		/**
+		 * Durable steps (a run's journal): `done` are the steps an earlier attempt persisted, which it resumes after; each
+		 * tool turn is persisted with `persist`, so a lost host costs at most the step in flight.
+		 */
+		steps?: {
+			readonly done: readonly Json[];
+			readonly persist: (index: number, step: Json) => Effect.Effect<void>;
+		};
 	} = {}
 ) {
 	return Effect.fn('Ai.inferFacility')(function* (
@@ -668,6 +713,24 @@ export function inferFacility(
 								: null;
 		/** What `diff` compares against: the draft the call started from. */
 		const original = draft;
+		// a resumed inference goes on after its last persisted step: its batch's conversation and answer as they were
+		const done = (options.steps?.done ?? []).flatMap((step) =>
+			Option.toArray(Schema.decodeUnknownOption(InferStep)(step))
+		);
+		const resumed = done.at(-1);
+		if (resumed !== undefined) draft = resumed.draft;
+		const history = done.flatMap((step) => step.messages);
+		if (options.onResume !== undefined) yield* options.onResume();
+		const onMessage = options.onMessage;
+		if (onMessage !== undefined) yield* Effect.forEach(history, onMessage, { discard: true });
+		let messageIndex = history.length;
+		let stepIndex = done.length;
+		const clock = yield* Clock.Clock;
+		/** The last progress (a model token, a reply, a tool result): STALL_MS after it the inference ends. */
+		let progressed = clock.currentTimeMillisUnsafe();
+		const beat = () => {
+			progressed = clock.currentTimeMillisUnsafe();
+		};
 		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.jsonSchema;
 		const rulesText =
 			rules.length === 0
@@ -760,24 +823,36 @@ export function inferFacility(
 			Effect.suspend(() => {
 				const from = recorded.get(messages) ?? 0;
 				recorded.set(messages, messages.length);
-				return options.onMessage === undefined
+				return onMessage === undefined
 					? Effect.void
-					: Effect.forEach(messages.slice(from), options.onMessage, { discard: true });
+					: Effect.forEach(messages.slice(from), (message) => onMessage(message, messageIndex++), {
+							discard: true
+						});
 			});
-		const read = (files: { mime: string; bytes: Uint8Array }[], prompt: string, final: boolean) => {
-			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
-			return batch(files, messages, final).pipe(Effect.ensuring(record(messages)));
+		const read = (
+			files: { mime: string; bytes: Uint8Array }[],
+			prompt: string,
+			final: boolean,
+			from: number
+		) => {
+			const at = resumed?.from === from ? resumed : undefined;
+			const messages: AiMessage[] =
+				at === undefined
+					? [{ role: 'user', content: prompt }]
+					: done.filter((step) => step.from === from).flatMap((step) => [...step.messages]);
+			// the transcript already holds a resumed conversation
+			if (at !== undefined) recorded.set(messages, messages.length);
+			return batch(files, messages, final, from, at).pipe(Effect.ensuring(record(messages)));
 		};
 		/** One conversation over one batch of files; a batch before the last hands back its draft unchecked. */
 		const batch = Effect.fn('Ai.inferBatch')(function* (
 			files: { mime: string; bytes: Uint8Array }[],
 			messages: AiMessage[],
-			final: boolean
+			final: boolean,
+			from: number,
+			at: typeof InferStep.Type | undefined
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
-			const started = yield* Clock.currentTimeMillis,
-				answerBy = started + INFER_MS * ANSWER_BY,
-				halfway = started + (INFER_MS * ANSWER_BY) / 2;
 			let text = '',
 				continuation: string | undefined,
 				cutAt: number | undefined,
@@ -785,12 +860,12 @@ export function inferFacility(
 				failures = 0,
 				stalls = 0,
 				idles = 0,
-				turns = 0,
-				edited = false,
-				nudged = false,
-				spent = false,
+				turns = at?.turns ?? 0,
+				spent = at?.spent ?? false,
 				finals = 0,
 				finished = false,
+				// a fresh batch's first step carries its prompt
+				persisted = at === undefined ? 0 : messages.length,
 				last: CrossAnswer | undefined;
 			for (;;) {
 				// `steps` spent and the final, tool-less turn answered without a valid answer: a draft that holds one still stands
@@ -800,7 +875,7 @@ export function inferFacility(
 					// what the draft still breaks (an unmet rule among it), else the last failed answer
 					const why = held ?? last;
 					return invalid(
-						`the tool budget (${a.steps ?? 'no'} steps, ${(INFER_MS * ANSWER_BY) / 60_000} minutes) was spent without a valid answer${why !== undefined && !why.ok && why.error.kind === 'invalid' ? `: ${why.error.message}` : ''}`
+						`the tool budget (${a.steps ?? 0} steps) was spent without a valid answer${why !== undefined && !why.ok && why.error.kind === 'invalid' ? `: ${why.error.message}` : ''}`
 					);
 				}
 				const tooling = spent ? finishing : offered;
@@ -815,18 +890,22 @@ export function inferFacility(
 						...(files.length === 0 ? {} : { files }),
 						...(continuation === undefined ? {} : { continuation })
 					},
-					{ ...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }) }
+					{
+						...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }),
+						onDelta: beat,
+						onReasoning: beat
+					}
 				).pipe(
-					// a provider or network blip (a dropped connection, a 5xx, a rate limit) is waited out for about a minute,
-					// backing off, before it ends an inference that may have browsed for half an hour
+					// Transient upstream failures back off within the inference's existing stall wall.
 					Effect.retry({
-						schedule: Schedule.exponential('1 second'),
+						schedule: retryBackoff,
 						times: TRANSIENT_RETRIES,
 						while: isTransientUpstream
 					}),
 					Effect.catch((e) => Effect.succeed(e))
 				);
-				// the ceiling on the whole call: the last failed submission says more than a bare timeout
+				beat();
+				// ended from outside (a stop, the caller's own wall): the last failed submission says more than a bare timeout
 				if (signal.aborted)
 					return last !== undefined && !last.ok
 						? last
@@ -834,7 +913,7 @@ export function inferFacility(
 								ok: false,
 								error: {
 									kind: 'timeout',
-									message: 'the inference did not finish within its ceiling'
+									message: 'the inference was ended before it answered'
 								}
 							};
 				// a silent model call stalls one turn, never the whole inference: ask again (for smaller calls when it went
@@ -1014,6 +1093,7 @@ export function inferFacility(
 							role: 'tool',
 							content: { id: c.id, name: c.name, result: bound(result) }
 						});
+						beat();
 					}
 					// a turn of only draft tools that leaves the draft as it was is no progress: 3 running end the call. Under a
 					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
@@ -1031,30 +1111,27 @@ export function inferFacility(
 								last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`)
 							);
 					} else stalls = 0;
-					// the step budget, or the time the ceiling leaves for one more answer, ends the tools: one final turn answers
-					if (r.toolCalls.some((c) => c.name === EDIT)) edited = true;
-					const now = yield* Clock.currentTimeMillis;
-					// half the tool time gone with nothing written: research that keeps its findings to the end loses them
-					// when the time runs out, so it is asked once to write what it has verified so far
-					if (structured && !edited && !nudged && !spent && now >= halfway) {
-						nudged = true;
-						messages.push({
-							role: 'user',
-							content: `Half your time for tools is gone and your answer is unchanged. Write every correction you have verified so far with ${EDIT} now, then go on; ${EDIT} each further one as you verify it.`
-						});
-					}
-					const outOfSteps = a.steps !== undefined && ++turns >= a.steps;
-					if (!spent && (outOfSteps || now >= answerBy)) {
+					// the step budget ends the tools: one final turn answers
+					if (!spent && a.steps !== undefined && ++turns >= a.steps) {
 						spent = true;
-						const budget = outOfSteps
-							? `Your tool budget of ${a.steps} steps is spent`
-							: 'Your time for tools is spent';
+						const budget = `Your tool budget of ${a.steps} steps is spent`;
 						messages.push({
 							role: 'user',
 							content: structured
 								? `${budget}: no more tools. Finish the answer now with ${EDIT} from what you have found, and call ${SUBMIT} in this reply.`
 								: `${budget}: no more tools. Give your answer now from what you have found.`
 						});
+					}
+					// the turn is a durable step: what it added to the conversation, and the answer as it left it
+					if (options.steps !== undefined) {
+						yield* options.steps.persist(stepIndex++, {
+							from,
+							messages: messages.slice(persisted),
+							draft,
+							turns,
+							spent
+						});
+						persisted = messages.length;
 					}
 					continue;
 				}
@@ -1097,34 +1174,55 @@ export function inferFacility(
 		const ask = (lead: string) =>
 			!structured
 				? (a.prompt ?? '')
-				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${EDIT}. ${a.initial === undefined ? `Build your answer with ${EDIT}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use ${draftRead} and ${FIND} to inspect it and ${EDIT} to change only the paths that need it`}, into this JSON Schema, then call ${SUBMIT}:\n${JSON.stringify(shape)}${rulesText}`;
-		if (refs.length === 0) return yield* read([], ask(''), true);
-		// files load a batch at a time, so a thousand scans are never all in memory at once
-		let from = 0;
-		while (from < refs.length) {
-			const batch: { mime: string; bytes: Uint8Array }[] = [];
-			let bytes = 0;
-			while (from + batch.length < refs.length && batch.length < MODEL_FILES.count) {
-				const loader = options.load;
-				if (loader === undefined) return invalid('the host provides no file reads');
-				const ref = refs[from + batch.length];
-				if (ref === undefined) break;
-				const file = yield* loader(ref.id);
-				if (batch.length > 0 && bytes + file.bytes.length > MODEL_FILES.bytes) break; // ponytail: the file that overflows is loaded again with the next batch
-				batch.push(file);
-				bytes += file.bytes.length;
+				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${EDIT}. ${a.initial === undefined ? `Build your answer with ${EDIT}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use ${draftRead} and ${FIND} to inspect it and ${EDIT} to change only the paths that need it`}, into this JSON Schema, then call ${SUBMIT}:\n\n\`\`\`json\n${JSON.stringify(shape, null, 2)}\n\`\`\`${rulesText}`;
+		const answering = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
+			if (refs.length === 0) return yield* read([], ask(''), true, 0);
+			// files load a batch at a time, so a thousand scans are never all in memory at once
+			let from = resumed?.from ?? 0;
+			while (from < refs.length) {
+				const batch: { mime: string; bytes: Uint8Array }[] = [];
+				let bytes = 0;
+				while (from + batch.length < refs.length && batch.length < MODEL_FILES.count) {
+					const loader = options.load;
+					if (loader === undefined) return invalid('the host provides no file reads');
+					const ref = refs[from + batch.length];
+					if (ref === undefined) break;
+					const file = yield* loader(ref.id);
+					if (batch.length > 0 && bytes + file.bytes.length > MODEL_FILES.bytes) break; // ponytail: the file that overflows is loaded again with the next batch
+					batch.push(file);
+					bytes += file.bytes.length;
+				}
+				const to = from + batch.length,
+					final = to === refs.length;
+				const lead =
+					refs.length <= batch.length
+						? ''
+						: `You are reading ${refs.length} source files in batches; these are files ${from + 1}–${to}.${from === 0 ? '' : ` The draft below already holds what files 1–${from} gave: keep it, append to its lists, fill what it lacks, and change a value only where these files show it differently.`} ${final ? `These are the last files: call ${SUBMIT} when the whole answer is complete; it is then checked.` : `Add everything these files hold with ${EDIT}, then call ${SUBMIT} to move on to the next files; the answer is checked after the last batch.`}\n\n`;
+				const answer = yield* read(batch, ask(lead), final, from);
+				if (!answer.ok || final) return answer;
+				draft = answer.value;
+				from = to;
 			}
-			const to = from + batch.length,
-				final = to === refs.length;
-			const lead =
-				refs.length <= batch.length
-					? ''
-					: `You are reading ${refs.length} source files in batches; these are files ${from + 1}–${to}.${from === 0 ? '' : ` The draft below already holds what files 1–${from} gave: keep it, append to its lists, fill what it lacks, and change a value only where these files show it differently.`} ${final ? `These are the last files: call ${SUBMIT} when the whole answer is complete; it is then checked.` : `Add everything these files hold with ${EDIT}, then call ${SUBMIT} to move on to the next files; the answer is checked after the last batch.`}\n\n`;
-			const answer = yield* read(batch, ask(lead), final);
-			if (!answer.ok || final) return answer;
-			draft = answer.value;
-			from = to;
-		}
-		return invalid('no files were read');
+			return invalid('no files were read');
+		});
+		// the stall window: STALL_MS without progress ends the inference, with the answer its draft already holds if any
+		const stalled = Effect.gen(function* (): Effect.fn.Return<CrossAnswer> {
+			for (;;) {
+				const quiet = clock.currentTimeMillisUnsafe() - progressed;
+				if (quiet >= STALL_MS) break;
+				yield* Effect.sleep(STALL_MS - quiet);
+			}
+			const held = structured ? decoded(draft) : undefined;
+			return held?.ok === true
+				? held
+				: {
+						ok: false,
+						error: {
+							kind: 'timeout',
+							message: `the inference made no progress for ${STALL_MS / 60_000} minutes`
+						}
+					};
+		});
+		return yield* Effect.raceFirst(answering, stalled);
 	}, Effect.scoped);
 }
