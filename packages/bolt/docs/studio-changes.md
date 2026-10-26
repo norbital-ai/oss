@@ -18,7 +18,8 @@ shows. Norbius describes its own saves the same way.
 Press **Preview**. The draft is built and shows inside Studio's preview pane, already signed in as you — no second
 sign-in. It runs on a copy-on-write fork of live's data taken at that moment: your real records, and nothing you do
 there reaches live. While it builds, the pane names the current step ("Building…", then "Starting the preview…") and the time so
-far. A preview is never a page of its own: it only shows inside this frame (or the Preview card in Norbius's Session sidebar). The frame's
+far. It never serves the previous head while a newer one builds: until that commit's bundle exists the pane is a
+placeholder that names the wait. A preview is never a page of its own: it only shows inside this frame (or the Preview card in Norbius's Session sidebar). The frame's
 header reads "Preview · My draft · <commit>"; **Phone** (390 × 844), **Tablet** (820 × 1180) and **Desktop** (fills the
 pane) size it, its right and bottom edges drag to any size (shown as width × height), and **Reload** reloads it. The
 page inside lays out exactly as in a browser of that size, and the last size is remembered on this device. Opened
@@ -34,6 +35,8 @@ Preview, Publish or Rollback: "You're inside a preview — open Studio from the 
 Nothing changes until you confirm. While it runs every Studio button is disabled, so a double click cannot start a
 second run, and a strip under the title reports "Getting ready…" → "Building…" → "Switching over…" with the time so
 far — it only moves forward within a run — then "Done — live runs the new version." or "Failed: <reason>".
+A failed merge is kept on the change as `Merge failed: <reason>`; the workbench returns to its idle state so the
+change can be fixed and merged again.
 
 ![The publish confirmation](./images/studio-flow-3.jpg)
 
