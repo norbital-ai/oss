@@ -4,7 +4,6 @@ import { mkdir, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import pg from 'pg';
 import { Effect, Option, Schema } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
 import { logStatements, type Sql, type StoreError } from '@norbital-ai/store';
@@ -73,16 +72,19 @@ export const purgePostgresAuditPartition = (
 		Effect.scoped(
 			Effect.gen(function* () {
 				const pool = yield* Effect.acquireRelease(
-					Effect.try({
-						try: () =>
-							new pg.Pool({
+					// the driver is a deployment choice, not a tooling dependency: load it only where this runs
+					Effect.tryPromise({
+						try: async () => {
+							const { default: pg } = await import('pg');
+							return new pg.Pool({
 								connectionString: options.url,
 								max: 1,
 								connectionTimeoutMillis: 5000,
 								statement_timeout: 5000,
 								lock_timeout: 5000,
 								idle_in_transaction_session_timeout: 5000
-							}),
+							});
+						},
 						catch: dbError
 					}),
 					(pool) => Effect.tryPromise({ try: () => pool.end(), catch: dbError }).pipe(Effect.orDie)
