@@ -343,6 +343,20 @@
 	 * Merges a change into live. The viewer's own unsaved drafts are saved (with their description) first; the
 	 * destructive steps its current preview names are what the confirmation accepts.
 	 */
+	/** The person takes the preview: the tenant shell steers Norbius's conversation with the fact. */
+	const takeControl = (id: string) =>
+		run({ op: 'preview.release', id }).pipe(
+			Effect.tap((ok) =>
+				Effect.sync(() => {
+					if (!ok) return;
+					for (const frame of document.querySelectorAll('iframe'))
+						frame.contentWindow?.postMessage(
+							{ type: 'norbital:preview-release', id },
+							location.origin
+						);
+				})
+			)
+		);
 	const merge = Effect.fn('Studio.merge')(function* (c: StudioChangeSet) {
 		if (locked || (c.id === view?.change && !(yield* save()))) return;
 		const current = changeSets.find((x) => x.id === c.id) ?? c;
@@ -749,6 +763,7 @@
 						{/if}
 					</Stack>
 				{:else}
+					<div class="relative flex min-h-0 flex-1 flex-col">
 					<PreviewFrame
 						src={view.preview}
 						version={p?.artifact}
@@ -777,6 +792,28 @@
 							</Button>
 						{/snippet}
 					</PreviewFrame>
+					{#if view.previewControl?.holder === 'norbius'}
+						<div
+							class="bg-background/70 absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[1px]"
+						>
+							<div
+								class="border-border bg-card flex max-w-sm flex-col items-center gap-2 rounded-lg border p-4 text-center shadow-lg"
+							>
+								<Icon name="lucide:bot" class="size-5" />
+								<p class="text-sm font-medium">{t('Norbius is using this preview')}</p>
+								<p class="text-muted-foreground text-xs">
+									{t('Take control to use it yourself; Norbius is told you did.')}
+								</p>
+								<Button
+									size="sm"
+									onclick={() =>
+										mine !== undefined ? fork(takeControl(mine.id)) : undefined}
+									>{t('Take control')}</Button
+								>
+							</div>
+						</div>
+					{/if}
+					</div>
 				{/if}
 			</Stack>
 		{:else}

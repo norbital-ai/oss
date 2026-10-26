@@ -109,6 +109,12 @@ export type StudioChangeSet = {
  * manifest, log and preview — live's Versions newest first, every change, and the host's environments (the Operations
  * pane).
  */
+/** Who is driving a change's preview: Norbius (with its conversation) or the person. */
+export type PreviewControl = {
+	holder: 'norbius' | 'person';
+	conversation?: string;
+	at?: string;
+};
 export type StudioState = {
 	commit: string;
 	/** The head commit's description (its message's first line). */
@@ -127,6 +133,8 @@ export type StudioState = {
 	change?: string;
 	branch?: string;
 	previewOf?: StudioPreview;
+	/** The open change's preview control; absent: nobody claimed it. */
+	previewControl?: PreviewControl;
 	base?: string;
 	behind?: number;
 	conflicts?: readonly string[];
@@ -181,6 +189,8 @@ export const StudioOp = Schema.Union([
 		/** The explicit change; absent uses the viewer's selected change. */
 		id: Schema.optionalKey(nonempty)
 	}),
+	Schema.Struct({ op: Schema.Literal('preview.claim'), id: nonempty }),
+	Schema.Struct({ op: Schema.Literal('preview.release'), id: nonempty }),
 	Schema.Struct({
 		op: Schema.Literal('package.install'),
 		name: nonempty,

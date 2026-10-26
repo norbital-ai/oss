@@ -90,6 +90,33 @@
 	// svelte-ignore state_referenced_locally
 	const api = shellApi(config.fetch);
 	const agent = agentPanel();
+	// Studio's Take control: the person hands the preview back by steering this conversation, as themselves
+	$effect(() => {
+		const onMessage = (event: MessageEvent) => {
+			if (event.origin !== location.origin) return;
+			const data = event.data as { type?: unknown; id?: unknown } | null;
+			if (data?.type !== 'norbital:preview-release') return;
+			let conversation: string | null = null;
+			try {
+				conversation = sessionStorage.getItem('bolt.agent.conversation');
+			} catch {
+				conversation = null;
+			}
+			if (conversation === null) return;
+			fork(
+				api.agent
+					.post(
+						conversation,
+						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; call workspace_view to take it back when I ask.`,
+						true
+					)
+					.pipe(Effect.asVoid)
+			);
+		};
+		window.addEventListener('message', onMessage);
+		return () => window.removeEventListener('message', onMessage);
+	});
+
 	let challenge = $state<import('./runtime.ts').ChallengeQueue | null>(null);
 	// the framework's own copy in the viewer's locale (their choice, else the workspace's); the workspace's messages win
 	// svelte-ignore state_referenced_locally
