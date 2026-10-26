@@ -708,6 +708,8 @@ interface ModelFor<
 	index?: readonly (string | readonly string[])[];
 	/** A rule rows must keep; `{ where, message }` gives the refusal its member-facing message (else it names the rule). */
 	check?: { readonly [name: string]: OwnWhere<All> | { where: OwnWhere<All>; message: Msg } };
+	/** Rows matching this own-field predicate are read-only; refuses update and delete. */
+	locked?: OwnWhere<All>;
 	noOverlap?: readonly {
 		key: readonly string[];
 		period: OfKind<Own, { kind: 'period' }>;

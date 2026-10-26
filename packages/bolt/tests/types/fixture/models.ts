@@ -391,6 +391,8 @@ export const sites = model('sites', {
 		budget: { kind: 'money', currency: 'EUR', optional: true }
 	},
 	noOverlap: [{ key: ['name'], period: 'open' }],
+	// a lock is a predicate over the model's own fields
+	locked: { zone: { isNull: false } },
 	read: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'], relations: [] },
 	update: { columns: ['name', 'location'] }
 });
