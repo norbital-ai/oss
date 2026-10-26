@@ -758,6 +758,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'the change was not applied': '更改未生效',
 	'Switching over…': '正在切换…',
 	'Building…': '正在构建…',
+	'Building the newest edits…': '正在构建最新更改…',
 	'Getting ready…': '正在准备…',
 	Dismiss: '关闭',
 	Checkpoint: '检查点',

@@ -732,16 +732,17 @@
 		{#if showPreview}
 			{@const p = view.previewOf}
 			<Stack gap="none" fill class="min-h-0">
-				{#if view.preview === null}
+				{#if view.preview === null || p?.stale === true}
+					{@const waiting = building || p?.stale === true}
 					<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
 						<Icon
-							name={building ? 'lucide:loader-2' : 'lucide:scan-eye'}
-							class="size-8 opacity-30 {building ? 'animate-spin' : ''}"
+							name={waiting ? 'lucide:loader-2' : 'lucide:scan-eye'}
+							class="size-8 opacity-30 {waiting ? 'animate-spin' : ''}"
 						/>
-						<p class="text-xs" role={building ? 'status' : undefined}>
-							{building ? running : t('No preview yet.')}
+						<p class="text-xs" role={waiting ? 'status' : undefined}>
+							{building ? running : p?.stale ? t('Building the newest edits…') : t('No preview yet.')}
 						</p>
-						{#if !building && view.change !== undefined}
+						{#if !waiting && view.change !== undefined}
 							<Button size="sm" disabled={locked} onclick={() => fork(buildPreview())}
 								>{t('Preview')}</Button
 							>
@@ -752,7 +753,7 @@
 						src={view.preview}
 						version={p?.artifact}
 						title={t('Workbench preview')}
-						label={`${mine === undefined ? t('Live') : `!${mine.id} ${mine.title}`}${p?.stale ? ` · ${t('building the newest edits')}` : ''}`}
+						label={mine === undefined ? t('Live') : `!${mine.id} ${mine.title}`}
 						status={building ? running : undefined}
 						{t}
 					>
@@ -760,9 +761,6 @@
 							{#if p !== undefined}
 								<div class="space-y-2 text-xs leading-relaxed">
 									<p class="font-medium text-foreground">{t('Preview of this change')}</p>
-									{#if p.stale}<p class="text-amber-700 dark:text-amber-300">
-											{t('Showing the previous preview while the newest edits build.')}
-										</p>{/if}
 									<p>{t('It runs on its own copy of live data and closes after two idle hours.')}</p>
 								</div>
 							{/if}

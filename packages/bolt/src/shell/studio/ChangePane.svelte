@@ -252,8 +252,7 @@
 						>{:else}{t('Preview shelved while idle — working on the change brings it back')}{/if}
 					{#if c.preview.stale}
 						· <span class="text-amber-700 dark:text-amber-300"
-							>{t('building the newest edits; serving')}
-							<code class="font-mono">{short(c.preview.commit)}</code></span
+							>{t('building the newest edits')}</span
 						>{/if}
 					{#if (c.preview.destructive?.length ?? 0) > 0}
 						· <span class="text-destructive"

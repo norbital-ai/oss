@@ -49,7 +49,7 @@
 	const phaseTitle = (p: StudioPhase) =>
 		t(
 			p === 'diagnose'
-				? 'Diagnose'
+				? 'Building'
 				: p === 'copy'
 					? 'Copying data'
 					: p === 'preview'
