@@ -9,11 +9,20 @@ export const PLATFORM_SKILLS: { readonly [name: string]: SkillSpec } = {
 	records: skill(`---
 description: Reading and writing a workspace's records - models, layers, filters, batches, links, policies and approvals.
 ---
-## Models
+## Know the model first
 A model is a table declared in src/data/model/<name>/+model.ts: its fields and their kinds, its relationships (a ref
 field links one row of another model; the other side sees the rows linking to it as a many-relation), the layers its
-read returns, and the columns each write (create, update, delete, upsert) takes per layer. Before your first read or
-write of a model in a conversation, read that file; it is the contract the tools enforce.
+read returns, and the columns each write (create, update, delete, upsert) takes per layer. Unless this conversation
+already shows them, read that file once before you first read or write the model: read and act take exactly its names.
+
+## Steps
+1. Find: one read for everything the request needs; several unrelated models are several roots of one call.
+2. Resolve: every record a write references with one bounded read. A missing one is created inline only where the
+   write's input declares that nested create, else ask first; an optional link still missing after one exact and one
+   focused lookup is left out.
+3. Change once: one act carrying the whole change as a batch, related rows inside their root row.
+4. Report from the result: a committed write answers its stored rows; read again only for what they lack.
+An empty read earns one different key, then a question to the person, never the same read again.
 
 ## Reading
 One read names keys: "<model>" is a root, "<root>.<relation>" a layer of related rows nested in each root row (a
