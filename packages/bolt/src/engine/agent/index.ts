@@ -248,7 +248,10 @@ export const NUDGE = {
 	empty:
 		'Your last reply was empty. Answer the person now in plain text, or tell them plainly what blocks you.',
 	cutTool:
-		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.'
+		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.',
+	truncated: (calls: readonly string[]) =>
+		`Some results were too large and you saw only part of them: ${calls.join(', ')}. Do not treat them as complete. ` +
+		"To see the rest, call read_output with that call id and the offset to continue from; or narrow the read (a tighter where, a smaller limit) or page it with after: the result's next cursor."
 } as const;
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
@@ -1534,6 +1537,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				}
 				let waiting = false,
 					failed = 0;
+				// the calls whose result this step clipped: the step closes with one note naming them, so the model knows
+				const truncated: string[] = [];
 				for (const call of calls) {
 					// the call is a `running` row while it runs, finished in place when it answers
 					const started = yield* Clock.currentTimeMillis,
@@ -1631,7 +1636,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								'bounded' in answer && answer.bounded === true ? result : bounded(result).value,
 							clipped = JSON.stringify(shown) !== JSON.stringify(result);
 						// the model does not see its own call ids, so the note names the one read_output takes
-						const more = `clipped: the whole result (${new TextEncoder().encode(outputText(result)).length} bytes). read_output { call: '${call.id}', offset } reads it on`;
+						const more = `TRUNCATED: this shows part of the ${new TextEncoder().encode(outputText(result)).length}-byte result. read_output { call: '${call.id}', offset } reads the rest from where it was cut`;
+						if (clipped) truncated.push(`${call.name} (call '${call.id}')`);
 						yield* wrote(
 							yield* rewrite(
 								step,
@@ -1644,8 +1650,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 									result: !clipped
 										? shown
 										: shown !== null && typeof shown === 'object' && !Array.isArray(shown)
-											? { ...shown, readOutput: more }
-											: { readOutput: more, start: shown }
+											? { truncated: more, ...shown }
+											: { truncated: more, start: shown }
 								},
 								null,
 								clipped ? { tag: 'output', full: result } : null
@@ -1677,6 +1683,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					receipts.length = 0;
 					if (yield* settle(id)) break;
 					continue;
+				}
+				if (truncated.length > 0) {
+					const text = NUDGE.truncated(truncated);
+					yield* write({
+						conversation: id,
+						role: 'system',
+						content: { text },
+						text,
+						meta: { tag: 'note' }
+					});
 				}
 				failing = calls.length > 0 && failed === calls.length ? failing + 1 : 0;
 				if (failing === AGENT_LIMITS.failingSteps)
