@@ -1339,7 +1339,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	if (x.attachments !== undefined) {
 		const readFileTool = Tool.make('read_file', {
 			description:
-				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (the closing note's Session inputs, filtered messages' files included) or outputs, or the same id a message attachment lists. Video and audio cannot be viewed: the answer says so. Its type selects image, PDF document, text or XLSX sheet. read_attachment is a shortcut for a message attachment by seq and file index; the id is the same document. Use it to compare values with the original evidence.",
+				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or the same id a message attachment lists. Video and audio cannot be viewed: the answer says so. Its type selects image, PDF document, text or XLSX sheet. read_attachment is a shortcut for a message attachment by seq and file index; the id is the same document. Use it to compare values with the original evidence.",
 			parameters: Schema.Struct({
 				id: Schema.String.annotate({ description: 'the file id' }),
 				...readAs
