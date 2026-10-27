@@ -336,7 +336,8 @@ describe('durable model sync', () => {
 													Effect.sync(() => {
 														advanced += result.affected;
 													})
-												)
+												),
+												Effect.asVoid
 											)
 									: Effect.void
 							)

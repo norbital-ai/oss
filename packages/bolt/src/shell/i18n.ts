@@ -1331,6 +1331,7 @@ const VIEW_ZH = {
 	'ui.approval.action.recreated': '已重建',
 	'ui.record.tab.record': '记录',
 	'ui.record.tab.runs': '运行记录',
+	'ui.record.locked': '此记录已锁定。',
 	'ui.record.new': '新建{what}',
 	'ui.record.cancel': '取消',
 	'ui.record.edit': '编辑',

@@ -1064,14 +1064,14 @@ const namedPack = (root: string, manifest: EngineManifest, name: 'base' | 'sampl
 			return yield* readPack(dir);
 		}
 		const compiler = yield* Effect.tryPromise({
-			try: () => import('../compiler/check/index.ts'),
+			try: () => import('../compiler/seed.ts'),
 			catch: invalid
 		});
 		const artifact = yield* Effect.tryPromise({
 			try: () => import('../compiler/artifact/seed.ts'),
 			catch: invalid
 		});
-		const errors: import('../compiler/check/index.ts').CheckDiagnostic[] = [],
+		const errors: import('../protocol/diagnostic.ts').CheckDiagnostic[] = [],
 			cache = join(root, '.norbital', 'cache');
 		const build = (out: string) =>
 			Effect.gen(function* () {

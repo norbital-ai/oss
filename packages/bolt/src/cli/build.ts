@@ -5,7 +5,8 @@ import { templateMeta, writeArtifact } from '../compiler/artifact/index.ts';
 import { buildPacks } from '../compiler/artifact/seed.ts';
 import { readArtifact } from '../engine/artifact/read.ts';
 import { readPack, type PackJson } from '../engine/write/pack.ts';
-import { check, seedPack } from '../compiler/check/index.ts';
+import { compile } from '../compiler/check/index.ts';
+import { seedPack } from '../compiler/seed.ts';
 import { Diagnostic, type CheckDiagnostic } from '../protocol/diagnostic.ts';
 import { discover } from '../compiler/discover.ts';
 
@@ -35,8 +36,9 @@ const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema:
 	return hash.digest('hex');
 });
 /**
- * Every build is a full build (a Studio preview's is the one its merge reuses) behind the compiler's own checks; the
- * type check and the audit are `bolt check` and doctor's, never a build's. Any build reuses an unchanged base pack.
+ * Every build is a full build (a Studio preview's is the one its merge reuses) through declaration compilation; the
+ * authoring diagnostics and type check are `bolt check`, and the audit is doctor's. Any build reuses an unchanged
+ * base pack.
  */
 export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 	dir: string,
@@ -45,7 +47,7 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 	const fs = yield* FileSystem.FileSystem,
 		path = yield* Path.Path,
 		root = yield* fs.realPath(dir);
-	const checked = yield* check(root, {
+	const checked = yield* compile(root, {
 			migrations: 'generate',
 			...(options.squash === undefined ? {} : { squash: options.squash })
 		}),
@@ -74,7 +76,7 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 		yield* fs.remove(stampFile, { force: true });
 		const packErrors: CheckDiagnostic[] = [],
 			meta = yield* templateMeta(root),
-			seed = yield* seedPack(root, []);
+			seed = yield* seedPack(root, packErrors);
 		packs = yield* buildPacks(
 			root,
 			checked.manifest,

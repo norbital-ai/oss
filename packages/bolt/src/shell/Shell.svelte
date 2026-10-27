@@ -110,7 +110,7 @@
 						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; call workspace_view to take it back when I ask.`,
 						true
 					)
-					.pipe(Effect.asVoid)
+					.pipe(Effect.asVoid, Effect.catch((error) => Effect.logWarning(error)))
 			);
 		};
 		window.addEventListener('message', onMessage);

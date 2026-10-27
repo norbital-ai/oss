@@ -8,11 +8,10 @@ import { realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { sync, type CheckDiagnostic } from '../compiler/check/index.ts';
+import type { CheckDiagnostic } from '../protocol/diagnostic.ts';
 import { dev } from './dev.ts';
 import { templatesCommand } from './templates.ts';
 import { AuthorErrors, buildWorkspace, ToolFailure, type Log } from './build.ts';
-import { diagnose } from './check.ts';
 import { testWorkspace } from './test.ts';
 
 const print = (errors: readonly CheckDiagnostic[]) =>
@@ -38,6 +37,10 @@ const reported = (json: boolean) => (error: AuthorErrors) =>
 		: Effect.fail(error);
 const checkCommand = Command.make('check', { dir, json }, ({ dir, json }) =>
 	Effect.gen(function* () {
+		const { diagnose } = yield* Effect.tryPromise({
+			try: () => import('./check.ts'),
+			catch: (cause) => new ToolFailure({ message: 'The workspace checker could not load.', cause })
+		});
 		const result = yield* diagnose(resolve(dir));
 		if (result.errors.length > 0)
 			return yield* Effect.fail(
@@ -49,6 +52,11 @@ const checkCommand = Command.make('check', { dir, json }, ({ dir, json }) =>
 /** `bolt sync`: the declarations evaluated, `.norbital/names.ts` written; `bolt dev` and `bolt check` run it first. */
 const syncCommand = Command.make('sync', { dir, json }, ({ dir, json }) =>
 	Effect.gen(function* () {
+		const { sync } = yield* Effect.tryPromise({
+			try: () => import('../compiler/check/index.ts'),
+			catch: (cause) =>
+				new ToolFailure({ message: 'The workspace compiler could not load.', cause })
+		});
 		const result = yield* sync(resolve(dir));
 		if (result.errors.length > 0)
 			return yield* Effect.fail(

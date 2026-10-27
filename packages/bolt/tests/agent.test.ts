@@ -26,6 +26,11 @@ import { respondSystem1 } from '../src/test/effect.ts';
 import { clockProbe } from './support/clock-probe.ts';
 
 const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+const promptSchema = (content: unknown) => {
+	const prompt = Schema.decodeUnknownSync(Schema.String)(content);
+	const fence = /```json\r?\n([\s\S]*?)\r?\n```/.exec(prompt);
+	return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(fence?.[1]);
+};
 const row = (
 	seq: number,
 	over: Partial<Exclude<MessageRow, { role: 'tool' }>> = {}
@@ -511,8 +516,12 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
 				expect(requests[0]!.output).toBeUndefined();
 				// the shape to build is in the prompt, as JSON Schema
-				expect(requests[0]!.messages[0]!.content).toContain('"required":["n"]');
-				expect(requests[0]!.messages[0]!.content).toContain('"n":{"type":"integer"}');
+				expect(promptSchema(requests[0]?.messages[0]?.content)).toEqual({
+					type: 'object',
+					additionalProperties: false,
+					properties: { n: { type: 'integer' }, note: { type: 'string' } },
+					required: ['n']
+				});
 				// each op is checked as it applies: the refused value never reaches the draft
 				expect(requests[1]!.messages.at(-1)).toMatchObject({
 					role: 'tool',
@@ -639,11 +648,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					ok: true,
 					value: answer
 				});
-				const prompt = Schema.decodeUnknownSync(Schema.String)(requests[0]?.messages[0]?.content);
-				const advertised = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
-					prompt.slice(prompt.lastIndexOf('\n') + 1)
-				);
-				expect(advertised).toEqual({
+				expect(promptSchema(requests[0]?.messages[0]?.content)).toEqual({
 					type: 'object',
 					properties: { intent: { type: 'string' }, summary: { type: 'string' } },
 					required: ['intent', 'summary'],
@@ -676,7 +681,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					value: { intent: answer.intent, summary: answer.summary }
 				});
 				expect(closed.requests).toHaveLength(2);
-				expect(closed.requests[0]?.messages[0]?.content).toContain('"additionalProperties":false');
+				expect(promptSchema(closed.requests[0]?.messages[0]?.content)).toMatchObject({
+					additionalProperties: false
+				});
 				expect(closed.requests[1]?.messages.at(-1)?.content).toContain(
 					'/metadata: is not an input'
 				);

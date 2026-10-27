@@ -10,12 +10,10 @@ import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync } from 'node:zlib';
-import { Effect, FileSystem, Option, Path, Result, Schema } from 'effect';
+import { Effect, FileSystem, Option, Result, Schema } from 'effect';
 import ivm from 'isolated-vm';
 import { build, type Rolldown } from 'vite';
 import { minify, type MinifyOptions } from 'terser';
-import type { RowData } from '../../engine/contracts.ts';
 import { decodeManifest, projectManifest, type EngineManifest } from '../../engine/manifest.ts';
 import { PRELUDE } from '../../engine/guest/prelude.ts';
 import type { GuestProgram } from '../../engine/guest/runner.ts';
@@ -25,7 +23,7 @@ import { decodeSeed, type SeedPack } from '../../engine/write/seed.ts';
 import { discover, type Discovered } from '../discover.ts';
 import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
-import { checkRules, sourceRules } from './rules.ts';
+import { seedPack } from '../seed.ts';
 import { prepareMigrations } from '../migrations.ts';
 import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
 export type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
@@ -142,10 +140,12 @@ export const sync = Effect.fn('bolt.sync')(function* (
 	return { stages, errors };
 });
 
-/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
-export const check = Effect.fn('bolt.check')(function* (
+type CompilerOptions = { bolt?: string; migrations?: 'generate' | 'verify'; squash?: string };
+/** Shared declaration compilation; the diagnostic pass belongs to `bolt check`. */
+const workspace = Effect.fn('bolt.workspace')(function* (
 	dir: string,
-	options: { bolt?: string; migrations?: 'generate' | 'verify'; squash?: string } = {}
+	options: CompilerOptions,
+	diagnostics: boolean
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const root = yield* fs.realPath(dir); // importers arrive resolved; relative paths need the same spelling
@@ -171,24 +171,26 @@ export const check = Effect.fn('bolt.check')(function* (
 	out.manifest = m;
 	out.transforms = [...bodies.transforms];
 
-	stage('seed');
-	const pack = yield* seedPack(root, errors);
-	// Identity rows are decoded by the identity area's seed path.
-	const tenant = Object.fromEntries(Object.entries(pack).filter(([c]) => !c.startsWith('sys_')));
-	const decodedSeed = Result.try({
-		try: () => decodeSeed(m, tenant),
-		catch: (cause) => new EvalError({ cause })
-	});
-	if (Result.isFailure(decodedSeed))
-		errors.push({
-			code: 'seed/decode',
-			path: 'seed',
-			message:
-				decodedSeed.failure.cause instanceof Error
-					? decodedSeed.failure.cause.message
-					: String(decodedSeed.failure.cause)
+	if (diagnostics) {
+		stage('seed');
+		const pack = yield* seedPack(root, errors);
+		// Identity rows are decoded by the identity area's seed path.
+		const tenant = Object.fromEntries(Object.entries(pack).filter(([c]) => !c.startsWith('sys_')));
+		const decodedSeed = Result.try({
+			try: () => decodeSeed(m, tenant),
+			catch: (cause) => new EvalError({ cause })
 		});
-	else out.seed = tenant;
+		if (Result.isFailure(decodedSeed))
+			errors.push({
+				code: 'seed/decode',
+				path: 'seed',
+				message:
+					decodedSeed.failure.cause instanceof Error
+						? decodedSeed.failure.cause.message
+						: String(decodedSeed.failure.cause)
+			});
+		else out.seed = tenant;
+	}
 
 	stage('schema');
 	const planned = yield* Effect.result(plan(null, m));
@@ -219,21 +221,33 @@ export const check = Effect.fn('bolt.check')(function* (
 		}
 	}
 
-	stage('rules');
-	const where = (role: string, name: string) =>
-		files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
-	errors.push(...checkRules(m, bodies, where));
-	const models = files.filter((f) => f.role === 'model');
-	const sources = yield* Effect.forEach(models, (f) =>
-		fs.readFileString(join(root, f.path)).pipe(Effect.map((text) => ({ path: f.path, text })))
-	);
-	errors.push(...sourceRules(m, sources));
+	if (diagnostics) {
+		stage('rules');
+		const { checkRules, sourceRules } = yield* Effect.tryPromise({
+			try: () => import('./rules.ts'),
+			catch: (cause) => new EvalError({ cause })
+		});
+		const where = (role: string, name: string) =>
+			files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
+		errors.push(...checkRules(m, bodies, where));
+		const models = files.filter((f) => f.role === 'model');
+		const sources = yield* Effect.forEach(models, (f) =>
+			fs.readFileString(join(root, f.path)).pipe(Effect.map((text) => ({ path: f.path, text })))
+		);
+		errors.push(...sourceRules(m, sources));
+	}
 	if (errors.length === 0) {
 		const runtime = yield* bundle(root, code, errors, true, bodies.models);
 		if (runtime !== undefined) out.guest = runtime;
 	}
 	return out;
 });
+
+/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
+export const check = (dir: string, options: CompilerOptions = {}) => workspace(dir, options, true);
+/** Compiles the artifact inputs and migrations without running the authoring diagnostics. */
+export const compile = (dir: string, options: CompilerOptions = {}) =>
+	workspace(dir, options, false);
 
 /**
  * A policy's guest part: each write grant's `approval` callback (`policy.<p>.grants.<model>.<op>.approval`), pure and
@@ -642,46 +656,4 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 			message: `module evaluation took over ${EVAL_CPU_MS} ms of CPU (rule 6)`
 		});
 	return a.json;
-});
-
-/** `seed/**\/<collection>.json[.gz]`, one pack (discover already refused unknown collections). */
-export const seedPack = Effect.fn('bolt.seedPack')(function* (
-	root: string,
-	errors: CheckDiagnostic[]
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const pathService = yield* Path.Path;
-	const dir = pathService.join(root, 'seed'),
-		pack: { [c: string]: RowData[] } = {};
-	if (!(yield* fs.exists(dir))) return pack;
-	for (const entry of yield* fs.readDirectory(dir, { recursive: true })) {
-		const absolute = pathService.join(dir, entry);
-		const path = pathService.relative(root, absolute).split(pathService.sep).join('/');
-		const hit = /^seed\/(?:.+\/)?([^/]+)\.json(\.gz)?$/.exec(path);
-		if (
-			(yield* fs.stat(absolute)).type !== 'File' ||
-			hit === null ||
-			path === 'seed/assets.json' ||
-			path.startsWith('seed/assets/')
-		)
-			continue;
-		const collection = hit[1];
-		if (collection === undefined) continue;
-		const bytes = yield* fs.readFile(absolute);
-		const rows = yield* Effect.try({
-			try: () => new TextDecoder().decode(hit[2] ? gunzipSync(bytes) : bytes),
-			catch: (cause) => new EvalError({ cause })
-		}).pipe(
-			Effect.flatMap(
-				Schema.decodeUnknownEffect(
-					Schema.fromJsonString(Schema.Array(Schema.Record(Schema.String, Schema.Json)))
-				)
-			),
-			Effect.result
-		);
-		if (Result.isFailure(rows))
-			errors.push({ code: 'seed/decode', path, message: `${path}: ${rows.failure.message}` });
-		else (pack[collection] ??= []).push(...rows.success);
-	}
-	return pack;
 });
