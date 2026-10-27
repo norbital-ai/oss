@@ -1033,7 +1033,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 		'安全编辑、预览准确结果，然后请求审核。',
 	'Rebuild preview': '重新构建预览',
 	'Norbius is using this preview': 'Norbius 正在使用此预览',
-	'Take control to use it yourself; Norbius is told you did.': '接管后即可自行使用；Norbius 会收到通知。',
+	'Take control to use it yourself; Norbius is told you did.':
+		'接管后即可自行使用；Norbius 会收到通知。',
 	'Take control': '接管',
 	'against Live': '对比线上版本',
 	'against MR head': '对比合并请求最新提交',
