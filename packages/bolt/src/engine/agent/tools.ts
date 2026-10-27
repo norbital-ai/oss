@@ -693,14 +693,22 @@ export function readTool(x: ReadToolContext) {
 			Effect.map(([got]) => got ?? null)
 		);
 	const run = Effect.fn('AgentTool.read')(function* (given: ReadRequestJson) {
-		// a root page the model can take in, unless it asked for one
+		// a root page the model can take in, unless it asked for one; an empty cursor or search is the model's "none"
 		const request: { [path: string]: ReadRequestJson[string] } = Object.fromEntries(
-			Object.entries(given).map(([path, layer]) => [
-				path,
-				path.includes('.') || layer.limit !== undefined || layer.aggregate !== undefined
-					? layer
-					: { ...layer, limit: READ_PAGE }
-			])
+			Object.entries(given).map(([path, asked]) => {
+				const { after, search, ...rest } = asked;
+				const layer = {
+					...rest,
+					...(after === undefined || after === '' ? {} : { after }),
+					...(search === undefined || search === '' ? {} : { search })
+				};
+				return [
+					path,
+					path.includes('.') || layer.limit !== undefined || layer.aggregate !== undefined
+						? layer
+						: { ...layer, limit: READ_PAGE }
+				];
+			})
 		);
 		const keep = [...new Set(Object.values(given).flatMap((layer) => layer.fields ?? []))];
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
