@@ -646,16 +646,22 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 					fields: _fields,
 					...base
 				} = LayerRequestSchema.fields;
+				// search is words, unless the model declares indexes or semantic search for its object form
+				const declared = layered(m).models[layers(m)[path.split('.')[0]!]?.[path] ?? path]?.search;
+				const words =
+					declared?.semantic !== undefined || Object.keys(declared?.indexes ?? {}).length > 0
+						? text
+						: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' }));
 				const description =
 					(dot < 0 ? 'a root' : `a layer of "${path.slice(0, dot)}"`) +
 					(search ? '' : '; no search');
 				const layer =
 					dot < 0
 						? search
-							? Schema.Struct({ ...base, search: text, after }).annotate({ description })
+							? Schema.Struct({ ...base, search: words, after }).annotate({ description })
 							: Schema.Struct({ ...base, after }).annotate({ description })
 						: search
-							? Schema.Struct({ ...base, search: text }).annotate({ description })
+							? Schema.Struct({ ...base, search: words }).annotate({ description })
 							: Schema.Struct(base).annotate({ description });
 				return [path, Schema.optionalKey(layer)];
 			})
@@ -764,16 +770,32 @@ export function readTool(x: ReadToolContext) {
 	});
 	return {
 		tool: Tool.make('read', {
-			description:
-				'Read records: { "<key>": options, … }, several keys in one call. ' +
-				'"<model>" is a root (that model\'s rows); "<root>.<relation>" is a layer (each root row\'s related rows, nested in it), sent beside its root key, never alone or inside the root\'s options. ' +
-				"Each key returns its model's declared read shape; options only filter, order and page it: where { <field>: { <operator>: value } } with and / or / not. " +
-				'Operators by field kind: text eq ne in nin isNull, like with % wildcards ("%word%" matches anywhere); number, decimal, date, instant eq ne lt lte gt gte in nin isNull (an instant also olderThan "7d"); enum, bool, link id eq ne in nin isNull; point near [point, metres], within { bbox | polygon }; period contains, overlaps, within; json contains, isEmpty; ' +
-				`orderBy (a field, { field: "asc" | "desc" } or a list); limit (a root ${READ_PAGE} by default, at most 10,000; limit a many-layer too); search (text; on a root also { <index>: input } or { semantic: text | { record: id } }); ` +
-				'aggregate { count: true, sum | avg | min | max: [fields], by: field | { month: dateField } }; on a root also after (the next cursor a page returned). ' +
-				"Root the read at the model whose rows you want and pick them with its where; a layer's where narrows only each root row's related rows (never which root rows return) and takes its own fields, never its link. " +
-				'To list rows read them with a limit; aggregate only counts or totals; after continues the same request only. A date is YYYY-MM-DD. Long values are clipped; read_output pages a clipped result. ' +
-				'Example: { "<root>": { "where": { "id": { "eq": "<id>" } } }, "<root>.<relation>": { "limit": 20 } }.',
+			description: `Read records. The input is an object: each key names what to read, its value holds that key's options. Several keys go in one call.
+
+Keys
+- "<model>" (a root): rows of that model.
+- "<root>.<relation>" (a layer): for each root row, its related rows, nested inside that row (one related row as an object in place of its link, many as a list). Send it together with its root key.
+Each key returns the fields its model's read declares.
+
+Options (all optional)
+- where: { "<field>": { "<operator>": value } }; several fields must all hold; combine with { "and": [...] }, { "or": [...] }, { "not": {...} }. On a root it chooses which rows return; on a layer it only narrows that layer's rows inside each root row, using the layer's own fields, never its link to the root.
+  Operators by field kind:
+  text: eq, ne, in, nin, isNull, like ("%word%"; % matches any characters)
+  number, decimal, date (YYYY-MM-DD), instant: eq, ne, lt, lte, gt, gte, in, nin, isNull; an instant also olderThan ("7d")
+  enum, bool, link (a row id): eq, ne, in, nin, isNull
+  point: near ([point, metres]), within ({ bbox } or { polygon }); period: contains, overlaps, within; json: contains, isEmpty
+- search: words found across the model's searchable text (where the schema offers it on that key).
+- orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these.
+- limit: how many rows. A root returns ${READ_PAGE} unless you set it (at most 10,000); a many-layer returns up to 10,000 per root row, so set one.
+- aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "month": "<date field>" } }: totals instead of rows.
+- after (root only): the "next" cursor a previous page of this same request returned.
+
+Long values are clipped; read_output reads the rest.
+
+Examples
+- Rows by a filter: { "<model>": { "where": { "<date field>": { "eq": "2026-01-31" } }, "limit": 20 } }
+- Rows with related rows: { "<model>": { "where": { "<text field>": { "like": "%word%" } } }, "<model>.<relation>": { "limit": 20 } }
+- A count per value: { "<model>": { "aggregate": { "count": true, "by": "<field>" } } }`,
 			parameters: readInput(e.manifest, a, paths),
 			success: ToolAnswer
 		}),
@@ -940,9 +962,15 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	if (agent && (acts.size > 0 || automations.length > 0 || files.size > 0 || syncs.length > 0)) {
 		const actTool = Tool.make('act', {
 			description:
-				'Write records, decide an approval, or start an automation or a sync: { callable, input }, one call per write. ' +
-				'A model write "<model>.<verb>" takes an array of rows committed as one batch: create [{ column, <relation>: [row or id] }]; update [{ target: id, set: { column, <relation>: { create: [row], update: [{ target, set }], delete: [id], link: [id], unlink: [id] } } }]; delete [{ target: id }]; upsert [{ id?, column, … }] (an id updates, none creates). ' +
-				'Related rows go inside their root row, never in a separate write. ' +
+				`Write records, decide an approval, or start an automation or a sync. The input is { "callable": "<name>", "input": <its input> }; one call per write.
+
+Model writes: the callable is "<model>.<verb>" and its input is always an array of rows, committed together as one batch.
+- create: [{ "<column>": value, "<relation>": [<row> or "<existing id>"] }]
+- update: [{ "target": "<id>", "set": { "<column>": value, "<relation>": { "create": [<row>], "update": [{ "target": "<id>", "set": {...} }], "delete": ["<id>"], "link": ["<id>"], "unlink": ["<id>"] } } }]
+- delete: [{ "target": "<id>" }]
+- upsert: [{ "id"?: "<id>", "<column>": value }]: with an id it updates that row, without one it creates.
+Related rows go inside their root row in the same call, never in a separate write. A link column takes the linked row's id; a file column takes the file reference { "id", "name", "mime" } a message or tool gave. The model's +model.ts names each write's columns and their kinds.
+` +
 				`Callables: ${[...acts.keys()].join(', ')}. ` +
 				(automations.length > 0
 					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A committed start admits a run to the queue; its business result is available only after the run finishes. `
